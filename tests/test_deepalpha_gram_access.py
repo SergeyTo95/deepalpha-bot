@@ -140,6 +140,22 @@ def test_guard_preserves_fsm_arguments_and_denies_inline_callbacks():
     assert calls == ['owner-state']
 
 
+def test_moderation_only_allows_registered_viewers_to_open_readonly_panel(monkeypatch):
+    from bot.admin_guard import can_open_view_during_moderation
+    monkeypatch.setattr(access, 'can_view_project', lambda uid: uid == 11)
+    event = SimpleNamespace(from_user=SimpleNamespace(id=11), chat=SimpleNamespace(type='private', id=11), text='/admin')
+    event.message = event
+    assert can_open_view_during_moderation(event)
+    for action in ('deepalpha_view:overview', 'deepalpha_view:wallet'):
+        event.data = action
+        assert can_open_view_during_moderation(event, callback=True)
+    for action in ('admin_back', 'deepalpha_team:add', 'ton_send', 'deepalpha_view:unknown'):
+        event.data = action
+        assert not can_open_view_during_moderation(event, callback=True)
+    event.text = '/ton_send'
+    assert not can_open_view_during_moderation(event)
+
+
 @pytest.fixture
 def postgres(monkeypatch):
     url = os.getenv('TEST_DATABASE_URL')
@@ -259,3 +275,15 @@ def test_postgres_changed_quote_cannot_send_and_known_failure_is_replayable(post
     first = purchase.purchase(11, 10, 'no-funds-request-key')
     assert first['error'] == 'insufficient_balance'
     assert purchase.purchase(11, 10, 'no-funds-request-key')['error'] == 'insufficient_balance'
+
+
+def test_postgres_verified_payment_resumes_after_credit_interruption(postgres, monkeypatch):
+    setup_purchase(monkeypatch)
+    created = purchase.purchase(11, 10, 'resume-credit-key')
+    row = dict(id=created['intent_id'], expected_amount_nano='100000000')
+    assert purchase.verify_purchase(row['id'], receipts=[receipt(row)])['ok']
+    monkeypatch.setattr(purchase, 'fetch_receipts', lambda *a, **k: pytest.fail('Confirmed receipt must not need another RPC'))
+    from services import referral_rewards_service as rewards
+    monkeypatch.setattr(rewards, 'process_token_purchase_referral_reward', lambda **kw: None)
+    completed = purchase.reconcile_pending_purchases()
+    assert len(completed) == 1 and completed[0]['status'] == 'fulfilled'

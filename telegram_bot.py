@@ -378,6 +378,9 @@ class ModerationGuardMiddleware(BaseMiddleware):
         user = message.from_user
         if not user or not is_moderation_enabled() or is_moderation_allowed(user.id):
             return
+        from bot.admin_guard import can_open_view_during_moderation
+        if await asyncio.to_thread(can_open_view_during_moderation, message):
+            return
         lang = get_user_lang(user.id) if user else "en"
         now = time.time()
         last_at = _moderation_last_notice_at.get(user.id, 0)
@@ -389,6 +392,9 @@ class ModerationGuardMiddleware(BaseMiddleware):
     async def on_pre_process_callback_query(self, callback_query: types.CallbackQuery, data: dict):
         user = callback_query.from_user
         if not user or not is_moderation_enabled() or is_moderation_allowed(user.id):
+            return
+        from bot.admin_guard import can_open_view_during_moderation
+        if await asyncio.to_thread(can_open_view_during_moderation, callback_query, callback=True):
             return
         lang = get_user_lang(user.id) if user else "en"
         await callback_query.answer(moderation_alert_text(lang), show_alert=True)

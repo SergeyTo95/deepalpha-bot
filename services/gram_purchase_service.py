@@ -247,7 +247,7 @@ def reconcile_pending_purchases():
     conn = db.get_connection()
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("SELECT * FROM ton_purchase_intents WHERE status='submitted' ORDER BY last_checked_at NULLS FIRST,id LIMIT 50")
+        cur.execute("SELECT * FROM ton_purchase_intents WHERE status='submitted' AND (payment_network IS NULL OR payment_network=%s) ORDER BY last_checked_at NULLS FIRST,id LIMIT 50", (chain._network(),))
         rows = cur.fetchall()
         if not rows:
             return []
@@ -256,6 +256,9 @@ def reconcile_pending_purchases():
     groups = {}
     completed = []
     for row in rows:
+        if row.get("verified_at") and row.get("verified_tx_hash"):
+            _complete_purchase(row["id"], completed)
+            continue
         # Legacy records use the currently configured network; actual receipt
         # proof still comes from that network, never the stored sender hash.
         if row.get("payment_network") and row["payment_network"] != chain._network():
@@ -269,22 +272,32 @@ def reconcile_pending_purchases():
             ids = [r["id"] for r in intents]
             _mark_scan(ids)
             receipts = fetch_receipts(address, start, start_offset=offset)
-            # Overlap the tip for delayed indexing; never skip a failed page.
-            _mark_scan(ids, offset + (300 if len(receipts) >= 300 else max(0, len(receipts) - 20)))
+            safe_to_advance = True
             for row in intents:
-                if verify_purchase(row["id"], receipts=receipts).get("ok"):
-                    fulfilled = db.fulfill_ton_purchase_intent(row["id"])
-                    if fulfilled and not fulfilled.get("already_fulfilled"):
-                        try:
-                            from services.referral_rewards_service import process_token_purchase_referral_reward
-                            process_token_purchase_referral_reward(buyer_user_id=int(fulfilled["user_id"]),
-                                purchase_amount_nano=int(fulfilled["expected_amount_nano"]), purchase_ref=str(fulfilled["id"]))
-                        except Exception:
-                            logger.warning("GRAM_PURCHASE_REFERRAL_RETRY_REQUIRED intent_id=%s", fulfilled["id"])
-                        completed.append(fulfilled)
+                verified = verify_purchase(row["id"], receipts=receipts)
+                if verified.get("error") == "verification_unavailable":
+                    safe_to_advance = False
+                if verified.get("ok"):
+                    _complete_purchase(row["id"], completed)
+            if safe_to_advance:
+                # Overlap the tip for delayed indexing; never skip a failed page.
+                _mark_scan(ids, offset + (300 if len(receipts) >= 300 else max(0, len(receipts) - 20)))
         except Exception:
             logger.warning("GRAM_PURCHASE_RECONCILIATION_UNAVAILABLE")
     return completed
+
+
+def _complete_purchase(intent_id, completed):
+    fulfilled = db.fulfill_ton_purchase_intent(intent_id)
+    if not fulfilled or fulfilled.get("already_fulfilled"):
+        return
+    try:
+        from services.referral_rewards_service import process_token_purchase_referral_reward
+        process_token_purchase_referral_reward(buyer_user_id=int(fulfilled["user_id"]),
+            purchase_amount_nano=int(fulfilled["expected_amount_nano"]), purchase_ref=str(fulfilled["id"]))
+    except Exception:
+        logger.warning("GRAM_PURCHASE_REFERRAL_RETRY_REQUIRED intent_id=%s", fulfilled["id"])
+    completed.append(fulfilled)
 
 
 def _mark_scan(ids, offset=None):

@@ -12,6 +12,21 @@ def private_actor(event, *, callback=False):
     return uid if uid and getattr(chat, "id", None) == uid else None
 
 
+def can_open_view_during_moderation(event, *, callback=False):
+    uid = private_actor(event, callback=callback)
+    if uid is None:
+        return False
+    if callback:
+        allowed = getattr(event, "data", None) in {"deepalpha_view:overview", "deepalpha_view:wallet"}
+    else:
+        command = str(getattr(event, "text", "") or "").split(maxsplit=1)
+        allowed = bool(command and command[0].split("@", 1)[0] == "/admin")
+    if not allowed:
+        return False
+    from services.deepalpha_admin_access import can_view_project
+    return can_view_project(uid)
+
+
 class OwnerDispatcher:
     def __init__(self, dispatcher, is_owner):
         self.dispatcher = dispatcher
