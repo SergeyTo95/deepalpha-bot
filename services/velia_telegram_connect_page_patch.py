@@ -113,10 +113,17 @@ def install(
     # the router. Linked-chat context therefore wraps the final _build_prompt
     # used by both blocking and SSE generation without rewriting those pipelines.
     import services.velia_chat_service as chat_service_module
+    import services.velia_conversation_links_routes as links_routes_module
+    import services.velia_conversation_links_service as links_service_module
     import services.velia_conversation_ux_routes as conversation_ux_routes_module
     import velia_mobile_routes as mobile_routes_module
-    from services.velia_conversation_links_routes import setup_velia_conversation_links_routes
-    from services.velia_conversation_links_service import install_linked_conversation_prompt
+    from services.velia_conversation_links_bidirectional_service import (
+        build_linked_context_bidirectional,
+        link_conversations_bidirectional,
+        list_conversation_link_summaries_bidirectional,
+        list_conversation_links_bidirectional,
+        unlink_conversation_bidirectional,
+    )
     from services.velia_conversation_ux_order_service import (
         list_conversations_ordered_stable,
         reorder_visible_conversations,
@@ -129,11 +136,23 @@ def install(
     # by pagination-safe reorder so equal timestamps cannot produce different pages.
     chat_service_module.list_conversations = list_conversations_ordered_stable
     mobile_routes_module.list_conversations = list_conversations_ordered_stable
-    install_linked_conversation_prompt(chat_service_module)
+
+    # Stored target/source columns are now an implementation detail. Runtime APIs,
+    # badges, unlink and prompt context all treat the relation as an undirected pair,
+    # so users cannot connect two chats "the wrong way around".
+    links_routes_module.link_conversations = link_conversations_bidirectional
+    links_routes_module.list_conversation_links = list_conversation_links_bidirectional
+    links_routes_module.unlink_conversation = unlink_conversation_bidirectional
+    links_routes_module.list_conversation_link_summaries = (
+        list_conversation_link_summaries_bidirectional
+    )
+    links_service_module.build_linked_context = build_linked_context_bidirectional
+    links_service_module.install_linked_conversation_prompt(chat_service_module)
+
     # Keep the public route contract stable while swapping in the pagination-safe
     # implementation before the route handlers are registered.
     conversation_ux_routes_module.reorder_conversations = reorder_visible_conversations
     setup_velia_conversation_ux_routes(app, mobile_routes_module)
-    setup_velia_conversation_links_routes(app, mobile_routes_module)
+    links_routes_module.setup_velia_conversation_links_routes(app, mobile_routes_module)
 
     app["velia_telegram_connect_page_patch_installed"] = True
