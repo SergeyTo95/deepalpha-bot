@@ -118,3 +118,8 @@ def setup_velia_project_routes(app):
         ("GET", "/deepalpha/{resource_id}/evidence", evidence),
     ]:
         app.router.add_route(method, prefix + path, guarded(handler))
+
+    # Research Center is a separate capability surface but shares the same
+    # authenticated mobile account and project-resource ownership boundary.
+    from velia_research_routes import setup_velia_research_routes
+    setup_velia_research_routes(app)
