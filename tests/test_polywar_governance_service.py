@@ -10,7 +10,7 @@ import services.polywar_capital_service as caps
 @pytest.fixture
 def polydb(monkeypatch):
     uri=f"file:polywar_gov_{uuid.uuid4().hex}?mode=memory&cache=shared"; keeper=sqlite3.connect(uri,uri=True,check_same_thread=False); keeper.row_factory=sqlite3.Row
-    settings={}
+    settings={'polywar_leadership_mode':'election'}
     def connect(): c=sqlite3.connect(uri,uri=True,check_same_thread=False); c.row_factory=sqlite3.Row; return c
     monkeypatch.setattr(polywar,'get_connection',connect); monkeypatch.setattr(polywar,'get_setting',lambda k,d='': settings.get(k,d)); monkeypatch.setattr(polywar,'get_airdrop_points_balance',lambda uid:{'total':0,'balance':0})
     c=connect(); polywar.init_polywar_schema(c); c.close(); yield connect,settings; keeper.close()
@@ -33,7 +33,7 @@ def test_election_nomination_vote_tiebreak_and_multiple_finalized(polydb):
     gov.nominate(102,'beta',True); gov.vote(101,102); same=gov.vote(101,102); assert same.get('duplicate') is True
     changed=gov.vote(101,101); assert changed['current_user_vote']==101
     c=connect(); c.execute('update polywar_commander_elections set ends_at=? where season_id=?',(datetime.utcnow()-timedelta(seconds=1),sid)); c.commit(); c.close()
-    final=gov.get_governance(101); assert final['commander']['commander_user_id'] is None
+    final=gov.get_governance(101); assert final['leadership_mode']=='election'; assert final['commander']['commander_user_id'] in (101,102)
     c=connect(); c.execute("insert into polywar_commander_elections (season_id,faction_id,status,starts_at,ends_at,finalized_at,created_at) values (?,?,?,?,?,?,?)",(sid,1,'finalized',datetime.utcnow(),datetime.utcnow(),datetime.utcnow(),datetime.utcnow())); c.commit(); n=c.execute("select count(*) from polywar_commander_elections where season_id=? and faction_id=? and status='finalized'",(sid,1)).fetchone()[0]; c.close(); assert n>=1
 
 def test_nomination_strict_statement_withdraw_and_cross_faction_vote(polydb):

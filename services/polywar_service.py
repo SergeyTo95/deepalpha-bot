@@ -288,6 +288,7 @@ def init_polywar_schema(conn=None) -> None:
             "CREATE INDEX IF NOT EXISTS idx_polywar_seasons_status ON polywar_seasons(status)",
             "CREATE INDEX IF NOT EXISTS idx_polywar_players_user ON polywar_players(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_polywar_players_faction ON polywar_players(season_id, faction_id)",
+            "CREATE INDEX IF NOT EXISTS idx_polywar_leader_candidates ON polywar_players(season_id, faction_id, faction_contribution, last_active_at, joined_at, user_id)",
             "CREATE INDEX IF NOT EXISTS idx_polywar_events_season_created ON polywar_events(season_id, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_polywar_faction_stats_season ON polywar_faction_season_stats(season_id)",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_polywar_one_active_season ON polywar_seasons(status) WHERE status = 'active'",
@@ -355,7 +356,13 @@ def _complete_expired_active_seasons(conn, now: datetime) -> None:
     rows = _fetchall(c, "SELECT * FROM polywar_seasons WHERE status = %s AND ends_at <= %s ORDER BY ends_at", ("active", now))
     if not rows:
         return
-    from services.polywar_finalization_service import finalize_season_in_transaction
+    from services.polywar_finalization_service import finalize_season_in_transaction, init_finalization_schema
+    init_finalization_schema(conn)
+    try:
+        from services.polywar_rebellion_service import init_rebellion_schema
+        init_rebellion_schema(conn)
+    except Exception:
+        pass
     for row in rows:
         finalize_season_in_transaction(conn, int(row["id"]), "time", None, now)
 
@@ -529,6 +536,12 @@ def touch_player_presence_in_transaction(conn, season_id: int, user_id: int, now
         WHERE user_id=%s AND season_id=%s AND (last_active_at IS NULL OR last_active_at<%s)""",
         (now, int(user_id), int(season_id), threshold))
     updated = inserted or int(getattr(result, 'rowcount', 0) or 0) > 0
+    if updated and player and player.get('faction_id') is not None:
+        try:
+            from services import polywar_leader_service as leaders
+            leaders.refresh_faction_leader_in_transaction(conn, int(season_id), int(player.get('faction_id')), now=now, force=True)
+        except Exception:
+            logger.exception('polywar_faction_leader_refresh_failed season_id=%s faction_id=%s reason=presence', season_id, player.get('faction_id'))
     if updated:
         logger.info('polywar_presence_recorded season_id=%s user_id=%s was_dormant=%s rescheduled_count=%s', season_id, user_id, resume['was_dormant'], resume['rescheduled_count'])
     else:
@@ -652,6 +665,8 @@ def join_faction(user_id: int, faction_id: int) -> Dict[str, Any]:
         INSERT INTO polywar_events (season_id, user_id, faction_id, event_type, message, created_at)
         VALUES (%s, %s, %s, %s, %s, %s)
         """, (sid, int(user_id), faction_id, "join", f"Player joined {faction['name']}", now))
+        from services import polywar_leader_service as leaders
+        leaders.refresh_faction_leader_in_transaction(conn, sid, faction_id, now=now, force=True)
         logger.info('polywar_faction_joined season_id=%s user_id=%s faction_id=%s simulation_resume_prepared=%s rescheduled_count=%s', sid, user_id, faction_id, resume['was_dormant'], resume['rescheduled_count'])
         conn.commit()
     except Exception:
@@ -743,7 +758,12 @@ def get_state(user_id: int) -> Dict[str, Any]:
         current_reward = _fetchone(conn.cursor(), "SELECT * FROM polywar_player_season_rewards WHERE season_id=%s AND user_id=%s", (int(latest_completed["id"]), int(user_id))) if latest_completed else None
         public_season = {k: v for k, v in dict(season).items() if k != "secret_seed"}
         _stage("response_build", t)
-        payload = {"ok": True, "enabled": True, "map": {"width": config.width, "height": config.height, "chunk_size": config.chunk_size, "max_chunks_per_request": config.max_chunks_per_request, "bases": get_starting_bases_with_config(config)}, "rules": rules, "season": public_season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "factions": factions, "faction_ranking": ranking, "world": world, "season_phase": season.get("status"), "latest_completed_season": latest_completed, "current_user_pending_reward": current_reward, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
+        leader = None
+        if faction:
+            from services import polywar_leader_service as leaders
+            leader = leaders.get_faction_leader(conn, int(season["id"]), int(faction["id"]), refresh=False)
+            faction["leader"] = leader
+        payload = {"ok": True, "enabled": True, "map": {"width": config.width, "height": config.height, "chunk_size": config.chunk_size, "max_chunks_per_request": config.max_chunks_per_request, "bases": get_starting_bases_with_config(config)}, "rules": rules, "season": public_season, "player": public_player, "energy": {k:v for k,v in e.items() if k != "energy_updated_at"}, "selected_faction": faction, "leader": leader, "factions": factions, "faction_ranking": ranking, "world": world, "season_phase": season.get("status"), "latest_completed_season": latest_completed, "current_user_pending_reward": current_reward, "events": get_events(season["id"], 20, conn), "feature_flags": {"polywar_enabled": True, "map_enabled": True, "boosts_enabled": False, "purchases_enabled": False}}
         logger.info("polywar_state_stage user_id=%s stage=total duration_ms=%.2f", int(user_id), (time.monotonic() - total_t0) * 1000)
         return _normalize_public_temporal(payload)
     except Exception:
