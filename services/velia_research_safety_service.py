@@ -146,8 +146,10 @@ def classify(text: object, *, phase: str = "intake") -> Dict[str, object]:
             "read_only_only": True,
         }
 
-    sensitive = dangerous_subject or defensive
-    if sensitive:
+    # Protective language alone (for example ordinary cancer treatment) does
+    # not make research sensitive. Restricted mode is reserved for an actually
+    # sensitive subject such as malware, a toxin, a controlled drug or weapon.
+    if dangerous_subject:
         return {
             "decision": "restricted_defensive",
             "phase": str(phase)[:40],
