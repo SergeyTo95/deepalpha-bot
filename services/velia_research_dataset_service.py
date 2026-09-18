@@ -207,6 +207,27 @@ def ensure_tables() -> None:
             ON velia_research_datasets(mission_id,user_id,created_at DESC)""")
 
 
+def _assert_integrity(row: Dict[str, Any]) -> None:
+    columns = json.loads(row["columns_json"])
+    rows = json.loads(row["rows_json"])
+    provenance = json.loads(row["provenance_json"])
+    split_snapshot = json.loads(row["split_json"])
+    observed_dataset_hash = _sha({
+        "registry_version": int(row["registry_version"]),
+        "columns": columns,
+        "rows": rows,
+        "provenance": provenance,
+    })
+    if observed_dataset_hash != str(row["dataset_hash"]):
+        raise projects.ProjectError("research_dataset_integrity_mismatch", 409)
+    observed_split_hash = _sha({
+        "dataset_hash": observed_dataset_hash,
+        "split": split_snapshot,
+    })
+    if observed_split_hash != str(row["split_hash"]):
+        raise projects.ProjectError("research_dataset_integrity_mismatch", 409)
+
+
 def _row(row: Dict[str, Any], *, include_rows: bool = False) -> Dict[str, Any]:
     result = {
         "id": row["dataset_id"],
@@ -242,6 +263,13 @@ def create(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
     )
     if metadata_safety["decision"] == "blocked":
         raise projects.ProjectError("research_dataset_safety_blocked", 403)
+    if mission["safety"].get("read_only_only"):
+        metadata_safety = {
+            **metadata_safety,
+            "read_only_only": True,
+            "execution_allowed": False,
+            "inherited_read_only": True,
+        }
 
     membership = _split_membership(len(rows), split_config)
     split_snapshot = {
@@ -283,6 +311,7 @@ def create(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
         row = cur.fetchone()
         if not row:
             raise projects.ProjectError("research_dataset_state_missing", 500)
+        _assert_integrity(row)
         center._event(cur, str(mission_id), user_id, "research_dataset_registered", {
             "dataset_id": row["dataset_id"],
             "dataset_hash": row["dataset_hash"],
@@ -302,6 +331,7 @@ def get(user_id: int, dataset_id: str, *, include_rows: bool = False) -> Dict[st
         row = cur.fetchone()
         if not row:
             raise projects.ProjectError("research_dataset_not_found", 404)
+        _assert_integrity(row)
         return _row(row, include_rows=include_rows)
 
 
@@ -332,6 +362,8 @@ def snapshot(user_id: int, dataset_id: str, split: str, columns: List[str]) -> D
         raise projects.ProjectError("invalid_research_dataset_columns")
 
     dataset = get(user_id, dataset_id, include_rows=False)
+    if dataset["safety"].get("read_only_only") or dataset["safety"].get("decision") == "blocked":
+        raise projects.ProjectError("research_dataset_read_only", 403)
     known = set(dataset["columns"])
     if any(value not in known for value in requested):
         raise projects.ProjectError("research_dataset_column_not_found", 404)
