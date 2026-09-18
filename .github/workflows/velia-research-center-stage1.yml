@@ -29,7 +29,6 @@ jobs:
       VELIA_RESEARCH_LITERATURE_ENABLED: 'false'
       VELIA_RESEARCH_REASONING_ENABLED: 'false'
       VELIA_RESEARCH_DIRECTOR_ENABLED: 'false'
-      VELIA_RESEARCH_REASONING_ENABLED: 'false'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,13 +51,25 @@ jobs:
           reasoning = Path('services/velia_research_reasoning_service.py').read_text()
           director = Path('services/velia_research_director_service.py').read_text()
           worker = Path('run_velia_research_worker.py').read_text()
-          reasoning = Path('services/velia_research_reasoning_service.py').read_text()
           routes = Path('velia_research_routes.py').read_text()
           assert 'VELIA_RESEARCH_CENTER_ENABLED", False' in center
           assert 'VELIA_RESEARCH_AUTONOMY_ENABLED", False' in center
           assert 'VELIA_RESEARCH_EXPERIMENT_EXECUTION_ENABLED", False' in center
           assert 'arbitrary_shell": False' in center
           assert 'arbitrary_url_fetch": False' in center
+          assert 'VELIA_RESEARCH_LITERATURE_ENABLED", False' in literature
+          assert 'ALLOWED_ENDPOINTS' in literature
+          assert 'allow_redirects=False' in literature
+          assert 'arbitrary_url_fetch": False' in literature
+          assert 'VELIA_RESEARCH_REASONING_ENABLED", False' in reasoning
+          assert 'source_text_is_untrusted": True' in reasoning
+          assert 'VELIA_RESEARCH_DIRECTOR_ENABLED", False' in director
+          assert 'experiment_execution": False' in director
+          assert 'subprocess' not in director
+          assert 'os.system' not in director
+          assert 'plan_experiment' not in director
+          assert 'subprocess' not in worker
+          assert 'os.system' not in worker
           assert 'execution_allowed": False' in safety
           assert 'safety.classify' in center
           assert 'subprocess' not in center
