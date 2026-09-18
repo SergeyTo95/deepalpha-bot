@@ -14,6 +14,7 @@ from services import velia_research_literature_service as literature
 from services import velia_research_meta_analysis_service as meta_analysis
 from services import velia_research_reasoning_service as reasoning
 from services import velia_research_report_service as reports
+from services import velia_research_systematic_review_service as systematic_review
 from velia_mobile_routes import _json_response, _mobile_api_available, _require_mobile_auth
 
 
@@ -45,6 +46,7 @@ def setup_velia_research_routes(app):
             await asyncio.to_thread(claims.ensure_tables)
             await asyncio.to_thread(literature.ensure_tables)
             await asyncio.to_thread(meta_analysis.ensure_tables)
+            await asyncio.to_thread(systematic_review.ensure_tables)
             await asyncio.to_thread(reasoning.ensure_tables)
             await asyncio.to_thread(director.ensure_tables)
             await asyncio.to_thread(reports.ensure_tables)
@@ -90,6 +92,7 @@ def setup_velia_research_routes(app):
         state["protocol_officer"] = protocol.status()
         state["claim_ledger"] = claims.status()
         state["meta_analysis"] = meta_analysis.status()
+        state["systematic_review"] = systematic_review.status()
         return _json_response({"ok": True, "research": state})
 
     async def mission_list(request, uid):
@@ -387,6 +390,78 @@ def setup_velia_research_routes(app):
         )
         return _json_response({"ok": True, **result})
 
+    async def systematic_review_create(request, uid):
+        data = await _body(request)
+        item = await asyncio.to_thread(
+            systematic_review.create_protocol,
+            uid,
+            request.match_info["mission_id"],
+            data,
+        )
+        return _json_response({"ok": True, "review": item}, status=201)
+
+    async def systematic_reviews_list(request, uid):
+        result = await asyncio.to_thread(
+            systematic_review.list_protocols,
+            uid,
+            request.match_info["mission_id"],
+            int(request.query.get("offset", 0)),
+        )
+        return _json_response({"ok": True, **result})
+
+    async def systematic_review_get(request, uid):
+        item = await asyncio.to_thread(
+            systematic_review.get_protocol,
+            uid,
+            request.match_info["review_id"],
+        )
+        return _json_response({"ok": True, "review": item})
+
+    async def systematic_review_search(request, uid):
+        item = await asyncio.to_thread(
+            systematic_review.execute_search,
+            uid,
+            request.match_info["review_id"],
+        )
+        return _json_response({"ok": True, **item})
+
+    async def systematic_review_screen(request, uid):
+        data = await _body(request)
+        item = await asyncio.to_thread(
+            systematic_review.screen_source,
+            uid,
+            request.match_info["review_id"],
+            request.match_info["source_id"],
+            data,
+        )
+        return _json_response({"ok": True, "screening": item}, status=201)
+
+    async def systematic_review_screening_history(request, uid):
+        source_id = request.query.get("source_id")
+        result = await asyncio.to_thread(
+            systematic_review.screening_history,
+            uid,
+            request.match_info["review_id"],
+            source_id,
+        )
+        return _json_response({"ok": True, **result})
+
+    async def systematic_review_flow(request, uid):
+        result = await asyncio.to_thread(
+            systematic_review.prisma_flow,
+            uid,
+            request.match_info["review_id"],
+        )
+        return _json_response({"ok": True, "flow": result})
+
+    async def systematic_review_graph(request, uid):
+        result = await asyncio.to_thread(
+            systematic_review.build_evidence_graph,
+            uid,
+            request.match_info["review_id"],
+        )
+        return _json_response({"ok": True, "evidence_graph": result})
+
     async def protocol_create(request, uid):
         data = await _body(request)
         item = await asyncio.to_thread(
@@ -490,6 +565,14 @@ def setup_velia_research_routes(app):
     app.router.add_get(prefix + "/claims/{claim_id}/meta-analyses", guarded(meta_snapshots_list))
     app.router.add_get(prefix + "/meta-analyses/{snapshot_id}", guarded(meta_snapshot_get))
     app.router.add_get(prefix + "/missions/{mission_id}/meta-evidence", guarded(mission_meta_evidence))
+    app.router.add_post(prefix + "/missions/{mission_id}/systematic-reviews", guarded(systematic_review_create))
+    app.router.add_get(prefix + "/missions/{mission_id}/systematic-reviews", guarded(systematic_reviews_list))
+    app.router.add_get(prefix + "/systematic-reviews/{review_id}", guarded(systematic_review_get))
+    app.router.add_post(prefix + "/systematic-reviews/{review_id}/search", guarded(systematic_review_search))
+    app.router.add_post(prefix + "/systematic-reviews/{review_id}/sources/{source_id}/screen", guarded(systematic_review_screen))
+    app.router.add_get(prefix + "/systematic-reviews/{review_id}/screening", guarded(systematic_review_screening_history))
+    app.router.add_get(prefix + "/systematic-reviews/{review_id}/flow", guarded(systematic_review_flow))
+    app.router.add_post(prefix + "/systematic-reviews/{review_id}/evidence-graph", guarded(systematic_review_graph))
     app.router.add_post(prefix + "/missions/{mission_id}/protocols", guarded(protocol_create))
     app.router.add_get(prefix + "/missions/{mission_id}/protocols", guarded(protocols_list))
     app.router.add_get(prefix + "/protocols/{protocol_id}", guarded(protocol_get))
