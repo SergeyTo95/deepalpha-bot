@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from services import velia_project_service as projects
 from services import velia_research_center_service as center
 from services import velia_research_claim_service as claims
+from services import velia_research_meta_analysis_service as meta_analysis
 from services.velia_chat_service import _iso
 
 
@@ -27,6 +28,8 @@ def status() -> Dict[str, Any]:
         "protocol_provenance": True,
         "claim_ledger_provenance": True,
         "claim_language_stage_bounded": True,
+        "meta_analysis_provenance": True,
+        "meta_analysis_may_promote_claim": False,
         "versioned_snapshots": True,
     }
 
@@ -178,6 +181,10 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
         raise projects.ProjectError("research_mission_not_reportable", 409)
 
     claim_ledger = claims.mission_ledger(user_id, mission_id) if claims.enabled() else None
+    meta_evidence = (
+        meta_analysis.mission_meta_evidence(user_id, mission_id)
+        if meta_analysis.enabled() else None
+    )
 
     with projects.transaction(user_id) as cur:
         synthesis = _latest_synthesis(cur, user_id, mission_id)
@@ -223,7 +230,7 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
             bounded_confidence = "claim_ledger_bounded"
 
         report: Dict[str, Any] = {
-            "version": 5 if claim_ledger is not None else 4,
+            "version": 6 if meta_evidence is not None else (5 if claim_ledger is not None else 4),
             "title": "VELIA Research Report",
             "mission": {
                 "id": str(mission_id),
@@ -239,7 +246,8 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
                 "literature_synthesis_confidence": result.get("confidence", "uncertain"),
                 "boundary": (
                     "Final scientific claim language is limited by the deterministic Claim Ledger. "
-                    "The literature synthesis is contextual and cannot raise a claim above its ledger stage."
+                    "Literature synthesis and meta-analysis are contextual calibration layers and cannot "
+                    "raise a claim above its ledger stage; meta-analysis may only add caution or contradiction."
                     if claim_ledger is not None
                     else "Claim Ledger is disabled; this report contains synthesis-level conclusions only."
                 ),
@@ -256,6 +264,7 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
             "open_questions": result.get("open_questions", []),
             "computational_evidence": computational,
             "claim_ledger": claim_ledger,
+            "meta_analysis": meta_evidence,
             "provenance": {
                 "synthesis_id": synthesis["synthesis_id"],
                 "evidence_hash": synthesis["evidence_hash"],
@@ -285,6 +294,14 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
                     [row["evidence_hash"] for row in claim_ledger.get("snapshots", [])]
                     if claim_ledger is not None else []
                 ),
+                "immutable_meta_snapshot_ids": (
+                    list(meta_evidence.get("snapshot_ids", []))
+                    if meta_evidence is not None else []
+                ),
+                "immutable_meta_evidence_hashes": (
+                    list(meta_evidence.get("evidence_hashes", []))
+                    if meta_evidence is not None else []
+                ),
             },
             "safety": {
                 "mission": mission["safety"],
@@ -292,6 +309,8 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
                 "operational_harmful_instructions_allowed": False,
                 "claim_overstatement_allowed": False,
                 "claim_ledger_enabled": claim_ledger is not None,
+                "meta_analysis_enabled": meta_evidence is not None,
+                "meta_analysis_claim_promotion_allowed": False,
             },
         }
         if mission["domain"] == "medicine":
