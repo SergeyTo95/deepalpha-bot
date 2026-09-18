@@ -64,12 +64,8 @@ def test_allowlisted_numeric_algorithms_are_reproducible():
     }},
 ])
 def test_non_allowlisted_or_non_numeric_input_is_rejected(payload):
-    if payload.get("operation") not in compute.ALLOWED_OPERATIONS or "code" in payload:
-        with pytest.raises(projects.ProjectError):
-            compute._validate_request(payload)
-        return
-    operation, parameters, _seed = compute._validate_request(payload)
     with pytest.raises(projects.ProjectError):
+        operation, parameters, _seed = compute._validate_request(payload)
         compute._HANDLERS[operation](parameters, compute.random.Random(0))
 
 
