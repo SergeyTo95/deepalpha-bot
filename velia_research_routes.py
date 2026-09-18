@@ -191,7 +191,6 @@ def setup_velia_research_routes(app):
         return _json_response({"ok": True, "run": item})
 
     async def report_create(request, uid):
-        del request
         item = await asyncio.to_thread(
             reports.build_report,
             uid,
