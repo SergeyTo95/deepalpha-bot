@@ -106,14 +106,20 @@ def ensure_tables() -> None:
     if not projects.ready():
         projects.ensure_tables()
     with projects.transaction() as cur:
-        # The original resource-kind CHECK was unnamed, so PostgreSQL generated
-        # this deterministic name. Replacing it is necessary for already-created
-        # production databases; changing CREATE TABLE IF NOT EXISTS is not.
-        cur.execute("ALTER TABLE velia_project_resources DROP CONSTRAINT IF EXISTS velia_project_resources_kind_check")
-        cur.execute("""ALTER TABLE velia_project_resources
-            ADD CONSTRAINT velia_project_resources_kind_check
-            CHECK(kind IN ('chat','deepalpha','image','video','music','research')) NOT VALID""")
-        cur.execute("ALTER TABLE velia_project_resources VALIDATE CONSTRAINT velia_project_resources_kind_check")
+        # Existing Railway databases still carry the original generated CHECK.
+        # Avoid taking a DDL lock on every process start: migrate only when the
+        # current definition has not yet learned the research resource kind.
+        cur.execute("""SELECT pg_get_constraintdef(oid) AS definition
+            FROM pg_constraint
+            WHERE conrelid='velia_project_resources'::regclass
+              AND conname='velia_project_resources_kind_check'""")
+        resource_check = cur.fetchone()
+        if not resource_check or "'research'" not in str(resource_check["definition"]):
+            cur.execute("ALTER TABLE velia_project_resources DROP CONSTRAINT IF EXISTS velia_project_resources_kind_check")
+            cur.execute("""ALTER TABLE velia_project_resources
+                ADD CONSTRAINT velia_project_resources_kind_check
+                CHECK(kind IN ('chat','deepalpha','image','video','music','research')) NOT VALID""")
+            cur.execute("ALTER TABLE velia_project_resources VALIDATE CONSTRAINT velia_project_resources_kind_check")
         cur.execute("""CREATE TABLE IF NOT EXISTS velia_research_missions (
             mission_id TEXT PRIMARY KEY,
             user_id BIGINT NOT NULL,
