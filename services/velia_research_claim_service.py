@@ -388,6 +388,10 @@ def _provenance_fingerprint(cur, dataset_id: str, user_id: int) -> Tuple[str, Di
 
 def _evidence(user_id: int, claim: Dict[str, Any]) -> List[Dict[str, Any]]:
     with projects.transaction() as cur:
+        cur.execute("SELECT to_regclass('velia_research_experiment_reviews') AS table_name")
+        table = cur.fetchone()
+        if not table or not table.get("table_name"):
+            return []
         cur.execute("""SELECT r.review_id,r.result_hash,r.statistician_json,r.replication_json,
                    e.experiment_id,e.method_json,e.result_json
             FROM velia_research_experiment_reviews r
