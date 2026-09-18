@@ -22,6 +22,7 @@ def status() -> Dict[str, Any]:
         "immutable_snapshots": True,
         "source_provenance": True,
         "computational_provenance": True,
+        "dataset_provenance": True,
         "versioned_snapshots": True,
     }
 
@@ -96,20 +97,42 @@ def _computational_evidence(cur, user_id: int, mission_id: str) -> Dict[str, Any
             "reviews": [],
             "boundary": "No reviewed safe-compute experiments are attached to this report snapshot.",
         }
-    cur.execute("""SELECT review_id,experiment_id,compute_run_id,operation,result_hash,
-               statistician_json,skeptic_json,replication_json,safety_json,created_at
-        FROM velia_research_experiment_reviews
-        WHERE mission_id=%s AND user_id=%s
-        ORDER BY created_at ASC,review_id ASC LIMIT 20""",
+    cur.execute("""SELECT r.review_id,r.experiment_id,r.compute_run_id,r.operation,r.result_hash,
+               r.statistician_json,r.skeptic_json,r.replication_json,r.safety_json,r.created_at,
+               e.method_json
+        FROM velia_research_experiment_reviews r
+        JOIN velia_research_experiments e
+          ON e.experiment_id=r.experiment_id AND e.user_id=r.user_id
+        WHERE r.mission_id=%s AND r.user_id=%s
+        ORDER BY r.created_at ASC,r.review_id ASC LIMIT 20""",
         (str(mission_id), int(user_id)))
     reviews: List[Dict[str, Any]] = []
+    dataset_snapshots: List[Dict[str, Any]] = []
+    seen_datasets = set()
     for row in cur.fetchall():
+        method = json.loads(row["method_json"])
+        data_provenance: Dict[str, Any] = {"data_origin": method.get("data_origin")}
+        if method.get("data_origin") == "dataset_registry":
+            snapshot = method.get("dataset_snapshot")
+            if isinstance(snapshot, dict):
+                data_provenance = snapshot
+                key = (
+                    str(snapshot.get("dataset_id") or ""),
+                    str(snapshot.get("dataset_hash") or ""),
+                    str(snapshot.get("split_hash") or ""),
+                    str(snapshot.get("split") or ""),
+                    tuple(snapshot.get("columns") or []),
+                )
+                if key not in seen_datasets:
+                    seen_datasets.add(key)
+                    dataset_snapshots.append(snapshot)
         reviews.append({
             "review_id": row["review_id"],
             "experiment_id": row["experiment_id"],
             "compute_run_id": row["compute_run_id"],
             "operation": row["operation"],
             "result_hash": row["result_hash"],
+            "data_provenance": data_provenance,
             "statistician": json.loads(row["statistician_json"]),
             "skeptic": json.loads(row["skeptic_json"]),
             "replication": json.loads(row["replication_json"]),
@@ -119,6 +142,7 @@ def _computational_evidence(cur, user_id: int, mission_id: str) -> Dict[str, Any
     return {
         "review_count": len(reviews),
         "reviews": reviews,
+        "datasets": dataset_snapshots,
         "boundary": (
             "Computational results are supporting evidence under explicit numerical inputs and "
             "model assumptions; they are not independent empirical replication."
@@ -165,7 +189,7 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
             })
 
         report: Dict[str, Any] = {
-            "version": 2,
+            "version": 3,
             "title": "VELIA Research Report",
             "mission": {
                 "id": str(mission_id),
@@ -196,6 +220,9 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
                 "immutable_source_ids": source_ids,
                 "immutable_compute_review_ids": [row["review_id"] for row in computational["reviews"]],
                 "immutable_compute_result_hashes": [row["result_hash"] for row in computational["reviews"]],
+                "immutable_dataset_ids": [row["dataset_id"] for row in computational.get("datasets", [])],
+                "immutable_dataset_hashes": [row["dataset_hash"] for row in computational.get("datasets", [])],
+                "immutable_dataset_split_hashes": [row["split_hash"] for row in computational.get("datasets", [])],
             },
             "safety": {
                 "mission": mission["safety"],
