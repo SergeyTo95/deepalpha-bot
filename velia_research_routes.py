@@ -5,6 +5,7 @@ import logging
 from services import velia_project_service as projects
 from services import velia_research_center_service as research
 from services import velia_research_compute_service as compute
+from services import velia_research_dataset_service as datasets
 from services import velia_research_experiment_pipeline_service as experiment_pipeline
 from services import velia_research_director_service as director
 from services import velia_research_literature_service as literature
@@ -14,13 +15,14 @@ from velia_mobile_routes import _json_response, _mobile_api_available, _require_
 
 
 MAX_BODY = 64 * 1024
+MAX_DATASET_BODY = 512 * 1024
 
 
-async def _body(request):
+async def _body(request, max_body=MAX_BODY):
     raw = bytearray()
     async for chunk in request.content.iter_chunked(4096):
         raw.extend(chunk)
-        if len(raw) > MAX_BODY:
+        if len(raw) > max_body:
             raise projects.ProjectError("request_too_large", 413)
     try:
         data = json.loads(raw)
@@ -42,6 +44,7 @@ def setup_velia_research_routes(app):
             await asyncio.to_thread(director.ensure_tables)
             await asyncio.to_thread(reports.ensure_tables)
             await asyncio.to_thread(compute.ensure_tables)
+            await asyncio.to_thread(datasets.ensure_tables)
             await asyncio.to_thread(experiment_pipeline.ensure_tables)
         except Exception:
             logging.getLogger(__name__).exception("VELIA_RESEARCH_STORAGE_UNAVAILABLE")
@@ -76,6 +79,7 @@ def setup_velia_research_routes(app):
         state["director"] = director.status()
         state["reports"] = reports.status()
         state["compute"] = compute.status()
+        state["datasets"] = datasets.status()
         state["experiment_pipeline"] = experiment_pipeline.status()
         return _json_response({"ok": True, "research": state})
 
@@ -249,6 +253,35 @@ def setup_velia_research_routes(app):
         )
         return _json_response({"ok": True, "compute_run": item})
 
+    async def dataset_create(request, uid):
+        data = await _body(request, MAX_DATASET_BODY)
+        item = await asyncio.to_thread(
+            datasets.create,
+            uid,
+            request.match_info["mission_id"],
+            data,
+        )
+        return _json_response({"ok": True, "dataset": item}, status=201)
+
+    async def datasets_list(request, uid):
+        result = await asyncio.to_thread(
+            datasets.list_datasets,
+            uid,
+            request.match_info["mission_id"],
+            int(request.query.get("offset", 0)),
+        )
+        return _json_response({"ok": True, **result})
+
+    async def dataset_get(request, uid):
+        include_rows = str(request.query.get("include_rows", "")).lower() in {"1", "true", "yes"}
+        item = await asyncio.to_thread(
+            datasets.get,
+            uid,
+            request.match_info["dataset_id"],
+            include_rows=include_rows,
+        )
+        return _json_response({"ok": True, "dataset": item})
+
     async def experiment_plan_create(request, uid):
         data = await _body(request)
         item = await asyncio.to_thread(
@@ -301,6 +334,9 @@ def setup_velia_research_routes(app):
     app.router.add_get(prefix + "/reports/{report_id}", guarded(report_get))
     app.router.add_post(prefix + "/missions/{mission_id}/hypotheses", guarded(hypothesis_create))
     app.router.add_post(prefix + "/missions/{mission_id}/experiments", guarded(experiment_create))
+    app.router.add_post(prefix + "/missions/{mission_id}/datasets", guarded(dataset_create))
+    app.router.add_get(prefix + "/missions/{mission_id}/datasets", guarded(datasets_list))
+    app.router.add_get(prefix + "/datasets/{dataset_id}", guarded(dataset_get))
     app.router.add_post(prefix + "/missions/{mission_id}/experiment-plans", guarded(experiment_plan_create))
     app.router.add_post(prefix + "/missions/{mission_id}/experiment-pipeline/run", guarded(experiment_pipeline_run))
     app.router.add_get(prefix + "/missions/{mission_id}/experiment-reviews", guarded(experiment_reviews_list))
