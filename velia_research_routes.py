@@ -5,6 +5,7 @@ import logging
 from services import velia_project_service as projects
 from services import velia_research_center_service as research
 from services import velia_research_compute_service as compute
+from services import velia_research_experiment_pipeline_service as experiment_pipeline
 from services import velia_research_director_service as director
 from services import velia_research_literature_service as literature
 from services import velia_research_reasoning_service as reasoning
@@ -41,6 +42,7 @@ def setup_velia_research_routes(app):
             await asyncio.to_thread(director.ensure_tables)
             await asyncio.to_thread(reports.ensure_tables)
             await asyncio.to_thread(compute.ensure_tables)
+            await asyncio.to_thread(experiment_pipeline.ensure_tables)
         except Exception:
             logging.getLogger(__name__).exception("VELIA_RESEARCH_STORAGE_UNAVAILABLE")
 
@@ -74,6 +76,7 @@ def setup_velia_research_routes(app):
         state["director"] = director.status()
         state["reports"] = reports.status()
         state["compute"] = compute.status()
+        state["experiment_pipeline"] = experiment_pipeline.status()
         return _json_response({"ok": True, "research": state})
 
     async def mission_list(request, uid):
@@ -246,6 +249,35 @@ def setup_velia_research_routes(app):
         )
         return _json_response({"ok": True, "compute_run": item})
 
+    async def experiment_plan_create(request, uid):
+        data = await _body(request)
+        item = await asyncio.to_thread(
+            experiment_pipeline.plan,
+            uid,
+            request.match_info["mission_id"],
+            data,
+        )
+        return _json_response({"ok": True, "experiment": item}, status=201)
+
+    async def experiment_pipeline_run(request, uid):
+        data = await _body(request)
+        result = await asyncio.to_thread(
+            experiment_pipeline.run_ready,
+            uid,
+            request.match_info["mission_id"],
+            data.get("max_experiments", 1),
+        )
+        return _json_response({"ok": True, **result})
+
+    async def experiment_reviews_list(request, uid):
+        result = await asyncio.to_thread(
+            experiment_pipeline.list_reviews,
+            uid,
+            request.match_info["mission_id"],
+            int(request.query.get("offset", 0)),
+        )
+        return _json_response({"ok": True, **result})
+
     async def mission_cancel(request, uid):
         mission = await asyncio.to_thread(research.cancel_mission, uid, request.match_info["mission_id"])
         return _json_response({"ok": True, "mission": mission})
@@ -269,6 +301,9 @@ def setup_velia_research_routes(app):
     app.router.add_get(prefix + "/reports/{report_id}", guarded(report_get))
     app.router.add_post(prefix + "/missions/{mission_id}/hypotheses", guarded(hypothesis_create))
     app.router.add_post(prefix + "/missions/{mission_id}/experiments", guarded(experiment_create))
+    app.router.add_post(prefix + "/missions/{mission_id}/experiment-plans", guarded(experiment_plan_create))
+    app.router.add_post(prefix + "/missions/{mission_id}/experiment-pipeline/run", guarded(experiment_pipeline_run))
+    app.router.add_get(prefix + "/missions/{mission_id}/experiment-reviews", guarded(experiment_reviews_list))
     app.router.add_post(prefix + "/experiments/{experiment_id}/compute", guarded(compute_execute))
     app.router.add_get(prefix + "/experiments/{experiment_id}/compute-runs", guarded(compute_runs_list))
     app.router.add_get(prefix + "/compute-runs/{run_id}", guarded(compute_run_get))
