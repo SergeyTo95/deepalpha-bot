@@ -299,12 +299,15 @@ def add_hypothesis(user_id: int, mission_id: str, title: str, rationale: str = "
         raise projects.ProjectError("invalid_hypothesis")
     decision = safety.classify(title + "\n" + rationale, phase="hypothesis")
     with projects.transaction(user_id) as cur:
-        cur.execute("SELECT status FROM velia_research_missions WHERE mission_id=%s AND user_id=%s FOR UPDATE", (str(mission_id), int(user_id)))
+        cur.execute("SELECT status,safety_json FROM velia_research_missions WHERE mission_id=%s AND user_id=%s FOR UPDATE", (str(mission_id), int(user_id)))
         mission = cur.fetchone()
         if not mission:
             raise projects.ProjectError("research_mission_not_found", 404)
         if mission["status"] in {"blocked", "cancelled", "completed"}:
             raise projects.ProjectError("research_mission_not_active", 409)
+        mission_safety = json.loads(mission["safety_json"])
+        if mission_safety.get("read_only_only"):
+            decision = {**decision, "read_only_only": True, "inherited_read_only": True}
         hypothesis_id = str(uuid.uuid4())
         state = "blocked" if decision["decision"] == "blocked" else "proposed"
         cur.execute("""INSERT INTO velia_research_hypotheses(
@@ -324,19 +327,33 @@ def plan_experiment(user_id: int, mission_id: str, method: Dict[str, Any], hypot
     if len(encoded) > 12000:
         raise projects.ProjectError("invalid_experiment_plan")
     decision = safety.classify(encoded, phase="experiment")
-    executable = bool(decision.get("execution_allowed")) and not bool(decision.get("read_only_only")) and experiment_execution_enabled()
     with projects.transaction(user_id) as cur:
-        cur.execute("SELECT status FROM velia_research_missions WHERE mission_id=%s AND user_id=%s FOR UPDATE", (str(mission_id), int(user_id)))
+        cur.execute("SELECT status,safety_json FROM velia_research_missions WHERE mission_id=%s AND user_id=%s FOR UPDATE", (str(mission_id), int(user_id)))
         mission = cur.fetchone()
         if not mission:
             raise projects.ProjectError("research_mission_not_found", 404)
         if mission["status"] in {"blocked", "cancelled", "completed"}:
             raise projects.ProjectError("research_mission_not_active", 409)
+        inherited_read_only = bool(json.loads(mission["safety_json"]).get("read_only_only"))
         if hypothesis_id:
-            cur.execute("SELECT 1 FROM velia_research_hypotheses WHERE hypothesis_id=%s AND mission_id=%s AND user_id=%s",
+            cur.execute("""SELECT status,safety_json FROM velia_research_hypotheses
+                WHERE hypothesis_id=%s AND mission_id=%s AND user_id=%s""",
                         (str(hypothesis_id), str(mission_id), int(user_id)))
-            if not cur.fetchone():
+            hypothesis = cur.fetchone()
+            if not hypothesis:
                 raise projects.ProjectError("research_hypothesis_not_found", 404)
+            if hypothesis["status"] == "blocked":
+                raise projects.ProjectError("research_hypothesis_not_active", 409)
+            inherited_read_only = inherited_read_only or bool(
+                json.loads(hypothesis["safety_json"]).get("read_only_only")
+            )
+        if inherited_read_only:
+            decision = {**decision, "read_only_only": True, "inherited_read_only": True}
+        executable = (
+            bool(decision.get("execution_allowed"))
+            and not bool(decision.get("read_only_only"))
+            and experiment_execution_enabled()
+        )
         experiment_id = str(uuid.uuid4())
         state = "blocked" if decision["decision"] == "blocked" else "planned"
         cur.execute("""INSERT INTO velia_research_experiments(
