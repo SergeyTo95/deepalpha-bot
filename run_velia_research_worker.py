@@ -8,6 +8,7 @@ import time
 
 from services import velia_research_center_service as center
 from services import velia_research_director_service as director
+from services import velia_research_dataset_service as datasets
 from services import velia_research_experiment_pipeline_service as experiment_pipeline
 from services import velia_research_literature_service as literature
 from services import velia_research_reasoning_service as reasoning
@@ -25,6 +26,7 @@ def main() -> None:
     center.ensure_tables()
     literature.ensure_tables()
     reasoning.ensure_tables()
+    datasets.ensure_tables()
     director.ensure_tables()
     experiment_pipeline.ensure_tables()
     reports.ensure_tables()
