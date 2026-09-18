@@ -17,6 +17,7 @@ from services import velia_research_protocol_service as protocol
 from services import velia_research_reasoning_service as reasoning
 from services import velia_research_report_service as reports
 from services import velia_research_systematic_review_service as systematic_review
+from services import velia_research_living_service as living_research
 
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ def main() -> None:
     literature.ensure_tables()
     meta_analysis.ensure_tables()
     systematic_review.ensure_tables()
+    living_research.ensure_tables()
     reasoning.ensure_tables()
     datasets.ensure_tables()
     director.ensure_tables()
@@ -39,8 +41,10 @@ def main() -> None:
     protocol.ensure_tables()
     reports.ensure_tables()
 
-    if not director.enabled():
-        logger.warning("VELIA_RESEARCH_DIRECTOR_WORKER_DISABLED")
+    director_on = director.enabled()
+    living_on = living_research.worker_enabled()
+    if not director_on and not living_on:
+        logger.warning("VELIA_RESEARCH_WORKER_DISABLED")
         return
 
     try:
@@ -61,21 +65,32 @@ def main() -> None:
 
     while not stop.is_set():
         try:
-            run = director.claim_next(worker)
-            if not run:
+            worked = False
+            if director_on:
+                run = director.claim_next(worker)
+                if run:
+                    worked = True
+                    logger.info(
+                        "VELIA_RESEARCH_RUN_STARTED run=%s mission=%s",
+                        run["id"], run["mission_id"],
+                    )
+                    result = director.execute_claimed(run, worker)
+                    logger.info(
+                        "VELIA_RESEARCH_RUN_FINISHED run=%s status=%s reason=%s",
+                        result["id"], result["status"], result.get("stop_reason", ""),
+                    )
+            if living_on:
+                scan = living_research.run_due_once(worker)
+                if scan:
+                    worked = True
+                    logger.info(
+                        "VELIA_LIVING_RESEARCH_SCAN_FINISHED scan=%s mission=%s status=%s",
+                        scan["id"], scan["mission_id"], scan["material_status"],
+                    )
+            if not worked:
                 stop.wait(poll_seconds)
-                continue
-            logger.info(
-                "VELIA_RESEARCH_RUN_STARTED run=%s mission=%s",
-                run["id"], run["mission_id"],
-            )
-            result = director.execute_claimed(run, worker)
-            logger.info(
-                "VELIA_RESEARCH_RUN_FINISHED run=%s status=%s reason=%s",
-                result["id"], result["status"], result.get("stop_reason", ""),
-            )
         except Exception:
-            logger.exception("VELIA_RESEARCH_DIRECTOR_WORKER_ITERATION_FAILED")
+            logger.exception("VELIA_RESEARCH_WORKER_ITERATION_FAILED")
             stop.wait(poll_seconds)
 
     logger.info("VELIA_RESEARCH_DIRECTOR_WORKER_STOPPED worker=%s", worker)
