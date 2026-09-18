@@ -23,6 +23,7 @@ def status() -> Dict[str, Any]:
         "source_provenance": True,
         "computational_provenance": True,
         "dataset_provenance": True,
+        "protocol_provenance": True,
         "versioned_snapshots": True,
     }
 
@@ -108,14 +109,21 @@ def _computational_evidence(cur, user_id: int, mission_id: str) -> Dict[str, Any
         (str(mission_id), int(user_id)))
     reviews: List[Dict[str, Any]] = []
     dataset_snapshots: List[Dict[str, Any]] = []
+    protocol_snapshots: List[Dict[str, Any]] = []
     seen_datasets = set()
+    seen_protocols = set()
     for row in cur.fetchall():
         method = json.loads(row["method_json"])
         data_provenance: Dict[str, Any] = {"data_origin": method.get("data_origin")}
         if method.get("data_origin") == "dataset_registry":
             snapshot = method.get("dataset_snapshot")
             if isinstance(snapshot, dict):
-                data_provenance = snapshot
+                protocol_snapshot = method.get("protocol_snapshot")
+                data_provenance = {
+                    **snapshot,
+                    "analysis_mode": method.get("analysis_mode"),
+                    "protocol_snapshot": protocol_snapshot,
+                }
                 key = (
                     str(snapshot.get("dataset_id") or ""),
                     str(snapshot.get("dataset_hash") or ""),
@@ -126,6 +134,14 @@ def _computational_evidence(cur, user_id: int, mission_id: str) -> Dict[str, Any
                 if key not in seen_datasets:
                     seen_datasets.add(key)
                     dataset_snapshots.append(snapshot)
+                if isinstance(protocol_snapshot, dict):
+                    pkey = (
+                        str(protocol_snapshot.get("protocol_id") or ""),
+                        str(protocol_snapshot.get("protocol_hash") or ""),
+                    )
+                    if pkey not in seen_protocols:
+                        seen_protocols.add(pkey)
+                        protocol_snapshots.append(protocol_snapshot)
         reviews.append({
             "review_id": row["review_id"],
             "experiment_id": row["experiment_id"],
@@ -143,6 +159,7 @@ def _computational_evidence(cur, user_id: int, mission_id: str) -> Dict[str, Any
         "review_count": len(reviews),
         "reviews": reviews,
         "datasets": dataset_snapshots,
+        "protocols": protocol_snapshots,
         "boundary": (
             "Computational results are supporting evidence under explicit numerical inputs and "
             "model assumptions; they are not independent empirical replication."
@@ -189,7 +206,7 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
             })
 
         report: Dict[str, Any] = {
-            "version": 3,
+            "version": 4,
             "title": "VELIA Research Report",
             "mission": {
                 "id": str(mission_id),
@@ -223,6 +240,8 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
                 "immutable_dataset_ids": [row["dataset_id"] for row in computational.get("datasets", [])],
                 "immutable_dataset_hashes": [row["dataset_hash"] for row in computational.get("datasets", [])],
                 "immutable_dataset_split_hashes": [row["split_hash"] for row in computational.get("datasets", [])],
+                "immutable_protocol_ids": [row["protocol_id"] for row in computational.get("protocols", [])],
+                "immutable_protocol_hashes": [row["protocol_hash"] for row in computational.get("protocols", [])],
             },
             "safety": {
                 "mission": mission["safety"],
