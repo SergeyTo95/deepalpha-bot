@@ -12,7 +12,6 @@ import os
 import socket
 import time
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from services import velia_project_service as projects
@@ -224,9 +223,9 @@ def cancel_job(user_id: int, job_id: str) -> Dict[str, Any]:
 
 def _recover_stale(cur) -> None:
     cur.execute("""UPDATE velia_research_autonomy_jobs
-        SET status=CASE WHEN failure_count >= %s THEN 'failed' ELSE 'queued' END,
-            last_error=CASE WHEN failure_count >= %s THEN 'research_autonomy_lease_exhausted'
-                            ELSE last_error END,
+        SET failure_count=LEAST(%s,failure_count+1),
+            status=CASE WHEN failure_count+1 >= %s THEN 'failed' ELSE 'queued' END,
+            last_error='research_autonomy_lease_expired',
             lease_token=NULL,lease_owner=NULL,lease_expires_at=NULL,updated_at=NOW()
         WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at < NOW()""",
         (MAX_FAILURES, MAX_FAILURES))
@@ -315,6 +314,25 @@ def _complete(job_id: str, lease_token: str, *, state: Dict[str, Any]) -> Dict[s
         return _job(completed)
 
 
+def _stop_claim(job_id: str, lease_token: str, code: str, *, cancelled: bool = False) -> Dict[str, Any]:
+    with projects.transaction() as cur:
+        row = _assert_claim(cur, job_id, lease_token)
+        status = "cancelled" if cancelled else "failed"
+        cur.execute("""UPDATE velia_research_autonomy_jobs
+            SET status=%s,last_error=%s,lease_token=NULL,lease_owner=NULL,
+                lease_expires_at=NULL,updated_at=NOW()
+            WHERE job_id=%s RETURNING *""",
+            (status, str(code)[:120], str(job_id)))
+        updated = cur.fetchone()
+        center._event(cur, row["mission_id"], int(row["user_id"]),
+                      "research_autonomy_cancelled" if cancelled else "research_autonomy_failed", {
+            "job_id": str(job_id),
+            "error": str(code)[:120],
+            "terminal": True,
+        })
+        return _job(updated)
+
+
 def _retry_or_fail(job_id: str, lease_token: str, code: str) -> Dict[str, Any]:
     with projects.transaction() as cur:
         row = _assert_claim(cur, job_id, lease_token)
@@ -367,9 +385,6 @@ def process_claimed(job: Dict[str, Any]) -> Dict[str, Any]:
     if not job_id or not lease_token:
         raise projects.ProjectError("research_autonomy_lease_required", 409)
 
-    persisted = get_job(int(job["state"].get("user_id", 0) or 0), job_id) if False else None
-    del persisted  # The owner is read from the lease below; never trust caller state.
-
     with projects.transaction() as cur:
         row = _assert_claim(cur, job_id, lease_token)
         user_id = int(row["user_id"])
@@ -379,13 +394,13 @@ def process_claimed(job: Dict[str, Any]) -> Dict[str, Any]:
         max_iterations = int(row["max_iterations"])
         state = _state(row["state_json"])
 
-    mission = center.get_mission(user_id, mission_id)
-    if mission["status"] in {"blocked", "cancelled", "completed"}:
-        return _retry_or_fail(job_id, lease_token, "research_mission_not_active")
-    if not bool(mission["safety"].get("execution_allowed")):
-        return _retry_or_fail(job_id, lease_token, "research_safety_blocked")
-
     try:
+        mission = center.get_mission(user_id, mission_id)
+        if mission["status"] in {"cancelled", "completed"}:
+            return _stop_claim(job_id, lease_token, "research_mission_not_active", cancelled=True)
+        if mission["status"] == "blocked" or not bool(mission["safety"].get("execution_allowed")):
+            return _stop_claim(job_id, lease_token, "research_safety_blocked")
+
         if phase == "literature":
             query = str(state.get("current_query") or mission["goal"])[:800]
             literature.collect(user_id, mission_id, query, 8)
@@ -420,12 +435,10 @@ def process_claimed(job: Dict[str, Any]) -> Dict[str, Any]:
 
         return _retry_or_fail(job_id, lease_token, "research_autonomy_invalid_phase")
     except projects.ProjectError as exc:
-        if exc.code in {
-            "research_safety_blocked",
-            "research_reasoning_safety_blocked",
-            "research_mission_not_active",
-        }:
-            return _retry_or_fail(job_id, lease_token, exc.code)
+        if exc.code in {"research_safety_blocked", "research_reasoning_safety_blocked"}:
+            return _stop_claim(job_id, lease_token, exc.code)
+        if exc.code == "research_mission_not_active":
+            return _stop_claim(job_id, lease_token, exc.code, cancelled=True)
         return _retry_or_fail(job_id, lease_token, exc.code)
     except Exception:
         return _retry_or_fail(job_id, lease_token, "research_autonomy_internal_error")
