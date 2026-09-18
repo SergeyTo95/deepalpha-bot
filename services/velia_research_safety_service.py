@@ -47,8 +47,8 @@ _TOXIN = (
 )
 
 _CYBER = (
-    r"\b(ransomware|malware|keylogger|botnet|shellcode|rootkit|credential stealer|phishing kit|exploit)\b",
-    r"(вымогател|вредонос|малвар|кейлоггер|ботнет|шеллкод|рутки|стилер|фишинг|эксплойт|взлом)",
+    r"\b(cybersecurity|cyber security|ransomware|malware|keylogger|botnet|shellcode|rootkit|credential stealer|phishing kit|exploit)\b",
+    r"(кибербезопас|киберзащит|вымогател|вредонос|малвар|кейлоггер|ботнет|шеллкод|рутки|стилер|фишинг|эксплойт|взлом)",
 )
 
 _CYBER_HARM = (
