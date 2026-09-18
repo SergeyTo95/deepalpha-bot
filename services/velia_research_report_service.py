@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 
 from services import velia_project_service as projects
 from services import velia_research_center_service as center
+from services import velia_research_claim_service as claims
 from services.velia_chat_service import _iso
 
 
@@ -24,6 +25,8 @@ def status() -> Dict[str, Any]:
         "computational_provenance": True,
         "dataset_provenance": True,
         "protocol_provenance": True,
+        "claim_ledger_provenance": True,
+        "claim_language_stage_bounded": True,
         "versioned_snapshots": True,
     }
 
@@ -174,6 +177,8 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
     if mission["status"] in {"blocked", "cancelled"}:
         raise projects.ProjectError("research_mission_not_reportable", 409)
 
+    claim_ledger = claims.mission_ledger(user_id, mission_id) if claims.enabled() else None
+
     with projects.transaction(user_id) as cur:
         synthesis = _latest_synthesis(cur, user_id, mission_id)
         result = json.loads(synthesis["result_json"])
@@ -205,8 +210,20 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
                 "retrieved_at": _iso(row["retrieved_at"]),
             })
 
+        bounded_summary = result.get("summary", "")
+        bounded_confidence = result.get("confidence", "uncertain")
+        claim_findings: List[str] = []
+        if claim_ledger is not None:
+            claim_findings = [item["wording"] for item in claim_ledger.get("snapshots", [])]
+            bounded_summary = (
+                " ".join(claim_findings[:8])
+                if claim_findings
+                else "No registered claim has completed evidence; no claim-level conclusion is permitted."
+            )
+            bounded_confidence = "claim_ledger_bounded"
+
         report: Dict[str, Any] = {
-            "version": 4,
+            "version": 5 if claim_ledger is not None else 4,
             "title": "VELIA Research Report",
             "mission": {
                 "id": str(mission_id),
@@ -215,8 +232,17 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
                 "status": mission["status"],
             },
             "conclusion": {
-                "summary": result.get("summary", ""),
-                "confidence": result.get("confidence", "uncertain"),
+                "summary": bounded_summary,
+                "confidence": bounded_confidence,
+                "claim_findings": claim_findings,
+                "literature_synthesis_summary": result.get("summary", ""),
+                "literature_synthesis_confidence": result.get("confidence", "uncertain"),
+                "boundary": (
+                    "Final scientific claim language is limited by the deterministic Claim Ledger. "
+                    "The literature synthesis is contextual and cannot raise a claim above its ledger stage."
+                    if claim_ledger is not None
+                    else "Claim Ledger is disabled; this report contains synthesis-level conclusions only."
+                ),
             },
             "evidence": {
                 "source_count": len(citations),
@@ -229,6 +255,7 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
             "hypotheses": result.get("hypotheses", []),
             "open_questions": result.get("open_questions", []),
             "computational_evidence": computational,
+            "claim_ledger": claim_ledger,
             "provenance": {
                 "synthesis_id": synthesis["synthesis_id"],
                 "evidence_hash": synthesis["evidence_hash"],
@@ -242,11 +269,29 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
                 "immutable_dataset_split_hashes": [row["split_hash"] for row in computational.get("datasets", [])],
                 "immutable_protocol_ids": [row["protocol_id"] for row in computational.get("protocols", [])],
                 "immutable_protocol_hashes": [row["protocol_hash"] for row in computational.get("protocols", [])],
+                "immutable_claim_ids": (
+                    [row["id"] for row in claim_ledger.get("claims", [])]
+                    if claim_ledger is not None else []
+                ),
+                "immutable_claim_hashes": (
+                    [row["claim_hash"] for row in claim_ledger.get("claims", [])]
+                    if claim_ledger is not None else []
+                ),
+                "immutable_claim_snapshot_ids": (
+                    [row["id"] for row in claim_ledger.get("snapshots", [])]
+                    if claim_ledger is not None else []
+                ),
+                "immutable_claim_evidence_hashes": (
+                    [row["evidence_hash"] for row in claim_ledger.get("snapshots", [])]
+                    if claim_ledger is not None else []
+                ),
             },
             "safety": {
                 "mission": mission["safety"],
                 "synthesis": json.loads(synthesis["safety_json"]),
                 "operational_harmful_instructions_allowed": False,
+                "claim_overstatement_allowed": False,
+                "claim_ledger_enabled": claim_ledger is not None,
             },
         }
         if mission["domain"] == "medicine":
