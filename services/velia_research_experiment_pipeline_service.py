@@ -238,6 +238,8 @@ def plan(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
 
     dataset_mode = dataset_id is not None
     if dataset_mode:
+        if split == "train" and claim_id is not None:
+            raise projects.ProjectError("invalid_experiment_pipeline_plan")
         if parameters is not None or not datasets.enabled():
             raise projects.ProjectError("invalid_experiment_pipeline_plan")
         if operation == "monte_carlo_sum":
@@ -288,7 +290,7 @@ def plan(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
     else:
         if not isinstance(parameters, dict):
             raise projects.ProjectError("invalid_experiment_pipeline_plan")
-        if split is not None or selected_columns is not None or analysis_options:
+        if split is not None or selected_columns is not None or analysis_options or claim_id is not None:
             raise projects.ProjectError("invalid_experiment_pipeline_plan")
         compute_request = {"operation": operation, "parameters": parameters, "seed": seed}
         validated_operation, validated_parameters, validated_seed = compute._validate_request(compute_request)
