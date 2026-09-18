@@ -12,6 +12,7 @@ from services import velia_research_director_service as director
 from services import velia_research_dataset_service as datasets
 from services import velia_research_experiment_pipeline_service as experiment_pipeline
 from services import velia_research_literature_service as literature
+from services import velia_research_meta_analysis_service as meta_analysis
 from services import velia_research_protocol_service as protocol
 from services import velia_research_reasoning_service as reasoning
 from services import velia_research_report_service as reports
@@ -28,6 +29,7 @@ def main() -> None:
     center.ensure_tables()
     claims.ensure_tables()
     literature.ensure_tables()
+    meta_analysis.ensure_tables()
     reasoning.ensure_tables()
     datasets.ensure_tables()
     director.ensure_tables()
