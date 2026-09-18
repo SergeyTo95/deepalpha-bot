@@ -24,6 +24,7 @@ RUN_STATES = {"queued", "running", "completed", "failed", "cancelled"}
 MAX_ITERATIONS = 3
 MAX_QUERIES_PER_ITERATION = 2
 LEASE_SECONDS = 180
+MAX_ATTEMPTS = 3
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -47,6 +48,7 @@ def status() -> Dict[str, Any]:
         "enabled": enabled(),
         "max_iterations": MAX_ITERATIONS,
         "max_queries_per_iteration": MAX_QUERIES_PER_ITERATION,
+        "max_attempts": MAX_ATTEMPTS,
         "worker_required": True,
         "read_only_research_cycle": True,
         "experiment_execution": False,
@@ -196,13 +198,28 @@ def claim_next(worker: str) -> Optional[Dict[str, Any]]:
         return None
     ensure_tables()
     with projects.transaction() as cur:
+        cur.execute("""UPDATE velia_research_autonomy_runs
+            SET status='failed',worker_id=NULL,lease_until=NULL,
+                stop_reason='attempt_limit',error_code='research_run_attempt_limit',
+                updated_at=NOW()
+            WHERE status='running'
+              AND lease_until IS NOT NULL
+              AND lease_until < NOW()
+              AND attempt_count >= %s
+            RETURNING run_id,mission_id,user_id""", (MAX_ATTEMPTS,))
+        for abandoned in cur.fetchall():
+            center._event(cur, abandoned["mission_id"], abandoned["user_id"], "autonomy_run_abandoned", {
+                "run_id": abandoned["run_id"],
+                "error_code": "research_run_attempt_limit",
+            })
         cur.execute("""SELECT * FROM velia_research_autonomy_runs
-            WHERE status='queued'
-               OR (status='running' AND lease_until IS NOT NULL AND lease_until < NOW())
+            WHERE (status='queued'
+               OR (status='running' AND lease_until IS NOT NULL AND lease_until < NOW()))
+              AND attempt_count < %s
             ORDER BY
               CASE WHEN status='queued' THEN 0 ELSE 1 END,
               updated_at ASC,created_at ASC
-            FOR UPDATE SKIP LOCKED LIMIT 1""")
+            FOR UPDATE SKIP LOCKED LIMIT 1""", (MAX_ATTEMPTS,))
         row = cur.fetchone()
         if not row:
             return None
