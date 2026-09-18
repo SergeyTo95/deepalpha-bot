@@ -398,8 +398,19 @@ def verify_snapshot(user_id: int, expected: Dict[str, Any]) -> Dict[str, Any]:
     return current
 
 
-def materialize(user_id: int, expected: Dict[str, Any]) -> Dict[str, List[float]]:
+def materialize(
+    user_id: int,
+    expected: Dict[str, Any],
+    *,
+    confirmatory_authorized: bool = False,
+) -> Dict[str, List[float]]:
     current = verify_snapshot(user_id, expected)
+    if (
+        current["split"] == "test"
+        and _env_bool("VELIA_RESEARCH_PROTOCOL_OFFICER_ENABLED", False)
+        and confirmatory_authorized is not True
+    ):
+        raise projects.ProjectError("research_preregistration_required", 409)
     dataset = get(user_id, current["dataset_id"], include_rows=True)
     indices = dataset["split"][current["split"] + "_indices"]
     positions = {name: dataset["columns"].index(name) for name in current["columns"]}
