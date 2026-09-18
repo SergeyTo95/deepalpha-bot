@@ -11,6 +11,7 @@ from services import velia_research_experiment_pipeline_service as experiment_pi
 from services import velia_research_protocol_service as protocol
 from services import velia_research_director_service as director
 from services import velia_research_literature_service as literature
+from services import velia_research_meta_analysis_service as meta_analysis
 from services import velia_research_reasoning_service as reasoning
 from services import velia_research_report_service as reports
 from velia_mobile_routes import _json_response, _mobile_api_available, _require_mobile_auth
@@ -43,6 +44,7 @@ def setup_velia_research_routes(app):
             await asyncio.to_thread(research.ensure_tables)
             await asyncio.to_thread(claims.ensure_tables)
             await asyncio.to_thread(literature.ensure_tables)
+            await asyncio.to_thread(meta_analysis.ensure_tables)
             await asyncio.to_thread(reasoning.ensure_tables)
             await asyncio.to_thread(director.ensure_tables)
             await asyncio.to_thread(reports.ensure_tables)
@@ -87,6 +89,7 @@ def setup_velia_research_routes(app):
         state["experiment_pipeline"] = experiment_pipeline.status()
         state["protocol_officer"] = protocol.status()
         state["claim_ledger"] = claims.status()
+        state["meta_analysis"] = meta_analysis.status()
         return _json_response({"ok": True, "research": state})
 
     async def mission_list(request, uid):
@@ -332,6 +335,58 @@ def setup_velia_research_routes(app):
         )
         return _json_response({"ok": True, **result})
 
+    async def meta_study_create(request, uid):
+        data = await _body(request)
+        item = await asyncio.to_thread(
+            meta_analysis.register_study,
+            uid,
+            request.match_info["claim_id"],
+            data,
+        )
+        return _json_response({"ok": True, "study": item}, status=201)
+
+    async def meta_studies_list(request, uid):
+        result = await asyncio.to_thread(
+            meta_analysis.list_studies,
+            uid,
+            request.match_info["claim_id"],
+            int(request.query.get("offset", 0)),
+        )
+        return _json_response({"ok": True, **result})
+
+    async def meta_analyze(request, uid):
+        item = await asyncio.to_thread(
+            meta_analysis.analyze_claim,
+            uid,
+            request.match_info["claim_id"],
+        )
+        return _json_response({"ok": True, "meta_analysis": item}, status=201)
+
+    async def meta_snapshots_list(request, uid):
+        result = await asyncio.to_thread(
+            meta_analysis.list_snapshots,
+            uid,
+            request.match_info["claim_id"],
+            int(request.query.get("offset", 0)),
+        )
+        return _json_response({"ok": True, **result})
+
+    async def meta_snapshot_get(request, uid):
+        item = await asyncio.to_thread(
+            meta_analysis.get_snapshot,
+            uid,
+            request.match_info["snapshot_id"],
+        )
+        return _json_response({"ok": True, "meta_analysis": item})
+
+    async def mission_meta_evidence(request, uid):
+        result = await asyncio.to_thread(
+            meta_analysis.mission_meta_evidence,
+            uid,
+            request.match_info["mission_id"],
+        )
+        return _json_response({"ok": True, **result})
+
     async def protocol_create(request, uid):
         data = await _body(request)
         item = await asyncio.to_thread(
@@ -429,6 +484,12 @@ def setup_velia_research_routes(app):
     app.router.add_get(prefix + "/claims/{claim_id}", guarded(claim_get))
     app.router.add_post(prefix + "/claims/{claim_id}/evaluate", guarded(claim_evaluate))
     app.router.add_get(prefix + "/missions/{mission_id}/claim-ledger", guarded(mission_claim_ledger))
+    app.router.add_post(prefix + "/claims/{claim_id}/meta-studies", guarded(meta_study_create))
+    app.router.add_get(prefix + "/claims/{claim_id}/meta-studies", guarded(meta_studies_list))
+    app.router.add_post(prefix + "/claims/{claim_id}/meta-analysis", guarded(meta_analyze))
+    app.router.add_get(prefix + "/claims/{claim_id}/meta-analyses", guarded(meta_snapshots_list))
+    app.router.add_get(prefix + "/meta-analyses/{snapshot_id}", guarded(meta_snapshot_get))
+    app.router.add_get(prefix + "/missions/{mission_id}/meta-evidence", guarded(mission_meta_evidence))
     app.router.add_post(prefix + "/missions/{mission_id}/protocols", guarded(protocol_create))
     app.router.add_get(prefix + "/missions/{mission_id}/protocols", guarded(protocols_list))
     app.router.add_get(prefix + "/protocols/{protocol_id}", guarded(protocol_get))
