@@ -243,6 +243,8 @@ def _quality_audit(
 
 def ensure_tables() -> None:
     datasets.ensure_tables()
+    if claims.enabled():
+        claims.ensure_tables()
     with projects.transaction() as cur:
         cur.execute("""CREATE TABLE IF NOT EXISTS velia_research_protocols (
             protocol_id TEXT PRIMARY KEY,
@@ -427,8 +429,6 @@ def create_locked(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
         "outlier_policy": outlier_policy,
         "power_plan": power_plan,
     }
-    protocol_hash = _sha(frozen)
-
     dataset_internal = datasets.get(user_id, dataset_id, include_rows=True)
     quality = _quality_audit(
         dataset_internal, selected, dictionary, outcome, outlier_policy
@@ -448,6 +448,9 @@ def create_locked(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
         power_plan["available_confirmatory_n"] = int(dataset_meta["split"]["test_count"])
         power_plan["planned_sample_size_sufficient"] = None
 
+    # The immutable hash covers the final frozen power plan, including available
+    # held-out sample size and the deterministic sufficiency assessment.
+    protocol_hash = _sha(frozen)
     decision = safety.classify(_json(frozen), phase="experiment")
     if decision["decision"] != "allowed" or decision.get("read_only_only"):
         raise projects.ProjectError("research_protocol_safety_blocked", 403)
