@@ -389,6 +389,10 @@ def test_verified_new_evidence_recomputes_pool_without_promoting_stage(postgres,
     assert new_report["report"]["safety"]["living_research_reassessment_pending"] is False
     assert new_report["report"]["conclusion"]["confidence"] == "claim_ledger_bounded_after_living_reassessment"
 
+    rebuilt = reports.build_report(803, mission["id"])
+    assert rebuilt["id"] == new_report["id"]
+    assert rebuilt["report_hash"] == new_report["report_hash"]
+
 
 def test_retraction_removes_study_only_from_living_pool(postgres, monkeypatch):
     mission, claim, review, s1, s2, old_meta, old_report = _setup_baseline(804)
