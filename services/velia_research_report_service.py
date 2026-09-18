@@ -83,6 +83,45 @@ def _source_rows(cur, user_id: int, mission_id: str, source_ids: List[str]) -> L
     return [by_id[source_id] for source_id in source_ids if source_id in by_id]
 
 
+def _computational_evidence(cur, user_id: int, mission_id: str) -> Dict[str, Any]:
+    cur.execute("SELECT to_regclass('velia_research_experiment_reviews') AS table_name")
+    table = cur.fetchone()
+    if not table or not table.get("table_name"):
+        return {
+            "review_count": 0,
+            "reviews": [],
+            "boundary": "No reviewed safe-compute experiments are attached to this report snapshot.",
+        }
+    cur.execute("""SELECT review_id,experiment_id,compute_run_id,operation,result_hash,
+               statistician_json,skeptic_json,replication_json,safety_json,created_at
+        FROM velia_research_experiment_reviews
+        WHERE mission_id=%s AND user_id=%s
+        ORDER BY created_at ASC,review_id ASC LIMIT 20""",
+        (str(mission_id), int(user_id)))
+    reviews: List[Dict[str, Any]] = []
+    for row in cur.fetchall():
+        reviews.append({
+            "review_id": row["review_id"],
+            "experiment_id": row["experiment_id"],
+            "compute_run_id": row["compute_run_id"],
+            "operation": row["operation"],
+            "result_hash": row["result_hash"],
+            "statistician": json.loads(row["statistician_json"]),
+            "skeptic": json.loads(row["skeptic_json"]),
+            "replication": json.loads(row["replication_json"]),
+            "safety": json.loads(row["safety_json"]),
+            "created_at": _iso(row["created_at"]),
+        })
+    return {
+        "review_count": len(reviews),
+        "reviews": reviews,
+        "boundary": (
+            "Computational results are supporting evidence under explicit numerical inputs and "
+            "model assumptions; they are not independent empirical replication."
+        ),
+    }
+
+
 def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
     if not center.enabled():
         raise projects.ProjectError("research_center_disabled", 503)
@@ -105,6 +144,7 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
             source_ids = []
         source_ids = [str(value) for value in source_ids[:20]]
         rows = _source_rows(cur, user_id, mission_id, source_ids)
+        computational = _computational_evidence(cur, user_id, mission_id)
 
         profile: Dict[str, int] = {}
         citations: List[Dict[str, Any]] = []
@@ -128,7 +168,7 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
             })
 
         report: Dict[str, Any] = {
-            "version": 1,
+            "version": 2,
             "title": "VELIA Research Report",
             "mission": {
                 "id": str(mission_id),
@@ -150,12 +190,15 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
             "limitations": result.get("limitations", []),
             "hypotheses": result.get("hypotheses", []),
             "open_questions": result.get("open_questions", []),
+            "computational_evidence": computational,
             "provenance": {
                 "synthesis_id": synthesis["synthesis_id"],
                 "evidence_hash": synthesis["evidence_hash"],
                 "provider": synthesis["provider"],
                 "synthesis_created_at": _iso(synthesis["created_at"]),
                 "immutable_source_ids": source_ids,
+                "immutable_compute_review_ids": [row["review_id"] for row in computational["reviews"]],
+                "immutable_compute_result_hashes": [row["result_hash"] for row in computational["reviews"]],
             },
             "safety": {
                 "mission": mission["safety"],
