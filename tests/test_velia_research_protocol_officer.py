@@ -256,14 +256,11 @@ def test_protocol_is_bound_to_exact_analysis_and_columns(postgres):
 
 def test_quality_officer_blocks_cross_split_duplicate_leakage(postgres):
     mission = _mission(307)
-    dataset = datasets.create(307, mission["id"], _dataset_payload(seed=1, duplicate=True))
+    dataset = datasets.create(307, mission["id"], _dataset_payload(seed=2, duplicate=True))
     hypothesis = _hypothesis(307, mission["id"])
-    # Pick seeds until duplicate records land across the boundary; registry split is immutable.
-    if not (
-        0 in dataset["split"]["train_indices"] and 79 in dataset["split"]["test_indices"]
-        or 79 in dataset["split"]["train_indices"] and 0 in dataset["split"]["test_indices"]
-    ):
-        pytest.skip("deterministic seed did not place duplicate pair across split")
+    assert (
+        0 in dataset["split"]["test_indices"] and 79 in dataset["split"]["train_indices"]
+    )
     with pytest.raises(projects.ProjectError, match="research_dataset_quality_failed"):
         protocol.create_locked(
             307, mission["id"], _protocol_payload(hypothesis["id"], dataset["id"])
