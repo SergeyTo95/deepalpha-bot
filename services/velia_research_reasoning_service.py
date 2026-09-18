@@ -136,7 +136,7 @@ def _source_packet(user_id: int, mission_id: str, max_sources: int) -> tuple[Lis
     seen = set()
     for row in rows:
         doi_key = str(row["doi"] or "").casefold()
-        title_key = re.sub(r"\\W+", "", str(row["title"] or "").casefold())
+        title_key = re.sub(r"\W+", "", str(row["title"] or "").casefold())
         dedupe_key = ("doi", doi_key) if doi_key else ("title", title_key)
         if not dedupe_key[1] or dedupe_key in seen:
             continue
