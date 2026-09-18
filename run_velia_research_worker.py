@@ -16,6 +16,7 @@ from services import velia_research_meta_analysis_service as meta_analysis
 from services import velia_research_protocol_service as protocol
 from services import velia_research_reasoning_service as reasoning
 from services import velia_research_report_service as reports
+from services import velia_research_systematic_review_service as systematic_review
 
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ def main() -> None:
     claims.ensure_tables()
     literature.ensure_tables()
     meta_analysis.ensure_tables()
+    systematic_review.ensure_tables()
     reasoning.ensure_tables()
     datasets.ensure_tables()
     director.ensure_tables()
