@@ -27,6 +27,7 @@ jobs:
       VELIA_RESEARCH_AUTONOMY_ENABLED: 'false'
       VELIA_RESEARCH_EXPERIMENT_EXECUTION_ENABLED: 'false'
       VELIA_RESEARCH_LITERATURE_ENABLED: 'false'
+      VELIA_RESEARCH_REASONING_ENABLED: 'false'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,9 +37,9 @@ jobs:
           python-version: '3.11'
       - run: pip install -r requirements.txt pytest pytest-asyncio
       - name: Focused Research Center tests
-        run: python -m pytest -q tests/test_velia_research_center.py tests/test_velia_research_literature.py tests/test_velia_projects.py
+        run: python -m pytest -q tests/test_velia_research_center.py tests/test_velia_research_literature.py tests/test_velia_research_reasoning.py tests/test_velia_projects.py
       - name: Compile Research Center surface
-        run: python -m compileall -q services/velia_research_safety_service.py services/velia_research_center_service.py services/velia_research_literature_service.py velia_research_routes.py velia_project_routes.py
+        run: python -m compileall -q services/velia_research_safety_service.py services/velia_research_center_service.py services/velia_research_literature_service.py services/velia_research_reasoning_service.py velia_research_routes.py velia_project_routes.py
       - name: Safety boundary static assertions
         run: |
           python - <<'PY'
@@ -46,6 +47,7 @@ jobs:
           center = Path('services/velia_research_center_service.py').read_text()
           safety = Path('services/velia_research_safety_service.py').read_text()
           literature = Path('services/velia_research_literature_service.py').read_text()
+          reasoning = Path('services/velia_research_reasoning_service.py').read_text()
           routes = Path('velia_research_routes.py').read_text()
           assert 'VELIA_RESEARCH_CENTER_ENABLED", False' in center
           assert 'VELIA_RESEARCH_AUTONOMY_ENABLED", False' in center
