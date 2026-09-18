@@ -4,6 +4,7 @@ import logging
 
 from services import velia_project_service as projects
 from services import velia_research_center_service as research
+from services import velia_research_compute_service as compute
 from services import velia_research_director_service as director
 from services import velia_research_literature_service as literature
 from services import velia_research_reasoning_service as reasoning
@@ -11,7 +12,7 @@ from services import velia_research_report_service as reports
 from velia_mobile_routes import _json_response, _mobile_api_available, _require_mobile_auth
 
 
-MAX_BODY = 24 * 1024
+MAX_BODY = 64 * 1024
 
 
 async def _body(request):
@@ -39,6 +40,7 @@ def setup_velia_research_routes(app):
             await asyncio.to_thread(reasoning.ensure_tables)
             await asyncio.to_thread(director.ensure_tables)
             await asyncio.to_thread(reports.ensure_tables)
+            await asyncio.to_thread(compute.ensure_tables)
         except Exception:
             logging.getLogger(__name__).exception("VELIA_RESEARCH_STORAGE_UNAVAILABLE")
 
@@ -71,6 +73,7 @@ def setup_velia_research_routes(app):
         state["reasoning"] = reasoning.status()
         state["director"] = director.status()
         state["reports"] = reports.status()
+        state["compute"] = compute.status()
         return _json_response({"ok": True, "research": state})
 
     async def mission_list(request, uid):
@@ -215,6 +218,34 @@ def setup_velia_research_routes(app):
         )
         return _json_response({"ok": True, "report": item})
 
+    async def compute_execute(request, uid):
+        data = await _body(request)
+        item = await asyncio.to_thread(
+            compute.execute,
+            uid,
+            request.match_info["experiment_id"],
+            data,
+            request.headers.get("Idempotency-Key"),
+        )
+        return _json_response({"ok": True, "compute_run": item}, status=201)
+
+    async def compute_runs_list(request, uid):
+        result = await asyncio.to_thread(
+            compute.list_runs,
+            uid,
+            request.match_info["experiment_id"],
+            int(request.query.get("offset", 0)),
+        )
+        return _json_response({"ok": True, **result})
+
+    async def compute_run_get(request, uid):
+        item = await asyncio.to_thread(
+            compute.get_run,
+            uid,
+            request.match_info["run_id"],
+        )
+        return _json_response({"ok": True, "compute_run": item})
+
     async def mission_cancel(request, uid):
         mission = await asyncio.to_thread(research.cancel_mission, uid, request.match_info["mission_id"])
         return _json_response({"ok": True, "mission": mission})
@@ -238,4 +269,7 @@ def setup_velia_research_routes(app):
     app.router.add_get(prefix + "/reports/{report_id}", guarded(report_get))
     app.router.add_post(prefix + "/missions/{mission_id}/hypotheses", guarded(hypothesis_create))
     app.router.add_post(prefix + "/missions/{mission_id}/experiments", guarded(experiment_create))
+    app.router.add_post(prefix + "/experiments/{experiment_id}/compute", guarded(compute_execute))
+    app.router.add_get(prefix + "/experiments/{experiment_id}/compute-runs", guarded(compute_runs_list))
+    app.router.add_get(prefix + "/compute-runs/{run_id}", guarded(compute_run_get))
     app.router.add_post(prefix + "/missions/{mission_id}/cancel", guarded(mission_cancel))
