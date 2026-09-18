@@ -7,6 +7,7 @@ from services import velia_research_center_service as research
 from services import velia_research_compute_service as compute
 from services import velia_research_dataset_service as datasets
 from services import velia_research_experiment_pipeline_service as experiment_pipeline
+from services import velia_research_protocol_service as protocol
 from services import velia_research_director_service as director
 from services import velia_research_literature_service as literature
 from services import velia_research_reasoning_service as reasoning
@@ -46,6 +47,7 @@ def setup_velia_research_routes(app):
             await asyncio.to_thread(compute.ensure_tables)
             await asyncio.to_thread(datasets.ensure_tables)
             await asyncio.to_thread(experiment_pipeline.ensure_tables)
+            await asyncio.to_thread(protocol.ensure_tables)
         except Exception:
             logging.getLogger(__name__).exception("VELIA_RESEARCH_STORAGE_UNAVAILABLE")
 
@@ -81,6 +83,7 @@ def setup_velia_research_routes(app):
         state["compute"] = compute.status()
         state["datasets"] = datasets.status()
         state["experiment_pipeline"] = experiment_pipeline.status()
+        state["protocol_officer"] = protocol.status()
         return _json_response({"ok": True, "research": state})
 
     async def mission_list(request, uid):
@@ -273,14 +276,52 @@ def setup_velia_research_routes(app):
         return _json_response({"ok": True, **result})
 
     async def dataset_get(request, uid):
-        include_rows = str(request.query.get("include_rows", "")).lower() in {"1", "true", "yes"}
+        if str(request.query.get("include_rows", "")).lower() in {"1", "true", "yes"}:
+            raise projects.ProjectError("research_dataset_rows_not_exposed", 403)
         item = await asyncio.to_thread(
             datasets.get,
             uid,
             request.match_info["dataset_id"],
-            include_rows=include_rows,
+            include_rows=False,
         )
         return _json_response({"ok": True, "dataset": item})
+
+    async def protocol_create(request, uid):
+        data = await _body(request)
+        item = await asyncio.to_thread(
+            protocol.create_locked,
+            uid,
+            request.match_info["mission_id"],
+            data,
+        )
+        return _json_response({"ok": True, "protocol": item}, status=201)
+
+    async def protocols_list(request, uid):
+        result = await asyncio.to_thread(
+            protocol.list_protocols,
+            uid,
+            request.match_info["mission_id"],
+            int(request.query.get("offset", 0)),
+        )
+        return _json_response({"ok": True, **result})
+
+    async def protocol_get(request, uid):
+        item = await asyncio.to_thread(
+            protocol.get,
+            uid,
+            request.match_info["protocol_id"],
+        )
+        return _json_response({"ok": True, "protocol": item})
+
+    async def protocol_correct_pvalues(request, uid):
+        data = await _body(request)
+        item = await asyncio.to_thread(
+            protocol.correct_p_values,
+            uid,
+            request.match_info["protocol_id"],
+            data.get("p_values"),
+        )
+        return _json_response({"ok": True, "correction": item})
 
     async def experiment_plan_create(request, uid):
         data = await _body(request)
@@ -337,6 +378,10 @@ def setup_velia_research_routes(app):
     app.router.add_post(prefix + "/missions/{mission_id}/datasets", guarded(dataset_create))
     app.router.add_get(prefix + "/missions/{mission_id}/datasets", guarded(datasets_list))
     app.router.add_get(prefix + "/datasets/{dataset_id}", guarded(dataset_get))
+    app.router.add_post(prefix + "/missions/{mission_id}/protocols", guarded(protocol_create))
+    app.router.add_get(prefix + "/missions/{mission_id}/protocols", guarded(protocols_list))
+    app.router.add_get(prefix + "/protocols/{protocol_id}", guarded(protocol_get))
+    app.router.add_post(prefix + "/protocols/{protocol_id}/correct-pvalues", guarded(protocol_correct_pvalues))
     app.router.add_post(prefix + "/missions/{mission_id}/experiment-plans", guarded(experiment_plan_create))
     app.router.add_post(prefix + "/missions/{mission_id}/experiment-pipeline/run", guarded(experiment_pipeline_run))
     app.router.add_get(prefix + "/missions/{mission_id}/experiment-reviews", guarded(experiment_reviews_list))
