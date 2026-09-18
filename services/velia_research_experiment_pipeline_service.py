@@ -157,8 +157,14 @@ def _dataset_request(
     dataset_snapshot: Dict[str, Any],
     analysis_options: Dict[str, Any],
     seed: Any,
+    *,
+    confirmatory_authorized: bool = False,
 ) -> Dict[str, Any]:
-    values = datasets.materialize(user_id, dataset_snapshot)
+    values = datasets.materialize(
+        user_id,
+        dataset_snapshot,
+        confirmatory_authorized=confirmatory_authorized,
+    )
     columns = list(dataset_snapshot["columns"])
     if operation in {"descriptive_stats", "bootstrap_mean_ci"}:
         if len(columns) != 1:
@@ -252,7 +258,12 @@ def plan(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
             )
             analysis_mode = "confirmatory"
         validated = _dataset_request(
-            user_id, operation, dataset_snapshot, analysis_options, seed
+            user_id,
+            operation,
+            dataset_snapshot,
+            analysis_options,
+            seed,
+            confirmatory_authorized=(analysis_mode == "confirmatory"),
         )
         method = {
             "type": "safe_compute",
@@ -479,6 +490,7 @@ def _request_from_method(user_id: int, method: Dict[str, Any]) -> Dict[str, Any]
             snapshot,
             method.get("analysis_options") or {},
             method.get("seed"),
+            confirmatory_authorized=(analysis_mode == "confirmatory"),
         )
 
     raise projects.ProjectError("research_experiment_not_compute_ready", 409)
