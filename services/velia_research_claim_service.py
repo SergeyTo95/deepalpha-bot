@@ -542,7 +542,7 @@ def record_calibration(
     calibration: Dict[str, Any],
 ) -> Dict[str, Any]:
     claim = get_claim(user_id, claim_id)
-    if source_type != "meta_analysis":
+    if source_type not in {"meta_analysis", "living_reassessment"}:
         raise projects.ProjectError("invalid_research_claim_calibration")
     if (
         not isinstance(source_snapshot_id, str)
@@ -623,20 +623,26 @@ def refresh_claim(user_id: int, claim_id: str) -> Dict[str, Any]:
         action = calibration["calibration"].get("claim_action")
         reasons = calibration["calibration"].get("reasons") or []
         reason_text = "; ".join(str(value) for value in reasons[:6] if value)
+        source_label = (
+            "Living reassessment"
+            if calibration["source_type"] == "living_reassessment"
+            else "Meta-analysis"
+        )
         if action == "contradict":
             stage = "contradicted"
             wording = (
-                "Source-backed meta-analysis contradicts the claim; no affirmative conclusion is permitted: "
+                source_label
+                + " contradicts the claim; no affirmative conclusion is permitted: "
                 + claim["statement"]
             )
         elif action == "caution":
             wording += (
-                " Meta-analysis calibration requires caution"
+                " " + source_label + " calibration requires caution"
                 + (": " + reason_text if reason_text else ".")
             )
         else:
             wording += (
-                " External meta-analysis does not promote the Claim Ledger stage; "
+                " External evidence calibration does not promote the Claim Ledger stage; "
                 "promotion still requires preregistered dataset-distinct replication."
             )
 
@@ -654,6 +660,7 @@ def refresh_claim(user_id: int, claim_id: str) -> Dict[str, Any]:
             "replicated": "dataset_and_provenance_distinct_support",
             "contradicted": "affirmative_claim_prohibited",
             "meta_analysis_policy": "may_caution_or_contradict_but_never_promote_stage",
+            "living_reassessment_policy": "may_caution_or_contradict_but_never_promote_stage",
         },
     }
     evidence_hash = _sha(evidence_snapshot)
