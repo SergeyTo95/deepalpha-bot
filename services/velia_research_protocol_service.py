@@ -435,6 +435,7 @@ def create_locked(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
     )
     if not quality["passed"]:
         raise projects.ProjectError("research_dataset_quality_failed", 409)
+    frozen["quality"] = quality
 
     if power_plan.get("minimum_total_n") is not None:
         actual_n = int(dataset_meta["split"]["test_count"])
