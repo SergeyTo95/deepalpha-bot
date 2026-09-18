@@ -139,6 +139,16 @@ def test_train_test_membership_is_deterministic_and_disjoint(postgres):
     assert datasets.snapshot(83, item["id"], "test", ["cycle"]) == test_snapshot
 
 
+def test_same_data_with_different_split_is_distinct_snapshot(postgres):
+    mission = _mission(831, "dataset-mission-0831")
+    first = datasets.create(831, mission["id"], _payload(seed=11))
+    second = datasets.create(831, mission["id"], _payload(seed=12))
+
+    assert first["dataset_hash"] == second["dataset_hash"]
+    assert first["split_hash"] != second["split_hash"]
+    assert first["id"] != second["id"]
+
+
 @pytest.mark.parametrize("mutation", [
     lambda p: p.update({"rows": [[1, "not-numeric"], [2, 3], [3, 4], [4, 5]]}),
     lambda p: p.update({"columns": ["bad column", "capacity"]}),
@@ -237,7 +247,7 @@ def test_snapshot_mismatch_fails_closed_before_compute(postgres):
             ("tampered", dataset["id"]),
         )
 
-    with pytest.raises(projects.ProjectError, match="research_dataset_snapshot_mismatch"):
+    with pytest.raises(projects.ProjectError, match="research_dataset_integrity_mismatch"):
         pipeline.run_ready(87, mission["id"], 1)
     with projects.transaction() as cur:
         cur.execute(
@@ -245,6 +255,20 @@ def test_snapshot_mismatch_fails_closed_before_compute(postgres):
             (mission["id"], 87),
         )
         assert cur.fetchone()["n"] == 0
+
+
+def test_row_tampering_without_hash_update_fails_integrity_check(postgres):
+    mission = _mission(871, "dataset-mission-0871")
+    dataset = datasets.create(871, mission["id"], _payload(seed=8))
+
+    with projects.transaction() as cur:
+        cur.execute(
+            "UPDATE velia_research_datasets SET rows_json=%s WHERE dataset_id=%s",
+            (json.dumps([[1.0, 1.0], [2.0, 2.0], [3.0, 3.0], [4.0, 4.0]]), dataset["id"]),
+        )
+
+    with pytest.raises(projects.ProjectError, match="research_dataset_integrity_mismatch"):
+        datasets.get(871, dataset["id"])
 
 
 def _seed_synthesis(uid: int, mission_id: str):
