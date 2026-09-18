@@ -8,8 +8,10 @@ import time
 
 from services import velia_research_center_service as center
 from services import velia_research_director_service as director
+from services import velia_research_experiment_pipeline_service as experiment_pipeline
 from services import velia_research_literature_service as literature
 from services import velia_research_reasoning_service as reasoning
+from services import velia_research_report_service as reports
 
 
 logger = logging.getLogger(__name__)
@@ -24,6 +26,8 @@ def main() -> None:
     literature.ensure_tables()
     reasoning.ensure_tables()
     director.ensure_tables()
+    experiment_pipeline.ensure_tables()
+    reports.ensure_tables()
 
     if not director.enabled():
         logger.warning("VELIA_RESEARCH_DIRECTOR_WORKER_DISABLED")
