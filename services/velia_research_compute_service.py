@@ -267,13 +267,13 @@ def _distribution(variable: Dict[str, Any], rng: random.Random) -> float:
             raise projects.ProjectError("invalid_compute_parameters")
         value = rng.gauss(mean, sd)
     elif kind == "uniform":
-        _strict_keys(variable, {"distribution", "low", "high"}, {"weight", "name"})
+        _strict_keys(variable, {"distribution", "low", "high"}, {"weight"})
         low, high = _number(variable["low"]), _number(variable["high"])
         if low > high:
             raise projects.ProjectError("invalid_compute_parameters")
         value = rng.uniform(low, high)
     elif kind == "bernoulli":
-        _strict_keys(variable, {"distribution", "p"}, {"weight", "name"})
+        _strict_keys(variable, {"distribution", "p"}, {"weight"})
         p = _number(variable["p"])
         if p < 0.0 or p > 1.0:
             raise projects.ProjectError("invalid_compute_parameters")
