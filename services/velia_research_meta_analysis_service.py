@@ -18,6 +18,7 @@ from services import velia_research_center_service as center
 from services import velia_research_claim_service as claims
 from services import velia_research_literature_service as literature
 from services import velia_research_safety_service as safety
+from services import velia_research_systematic_review_service as systematic_review
 from services.velia_chat_service import _iso
 
 
@@ -336,6 +337,9 @@ def register_study(user_id: int, claim_id: str, data: Any) -> Dict[str, Any]:
     if effect_type not in compatible:
         raise projects.ProjectError("research_meta_effect_incompatible_with_claim", 409)
     source = _source(user_id, claim["mission_id"], data.get("source_id"))
+    systematic_review.assert_source_eligible(
+        user_id, claim["mission_id"], source["source_id"]
+    )
     risk = _risk(data.get("risk_of_bias"))
     normalized = _normalize(effect_type, data.get("statistics"))
 
