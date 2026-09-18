@@ -9,6 +9,7 @@ from services import velia_project_service as projects
 from services import velia_research_center_service as center
 from services import velia_research_claim_service as claims
 from services import velia_research_meta_analysis_service as meta_analysis
+from services import velia_research_systematic_review_service as systematic_review
 from services.velia_chat_service import _iso
 
 
@@ -30,6 +31,8 @@ def status() -> Dict[str, Any]:
         "claim_language_stage_bounded": True,
         "meta_analysis_provenance": True,
         "meta_analysis_may_promote_claim": False,
+        "systematic_review_provenance": True,
+        "evidence_graph_provenance": True,
         "versioned_snapshots": True,
     }
 
@@ -185,6 +188,7 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
         meta_analysis.mission_meta_evidence(user_id, mission_id)
         if meta_analysis.enabled() else None
     )
+    systematic_evidence = systematic_review.mission_review_evidence(user_id, mission_id)
 
     with projects.transaction(user_id) as cur:
         synthesis = _latest_synthesis(cur, user_id, mission_id)
@@ -230,7 +234,7 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
             bounded_confidence = "claim_ledger_bounded"
 
         report: Dict[str, Any] = {
-            "version": 6 if meta_evidence is not None else (5 if claim_ledger is not None else 4),
+            "version": 7 if systematic_evidence is not None else (6 if meta_evidence is not None else (5 if claim_ledger is not None else 4)),
             "title": "VELIA Research Report",
             "mission": {
                 "id": str(mission_id),
@@ -246,8 +250,9 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
                 "literature_synthesis_confidence": result.get("confidence", "uncertain"),
                 "boundary": (
                     "Final scientific claim language is limited by the deterministic Claim Ledger. "
-                    "Literature synthesis and meta-analysis are contextual calibration layers and cannot "
-                    "raise a claim above its ledger stage; meta-analysis may only add caution or contradiction."
+                    "Preregistered systematic-review screening, literature synthesis and meta-analysis are "
+                    "contextual calibration layers and cannot raise a claim above its ledger stage; "
+                    "meta-analysis may only add caution or contradiction."
                     if claim_ledger is not None
                     else "Claim Ledger is disabled; this report contains synthesis-level conclusions only."
                 ),
@@ -265,6 +270,7 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
             "computational_evidence": computational,
             "claim_ledger": claim_ledger,
             "meta_analysis": meta_evidence,
+            "systematic_review": systematic_evidence,
             "provenance": {
                 "synthesis_id": synthesis["synthesis_id"],
                 "evidence_hash": synthesis["evidence_hash"],
@@ -302,6 +308,26 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
                     list(meta_evidence.get("evidence_hashes", []))
                     if meta_evidence is not None else []
                 ),
+                "immutable_systematic_review_id": (
+                    systematic_evidence["review"]["id"]
+                    if systematic_evidence is not None else None
+                ),
+                "immutable_systematic_protocol_hash": (
+                    systematic_evidence["review"]["protocol_hash"]
+                    if systematic_evidence is not None else None
+                ),
+                "immutable_systematic_flow_hash": (
+                    systematic_evidence["flow"]["flow_hash"]
+                    if systematic_evidence is not None else None
+                ),
+                "immutable_evidence_graph_snapshot_id": (
+                    systematic_evidence["evidence_graph"]["snapshot_id"]
+                    if systematic_evidence is not None else None
+                ),
+                "immutable_evidence_graph_hash": (
+                    systematic_evidence["evidence_graph"]["graph_hash"]
+                    if systematic_evidence is not None else None
+                ),
             },
             "safety": {
                 "mission": mission["safety"],
@@ -311,6 +337,11 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
                 "claim_ledger_enabled": claim_ledger is not None,
                 "meta_analysis_enabled": meta_evidence is not None,
                 "meta_analysis_claim_promotion_allowed": False,
+                "systematic_review_enabled": systematic_evidence is not None,
+                "systematic_review_protocol_preregistered": (
+                    systematic_evidence is not None
+                ),
+                "systematic_review_arbitrary_full_text_fetch": False,
             },
         }
         if mission["domain"] == "medicine":
