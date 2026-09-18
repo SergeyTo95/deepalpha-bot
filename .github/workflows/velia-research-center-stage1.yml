@@ -69,7 +69,8 @@ jobs:
           assert 'VELIA_RESEARCH_REASONING_ENABLED", False' in reasoning
           assert 'source_text_is_untrusted": True' in reasoning
           assert 'VELIA_RESEARCH_DIRECTOR_ENABLED", False' in director
-          assert 'experiment_execution": False' in director
+          assert 'experiment_execution": experiment_pipeline.enabled()' in director
+          assert 'VELIA_RESEARCH_AUTO_REPORT_ENABLED", False' in director
           assert 'subprocess' not in director
           assert 'os.system' not in director
           assert 'plan_experiment' not in director
