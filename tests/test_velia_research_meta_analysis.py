@@ -292,25 +292,26 @@ def test_egger_is_screening_only_when_ten_studies_exist(postgres):
     assert 0.0 <= diagnostic["approx_two_sided_p"] <= 1.0
 
 
-def test_mixed_effect_types_fail_closed(postgres):
+def test_effect_type_must_match_immutable_claim_analysis(postgres):
     mission = _mission(507)
     hypothesis = _hypothesis(507, mission["id"])
     claim = _claim(507, mission["id"], hypothesis["id"])
-    _study(507, claim["id"], _source(507, mission["id"], 1), 0.4)
-    meta.register_study(507, claim["id"], {
-        "source_id": _source(507, mission["id"], 2),
-        "study_design": "rct",
-        "effect_type": "log_odds_ratio",
-        "statistics": {
-            "event_treatment": 20,
-            "non_event_treatment": 80,
-            "event_control": 12,
-            "non_event_control": 88,
-        },
-        "risk_of_bias": _risk(),
-    })
-    with pytest.raises(projects.ProjectError, match="research_meta_mixed_effect_types"):
-        meta.analyze_claim(507, claim["id"])
+    with pytest.raises(
+        projects.ProjectError,
+        match="research_meta_effect_incompatible_with_claim",
+    ):
+        meta.register_study(507, claim["id"], {
+            "source_id": _source(507, mission["id"], 1),
+            "study_design": "rct",
+            "effect_type": "log_odds_ratio",
+            "statistics": {
+                "event_treatment": 20,
+                "non_event_treatment": 80,
+                "event_control": 12,
+                "non_event_control": 88,
+            },
+            "risk_of_bias": _risk(),
+        })
 
 
 def test_report_v6_carries_meta_provenance_and_bounded_conclusion(postgres):
