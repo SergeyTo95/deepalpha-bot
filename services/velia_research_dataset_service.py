@@ -335,7 +335,7 @@ def snapshot(user_id: int, dataset_id: str, split: str, columns: List[str]) -> D
     known = set(dataset["columns"])
     if any(value not in known for value in requested):
         raise projects.ProjectError("research_dataset_column_not_found", 404)
-    indices = dataset["split"][split]
+    indices = dataset["split"][split + "_indices"]
     return {
         "dataset_id": dataset["id"],
         "mission_id": dataset["mission_id"],
@@ -369,7 +369,7 @@ def verify_snapshot(user_id: int, expected: Dict[str, Any]) -> Dict[str, Any]:
 def materialize(user_id: int, expected: Dict[str, Any]) -> Dict[str, List[float]]:
     current = verify_snapshot(user_id, expected)
     dataset = get(user_id, current["dataset_id"], include_rows=True)
-    indices = dataset["split"][current["split"]]
+    indices = dataset["split"][current["split"] + "_indices"]
     positions = {name: dataset["columns"].index(name) for name in current["columns"]}
     output: Dict[str, List[float]] = {}
     for name in current["columns"]:
