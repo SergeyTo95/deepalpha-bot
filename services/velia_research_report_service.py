@@ -21,6 +21,8 @@ def status() -> Dict[str, Any]:
         "extra_model_calls": 0,
         "immutable_snapshots": True,
         "source_provenance": True,
+        "computational_provenance": True,
+        "versioned_snapshots": True,
     }
 
 
@@ -35,11 +37,13 @@ def ensure_tables() -> None:
             report_hash TEXT NOT NULL,
             report_json TEXT NOT NULL,
             created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-            UNIQUE(mission_id,user_id,synthesis_id),
             FOREIGN KEY(mission_id,user_id)
                 REFERENCES velia_research_missions(mission_id,user_id) ON DELETE CASCADE,
             FOREIGN KEY(synthesis_id)
                 REFERENCES velia_research_syntheses(synthesis_id) ON DELETE CASCADE)""")
+        cur.execute("ALTER TABLE velia_research_reports DROP CONSTRAINT IF EXISTS velia_research_reports_mission_id_user_id_synthesis_id_key")
+        cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_velia_research_report_snapshot
+            ON velia_research_reports(mission_id,user_id,synthesis_id,report_hash)""")
         cur.execute("""CREATE INDEX IF NOT EXISTS idx_velia_research_reports_mission
             ON velia_research_reports(mission_id,user_id,created_at DESC)""")
 
@@ -131,13 +135,6 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
 
     with projects.transaction(user_id) as cur:
         synthesis = _latest_synthesis(cur, user_id, mission_id)
-        cur.execute("""SELECT * FROM velia_research_reports
-            WHERE mission_id=%s AND user_id=%s AND synthesis_id=%s""",
-            (str(mission_id), int(user_id), synthesis["synthesis_id"]))
-        existing = cur.fetchone()
-        if existing:
-            return _report_row(existing)
-
         result = json.loads(synthesis["result_json"])
         source_ids = json.loads(synthesis["source_ids_json"])
         if not isinstance(source_ids, list):
@@ -225,14 +222,14 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
         cur.execute("""INSERT INTO velia_research_reports(
             report_id,mission_id,user_id,synthesis_id,evidence_hash,report_hash,report_json)
             VALUES(%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT(mission_id,user_id,synthesis_id) DO NOTHING""",
+            ON CONFLICT(mission_id,user_id,synthesis_id,report_hash) DO NOTHING""",
             (
                 report_id, str(mission_id), int(user_id), synthesis["synthesis_id"],
                 synthesis["evidence_hash"], report_hash, encoded,
             ))
         cur.execute("""SELECT * FROM velia_research_reports
-            WHERE mission_id=%s AND user_id=%s AND synthesis_id=%s""",
-            (str(mission_id), int(user_id), synthesis["synthesis_id"]))
+            WHERE mission_id=%s AND user_id=%s AND synthesis_id=%s AND report_hash=%s""",
+            (str(mission_id), int(user_id), synthesis["synthesis_id"], report_hash))
         row = cur.fetchone()
         if not row:
             raise projects.ProjectError("research_report_state_missing", 500)
