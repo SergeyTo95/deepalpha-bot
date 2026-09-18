@@ -10,6 +10,7 @@ from services import velia_research_center_service as center
 from services import velia_research_claim_service as claims
 from services import velia_research_meta_analysis_service as meta_analysis
 from services import velia_research_systematic_review_service as systematic_review
+from services import velia_research_living_service as living_research
 from services.velia_chat_service import _iso
 
 
@@ -33,6 +34,8 @@ def status() -> Dict[str, Any]:
         "meta_analysis_may_promote_claim": False,
         "systematic_review_provenance": True,
         "evidence_graph_provenance": True,
+        "living_research_provenance": True,
+        "living_research_mutates_prior_reports": False,
         "versioned_snapshots": True,
     }
 
@@ -189,6 +192,7 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
         if meta_analysis.enabled() else None
     )
     systematic_evidence = systematic_review.mission_review_evidence(user_id, mission_id)
+    living_evidence = living_research.latest_mission_evidence(user_id, mission_id)
 
     with projects.transaction(user_id) as cur:
         synthesis = _latest_synthesis(cur, user_id, mission_id)
@@ -232,9 +236,11 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
                 else "No registered claim has completed evidence; no claim-level conclusion is permitted."
             )
             bounded_confidence = "claim_ledger_bounded"
+        if living_evidence is not None and living_evidence.get("reassessment_required"):
+            bounded_confidence = "claim_ledger_bounded_with_living_reassessment_pending"
 
         report: Dict[str, Any] = {
-            "version": 7 if systematic_evidence is not None else (6 if meta_evidence is not None else (5 if claim_ledger is not None else 4)),
+            "version": 8 if living_evidence is not None else (7 if systematic_evidence is not None else (6 if meta_evidence is not None else (5 if claim_ledger is not None else 4))),
             "title": "VELIA Research Report",
             "mission": {
                 "id": str(mission_id),
@@ -271,6 +277,7 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
             "claim_ledger": claim_ledger,
             "meta_analysis": meta_evidence,
             "systematic_review": systematic_evidence,
+            "living_research": living_evidence,
             "provenance": {
                 "synthesis_id": synthesis["synthesis_id"],
                 "evidence_hash": synthesis["evidence_hash"],
@@ -328,6 +335,24 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
                     systematic_evidence["evidence_graph"]["graph_hash"]
                     if systematic_evidence is not None else None
                 ),
+                "immutable_living_scan_id": (
+                    living_evidence["scan_id"] if living_evidence is not None else None
+                ),
+                "immutable_living_scan_hash": (
+                    living_evidence["scan_hash"] if living_evidence is not None else None
+                ),
+                "immutable_living_graph_revision_id": (
+                    living_evidence["graph_revision_id"] if living_evidence is not None else None
+                ),
+                "immutable_living_graph_revision_hash": (
+                    living_evidence["graph_revision_hash"] if living_evidence is not None else None
+                ),
+                "revision_of_report_id": (
+                    living_evidence["previous_report_id"] if living_evidence is not None else None
+                ),
+                "revision_of_report_hash": (
+                    living_evidence["previous_report_hash"] if living_evidence is not None else None
+                ),
             },
             "safety": {
                 "mission": mission["safety"],
@@ -342,6 +367,12 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
                     systematic_evidence is not None
                 ),
                 "systematic_review_arbitrary_full_text_fetch": False,
+                "living_research_enabled": living_evidence is not None,
+                "living_research_old_report_mutation": False,
+                "living_research_auto_claim_stage_change": False,
+                "living_research_reassessment_pending": (
+                    bool(living_evidence and living_evidence.get("reassessment_required"))
+                ),
             },
         }
         if mission["domain"] == "medicine":
