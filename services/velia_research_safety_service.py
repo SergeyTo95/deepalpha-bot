@@ -57,6 +57,8 @@ _CYBER_HARM = (
     r"\b(ransomware|malware|keylogger|botnet|shellcode|rootkit|credential stealer|phishing kit|exploit)\b.{0,60}\b(write|create|build|develop|code|generate|deploy)\w*\b",
     r"(украст|эксфильтр|зараз|закреп|обойти.{0,20}(auth|аутентиф|защит)|получить доступ|захватить|взлом)",
     r"(напиш|созда|разработ|сгенер|собер).{0,60}(вымогател|вредонос|малвар|кейлоггер|ботнет|шеллкод|рутки|стилер|фишинг|эксплойт)",
+    r"(напиш|созда|разработ|сгенер|собер).{0,60}\\b(ransomware|malware|keylogger|botnet|shellcode|rootkit|credential stealer|phishing kit|exploit)\\b",
+    r"\\b(write|create|build|develop|code|generate)\\w*\\b.{0,60}(вымогател|вредонос|малвар|кейлоггер|ботнет|шеллкод|рутки|стилер|фишинг|эксплойт)",
 )
 
 _WEAPON = (
