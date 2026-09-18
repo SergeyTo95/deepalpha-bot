@@ -526,22 +526,26 @@ def authorize_test_plan(
     hypothesis_id: str,
     dataset_snapshot: Dict[str, Any],
     analysis_kind: str,
+    claim_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     if not enabled():
         raise projects.ProjectError("research_protocol_officer_disabled", 503)
     if dataset_snapshot.get("split") != "test":
         raise projects.ProjectError("research_protocol_test_split_required")
+    if claims.enabled() and (not isinstance(claim_id, str) or not claim_id):
+        raise projects.ProjectError("research_claim_required", 409)
     with projects.transaction() as cur:
         cur.execute("""SELECT * FROM velia_research_protocols
             WHERE mission_id=%s AND user_id=%s AND hypothesis_id=%s
               AND dataset_id=%s AND dataset_hash=%s AND split_hash=%s
               AND analysis_kind=%s AND selected_columns_json=%s AND status='locked'
+              AND (%s IS NULL OR claim_id=%s)
             ORDER BY locked_at DESC,protocol_id DESC LIMIT 1""",
             (
                 str(mission_id), int(user_id), str(hypothesis_id),
                 str(dataset_snapshot["dataset_id"]), str(dataset_snapshot["dataset_hash"]),
                 str(dataset_snapshot["split_hash"]), str(analysis_kind),
-                _json(dataset_snapshot["columns"]),
+                _json(dataset_snapshot["columns"]), claim_id, claim_id,
             ))
         row = cur.fetchone()
         if not row:
