@@ -104,7 +104,8 @@ jobs:
           assert '"update-to"' in literature
           assert 'No indexed update is not proof' in literature
 
-          assert '"version": 8 if living_evidence is not None' in report
+          assert '"version": 9 if reassessment_evidence is not None' in report
+          assert '8 if living_evidence is not None' in report
           assert '"living_research": living_evidence' in report
           assert '"immutable_living_scan_hash"' in report
           assert '"revision_of_report_hash"' in report
