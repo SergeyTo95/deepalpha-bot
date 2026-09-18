@@ -126,14 +126,21 @@ def _source_packet(user_id: int, mission_id: str, max_sources: int) -> tuple[Lis
               citation_count DESC,
               published_year DESC NULLS LAST,
               retrieved_at DESC
-            LIMIT %s""", (str(mission_id), int(user_id), int(max_sources)))
+            LIMIT %s""", (str(mission_id), int(user_id), int(max_sources) * 4))
         rows = list(cur.fetchall())
     if not rows:
         raise projects.ProjectError("research_evidence_required", 409)
 
     packet: List[Dict[str, Any]] = []
     hashes: List[str] = []
+    seen = set()
     for row in rows:
+        doi_key = str(row["doi"] or "").casefold()
+        title_key = re.sub(r"\\W+", "", str(row["title"] or "").casefold())
+        dedupe_key = ("doi", doi_key) if doi_key else ("title", title_key)
+        if not dedupe_key[1] or dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
         hashes.append(row["metadata_hash"])
         packet.append({
             "source_id": row["source_id"],
@@ -149,6 +156,8 @@ def _source_packet(user_id: int, mission_id: str, max_sources: int) -> tuple[Lis
             "excerpt": _text(row["excerpt"], 900),
             "citation_count": row["citation_count"],
         })
+        if len(packet) >= max_sources:
+            break
     evidence_hash = hashlib.sha256("|".join(sorted(hashes)).encode("utf-8")).hexdigest()
     return packet, evidence_hash
 
