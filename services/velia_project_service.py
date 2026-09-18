@@ -68,7 +68,7 @@ def ensure_tables():
             client_request_id TEXT NOT NULL, request_hash TEXT NOT NULL,
             created_at TIMESTAMP NOT NULL DEFAULT NOW(),
             UNIQUE(resource_id, user_id), UNIQUE(user_id, client_request_id),
-            CHECK(kind IN ('chat','deepalpha','image','video','music')),
+            CHECK(kind IN ('chat','deepalpha','image','video','music','research')),
             FOREIGN KEY(project_id, user_id) REFERENCES velia_projects(project_id, user_id)
                 ON DELETE CASCADE)""")
         cur.execute("""CREATE TABLE IF NOT EXISTS velia_research_evidence (
@@ -249,7 +249,7 @@ def create_resource(user_id, data, client_request_id):
 
 
 def list_resources(user_id, project_id=None, kind=None, offset=0):
-    if kind is not None and kind != "deepalpha":
+    if kind is not None and kind not in {"chat", "deepalpha", "image", "video", "music", "research"}:
         raise ProjectError("invalid_resource_kind")
     if not 0 <= int(offset) <= 2000:
         raise ProjectError("invalid_offset")
