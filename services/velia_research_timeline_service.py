@@ -219,9 +219,11 @@ def _claim_snapshots(user_id: int, claim_id: str) -> List[Dict[str, Any]]:
     with projects.transaction() as cur:
         cur.execute("""SELECT * FROM velia_research_claim_snapshots
             WHERE claim_id=%s AND user_id=%s
-            ORDER BY created_at ASC,snapshot_id ASC LIMIT %s""",
+            ORDER BY created_at DESC,snapshot_id DESC LIMIT %s""",
             (str(claim_id), int(user_id), MAX_TIMELINE_ITEMS))
-        return [_snapshot_item(row) for row in cur.fetchall()]
+        rows = list(cur.fetchall())
+    rows.reverse()
+    return [_snapshot_item(row) for row in rows]
 
 
 def _mission_reports(user_id: int, mission_id: str) -> List[Dict[str, Any]]:
@@ -250,12 +252,13 @@ def _reassessment_events(
             FROM velia_research_living_reassessments
             WHERE mission_id=%s AND user_id=%s
               AND status='completed' AND result_json IS NOT NULL
-            ORDER BY updated_at ASC,run_id ASC LIMIT %s""",
+            ORDER BY updated_at DESC,run_id DESC LIMIT %s""",
             (
                 str(mission_id), int(user_id),
                 MAX_ALERT_SYNC_REASSESSMENTS,
             ))
         rows = list(cur.fetchall())
+    rows.reverse()
 
     output: List[Dict[str, Any]] = []
     for row in rows:
@@ -416,6 +419,7 @@ def claim_timeline(
                 reports, item["_occurred_dt"]
             )
     events.sort(key=lambda item: (item["_occurred_dt"], item["id"]), reverse=True)
+    events = events[:MAX_TIMELINE_ITEMS]
     for item in events:
         item.pop("_occurred_dt", None)
 
@@ -474,9 +478,10 @@ def _sync_snapshot_alerts(user_id: int, claim: Dict[str, Any]) -> None:
     with projects.transaction() as cur:
         cur.execute("""SELECT * FROM velia_research_claim_snapshots
             WHERE claim_id=%s AND user_id=%s
-            ORDER BY created_at ASC,snapshot_id ASC LIMIT %s""",
+            ORDER BY created_at DESC,snapshot_id DESC LIMIT %s""",
             (claim["id"], int(user_id), MAX_ALERT_SYNC_SNAPSHOTS))
         rows = list(cur.fetchall())
+    rows.reverse()
 
     previous = None
     for row in rows:
