@@ -464,10 +464,11 @@ def _stage_and_wording(claim: Dict[str, Any], evidence: List[Dict[str, Any]]) ->
         else:
             wording = "Preregistered held-out analysis is inconclusive for the claim: "
         return "preregistered", wording + claim["statement"]
-    return (
-        "exploratory",
-        "Only exploratory evidence is available; the claim is not confirmed: " + claim["statement"],
-    )
+    if evidence:
+        wording = "Only exploratory evidence is available; the claim is not confirmed: "
+    else:
+        wording = "No completed confirmatory evidence is available; the claim is not confirmed: "
+    return ("exploratory", wording + claim["statement"])
 
 
 def _upsert_edges(user_id: int, claim: Dict[str, Any], evidence: List[Dict[str, Any]]) -> None:
@@ -491,7 +492,9 @@ def _upsert_edges(user_id: int, claim: Dict[str, Any], evidence: List[Dict[str, 
                     if left["signal"] == right["signal"]
                     else "dataset_distinct_conflict"
                 )
-                a, b = sorted([left["review_id"], right["review_id"]])
+                ordered = sorted([left, right], key=lambda item: item["review_id"])
+                first, second = ordered[0], ordered[1]
+                a, b = first["review_id"], second["review_id"]
                 edge_id = _sha({
                     "claim_id": claim["id"],
                     "left_review_id": a,
@@ -506,8 +509,8 @@ def _upsert_edges(user_id: int, claim: Dict[str, Any], evidence: List[Dict[str, 
                     ON CONFLICT(claim_id,user_id,left_review_id,right_review_id) DO NOTHING""",
                     (
                         edge_id, claim["id"], claim["mission_id"], int(user_id), a, b, relation,
-                        left["dataset_hash"], right["dataset_hash"],
-                        left["provenance_fingerprint"], right["provenance_fingerprint"],
+                        first["dataset_hash"], second["dataset_hash"],
+                        first["provenance_fingerprint"], second["provenance_fingerprint"],
                     ))
 
 
@@ -539,6 +542,12 @@ def refresh_claim(user_id: int, claim_id: str) -> Dict[str, Any]:
         "evidence_hash": evidence_hash,
     })
     with projects.transaction(user_id) as cur:
+        cur.execute("""SELECT * FROM velia_research_claim_snapshots
+            WHERE claim_id=%s AND user_id=%s AND evidence_hash=%s""",
+            (claim["id"], int(user_id), evidence_hash))
+        existing = cur.fetchone()
+        if existing:
+            return _snapshot_row(existing)
         cur.execute("""INSERT INTO velia_research_claim_snapshots(
             snapshot_id,claim_id,mission_id,user_id,stage,evidence_hash,evidence_json,wording)
             VALUES(%s,%s,%s,%s,%s,%s,%s,%s)
