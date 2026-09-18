@@ -110,6 +110,7 @@ def test_migration_allows_research_resource_and_persists_safe_mission(postgres):
     }, "research-mission-1")
     assert mission["status"] == "planned"
     assert mission["domain"] == "medicine"
+    assert projects.list_resources(7, kind="research")["resources"][0]["id"] == mission["id"]
     assert mission["safety"]["decision"] == "allowed"
     assert "safety_officer" in mission["plan"]["roles"]
     assert center.create_mission(7, {
