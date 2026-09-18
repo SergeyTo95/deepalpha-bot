@@ -995,14 +995,14 @@ def run_now(user_id: int, run_id: str) -> Dict[str, Any]:
                 (str(run_id), int(user_id)))
         elif row["status"] not in {"queued", "failed"}:
             raise projects.ProjectError("research_living_reassessment_not_runnable", 409)
+        if int(row["attempt_count"]) >= MAX_ATTEMPTS:
+            raise projects.ProjectError("research_living_reassessment_attempt_limit_reached", 409)
         cur.execute("""UPDATE velia_research_living_reassessments
             SET status='running',worker_id='manual',lease_until=NOW() + (%s * INTERVAL '1 second'),
                 attempt_count=attempt_count+1,error_code=NULL,updated_at=NOW()
             WHERE run_id=%s AND user_id=%s
             RETURNING *""", (LEASE_SECONDS, str(run_id), int(user_id)))
         claimed = _run_row(cur.fetchone())
-    if claimed["attempt_count"] > MAX_ATTEMPTS:
-        raise projects.ProjectError("research_living_reassessment_attempt_limit_reached", 409)
     try:
         return _execute(user_id, claimed)
     except Exception as exc:
@@ -1023,7 +1023,7 @@ def claim_next(worker_id: str) -> Optional[Dict[str, Any]]:
         cur.execute("""SELECT * FROM velia_research_living_reassessments
             WHERE (
                 status='queued'
-                OR (status='running' AND lease_until<NOW())
+                OR (status IN ('running','reporting') AND lease_until<NOW())
             )
             AND attempt_count<%s
             ORDER BY updated_at ASC,created_at ASC
@@ -1088,12 +1088,9 @@ def latest_mission_evidence(user_id: int, mission_id: str) -> Optional[Dict[str,
     return {
         "run_id": run["id"],
         "scan_id": run["scan_id"],
-        "status": run["status"],
         "result_hash": run["result_hash"],
         "previous_report_id": run["previous_report_id"],
         "previous_report_hash": run["previous_report_hash"],
-        "new_report_id": run["new_report_id"],
-        "new_report_hash": run["new_report_hash"],
         "affected_claim_count": result.get("affected_claim_count", 0),
         "scientific_diff": result.get("scientific_diff", []),
         "scientific_diff_hash": _sha(result.get("scientific_diff", [])),
