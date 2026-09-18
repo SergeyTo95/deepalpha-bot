@@ -90,6 +90,7 @@ def postgres(monkeypatch):
     monkeypatch.setenv("VELIA_RESEARCH_EXPERIMENT_EXECUTION_ENABLED", "false")
 
     chat.ensure_velia_chat_tables()
+    center.ensure_tables()
     literature.ensure_tables()
     try:
         yield connect
