@@ -38,6 +38,7 @@ def test_harmful_capability_is_blocked(text, category):
 
 @pytest.mark.parametrize("text", [
     "Как обнаруживать ransomware и защищать корпоративную сеть?",
+    "Defensive cybersecurity research for incident response",
     "Исследуй лечение отравления цианидом и существующие антидоты",
     "Клиническая фармакология фентанила при обезболивании",
     "История огнестрельного оружия и профилактика травм",
