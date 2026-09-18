@@ -4,6 +4,7 @@ import logging
 
 from services import velia_project_service as projects
 from services import velia_research_center_service as research
+from services import velia_research_claim_service as claims
 from services import velia_research_compute_service as compute
 from services import velia_research_dataset_service as datasets
 from services import velia_research_experiment_pipeline_service as experiment_pipeline
@@ -40,6 +41,7 @@ def setup_velia_research_routes(app):
             return
         try:
             await asyncio.to_thread(research.ensure_tables)
+            await asyncio.to_thread(claims.ensure_tables)
             await asyncio.to_thread(literature.ensure_tables)
             await asyncio.to_thread(reasoning.ensure_tables)
             await asyncio.to_thread(director.ensure_tables)
@@ -84,6 +86,7 @@ def setup_velia_research_routes(app):
         state["datasets"] = datasets.status()
         state["experiment_pipeline"] = experiment_pipeline.status()
         state["protocol_officer"] = protocol.status()
+        state["claim_ledger"] = claims.status()
         return _json_response({"ok": True, "research": state})
 
     async def mission_list(request, uid):
@@ -286,6 +289,49 @@ def setup_velia_research_routes(app):
         )
         return _json_response({"ok": True, "dataset": item})
 
+    async def claim_create(request, uid):
+        data = await _body(request)
+        item = await asyncio.to_thread(
+            claims.create_claim,
+            uid,
+            request.match_info["mission_id"],
+            data,
+        )
+        return _json_response({"ok": True, "claim": item}, status=201)
+
+    async def claims_list(request, uid):
+        result = await asyncio.to_thread(
+            claims.list_claims,
+            uid,
+            request.match_info["mission_id"],
+            int(request.query.get("offset", 0)),
+        )
+        return _json_response({"ok": True, **result})
+
+    async def claim_get(request, uid):
+        item = await asyncio.to_thread(
+            claims.get_claim,
+            uid,
+            request.match_info["claim_id"],
+        )
+        return _json_response({"ok": True, "claim": item})
+
+    async def claim_evaluate(request, uid):
+        item = await asyncio.to_thread(
+            claims.refresh_claim,
+            uid,
+            request.match_info["claim_id"],
+        )
+        return _json_response({"ok": True, "snapshot": item})
+
+    async def mission_claim_ledger(request, uid):
+        result = await asyncio.to_thread(
+            claims.mission_ledger,
+            uid,
+            request.match_info["mission_id"],
+        )
+        return _json_response({"ok": True, **result})
+
     async def protocol_create(request, uid):
         data = await _body(request)
         item = await asyncio.to_thread(
@@ -378,6 +424,11 @@ def setup_velia_research_routes(app):
     app.router.add_post(prefix + "/missions/{mission_id}/datasets", guarded(dataset_create))
     app.router.add_get(prefix + "/missions/{mission_id}/datasets", guarded(datasets_list))
     app.router.add_get(prefix + "/datasets/{dataset_id}", guarded(dataset_get))
+    app.router.add_post(prefix + "/missions/{mission_id}/claims", guarded(claim_create))
+    app.router.add_get(prefix + "/missions/{mission_id}/claims", guarded(claims_list))
+    app.router.add_get(prefix + "/claims/{claim_id}", guarded(claim_get))
+    app.router.add_post(prefix + "/claims/{claim_id}/evaluate", guarded(claim_evaluate))
+    app.router.add_get(prefix + "/missions/{mission_id}/claim-ledger", guarded(mission_claim_ledger))
     app.router.add_post(prefix + "/missions/{mission_id}/protocols", guarded(protocol_create))
     app.router.add_get(prefix + "/missions/{mission_id}/protocols", guarded(protocols_list))
     app.router.add_get(prefix + "/protocols/{protocol_id}", guarded(protocol_get))
