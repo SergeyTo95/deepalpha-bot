@@ -149,3 +149,33 @@ def test_hypothesis_and_experiment_are_safety_checked_independently(postgres):
     }, hypothesis["id"])
     assert blocked["status"] == "blocked"
     assert blocked["execution_ready"] is False
+
+
+
+def test_restricted_mission_safety_is_inherited_by_children(postgres, monkeypatch):
+    monkeypatch.setenv("VELIA_RESEARCH_AUTONOMY_ENABLED", "true")
+    monkeypatch.setenv("VELIA_RESEARCH_EXPERIMENT_EXECUTION_ENABLED", "true")
+    mission = center.create_mission(10, {
+        "goal": "Defensive cybersecurity research for ransomware detection and incident response",
+        "title": "Defensive security",
+    }, "research-mission-restricted")
+    assert mission["safety"]["decision"] == "restricted_defensive"
+    assert mission["safety"]["read_only_only"] is True
+
+    hypothesis = center.add_hypothesis(
+        10,
+        mission["id"],
+        "Faster anomaly detection may reduce incident response time",
+        "Compare defensive detection metrics using existing benchmark data.",
+    )
+    assert hypothesis["safety"]["read_only_only"] is True
+    assert hypothesis["safety"]["inherited_read_only"] is True
+
+    plan = center.plan_experiment(10, mission["id"], {
+        "type": "simulation",
+        "description": "Run a bounded statistical simulation over existing benchmark metrics",
+    }, hypothesis["id"])
+    assert plan["status"] == "planned"
+    assert plan["execution_ready"] is False
+    assert plan["safety"]["read_only_only"] is True
+    assert plan["safety"]["inherited_read_only"] is True
