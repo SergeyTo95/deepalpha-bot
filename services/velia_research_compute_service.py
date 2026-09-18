@@ -261,7 +261,7 @@ def _distribution(variable: Dict[str, Any], rng: random.Random) -> float:
     if abs(weight) > 1e6:
         raise projects.ProjectError("invalid_compute_parameters")
     if kind == "normal":
-        _strict_keys(variable, {"distribution", "mean", "sd"}, {"weight", "name"})
+        _strict_keys(variable, {"distribution", "mean", "sd"}, {"weight"})
         mean, sd = _number(variable["mean"]), _number(variable["sd"])
         if sd < 0.0 or sd > 1e12:
             raise projects.ProjectError("invalid_compute_parameters")
@@ -339,7 +339,10 @@ def _validate_request(data: Any) -> Tuple[str, Dict[str, Any], Optional[int]]:
     seed = data.get("seed")
     if seed is not None:
         seed = _integer(seed, 0, 2**63 - 1, "invalid_compute_seed")
-    encoded = _json(data)
+    try:
+        encoded = _json(data)
+    except (TypeError, ValueError, OverflowError):
+        raise projects.ProjectError("invalid_compute_parameters")
     if len(encoded) > 64000:
         raise projects.ProjectError("compute_request_too_large", 413)
     return str(operation), parameters, seed
