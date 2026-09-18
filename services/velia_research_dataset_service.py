@@ -198,7 +198,7 @@ def ensure_tables() -> None:
             row_count INTEGER NOT NULL,
             column_count INTEGER NOT NULL,
             created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-            UNIQUE(mission_id,user_id,dataset_hash),
+            UNIQUE(mission_id,user_id,dataset_hash,split_hash),
             CHECK(row_count BETWEEN 4 AND 2000),
             CHECK(column_count BETWEEN 1 AND 16),
             FOREIGN KEY(mission_id,user_id)
@@ -263,7 +263,7 @@ def create(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
         "split": split_snapshot,
     })
     dataset_id = hashlib.sha256(
-        (str(mission_id) + "|" + dataset_hash).encode("utf-8")
+        (str(mission_id) + "|" + dataset_hash + "|" + split_hash).encode("utf-8")
     ).hexdigest()
 
     with projects.transaction(user_id) as cur:
@@ -271,15 +271,15 @@ def create(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
             dataset_id,mission_id,user_id,name,registry_version,dataset_hash,split_hash,
             columns_json,rows_json,provenance_json,split_json,safety_json,row_count,column_count)
             VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT(mission_id,user_id,dataset_hash) DO NOTHING""",
+            ON CONFLICT(mission_id,user_id,dataset_hash,split_hash) DO NOTHING""",
             (
                 dataset_id, str(mission_id), int(user_id), name, REGISTRY_VERSION,
                 dataset_hash, split_hash, _json(columns), _json(rows), _json(provenance),
                 _json(split_snapshot), _json(metadata_safety), len(rows), len(columns),
             ))
         cur.execute("""SELECT * FROM velia_research_datasets
-            WHERE mission_id=%s AND user_id=%s AND dataset_hash=%s""",
-            (str(mission_id), int(user_id), dataset_hash))
+            WHERE mission_id=%s AND user_id=%s AND dataset_hash=%s AND split_hash=%s""",
+            (str(mission_id), int(user_id), dataset_hash, split_hash))
         row = cur.fetchone()
         if not row:
             raise projects.ProjectError("research_dataset_state_missing", 500)
