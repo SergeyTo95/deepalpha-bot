@@ -73,6 +73,7 @@ _FEATURE_PROVIDER_ENV = {
     "studio_video_prompt": "GEMINI_ENABLED",
     "studio_music_prompt": "GEMINI_ENABLED",
     "studio_music_lyrics": "GEMINI_ENABLED",
+    "research_center": "LLM_PROVIDER_RESEARCH",
 }
 
 
