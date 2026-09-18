@@ -23,6 +23,10 @@ from services.velia_chat_service import _iso
 
 META_VERSION = 1
 ALLOWED_EFFECT_TYPES = {"correlation", "standardized_mean_difference", "log_odds_ratio"}
+CLAIM_EFFECT_COMPATIBILITY = {
+    "correlation": {"correlation"},
+    "bootstrap_mean_difference_ci": {"standardized_mean_difference"},
+}
 ALLOWED_DESIGNS = {"rct", "cohort", "case_control", "cross_sectional", "preclinical", "other"}
 ROB_DOMAINS = ("selection", "measurement", "confounding", "missing_data", "reporting")
 ROB_LEVELS = {"low", "some_concerns", "high"}
@@ -244,6 +248,8 @@ def _normalize(effect_type: str, stats: Any) -> Dict[str, Any]:
         d = (m1 - m0) / math.sqrt(pooled_var)
         correction = 1.0 - 3.0 / (4.0 * df - 1.0)
         g = correction * d
+        if not math.isfinite(g) or abs(g) > 100.0:
+            raise projects.ProjectError("invalid_research_meta_effect")
         variance = ((n1 + n0) / (n1 * n0)) + (g * g) / (2.0 * df)
         return {
             "effect": g,
@@ -326,6 +332,9 @@ def register_study(user_id: int, claim_id: str, data: Any) -> Dict[str, Any]:
     effect_type = str(data.get("effect_type") or "")
     if design not in ALLOWED_DESIGNS or effect_type not in ALLOWED_EFFECT_TYPES:
         raise projects.ProjectError("invalid_research_meta_study")
+    compatible = CLAIM_EFFECT_COMPATIBILITY.get(claim["analysis_kind"], set())
+    if effect_type not in compatible:
+        raise projects.ProjectError("research_meta_effect_incompatible_with_claim", 409)
     source = _source(user_id, claim["mission_id"], data.get("source_id"))
     risk = _risk(data.get("risk_of_bias"))
     normalized = _normalize(effect_type, data.get("statistics"))
