@@ -306,7 +306,6 @@ def _dedupe(rows: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
 
 
 def ensure_tables() -> None:
-    center.ensure_tables()
     with projects.transaction() as cur:
         cur.execute("""CREATE TABLE IF NOT EXISTS velia_research_literature_queries (
             mission_id TEXT NOT NULL,
