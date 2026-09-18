@@ -11,6 +11,7 @@ from services import velia_research_director_service as director
 from services import velia_research_dataset_service as datasets
 from services import velia_research_experiment_pipeline_service as experiment_pipeline
 from services import velia_research_literature_service as literature
+from services import velia_research_protocol_service as protocol
 from services import velia_research_reasoning_service as reasoning
 from services import velia_research_report_service as reports
 
@@ -29,6 +30,7 @@ def main() -> None:
     datasets.ensure_tables()
     director.ensure_tables()
     experiment_pipeline.ensure_tables()
+    protocol.ensure_tables()
     reports.ensure_tables()
 
     if not director.enabled():
