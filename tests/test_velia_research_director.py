@@ -215,3 +215,21 @@ def test_restricted_defensive_mission_can_only_do_read_only_director_cycle(postg
     )
     assert planned["execution_ready"] is False
     assert planned["safety"]["read_only_only"] is True
+
+
+def test_abandoned_run_hits_attempt_ceiling(postgres):
+    mission = _mission(48, "director-mission-0007")
+    queued = director.enqueue(48, mission["id"], 1)
+    claimed = director.claim_next("worker-old")
+    assert claimed["id"] == queued["id"]
+
+    with projects.transaction() as cur:
+        cur.execute("""UPDATE velia_research_autonomy_runs
+            SET attempt_count=%s,lease_until=NOW()-INTERVAL '10 seconds'
+            WHERE run_id=%s""", (director.MAX_ATTEMPTS, queued["id"]))
+
+    assert director.claim_next("worker-new") is None
+    failed = director.get_run(48, queued["id"])
+    assert failed["status"] == "failed"
+    assert failed["stop_reason"] == "attempt_limit"
+    assert failed["error_code"] == "research_run_attempt_limit"
