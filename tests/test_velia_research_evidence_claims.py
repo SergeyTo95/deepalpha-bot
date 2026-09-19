@@ -63,7 +63,20 @@ def _seed_source(monkeypatch, user_id, mission_id):
         "excerpt": "Prospective evidence with important limitations.",
         "citation_count": 8,
     }])
-    monkeypatch.setattr(literature, "_crossref", lambda query, limit: [])
+    monkeypatch.setattr(literature, "_crossref", lambda query, limit: [{
+        "provider": "crossref",
+        "external_id": "10.1000/evidence-claim",
+        "doi": "10.1000/evidence-claim",
+        "title": "Prospective biomarker study",
+        "authors": ["Researcher A"],
+        "published_year": 2026,
+        "venue": "Clinical Evidence",
+        "source_type": "journal-article",
+        "evidence_hint": "observational",
+        "url": "https://doi.org/10.1000/evidence-claim",
+        "excerpt": "Prospective evidence with important limitations.",
+        "citation_count": 8,
+    }])
     return literature.collect(user_id, mission_id, max_results=8)
 
 
