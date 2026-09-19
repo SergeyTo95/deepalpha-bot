@@ -321,12 +321,19 @@ async def create_app() -> web.Application:
                 state["status"] = "running"
                 state["updated_epoch"] = time.time()
                 store.write(job_id, state)
-                prepared = await asyncio.to_thread(
-                    _prepare_input,
-                    folder / "upload.bin",
-                    state["upload_format"],
-                    folder,
+                prepared = next(
+                    (candidate for candidate in (folder / "study.nii.gz", folder / "study.nii") if candidate.exists()),
+                    None,
                 )
+                if prepared is None:
+                    prepared = await asyncio.to_thread(
+                        _prepare_input,
+                        folder / "upload.bin",
+                        state["upload_format"],
+                        folder,
+                    )
+                else:
+                    await asyncio.to_thread(_validate_nifti, prepared)
                 result = await asyncio.to_thread(
                     adapter.infer,
                     str(prepared),
@@ -374,7 +381,11 @@ async def create_app() -> web.Application:
         for folder in store.jobs_root.iterdir():
             try:
                 state = store.read(folder.name)
-                if state.get("status") in {"queued", "running"} and (folder / "upload.bin").exists():
+                recoverable_input = any(
+                    candidate.exists()
+                    for candidate in (folder / "upload.bin", folder / "study.nii", folder / "study.nii.gz")
+                )
+                if state.get("status") in {"queued", "running"} and recoverable_input:
                     state["status"] = "queued"
                     state["updated_epoch"] = time.time()
                     store.write(folder.name, state)
