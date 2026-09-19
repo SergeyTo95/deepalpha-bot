@@ -28,6 +28,7 @@ STALE_RUNNING_SECONDS = 600
 QUALITY = {"high", "moderate", "low", "uncertain"}
 STANCE = {"supports", "challenges", "mixed", "context", "uncertain"}
 CONFIDENCE = {"high", "moderate", "low", "uncertain"}
+EVIDENCE_CLAIM_VERDICTS = {"supported", "contradicted", "conflicting", "insufficient"}
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -244,6 +245,13 @@ def _prompt(mission: Dict[str, Any], sources: List[Dict[str, Any]]) -> str:
             "strength": "high|moderate|low|uncertain",
             "notes": "important limitations or relevance",
         }],
+        "evidence_claims": [{
+            "statement": "one bounded scientific conclusion supported by the supplied evidence",
+            "verdict": "supported|contradicted|conflicting|insufficient",
+            "confidence": "high|moderate|low|uncertain",
+            "source_ids": ["one or more supplied source ids"],
+            "rationale": "brief explanation of why the cited evidence supports this verdict",
+        }],
         "contradictions": ["material conflicts in evidence"],
         "limitations": ["coverage and methodology limitations"],
         "hypotheses": [{
@@ -304,6 +312,37 @@ def _validate_result(raw: Dict[str, Any], source_ids: set[str]) -> Dict[str, Any
                 break
         return output
 
+    evidence_claims: List[Dict[str, Any]] = []
+    claim_values = raw.get("evidence_claims")
+    if isinstance(claim_values, list):
+        for value in claim_values:
+            if not isinstance(value, dict):
+                continue
+            statement = _text(value.get("statement"), 1200)
+            verdict = _text(value.get("verdict"), 24).lower()
+            claim_confidence = _text(value.get("confidence"), 24).lower()
+            rationale = _text(value.get("rationale"), 1800)
+            raw_source_ids = value.get("source_ids")
+            valid_source_ids: List[str] = []
+            if isinstance(raw_source_ids, list):
+                for source_id_value in raw_source_ids:
+                    source_id = _text(source_id_value, 80)
+                    if source_id in source_ids and source_id not in valid_source_ids:
+                        valid_source_ids.append(source_id)
+                    if len(valid_source_ids) >= 12:
+                        break
+            if not statement or verdict not in EVIDENCE_CLAIM_VERDICTS or not valid_source_ids:
+                continue
+            evidence_claims.append({
+                "statement": statement,
+                "verdict": verdict,
+                "confidence": claim_confidence if claim_confidence in CONFIDENCE else "uncertain",
+                "source_ids": valid_source_ids,
+                "rationale": rationale,
+            })
+            if len(evidence_claims) >= 12:
+                break
+
     hypotheses: List[Dict[str, str]] = []
     values = raw.get("hypotheses")
     if isinstance(values, list):
@@ -327,6 +366,7 @@ def _validate_result(raw: Dict[str, Any], source_ids: set[str]) -> Dict[str, Any
         "summary": summary,
         "confidence": confidence,
         "evidence_assessment": assessments,
+        "evidence_claims": evidence_claims,
         "contradictions": strings("contradictions", 12, 800),
         "limitations": strings("limitations", 12, 800),
         "hypotheses": hypotheses,
