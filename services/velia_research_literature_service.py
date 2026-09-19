@@ -32,6 +32,21 @@ MAX_RESULTS = 20
 MAX_SEARCHES_PER_MISSION = 50
 MAX_SOURCES_PER_MISSION = 500
 STALE_RUNNING_SECONDS = 600
+MAX_QUERY_INPUT_CHARS = 6000
+MAX_PROVIDER_QUERY_CHARS = 800
+QUERY_INSTRUCTION_MARKERS = (
+    " цель исследования:",
+    " проведи полноцен",
+    " проведи исслед",
+    " выполни анализ",
+    " финальный отчет",
+    " финальный отчёт",
+    " формат результата:",
+    " research goal:",
+    " methodology:",
+    " requirements:",
+    " final report:",
+)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -62,12 +77,47 @@ def _json(value: Any) -> str:
 
 
 def _query(value: Any) -> str:
-    if not isinstance(value, str) or "\x00" in value or len(value) > 800:
+    """Validate the full research intent before deriving a provider query."""
+    if not isinstance(value, str) or "\x00" in value or len(value) > MAX_QUERY_INPUT_CHARS:
         raise projects.ProjectError("invalid_literature_query")
     value = re.sub(r"\s+", " ", value).strip()
     if len(value) < 2:
         raise projects.ProjectError("literature_query_required")
     return value
+
+
+def _provider_query(value: str) -> str:
+    """Bound a long research brief into a scholarly-search query.
+
+    Mission goals intentionally allow substantially more detail than scholarly
+    providers accept. Safety classification must run on the full goal first;
+    only the provider-facing query is compacted here.
+    """
+    if len(value) <= MAX_PROVIDER_QUERY_CHARS:
+        return value
+
+    low = value.casefold()
+    marker_positions = [
+        low.find(marker)
+        for marker in QUERY_INSTRUCTION_MARKERS
+        if low.find(marker) >= 60
+    ]
+    cut = min(marker_positions) if marker_positions else MAX_PROVIDER_QUERY_CHARS
+    cut = min(cut, MAX_PROVIDER_QUERY_CHARS)
+    bounded = value[:cut].strip(" \t\r\n:;-")
+
+    if not marker_positions and len(bounded) >= MAX_PROVIDER_QUERY_CHARS:
+        sentence_ends = [
+            match.end()
+            for match in re.finditer(r"[.!?](?:\s|$)", bounded)
+            if match.end() >= 120
+        ]
+        if sentence_ends:
+            bounded = bounded[: sentence_ends[-1]].strip()
+
+    if len(bounded) < 2:
+        bounded = value[:MAX_PROVIDER_QUERY_CHARS].strip()
+    return bounded[:MAX_PROVIDER_QUERY_CHARS]
 
 
 def _hash_query(value: str) -> str:
@@ -320,13 +370,14 @@ def live_discover(query: str, max_results: int = 12) -> Dict[str, Any]:
     decision = safety.classify(query, phase="literature")
     if decision["decision"] == "blocked":
         raise projects.ProjectError("research_literature_safety_blocked", 403)
+    provider_query = _provider_query(query)
 
     rows: List[Dict[str, Any]] = []
     providers: List[str] = []
     errors: List[str] = []
     for provider, fetcher in (("crossref", _crossref), ("europe_pmc", _europe_pmc)):
         try:
-            provider_rows = fetcher(query, max_results)
+            provider_rows = fetcher(provider_query, max_results)
             rows.extend(provider_rows)
             providers.append(provider)
         except Exception:
@@ -335,8 +386,9 @@ def live_discover(query: str, max_results: int = 12) -> Dict[str, Any]:
         raise projects.ProjectError("research_literature_unavailable", 502)
     rows = _dedupe(rows, max_results)
     return {
-        "query": query,
+        "query": provider_query,
         "query_hash": _hash_query(query),
+        "query_compacted": provider_query != query,
         "partial": bool(errors),
         "provider_gaps": errors,
         "providers": providers,
@@ -599,12 +651,14 @@ def collect(user_id: int, mission_id: str, query: str = "", max_results: int = 1
     if decision["decision"] == "blocked":
         raise projects.ProjectError("research_safety_blocked", 403)
 
+    provider_query = _provider_query(query)
     query_hash = _hash_query(query)
-    cached = _claim(user_id, mission_id, query, query_hash, decision)
+    cached = _claim(user_id, mission_id, provider_query, query_hash, decision)
     if cached is not None:
         return {
             "query_hash": query_hash,
-            "query": query,
+            "query": provider_query,
+            "query_compacted": provider_query != query,
             "cached": True,
             "partial": False,
             "safety": decision,
@@ -618,12 +672,12 @@ def collect(user_id: int, mission_id: str, query: str = "", max_results: int = 1
         if mission["domain"] in {"medicine", "biology"}:
             providers.append("europe_pmc")
             try:
-                provider_rows.extend(_europe_pmc(query, max_results))
+                provider_rows.extend(_europe_pmc(provider_query, max_results))
             except ValueError:
                 errors.append("europe_pmc_unavailable")
         providers.append("crossref")
         try:
-            provider_rows.extend(_crossref(query, max_results))
+            provider_rows.extend(_crossref(provider_query, max_results))
         except ValueError:
             errors.append("crossref_unavailable")
 
@@ -687,7 +741,8 @@ def collect(user_id: int, mission_id: str, query: str = "", max_results: int = 1
 
         return {
             "query_hash": query_hash,
-            "query": query,
+            "query": provider_query,
+            "query_compacted": provider_query != query,
             "cached": False,
             "partial": bool(errors),
             "provider_gaps": errors,
