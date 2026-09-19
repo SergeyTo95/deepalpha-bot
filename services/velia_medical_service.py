@@ -177,6 +177,8 @@ def create_case(user_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
     project_id = data.get("project_id") or None
     if modality not in ALLOWED_MODALITIES or study_kind not in ALLOWED_STUDY_KINDS:
         raise projects.ProjectError("medical_modality_not_supported", 422)
+    if data.get("contrast_enhanced_confirmed") is not True or data.get("abdomen_confirmed") is not True:
+        raise projects.ProjectError("medical_scope_confirmation_required", 422)
     if provider() != "radar":
         raise projects.ProjectError("medical_provider_not_configured", 503)
     if not radar_noncommercial_acknowledged():
