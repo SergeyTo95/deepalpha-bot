@@ -60,3 +60,27 @@ jobs:
           assert 'VELIA_MEDICAL_RADAR_NONCOMMERCIAL_ACK' in prep
           assert 'checkpoint_radar_pretrain.pth' not in docker
           PY
+      - name: Build medical worker image
+        run: docker build -f medical_worker/Dockerfile -t velia-medical-worker:ci .
+      - name: Fail-closed worker health smoke
+        run: |
+          docker run -d --rm --name velia-medical-ci -p 18088:8088 \
+            -e VELIA_MEDICAL_WORKER_AUTH_TOKEN=ci-secret \
+            -e VELIA_MEDICAL_RADAR_NONCOMMERCIAL_ACK=false \
+            velia-medical-worker:ci
+          trap 'docker rm -f velia-medical-ci >/dev/null 2>&1 || true' EXIT
+          for i in $(seq 1 30); do
+            if curl -fsS -H 'Authorization: Bearer ci-secret' http://127.0.0.1:18088/health > /tmp/medical-health.json; then
+              break
+            fi
+            sleep 1
+          done
+          python - <<'PY'
+          import json
+          data=json.load(open('/tmp/medical-health.json'))
+          assert data['ok'] is True
+          assert data['provider'] == 'radar'
+          assert data['ready_for_inference'] is False
+          assert data['commercial_use_allowed_by_public_weights'] is False
+          assert data['raw_input_retained_after_job'] is False
+          PY
