@@ -432,6 +432,7 @@ async def create_app() -> web.Application:
             "ok": True,
             "job_id": job_id,
             "status": state["status"],
+            "upload_format": state.get("upload_format"),
             "input_sha256": state.get("input_sha256"),
             "received_bytes": int(state.get("received_bytes") or 0),
             "declared_bytes": int(state.get("declared_bytes") or 0),
