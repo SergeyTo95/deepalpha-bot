@@ -1,0 +1,90 @@
+name: VELIA Research Knowledge Timeline
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  research-timeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: velia_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/velia_test
+      VELIA_RESEARCH_CENTER_ENABLED: 'false'
+      VELIA_RESEARCH_CLAIM_LEDGER_ENABLED: 'false'
+      VELIA_RESEARCH_KNOWLEDGE_TIMELINE_ENABLED: 'false'
+      VELIA_RESEARCH_LIVING_RESEARCH_ENABLED: 'false'
+      VELIA_RESEARCH_LIVING_REASSESSMENT_ENABLED: 'false'
+      VELIA_RESEARCH_META_ANALYSIS_ENABLED: 'false'
+      VELIA_RESEARCH_SYSTEMATIC_REVIEW_ENABLED: 'false'
+      VELIA_RESEARCH_PROTOCOL_OFFICER_ENABLED: 'false'
+      VELIA_RESEARCH_EXPERIMENT_EXECUTION_ENABLED: 'false'
+      VELIA_RESEARCH_COMPUTE_ENABLED: 'false'
+      VELIA_RESEARCH_EXPERIMENT_PIPELINE_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt pytest pytest-asyncio
+      - name: Knowledge timeline and downstream research tests
+        run: >
+          python -m pytest -q
+          tests/test_velia_research_timeline.py
+          tests/test_velia_research_living_reassessment.py
+          tests/test_velia_research_living_research.py
+          tests/test_velia_research_claim_ledger.py
+          tests/test_velia_research_report.py
+      - name: Compile knowledge timeline surface
+        run: >
+          python -m compileall -q
+          services/velia_research_timeline_service.py
+          services/velia_research_living_reassessment_service.py
+          services/velia_research_claim_service.py
+          services/velia_research_report_service.py
+          velia_research_routes.py
+      - name: Static timeline materiality and safety boundary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          timeline = Path('services/velia_research_timeline_service.py').read_text()
+          routes = Path('velia_research_routes.py').read_text()
+          env = Path('.env.example').read_text()
+
+          assert 'VELIA_RESEARCH_KNOWLEDGE_TIMELINE_ENABLED", False' in timeline
+          assert '"candidate_discovery_alerts": False' in timeline
+          assert '"material_change_alerts_only": True' in timeline
+          assert '"report_as_of_supported": True' in timeline
+          assert '"extra_model_calls": 0' in timeline
+          assert '"retracted_or_withdrawn_evidence_removed_from_living_pool"' in timeline
+          assert '"citation_integrity_alert"' in timeline
+          assert '"new_verified_external_evidence_added"' in timeline
+          assert 'MATERIAL_REASSESSMENT_CHANGES' in timeline
+          assert '/claims/{claim_id}/timeline' in routes
+          assert '/claims/{claim_id}/as-of' in routes
+          assert '/missions/{mission_id}/report-as-of' in routes
+          assert '/missions/{mission_id}/scientific-alerts' in routes
+          assert '/scientific-alerts/{alert_id}/acknowledge' in routes
+          assert 'VELIA_RESEARCH_KNOWLEDGE_TIMELINE_ENABLED=false' in env
+
+          forbidden = (
+              'subprocess', 'os.system', 'eval(', 'exec(', 'compile(',
+              '__import__(', 'requests.', 'aiohttp.', 'socket.', 'open(',
+          )
+          for token in forbidden:
+              assert token not in timeline, token
+          PY
