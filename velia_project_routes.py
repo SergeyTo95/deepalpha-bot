@@ -123,3 +123,9 @@ def setup_velia_project_routes(app):
     # authenticated mobile account and project-resource ownership boundary.
     from velia_research_routes import setup_velia_research_routes
     setup_velia_research_routes(app)
+
+    # Medical Intelligence is a separate high-trust capability surface. Raw
+    # studies are streamed to a self-hosted GPU worker and are never stored in
+    # the Railway database.
+    from velia_medical_routes import setup_velia_medical_routes
+    setup_velia_medical_routes(app)

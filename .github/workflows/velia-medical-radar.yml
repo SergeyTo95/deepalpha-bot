@@ -1,0 +1,90 @@
+name: VELIA Medical RADAR
+on:
+  pull_request:
+  push:
+    branches: [feature/turbo-short-term-btc]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  medical-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      VELIA_MEDICAL_ENABLED: 'false'
+      VELIA_MEDICAL_RADAR_NONCOMMERCIAL_ACK: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt -r medical_worker/requirements.txt pytest
+      - name: Medical contract tests
+        run: python -m pytest -q tests/test_velia_medical.py
+      - name: Compile medical surfaces
+        run: python -m compileall -q services/velia_medical_service.py velia_medical_routes.py medical_worker
+      - name: Safety and licensing assertions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          service = Path('services/velia_medical_service.py').read_text()
+          routes = Path('velia_medical_routes.py').read_text()
+          worker = Path('medical_worker/app.py').read_text()
+          adapter = Path('medical_worker/radar_adapter.py').read_text()
+          docker = Path('medical_worker/Dockerfile').read_text()
+          prep = Path('medical_worker/prepare_weights.py').read_text()
+
+          assert 'VELIA_MEDICAL_ENABLED", False' in service
+          assert 'VELIA_MEDICAL_RADAR_NONCOMMERCIAL_ACK", False' in service
+          assert 'CC-BY-NC-SA-4.0' in service
+          assert 'commercial_use_allowed_by_public_weights": False' in service
+          assert 'raw_medical_data_persisted_on_railway": False' in service
+          assert 'model_score_not_calibrated_probability' in service
+          assert '_require_mobile_auth' in routes
+          assert 'request.content.iter_chunked' in routes
+          assert 'content_bytes' not in service
+          assert 'allow_redirects=False' in routes
+          assert 'single_dicom_series_required' in worker
+          assert 'dicom_modality_not_ct' in worker
+          assert 'raw_input_retained_after_job": False' in worker
+          assert 'access_log=None' in worker
+          assert 'os.system' not in worker
+          assert 'eval(' not in worker
+          assert 'exec(' not in worker
+          assert 'subprocess' not in worker
+          assert '9319f36642b6f3f4708c8e5c8844ab114d6e7b24' in adapter
+          assert '0.0 <= score <= 1.0' in adapter
+          assert 'HF_HUB_OFFLINE' in adapter
+          assert 'TRANSFORMERS_OFFLINE' in adapter
+          assert 'bert-base-uncased' in adapter
+          assert 'snapshot_download' in prep
+          assert 'VELIA_MEDICAL_RADAR_NONCOMMERCIAL_ACK' in prep
+          assert 'bert-base-uncased/**' in prep
+          assert 'checkpoint_radar_pretrain.pth' not in docker
+          PY
+      - name: Build medical worker image
+        run: docker build -f medical_worker/Dockerfile -t velia-medical-worker:ci .
+      - name: Fail-closed worker health smoke
+        run: |
+          docker run -d --rm --name velia-medical-ci -p 18088:8088 \
+            -e VELIA_MEDICAL_WORKER_AUTH_TOKEN=ci-secret \
+            -e VELIA_MEDICAL_RADAR_NONCOMMERCIAL_ACK=false \
+            velia-medical-worker:ci
+          trap 'docker rm -f velia-medical-ci >/dev/null 2>&1 || true' EXIT
+          for i in $(seq 1 30); do
+            if curl -fsS -H 'Authorization: Bearer ci-secret' http://127.0.0.1:18088/health > /tmp/medical-health.json; then
+              break
+            fi
+            sleep 1
+          done
+          python - <<'PY'
+          import json
+          data=json.load(open('/tmp/medical-health.json'))
+          assert data['ok'] is True
+          assert data['provider'] == 'radar'
+          assert data['ready_for_inference'] is False
+          assert data['commercial_use_allowed_by_public_weights'] is False
+          assert data['raw_input_retained_after_job'] is False
+          PY
