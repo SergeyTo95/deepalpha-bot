@@ -238,37 +238,109 @@ def setup_velia_medical_routes(app) -> None:
             )
         return _json_response({"ok": True, "case": case})
 
-    async def upload_route(request, uid):
+    async def begin_upload_route(request, uid):
         case_id = request.match_info["case_id"]
-        upload_format = str(request.query.get("format") or "").strip().lower()
+        data = await _json_body(request)
+        upload_format = str(data.get("format") or "").strip().lower()
         if upload_format not in ALLOWED_UPLOAD_FORMATS:
             raise projects.ProjectError("medical_upload_format_required")
+        try:
+            total_bytes = int(data.get("total_bytes") or 0)
+        except (TypeError, ValueError):
+            raise projects.ProjectError("invalid_medical_upload_size")
+        max_bytes = _env_int(
+            "VELIA_MEDICAL_MAX_UPLOAD_BYTES",
+            1024 * 1024 * 1024,
+            16 * 1024 * 1024,
+            2 * 1024 * 1024 * 1024,
+        )
+        if total_bytes <= 0 or total_bytes > max_bytes:
+            raise projects.ProjectError("medical_upload_size_rejected", 413)
+
         case = await asyncio.to_thread(medical.get_case, uid, case_id)
         if case["modality"] != "ct" or case["study_kind"] != "contrast_abdomen":
             raise projects.ProjectError("medical_modality_not_supported", 422)
-        await asyncio.to_thread(medical.mark_uploading, uid, case_id)
+
+        job_id = case.get("provider_job_id")
+        if case["status"] == "uploading" and job_id:
+            payload = await _worker_json("GET", "/v1/jobs/" + job_id, case_id=case_id)
+            if payload.get("status") != "uploading":
+                raise projects.ProjectError("medical_upload_not_active", 409)
+            if str(payload.get("upload_format") or "") != upload_format:
+                raise projects.ProjectError("medical_upload_resume_mismatch", 409)
+            if int(payload.get("declared_bytes") or 0) != total_bytes:
+                raise projects.ProjectError("medical_upload_resume_mismatch", 409)
+            return _json_response({
+                "ok": True,
+                "case": case,
+                "upload": {
+                    "job_id": job_id,
+                    "received_bytes": int(payload.get("received_bytes") or 0),
+                    "next_chunk": int(payload.get("next_chunk") or 0),
+                },
+            })
+
+        if case["status"] not in {"created", "failed"}:
+            raise projects.ProjectError("medical_case_not_uploadable", 409)
+
+        payload = await _begin_worker_upload(case_id, upload_format, total_bytes)
+        job_id = str(payload.get("job_id") or "")
+        if not job_id:
+            raise projects.ProjectError("medical_worker_invalid_response", 502)
+        case = await asyncio.to_thread(
+            medical.mark_upload_started,
+            uid,
+            case_id,
+            provider_job_id=job_id,
+        )
+        return _json_response({
+            "ok": True,
+            "case": case,
+            "upload": {
+                "job_id": job_id,
+                "received_bytes": int(payload.get("received_bytes") or 0),
+                "next_chunk": int(payload.get("next_chunk") or 0),
+            },
+        }, status=201)
+
+    async def upload_chunk_route(request, uid):
+        case_id = request.match_info["case_id"]
         try:
-            queued = await _upload_to_worker(request, case_id, upload_format)
-            case = await asyncio.to_thread(
-                medical.mark_queued,
-                uid,
-                case_id,
-                provider_job_id=queued["job_id"],
-                input_sha256=queued["input_sha256"],
-            )
-            return _json_response({"ok": True, "case": case}, status=202)
-        except Exception:
-            # The client may retry the same case after a failed upload.
-            try:
-                await asyncio.to_thread(
-                    medical.reconcile_worker_result,
-                    uid,
-                    case_id,
-                    {"status": "failed", "error": "medical_upload_failed"},
-                )
-            except Exception:
-                pass
-            raise
+            chunk_index = int(request.match_info["chunk_index"])
+        except (TypeError, ValueError):
+            raise projects.ProjectError("invalid_medical_chunk")
+        case = await asyncio.to_thread(medical.get_case, uid, case_id)
+        job_id = case.get("provider_job_id")
+        if case["status"] != "uploading" or not job_id:
+            raise projects.ProjectError("medical_upload_not_active", 409)
+        payload = await _forward_worker_chunk(
+            request,
+            case_id=case_id,
+            job_id=job_id,
+            chunk_index=chunk_index,
+        )
+        return _json_response({"ok": True, "upload": payload})
+
+    async def complete_upload_route(request, uid):
+        case_id = request.match_info["case_id"]
+        case = await asyncio.to_thread(medical.get_case, uid, case_id)
+        job_id = case.get("provider_job_id")
+        if case["status"] != "uploading" or not job_id:
+            if case["status"] == "queued" and job_id:
+                return _json_response({"ok": True, "case": case}, status=202)
+            raise projects.ProjectError("medical_upload_not_active", 409)
+        payload = await _complete_worker_upload(case_id, job_id)
+        digest = str(payload.get("input_sha256") or "")
+        if not digest:
+            raise projects.ProjectError("medical_worker_invalid_response", 502)
+        case = await asyncio.to_thread(
+            medical.mark_queued,
+            uid,
+            case_id,
+            provider_job_id=job_id,
+            input_sha256=digest,
+        )
+        return _json_response({"ok": True, "case": case}, status=202)
 
     async def research_route(request, uid):
         case = await asyncio.to_thread(
@@ -281,5 +353,11 @@ def setup_velia_medical_routes(app) -> None:
     app.router.add_route("GET", prefix + "/cases", guarded(list_route))
     app.router.add_route("POST", prefix + "/cases", guarded(create_route))
     app.router.add_route("GET", prefix + "/cases/{case_id}", guarded(get_route))
-    app.router.add_route("POST", prefix + "/cases/{case_id}/study", guarded(upload_route))
+    app.router.add_route("POST", prefix + "/cases/{case_id}/study/begin", guarded(begin_upload_route))
+    app.router.add_route(
+        "PUT",
+        prefix + "/cases/{case_id}/study/chunks/{chunk_index}",
+        guarded(upload_chunk_route),
+    )
+    app.router.add_route("POST", prefix + "/cases/{case_id}/study/complete", guarded(complete_upload_route))
     app.router.add_route("POST", prefix + "/cases/{case_id}/research", guarded(research_route))
