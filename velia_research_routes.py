@@ -10,6 +10,7 @@ from services import velia_research_dataset_service as datasets
 from services import velia_research_experiment_pipeline_service as experiment_pipeline
 from services import velia_research_protocol_service as protocol
 from services import velia_research_director_service as director
+from services import velia_research_evidence_claim_service as evidence_claims
 from services import velia_research_literature_service as literature
 from services import velia_research_meta_analysis_service as meta_analysis
 from services import velia_research_reasoning_service as reasoning
@@ -92,6 +93,7 @@ def setup_velia_research_routes(app):
         state["reasoning"] = reasoning.status()
         state["director"] = director.status()
         state["reports"] = reports.status()
+        state["evidence_claims"] = evidence_claims.status()
         state["compute"] = compute.status()
         state["datasets"] = datasets.status()
         state["experiment_pipeline"] = experiment_pipeline.status()
@@ -180,6 +182,15 @@ def setup_velia_research_routes(app):
     async def synthesis_list(request, uid):
         result = await asyncio.to_thread(
             reasoning.list_syntheses,
+            uid,
+            request.match_info["mission_id"],
+            int(request.query.get("offset", 0)),
+        )
+        return _json_response({"ok": True, **result})
+
+    async def evidence_claims_list(request, uid):
+        result = await asyncio.to_thread(
+            evidence_claims.list_evidence_claims,
             uid,
             request.match_info["mission_id"],
             int(request.query.get("offset", 0)),
@@ -703,6 +714,7 @@ def setup_velia_research_routes(app):
     app.router.add_get(prefix + "/missions/{mission_id}/sources", guarded(literature_sources))
     app.router.add_post(prefix + "/missions/{mission_id}/synthesize", guarded(synthesis_create))
     app.router.add_get(prefix + "/missions/{mission_id}/syntheses", guarded(synthesis_list))
+    app.router.add_get(prefix + "/missions/{mission_id}/evidence-claims", guarded(evidence_claims_list))
     app.router.add_post(prefix + "/missions/{mission_id}/runs", guarded(autonomy_run_create))
     app.router.add_get(prefix + "/missions/{mission_id}/runs", guarded(autonomy_runs_list))
     app.router.add_get(prefix + "/runs/{run_id}", guarded(autonomy_run_get))
