@@ -1,0 +1,103 @@
+name: VELIA Research Systematic Review
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  research-systematic-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: velia_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/velia_test
+      VELIA_RESEARCH_CENTER_ENABLED: 'false'
+      VELIA_RESEARCH_LITERATURE_ENABLED: 'false'
+      VELIA_RESEARCH_CLAIM_LEDGER_ENABLED: 'false'
+      VELIA_RESEARCH_META_ANALYSIS_ENABLED: 'false'
+      VELIA_RESEARCH_SYSTEMATIC_REVIEW_ENABLED: 'false'
+      VELIA_RESEARCH_PROTOCOL_OFFICER_ENABLED: 'false'
+      VELIA_RESEARCH_EXPERIMENT_EXECUTION_ENABLED: 'false'
+      VELIA_RESEARCH_COMPUTE_ENABLED: 'false'
+      VELIA_RESEARCH_EXPERIMENT_PIPELINE_ENABLED: 'false'
+      VELIA_RESEARCH_AUTO_REPORT_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt pytest pytest-asyncio
+      - name: Systematic review and downstream research tests
+        run: >
+          python -m pytest -q
+          tests/test_velia_research_systematic_review.py
+          tests/test_velia_research_meta_analysis.py
+          tests/test_velia_research_claim_ledger.py
+          tests/test_velia_research_protocol_officer.py
+          tests/test_velia_research_dataset_registry.py
+          tests/test_velia_research_experiment_pipeline.py
+          tests/test_velia_research_compute.py
+          tests/test_velia_research_report.py
+      - name: Compile systematic review surface
+        run: >
+          python -m compileall -q
+          services/velia_research_systematic_review_service.py
+          services/velia_research_meta_analysis_service.py
+          services/velia_research_report_service.py
+          run_velia_research_worker.py
+          velia_research_routes.py
+      - name: Static preregistration and evidence-graph boundary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          review = Path('services/velia_research_systematic_review_service.py').read_text()
+          meta = Path('services/velia_research_meta_analysis_service.py').read_text()
+          report = Path('services/velia_research_report_service.py').read_text()
+          routes = Path('velia_research_routes.py').read_text()
+          env = Path('.env.example').read_text()
+
+          assert 'VELIA_RESEARCH_SYSTEMATIC_REVIEW_ENABLED", False' in review
+          assert '"protocol_must_precede_literature_search": True' in review
+          assert '"immutable_search_plan": True' in review
+          assert '"append_only_screening": True' in review
+          assert '"full_text_fetch_by_velia": False' in review
+          assert 'research_review_protocol_must_precede_search' in review
+          assert 'publication_fingerprint' in review
+          assert 'duplicate_publication' in review
+          assert 'research_review_screening_locked_after_meta_analysis' in review
+          assert 'research_meta_source_not_systematically_included' in review
+          assert 'build_evidence_graph' in review
+          assert '"flow_hash"' in review
+
+          forbidden = (
+              'subprocess', 'os.system', 'eval(', 'exec(', 'compile(',
+              '__import__(', 'requests.', 'aiohttp.', 'socket.', 'open(',
+          )
+          for token in forbidden:
+              assert token not in review, token
+
+          assert 'systematic_review.assert_source_eligible' in meta
+          assert '"systematic_review": systematic_evidence' in report
+          assert '"immutable_evidence_graph_hash"' in report
+          assert '"systematic_review_arbitrary_full_text_fetch": False' in report
+
+          assert '/missions/{mission_id}/systematic-reviews' in routes
+          assert '/systematic-reviews/{review_id}/search' in routes
+          assert '/systematic-reviews/{review_id}/sources/{source_id}/screen' in routes
+          assert '/systematic-reviews/{review_id}/flow' in routes
+          assert '/systematic-reviews/{review_id}/evidence-graph' in routes
+          assert 'VELIA_RESEARCH_SYSTEMATIC_REVIEW_ENABLED=false' in env
+          PY

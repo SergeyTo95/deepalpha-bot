@@ -7,6 +7,11 @@ from typing import Any, Dict, List
 
 from services import velia_project_service as projects
 from services import velia_research_center_service as center
+from services import velia_research_claim_service as claims
+from services import velia_research_meta_analysis_service as meta_analysis
+from services import velia_research_systematic_review_service as systematic_review
+from services import velia_research_living_service as living_research
+from services import velia_research_living_reassessment_service as living_reassessment
 from services.velia_chat_service import _iso
 
 
@@ -24,6 +29,16 @@ def status() -> Dict[str, Any]:
         "computational_provenance": True,
         "dataset_provenance": True,
         "protocol_provenance": True,
+        "claim_ledger_provenance": True,
+        "claim_language_stage_bounded": True,
+        "meta_analysis_provenance": True,
+        "meta_analysis_may_promote_claim": False,
+        "systematic_review_provenance": True,
+        "evidence_graph_provenance": True,
+        "living_research_provenance": True,
+        "living_research_mutates_prior_reports": False,
+        "living_reassessment_provenance": True,
+        "living_reassessment_may_promote_claim": False,
         "versioned_snapshots": True,
     }
 
@@ -174,6 +189,21 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
     if mission["status"] in {"blocked", "cancelled"}:
         raise projects.ProjectError("research_mission_not_reportable", 409)
 
+    claim_ledger = claims.mission_ledger(user_id, mission_id) if claims.enabled() else None
+    meta_evidence = (
+        meta_analysis.mission_meta_evidence(user_id, mission_id)
+        if meta_analysis.enabled() else None
+    )
+    systematic_evidence = systematic_review.mission_review_evidence(user_id, mission_id)
+    living_evidence = living_research.latest_mission_evidence(user_id, mission_id)
+    reassessment_evidence = living_reassessment.latest_mission_evidence(user_id, mission_id)
+    latest_scan_reassessed = bool(
+        living_evidence
+        and reassessment_evidence
+        and reassessment_evidence.get("scan_id") == living_evidence.get("scan_id")
+        and reassessment_evidence.get("reassessment_complete")
+    )
+
     with projects.transaction(user_id) as cur:
         synthesis = _latest_synthesis(cur, user_id, mission_id)
         result = json.loads(synthesis["result_json"])
@@ -205,8 +235,26 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
                 "retrieved_at": _iso(row["retrieved_at"]),
             })
 
+        bounded_summary = result.get("summary", "")
+        bounded_confidence = result.get("confidence", "uncertain")
+        claim_findings: List[str] = []
+        if claim_ledger is not None:
+            claim_findings = [item["wording"] for item in claim_ledger.get("snapshots", [])]
+            bounded_summary = (
+                " ".join(claim_findings[:8])
+                if claim_findings
+                else "No registered claim has completed evidence; no claim-level conclusion is permitted."
+            )
+            bounded_confidence = "claim_ledger_bounded"
+        if living_evidence is not None and living_evidence.get("reassessment_required"):
+            bounded_confidence = (
+                "claim_ledger_bounded_after_living_reassessment"
+                if latest_scan_reassessed
+                else "claim_ledger_bounded_with_living_reassessment_pending"
+            )
+
         report: Dict[str, Any] = {
-            "version": 4,
+            "version": 9 if reassessment_evidence is not None else (8 if living_evidence is not None else (7 if systematic_evidence is not None else (6 if meta_evidence is not None else (5 if claim_ledger is not None else 4)))),
             "title": "VELIA Research Report",
             "mission": {
                 "id": str(mission_id),
@@ -215,8 +263,19 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
                 "status": mission["status"],
             },
             "conclusion": {
-                "summary": result.get("summary", ""),
-                "confidence": result.get("confidence", "uncertain"),
+                "summary": bounded_summary,
+                "confidence": bounded_confidence,
+                "claim_findings": claim_findings,
+                "literature_synthesis_summary": result.get("summary", ""),
+                "literature_synthesis_confidence": result.get("confidence", "uncertain"),
+                "boundary": (
+                    "Final scientific claim language is limited by the deterministic Claim Ledger. "
+                    "Preregistered systematic-review screening, literature synthesis, meta-analysis and "
+                    "Living Reassessment are contextual calibration layers and cannot raise a claim above its "
+                    "ledger stage; external evidence may only add caution or robust contradiction."
+                    if claim_ledger is not None
+                    else "Claim Ledger is disabled; this report contains synthesis-level conclusions only."
+                ),
             },
             "evidence": {
                 "source_count": len(citations),
@@ -229,6 +288,11 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
             "hypotheses": result.get("hypotheses", []),
             "open_questions": result.get("open_questions", []),
             "computational_evidence": computational,
+            "claim_ledger": claim_ledger,
+            "meta_analysis": meta_evidence,
+            "systematic_review": systematic_evidence,
+            "living_research": living_evidence,
+            "living_reassessment": reassessment_evidence,
             "provenance": {
                 "synthesis_id": synthesis["synthesis_id"],
                 "evidence_hash": synthesis["evidence_hash"],
@@ -242,11 +306,104 @@ def build_report(user_id: int, mission_id: str) -> Dict[str, Any]:
                 "immutable_dataset_split_hashes": [row["split_hash"] for row in computational.get("datasets", [])],
                 "immutable_protocol_ids": [row["protocol_id"] for row in computational.get("protocols", [])],
                 "immutable_protocol_hashes": [row["protocol_hash"] for row in computational.get("protocols", [])],
+                "immutable_claim_ids": (
+                    [row["id"] for row in claim_ledger.get("claims", [])]
+                    if claim_ledger is not None else []
+                ),
+                "immutable_claim_hashes": (
+                    [row["claim_hash"] for row in claim_ledger.get("claims", [])]
+                    if claim_ledger is not None else []
+                ),
+                "immutable_claim_snapshot_ids": (
+                    [row["id"] for row in claim_ledger.get("snapshots", [])]
+                    if claim_ledger is not None else []
+                ),
+                "immutable_claim_evidence_hashes": (
+                    [row["evidence_hash"] for row in claim_ledger.get("snapshots", [])]
+                    if claim_ledger is not None else []
+                ),
+                "immutable_meta_snapshot_ids": (
+                    list(meta_evidence.get("snapshot_ids", []))
+                    if meta_evidence is not None else []
+                ),
+                "immutable_meta_evidence_hashes": (
+                    list(meta_evidence.get("evidence_hashes", []))
+                    if meta_evidence is not None else []
+                ),
+                "immutable_systematic_review_id": (
+                    systematic_evidence["review"]["id"]
+                    if systematic_evidence is not None else None
+                ),
+                "immutable_systematic_protocol_hash": (
+                    systematic_evidence["review"]["protocol_hash"]
+                    if systematic_evidence is not None else None
+                ),
+                "immutable_systematic_flow_hash": (
+                    systematic_evidence["flow"]["flow_hash"]
+                    if systematic_evidence is not None else None
+                ),
+                "immutable_evidence_graph_snapshot_id": (
+                    systematic_evidence["evidence_graph"]["snapshot_id"]
+                    if systematic_evidence is not None else None
+                ),
+                "immutable_evidence_graph_hash": (
+                    systematic_evidence["evidence_graph"]["graph_hash"]
+                    if systematic_evidence is not None else None
+                ),
+                "immutable_living_scan_id": (
+                    living_evidence["scan_id"] if living_evidence is not None else None
+                ),
+                "immutable_living_scan_hash": (
+                    living_evidence["scan_hash"] if living_evidence is not None else None
+                ),
+                "immutable_living_graph_revision_id": (
+                    living_evidence["graph_revision_id"] if living_evidence is not None else None
+                ),
+                "immutable_living_graph_revision_hash": (
+                    living_evidence["graph_revision_hash"] if living_evidence is not None else None
+                ),
+                "revision_of_report_id": (
+                    living_evidence["previous_report_id"] if living_evidence is not None else None
+                ),
+                "revision_of_report_hash": (
+                    living_evidence["previous_report_hash"] if living_evidence is not None else None
+                ),
+                "immutable_living_reassessment_id": (
+                    reassessment_evidence["run_id"] if reassessment_evidence is not None else None
+                ),
+                "immutable_living_reassessment_hash": (
+                    reassessment_evidence["result_hash"] if reassessment_evidence is not None else None
+                ),
+                "immutable_scientific_diff_hash": (
+                    reassessment_evidence["scientific_diff_hash"] if reassessment_evidence is not None else None
+                ),
             },
             "safety": {
                 "mission": mission["safety"],
                 "synthesis": json.loads(synthesis["safety_json"]),
                 "operational_harmful_instructions_allowed": False,
+                "claim_overstatement_allowed": False,
+                "claim_ledger_enabled": claim_ledger is not None,
+                "meta_analysis_enabled": meta_evidence is not None,
+                "meta_analysis_claim_promotion_allowed": False,
+                "systematic_review_enabled": systematic_evidence is not None,
+                "systematic_review_protocol_preregistered": (
+                    systematic_evidence is not None
+                ),
+                "systematic_review_arbitrary_full_text_fetch": False,
+                "living_research_enabled": living_evidence is not None,
+                "living_research_old_report_mutation": False,
+                "living_research_auto_claim_stage_change": False,
+                "living_research_reassessment_pending": (
+                    bool(
+                        living_evidence
+                        and living_evidence.get("reassessment_required")
+                        and not latest_scan_reassessed
+                    )
+                ),
+                "living_reassessment_enabled": reassessment_evidence is not None,
+                "living_reassessment_claim_promotion_allowed": False,
+                "living_reassessment_old_report_mutation": False,
             },
         }
         if mission["domain"] == "medicine":

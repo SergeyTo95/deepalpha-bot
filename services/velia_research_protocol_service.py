@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from services import velia_project_service as projects
 from services import velia_research_center_service as center
 from services import velia_research_dataset_service as datasets
+from services import velia_research_claim_service as claims
 from services import velia_research_safety_service as safety
 from services.velia_chat_service import _iso
 
@@ -242,12 +243,16 @@ def _quality_audit(
 
 def ensure_tables() -> None:
     datasets.ensure_tables()
+    if claims.enabled():
+        claims.ensure_tables()
     with projects.transaction() as cur:
         cur.execute("""CREATE TABLE IF NOT EXISTS velia_research_protocols (
             protocol_id TEXT PRIMARY KEY,
             mission_id TEXT NOT NULL,
             user_id BIGINT NOT NULL,
             hypothesis_id TEXT NOT NULL,
+            claim_id TEXT,
+            claim_hash TEXT,
             dataset_id TEXT NOT NULL,
             dataset_hash TEXT NOT NULL,
             split_hash TEXT NOT NULL,
@@ -275,6 +280,8 @@ def ensure_tables() -> None:
                 REFERENCES velia_research_datasets(dataset_id) ON DELETE CASCADE,
             FOREIGN KEY(hypothesis_id)
                 REFERENCES velia_research_hypotheses(hypothesis_id) ON DELETE CASCADE)""")
+        cur.execute("ALTER TABLE velia_research_protocols ADD COLUMN IF NOT EXISTS claim_id TEXT")
+        cur.execute("ALTER TABLE velia_research_protocols ADD COLUMN IF NOT EXISTS claim_hash TEXT")
         cur.execute("""CREATE INDEX IF NOT EXISTS idx_velia_research_protocols_mission
             ON velia_research_protocols(mission_id,user_id,created_at DESC)""")
 
@@ -284,6 +291,8 @@ def _protocol_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "id": row["protocol_id"],
         "mission_id": row["mission_id"],
         "hypothesis_id": row["hypothesis_id"],
+        "claim_id": row.get("claim_id"),
+        "claim_hash": row.get("claim_hash"),
         "dataset_id": row["dataset_id"],
         "dataset_hash": row["dataset_hash"],
         "split_hash": row["split_hash"],
@@ -313,7 +322,7 @@ def create_locked(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
     if not isinstance(data, dict) or set(data) - {
         "hypothesis_id", "dataset_id", "analysis_kind", "columns", "outcome_column",
         "data_dictionary", "alpha", "target_power", "effect_size", "family_size",
-        "correction", "outlier_policy",
+        "correction", "outlier_policy", "claim_id",
     }:
         raise projects.ProjectError("invalid_research_protocol")
 
@@ -324,6 +333,7 @@ def create_locked(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
         raise projects.ProjectError("research_protocol_read_only", 403)
 
     hypothesis_id = data.get("hypothesis_id")
+    claim_id = data.get("claim_id")
     dataset_id = data.get("dataset_id")
     analysis_kind = str(data.get("analysis_kind") or "")
     selected = data.get("columns")
@@ -388,11 +398,22 @@ def create_locked(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
         analysis_kind, alpha, target_power, effect_size, family_size, correction
     )
 
+    claim_binding = None
+    if claims.enabled():
+        if not isinstance(claim_id, str) or not claim_id:
+            raise projects.ProjectError("research_claim_required", 409)
+        claim_binding = claims.authorize_protocol(
+            user_id, claim_id, mission_id, hypothesis_id, analysis_kind
+        )
+    elif claim_id is not None:
+        raise projects.ProjectError("research_claim_ledger_disabled", 503)
+
     # Protocol choices are fully validated and frozen before held-out rows are read.
     frozen = {
         "protocol_version": PROTOCOL_VERSION,
         "mission_id": str(mission_id),
         "hypothesis_id": hypothesis_id,
+        "claim_binding": claim_binding,
         "dataset_id": dataset_id,
         "dataset_hash": dataset_meta["dataset_hash"],
         "split_hash": dataset_meta["split_hash"],
@@ -408,14 +429,13 @@ def create_locked(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
         "outlier_policy": outlier_policy,
         "power_plan": power_plan,
     }
-    protocol_hash = _sha(frozen)
-
     dataset_internal = datasets.get(user_id, dataset_id, include_rows=True)
     quality = _quality_audit(
         dataset_internal, selected, dictionary, outcome, outlier_policy
     )
     if not quality["passed"]:
         raise projects.ProjectError("research_dataset_quality_failed", 409)
+    frozen["quality"] = quality
 
     if power_plan.get("minimum_total_n") is not None:
         actual_n = int(dataset_meta["split"]["test_count"])
@@ -429,6 +449,9 @@ def create_locked(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
         power_plan["available_confirmatory_n"] = int(dataset_meta["split"]["test_count"])
         power_plan["planned_sample_size_sufficient"] = None
 
+    # The immutable hash covers the final frozen power plan, including available
+    # held-out sample size and the deterministic sufficiency assessment.
+    protocol_hash = _sha(frozen)
     decision = safety.classify(_json(frozen), phase="experiment")
     if decision["decision"] != "allowed" or decision.get("read_only_only"):
         raise projects.ProjectError("research_protocol_safety_blocked", 403)
@@ -438,15 +461,17 @@ def create_locked(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
     ).hexdigest()
     with projects.transaction(user_id) as cur:
         cur.execute("""INSERT INTO velia_research_protocols(
-            protocol_id,mission_id,user_id,hypothesis_id,dataset_id,dataset_hash,split_hash,
+            protocol_id,mission_id,user_id,hypothesis_id,claim_id,claim_hash,dataset_id,dataset_hash,split_hash,
             analysis_kind,selected_columns_json,outcome_column,dictionary_json,alpha,target_power,
             effect_size,family_size,correction,outlier_policy,power_json,quality_json,protocol_hash,
             safety_json,status)
-            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'locked')
+            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'locked')
             ON CONFLICT(mission_id,user_id,protocol_hash) DO NOTHING""",
             (
-                protocol_id, str(mission_id), int(user_id), hypothesis_id, dataset_id,
-                dataset_meta["dataset_hash"], dataset_meta["split_hash"], analysis_kind,
+                protocol_id, str(mission_id), int(user_id), hypothesis_id,
+                claim_binding["claim_id"] if claim_binding else None,
+                claim_binding["claim_hash"] if claim_binding else None,
+                dataset_id, dataset_meta["dataset_hash"], dataset_meta["split_hash"], analysis_kind,
                 _json(selected), outcome, _json(dictionary), alpha, target_power, effect_size,
                 family_size, correction, outlier_policy, _json(power_plan), _json(quality),
                 protocol_hash, _json(decision),
@@ -460,6 +485,8 @@ def create_locked(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
         center._event(cur, str(mission_id), user_id, "research_protocol_locked", {
             "protocol_id": row["protocol_id"],
             "protocol_hash": row["protocol_hash"],
+            "claim_id": row.get("claim_id"),
+            "claim_hash": row.get("claim_hash"),
             "dataset_id": dataset_id,
             "dataset_hash": dataset_meta["dataset_hash"],
             "split_hash": dataset_meta["split_hash"],
@@ -503,22 +530,26 @@ def authorize_test_plan(
     hypothesis_id: str,
     dataset_snapshot: Dict[str, Any],
     analysis_kind: str,
+    claim_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     if not enabled():
         raise projects.ProjectError("research_protocol_officer_disabled", 503)
     if dataset_snapshot.get("split") != "test":
         raise projects.ProjectError("research_protocol_test_split_required")
+    if claims.enabled() and (not isinstance(claim_id, str) or not claim_id):
+        raise projects.ProjectError("research_claim_required", 409)
     with projects.transaction() as cur:
         cur.execute("""SELECT * FROM velia_research_protocols
             WHERE mission_id=%s AND user_id=%s AND hypothesis_id=%s
               AND dataset_id=%s AND dataset_hash=%s AND split_hash=%s
               AND analysis_kind=%s AND selected_columns_json=%s AND status='locked'
+              AND (%s IS NULL OR claim_id=%s)
             ORDER BY locked_at DESC,protocol_id DESC LIMIT 1""",
             (
                 str(mission_id), int(user_id), str(hypothesis_id),
                 str(dataset_snapshot["dataset_id"]), str(dataset_snapshot["dataset_hash"]),
                 str(dataset_snapshot["split_hash"]), str(analysis_kind),
-                _json(dataset_snapshot["columns"]),
+                _json(dataset_snapshot["columns"]), claim_id, claim_id,
             ))
         row = cur.fetchone()
         if not row:
@@ -529,6 +560,8 @@ def authorize_test_plan(
     return {
         "protocol_id": protocol["id"],
         "protocol_hash": protocol["protocol_hash"],
+        "claim_id": protocol.get("claim_id"),
+        "claim_hash": protocol.get("claim_hash"),
         "dataset_id": protocol["dataset_id"],
         "dataset_hash": protocol["dataset_hash"],
         "split_hash": protocol["split_hash"],
@@ -550,6 +583,8 @@ def verify_authorization(user_id: int, expected: Dict[str, Any]) -> Dict[str, An
     current = {
         "protocol_id": protocol["id"],
         "protocol_hash": protocol["protocol_hash"],
+        "claim_id": protocol.get("claim_id"),
+        "claim_hash": protocol.get("claim_hash"),
         "dataset_id": protocol["dataset_id"],
         "dataset_hash": protocol["dataset_hash"],
         "split_hash": protocol["split_hash"],

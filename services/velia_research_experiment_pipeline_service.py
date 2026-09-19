@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 from services import velia_project_service as projects
 from services import velia_research_center_service as center
 from services import velia_research_compute_service as compute
+from services import velia_research_claim_service as claims
 from services import velia_research_dataset_service as datasets
 from services import velia_research_protocol_service as protocol
 from services import velia_research_safety_service as safety
@@ -55,6 +56,7 @@ def status() -> Dict[str, Any]:
         "dataset_registry_enabled": datasets.enabled(),
         "dataset_backed_plans": True,
         "protocol_officer_enabled": protocol.enabled(),
+        "claim_ledger_enabled": claims.enabled(),
         "preregistration_required_for_test_split": protocol.enabled(),
         "allowed_analysis_kinds": sorted(ANALYSIS_KIND_TO_OPERATION),
         "max_ready_per_run": MAX_READY_PER_RUN,
@@ -203,7 +205,7 @@ def plan(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
         raise projects.ProjectError("research_experiment_pipeline_disabled", 503)
     if not isinstance(data, dict) or set(data) - {
         "hypothesis_id", "analysis_kind", "parameters", "seed", "question",
-        "dataset_id", "split", "columns", "analysis_options",
+        "dataset_id", "split", "columns", "analysis_options", "claim_id",
     }:
         raise projects.ProjectError("invalid_experiment_pipeline_plan")
 
@@ -213,6 +215,7 @@ def plan(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
     seed = data.get("seed")
     question = _text(data.get("question"), 600, "invalid_experiment_pipeline_plan")
     dataset_id = data.get("dataset_id")
+    claim_id = data.get("claim_id")
     split = data.get("split")
     selected_columns = data.get("columns")
     analysis_options = data.get("analysis_options") or {}
@@ -235,6 +238,8 @@ def plan(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
 
     dataset_mode = dataset_id is not None
     if dataset_mode:
+        if split == "train" and claim_id is not None:
+            raise projects.ProjectError("invalid_experiment_pipeline_plan")
         if parameters is not None or not datasets.enabled():
             raise projects.ProjectError("invalid_experiment_pipeline_plan")
         if operation == "monte_carlo_sum":
@@ -249,12 +254,15 @@ def plan(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
         protocol_snapshot = None
         analysis_mode = "exploratory"
         if split == "test" and protocol.enabled():
+            if claims.enabled() and (not isinstance(claim_id, str) or not claim_id):
+                raise projects.ProjectError("research_claim_required", 409)
             protocol_snapshot = protocol.authorize_test_plan(
                 user_id,
                 mission_id,
                 hypothesis_id,
                 dataset_snapshot,
                 str(analysis_kind),
+                claim_id,
             )
             analysis_mode = "confirmatory"
         validated = _dataset_request(
@@ -282,7 +290,7 @@ def plan(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
     else:
         if not isinstance(parameters, dict):
             raise projects.ProjectError("invalid_experiment_pipeline_plan")
-        if split is not None or selected_columns is not None or analysis_options:
+        if split is not None or selected_columns is not None or analysis_options or claim_id is not None:
             raise projects.ProjectError("invalid_experiment_pipeline_plan")
         compute_request = {"operation": operation, "parameters": parameters, "seed": seed}
         validated_operation, validated_parameters, validated_seed = compute._validate_request(compute_request)
@@ -584,7 +592,19 @@ def _execute_one(user_id: int, experiment: Dict[str, Any]) -> Dict[str, Any]:
             "experiment_pipeline_completed",
             event,
         )
-        return _review_row(row)
+        review = _review_row(row)
+
+    protocol_snapshot = method.get("protocol_snapshot")
+    if (
+        claims.enabled()
+        and isinstance(protocol_snapshot, dict)
+        and isinstance(protocol_snapshot.get("claim_id"), str)
+        and protocol_snapshot.get("claim_id")
+    ):
+        review["claim_snapshot"] = claims.refresh_claim(
+            user_id, protocol_snapshot["claim_id"]
+        )
+    return review
 
 
 def run_ready(user_id: int, mission_id: str, max_experiments: int = 1) -> Dict[str, Any]:
