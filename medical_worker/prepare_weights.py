@@ -24,6 +24,7 @@ def main() -> None:
             "checkpoint_radar_pretrain.pth",
             "infer_text_embedding_merlin.pt",
             "bert-base-chinese/**",
+            "bert-base-uncased/**",
         ],
         local_dir_use_symlinks=False,
     )
