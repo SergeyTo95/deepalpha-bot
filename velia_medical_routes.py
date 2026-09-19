@@ -69,14 +69,20 @@ def _worker_headers(case_id: str, upload_format: str | None = None) -> dict[str,
     return headers
 
 
-async def _worker_json(method: str, path: str, *, case_id: str) -> dict[str, Any]:
+async def _worker_json(
+    method: str,
+    path: str,
+    *,
+    case_id: str,
+    extra_headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
     timeout = aiohttp.ClientTimeout(total=35, connect=8, sock_read=25)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.request(
                 method,
                 _worker_url(path),
-                headers=_worker_headers(case_id),
+                headers={**_worker_headers(case_id), **(extra_headers or {})},
                 allow_redirects=False,
             ) as response:
                 raw = await response.read()
@@ -98,31 +104,52 @@ async def _worker_json(method: str, path: str, *, case_id: str) -> dict[str, Any
         raise projects.ProjectError("medical_worker_unavailable", 503)
 
 
-async def _upload_to_worker(request, case_id: str, upload_format: str) -> dict[str, Any]:
+async def _begin_worker_upload(
+    case_id: str,
+    upload_format: str,
+    total_bytes: int,
+) -> dict[str, Any]:
+    return await _worker_json(
+        "POST",
+        "/v1/uploads",
+        case_id=case_id,
+        extra_headers={
+            "X-Velia-Medical-Format": upload_format,
+            "X-Velia-Medical-Bytes": str(total_bytes),
+        },
+    )
+
+
+async def _forward_worker_chunk(
+    request,
+    *,
+    case_id: str,
+    job_id: str,
+    chunk_index: int,
+) -> dict[str, Any]:
     content_length = request.content_length
-    max_bytes = _env_int(
-        "VELIA_MEDICAL_MAX_UPLOAD_BYTES",
-        1024 * 1024 * 1024,
-        16 * 1024 * 1024,
-        2 * 1024 * 1024 * 1024,
+    chunk_limit = _env_int(
+        "VELIA_MEDICAL_CHUNK_BYTES",
+        8 * 1024 * 1024,
+        1 * 1024 * 1024,
+        32 * 1024 * 1024,
     )
     if content_length is None:
         raise projects.ProjectError("medical_content_length_required", 411)
-    if content_length <= 0:
-        raise projects.ProjectError("medical_empty_upload")
-    if content_length > max_bytes:
-        raise projects.ProjectError("medical_upload_too_large", 413)
-    mime = str(request.content_type or "").lower()
-    if mime not in ALLOWED_UPLOAD_CONTENT_TYPES:
-        raise projects.ProjectError("medical_upload_type_not_supported", 415)
-    timeout = aiohttp.ClientTimeout(total=None, connect=10, sock_read=180)
-    headers = _worker_headers(case_id, upload_format)
-    headers["Content-Type"] = mime
-    headers["X-Velia-Medical-Bytes"] = str(content_length)
+    if content_length <= 0 or content_length > chunk_limit:
+        raise projects.ProjectError("medical_chunk_size_rejected", 413)
+    digest = str(request.headers.get("X-Velia-Chunk-SHA256") or "").strip().lower()
+    if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+        raise projects.ProjectError("invalid_medical_chunk_hash")
+    timeout = aiohttp.ClientTimeout(total=120, connect=10, sock_read=90)
+    headers = _worker_headers(case_id)
+    headers["Content-Type"] = "application/octet-stream"
+    headers["Content-Length"] = str(content_length)
+    headers["X-Velia-Chunk-SHA256"] = digest
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                _worker_url("/v1/jobs"),
+            async with session.put(
+                _worker_url(f"/v1/uploads/{job_id}/chunks/{chunk_index}"),
                 headers=headers,
                 data=request.content.iter_chunked(1024 * 1024),
                 allow_redirects=False,
@@ -134,20 +161,27 @@ async def _upload_to_worker(request, case_id: str, upload_format: str) -> dict[s
                     payload = json.loads(raw)
                 except (ValueError, UnicodeError):
                     raise projects.ProjectError("medical_worker_invalid_response", 502)
-                if response.status >= 400:
-                    code = str(payload.get("error") or "medical_worker_upload_failed")
-                    raise projects.ProjectError(code, 502 if response.status >= 500 else response.status)
                 if not isinstance(payload, dict):
                     raise projects.ProjectError("medical_worker_invalid_response", 502)
-                job_id = str(payload.get("job_id") or "")
-                digest = str(payload.get("input_sha256") or "")
-                if not job_id or not digest:
-                    raise projects.ProjectError("medical_worker_invalid_response", 502)
-                return {"job_id": job_id, "input_sha256": digest}
+                if response.status >= 400:
+                    code = str(payload.get("error") or "medical_worker_upload_failed")
+                    raise projects.ProjectError(
+                        code,
+                        502 if response.status >= 500 else response.status,
+                    )
+                return payload
     except projects.ProjectError:
         raise
     except (aiohttp.ClientError, asyncio.TimeoutError):
         raise projects.ProjectError("medical_worker_unavailable", 503)
+
+
+async def _complete_worker_upload(case_id: str, job_id: str) -> dict[str, Any]:
+    return await _worker_json(
+        "POST",
+        f"/v1/uploads/{job_id}/complete",
+        case_id=case_id,
+    )
 
 
 def setup_velia_medical_routes(app) -> None:
