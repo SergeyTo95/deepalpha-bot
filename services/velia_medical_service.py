@@ -227,23 +227,36 @@ def list_cases(user_id: int, offset: int = 0) -> Dict[str, Any]:
     }
 
 
-def mark_uploading(user_id: int, case_id: str) -> Dict[str, Any]:
+def mark_upload_started(
+    user_id: int,
+    case_id: str,
+    *,
+    provider_job_id: str,
+) -> Dict[str, Any]:
+    job_id = str(provider_job_id or "").strip()
+    if not job_id or len(job_id) > 160:
+        raise projects.ProjectError("medical_worker_invalid_response", 502)
     with projects.transaction(user_id) as cur:
         cur.execute(
-            """UPDATE velia_medical_cases SET status='uploading',error_code=NULL,updated_at=NOW()
-               WHERE case_id=%s AND user_id=%s AND status IN ('created','failed')
-               RETURNING *""",
+            """SELECT * FROM velia_medical_cases
+               WHERE case_id=%s AND user_id=%s FOR UPDATE""",
             (str(case_id), int(user_id)),
         )
         row = cur.fetchone()
         if not row:
-            current = get_case(user_id, case_id)
-            raise projects.ProjectError(
-                "medical_case_not_uploadable" if current["status"] != "uploading" else "medical_upload_in_progress",
-                409,
-            )
-        return _case(row)
-
+            raise projects.ProjectError("medical_case_not_found", 404)
+        if row["status"] == "uploading" and row.get("provider_job_id") == job_id:
+            return _case(row)
+        if row["status"] not in {"created", "failed"}:
+            raise projects.ProjectError("medical_case_not_uploadable", 409)
+        cur.execute(
+            """UPDATE velia_medical_cases
+               SET status='uploading',provider_job_id=%s,result_json=NULL,
+                   input_sha256=NULL,error_code=NULL,updated_at=NOW()
+               WHERE case_id=%s AND user_id=%s RETURNING *""",
+            (job_id, str(case_id), int(user_id)),
+        )
+        return _case(cur.fetchone())
 
 def mark_queued(
     user_id: int,
