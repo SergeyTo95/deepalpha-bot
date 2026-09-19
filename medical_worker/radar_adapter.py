@@ -38,6 +38,7 @@ class RadarAdapter:
             self.model_root / "checkpoint_radar_pretrain.pth",
             self.model_root / "infer_text_embedding_merlin.pt",
             self.model_root / "bert-base-chinese",
+            self.model_root / "bert-base-uncased",
         ]
         missing = [str(path) for path in required if not path.exists()]
         return {
@@ -54,6 +55,27 @@ class RadarAdapter:
             sys.path.insert(0, str(self.inference_root))
         os.environ["MODEL_ROOT"] = str(self.model_root)
         os.environ["CONFIGS_ROOT"] = str(self.model_root)
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+        # Upstream inference_demo calls XBertEncoder.from_config({}, True).
+        # The inference copy of med.py references an undefined get_abs_path and
+        # otherwise resolves bert-base-uncased through Hugging Face. Patch the
+        # class method to the checkpoint bundle so patient inference has no
+        # runtime network dependency.
+        med = importlib.import_module("dynamic_network_architectures.med")
+        from transformers import BertConfig
+
+        uncased_root = self.model_root / "bert-base-uncased"
+
+        def _local_encoder_from_config(cls, cfg=None, from_pretrained=False):
+            config = BertConfig.from_json_file(str(uncased_root / "config.json"))
+            if from_pretrained:
+                return cls.from_pretrained(str(uncased_root), config=config)
+            return cls(config=config)
+
+        med.XBertEncoder.from_config = classmethod(_local_encoder_from_config)
+
         previous = os.getcwd()
         try:
             os.chdir(self.inference_root)
