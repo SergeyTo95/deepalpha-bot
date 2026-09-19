@@ -305,6 +305,160 @@ def _dedupe(rows: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
     return output
 
 
+def live_discover(query: str, max_results: int = 12) -> Dict[str, Any]:
+    """Read-only fresh discovery for a frozen Living Research query.
+
+    Unlike collect(), this does not mutate or replace the original systematic-review
+    search snapshot. It only queries the existing fixed scholarly endpoints and
+    returns a fresh, bounded metadata snapshot for comparison.
+    """
+    if not enabled():
+        raise projects.ProjectError("research_literature_disabled", 503)
+    query = _query(query)
+    if type(max_results) is not int or not 1 <= max_results <= MAX_RESULTS:
+        raise projects.ProjectError("invalid_max_results")
+    decision = safety.classify(query, phase="literature")
+    if decision["decision"] == "blocked":
+        raise projects.ProjectError("research_literature_safety_blocked", 403)
+
+    rows: List[Dict[str, Any]] = []
+    providers: List[str] = []
+    errors: List[str] = []
+    for provider, fetcher in (("crossref", _crossref), ("europe_pmc", _europe_pmc)):
+        try:
+            provider_rows = fetcher(query, max_results)
+            rows.extend(provider_rows)
+            providers.append(provider)
+        except Exception:
+            errors.append(provider)
+    if not rows and errors:
+        raise projects.ProjectError("research_literature_unavailable", 502)
+    rows = _dedupe(rows, max_results)
+    return {
+        "query": query,
+        "query_hash": _hash_query(query),
+        "partial": bool(errors),
+        "provider_gaps": errors,
+        "providers": providers,
+        "safety": decision,
+        "sources": rows,
+    }
+
+
+def verify_doi_status(value: str) -> Dict[str, Any]:
+    """Verify DOI registration and post-publication updates through fixed Crossref metadata.
+
+    This is metadata verification only. Absence of an update is not proof that a
+    publication has never been corrected or retracted outside indexed metadata.
+    """
+    if not enabled():
+        raise projects.ProjectError("research_literature_disabled", 503)
+    doi = _doi(value)
+    if not doi:
+        raise projects.ProjectError("invalid_research_doi")
+    params: Dict[str, Any] = {
+        "filter": "doi:" + doi,
+        "rows": 1,
+    }
+    contact = str(os.getenv("VELIA_RESEARCH_CONTACT_EMAIL", "") or "").strip()
+    if contact and len(contact) <= 200 and "@" in contact:
+        params["mailto"] = contact
+    try:
+        payload = _fetch_json(CROSSREF_URL, params=params)
+    except Exception as exc:
+        raise projects.ProjectError("research_citation_verification_unavailable", 502) from exc
+    message = payload.get("message")
+    items = message.get("items") if isinstance(message, dict) else None
+    raw = items[0] if isinstance(items, list) and items and isinstance(items[0], dict) else None
+    if raw is None or _doi(raw.get("DOI")).casefold() != doi.casefold():
+        return {
+            "doi": doi,
+            "registered": False,
+            "status": "unverified",
+            "updates": [],
+            "provider": "crossref",
+            "coverage_note": (
+                "No exact Crossref DOI record was returned. This is not proof that the work does not exist."
+            ),
+        }
+
+    updates: List[Dict[str, str]] = []
+    raw_updates = raw.get("update-to")
+    if isinstance(raw_updates, list):
+        for item in raw_updates[:20]:
+            if not isinstance(item, dict):
+                continue
+            update_type = _clean(item.get("type"), 80).casefold().replace(" ", "_")
+            if not update_type:
+                continue
+            updates.append({
+                "type": update_type,
+                "doi": _doi(item.get("DOI")),
+                "label": _clean(item.get("label"), 160),
+                "source": _clean(item.get("source"), 80),
+            })
+
+    relation = raw.get("relation")
+    if isinstance(relation, dict):
+        for relation_type, values in relation.items():
+            normalized_type = _clean(relation_type, 100).casefold().replace(" ", "_")
+            if not any(token in normalized_type for token in ("retract", "correct", "concern", "withdraw", "reinstate", "update")):
+                continue
+            values = values if isinstance(values, list) else [values]
+            for item in values[:20]:
+                if isinstance(item, dict):
+                    target = _doi(item.get("id") or item.get("DOI"))
+                else:
+                    target = _doi(item)
+                updates.append({
+                    "type": normalized_type,
+                    "doi": target,
+                    "label": "",
+                    "source": "crossref_relation",
+                })
+
+    deduped: List[Dict[str, str]] = []
+    seen = set()
+    for item in updates:
+        key = (item["type"], item["doi"], item["label"], item["source"])
+        if key not in seen:
+            seen.add(key)
+            deduped.append(item)
+    updates = deduped[:20]
+    types = {item["type"] for item in updates}
+    joined = " ".join(types)
+    if "retract" in joined or "withdraw" in joined:
+        state = "retracted_or_withdrawn"
+    elif "expression" in joined and "concern" in joined:
+        state = "expression_of_concern"
+    elif "correct" in joined:
+        state = "corrected"
+    elif updates:
+        state = "updated"
+    else:
+        state = "verified_no_indexed_update"
+
+    metadata = {
+        "doi": doi,
+        "title": _clean((raw.get("title") or [""])[0] if isinstance(raw.get("title"), list) else raw.get("title"), 600),
+        "type": _clean(raw.get("type"), 100),
+        "publisher": _clean(raw.get("publisher"), 240),
+        "updates": updates,
+    }
+    return {
+        "doi": doi,
+        "registered": True,
+        "status": state,
+        "updates": updates,
+        "provider": "crossref",
+        "metadata_hash": hashlib.sha256(_json(metadata).encode("utf-8")).hexdigest(),
+        "coverage_note": (
+            "Crossref post-publication metadata is checked, including indexed update/retraction metadata. "
+            "No indexed update is not proof that no external correction or retraction exists."
+        ),
+    }
+
+
 def ensure_tables() -> None:
     with projects.transaction() as cur:
         cur.execute("""CREATE TABLE IF NOT EXISTS velia_research_literature_queries (
