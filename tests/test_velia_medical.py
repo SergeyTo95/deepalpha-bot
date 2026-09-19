@@ -88,3 +88,23 @@ def test_radar_adapter_parses_english_labels():
     )
     assert organ == "Liver"
     assert finding == "Hepatocellular carcinoma"
+
+
+def test_case_requires_explicit_supported_scope(monkeypatch):
+    monkeypatch.setenv("VELIA_MEDICAL_ENABLED", "true")
+    monkeypatch.setenv("VELIA_MEDICAL_PROVIDER", "radar")
+    monkeypatch.setenv("VELIA_MEDICAL_WORKER_BASE_URL", "https://medical.example.invalid")
+    monkeypatch.setenv("VELIA_MEDICAL_WORKER_AUTH_TOKEN", "secret")
+    monkeypatch.setenv("VELIA_MEDICAL_RADAR_NONCOMMERCIAL_ACK", "true")
+    with pytest.raises(projects.ProjectError) as error:
+        medical.create_case(
+            1,
+            {
+                "modality": "ct",
+                "study_kind": "contrast_abdomen",
+                "title": "CT",
+                "contrast_enhanced_confirmed": False,
+                "abdomen_confirmed": True,
+            },
+        )
+    assert error.value.code == "medical_scope_confirmation_required"
