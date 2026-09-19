@@ -127,6 +127,22 @@ def ensure_tables() -> None:
             created_at TIMESTAMP NOT NULL DEFAULT NOW(),
             UNIQUE(claim_id,user_id,left_review_id,right_review_id),
             FOREIGN KEY(claim_id) REFERENCES velia_research_claims(claim_id) ON DELETE CASCADE)""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS velia_research_claim_calibrations (
+            calibration_id TEXT PRIMARY KEY,
+            claim_id TEXT NOT NULL,
+            mission_id TEXT NOT NULL,
+            user_id BIGINT NOT NULL,
+            source_type TEXT NOT NULL,
+            source_snapshot_id TEXT NOT NULL,
+            calibration_hash TEXT NOT NULL,
+            calibration_json TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            UNIQUE(claim_id,user_id,source_type,source_snapshot_id),
+            FOREIGN KEY(claim_id) REFERENCES velia_research_claims(claim_id) ON DELETE CASCADE,
+            FOREIGN KEY(mission_id,user_id)
+                REFERENCES velia_research_missions(mission_id,user_id) ON DELETE CASCADE)""")
+        cur.execute("""CREATE INDEX IF NOT EXISTS idx_velia_research_claim_calibrations
+            ON velia_research_claim_calibrations(claim_id,user_id,created_at DESC)""")
 
 
 def _claim_row(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -372,6 +388,10 @@ def _provenance_fingerprint(cur, dataset_id: str, user_id: int) -> Tuple[str, Di
 
 def _evidence(user_id: int, claim: Dict[str, Any]) -> List[Dict[str, Any]]:
     with projects.transaction() as cur:
+        cur.execute("SELECT to_regclass('velia_research_experiment_reviews') AS table_name")
+        table = cur.fetchone()
+        if not table or not table.get("table_name"):
+            return []
         cur.execute("""SELECT r.review_id,r.result_hash,r.statistician_json,r.replication_json,
                    e.experiment_id,e.method_json,e.result_json
             FROM velia_research_experiment_reviews r
@@ -514,6 +534,83 @@ def _upsert_edges(user_id: int, claim: Dict[str, Any], evidence: List[Dict[str, 
                     ))
 
 
+def record_calibration(
+    user_id: int,
+    claim_id: str,
+    source_type: str,
+    source_snapshot_id: str,
+    calibration: Dict[str, Any],
+) -> Dict[str, Any]:
+    claim = get_claim(user_id, claim_id)
+    if source_type not in {"meta_analysis", "living_reassessment"}:
+        raise projects.ProjectError("invalid_research_claim_calibration")
+    if (
+        not isinstance(source_snapshot_id, str)
+        or not source_snapshot_id
+        or len(source_snapshot_id) > 128
+        or not isinstance(calibration, dict)
+    ):
+        raise projects.ProjectError("invalid_research_claim_calibration")
+    action = calibration.get("claim_action")
+    if action not in {"no_change", "caution", "contradict"}:
+        raise projects.ProjectError("invalid_research_claim_calibration")
+    calibration_hash = _sha({
+        "claim_id": claim["id"],
+        "source_type": source_type,
+        "source_snapshot_id": source_snapshot_id,
+        "calibration": calibration,
+    })
+    calibration_id = _sha({
+        "claim_id": claim["id"],
+        "source_snapshot_id": source_snapshot_id,
+        "calibration_hash": calibration_hash,
+    })
+    with projects.transaction(user_id) as cur:
+        cur.execute("""INSERT INTO velia_research_claim_calibrations(
+            calibration_id,claim_id,mission_id,user_id,source_type,source_snapshot_id,
+            calibration_hash,calibration_json)
+            VALUES(%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT(claim_id,user_id,source_type,source_snapshot_id) DO NOTHING""",
+            (
+                calibration_id, claim["id"], claim["mission_id"], int(user_id),
+                source_type, source_snapshot_id, calibration_hash, _json(calibration),
+            ))
+        cur.execute("""SELECT * FROM velia_research_claim_calibrations
+            WHERE claim_id=%s AND user_id=%s AND source_type=%s AND source_snapshot_id=%s""",
+            (claim["id"], int(user_id), source_type, source_snapshot_id))
+        row = cur.fetchone()
+        if not row:
+            raise projects.ProjectError("research_claim_calibration_state_missing", 500)
+        return {
+            "id": row["calibration_id"],
+            "claim_id": row["claim_id"],
+            "source_type": row["source_type"],
+            "source_snapshot_id": row["source_snapshot_id"],
+            "calibration_hash": row["calibration_hash"],
+            "calibration": json.loads(row["calibration_json"]),
+            "created_at": _iso(row["created_at"]),
+        }
+
+
+def _latest_calibration(user_id: int, claim_id: str) -> Optional[Dict[str, Any]]:
+    with projects.transaction() as cur:
+        cur.execute("""SELECT * FROM velia_research_claim_calibrations
+            WHERE claim_id=%s AND user_id=%s
+            ORDER BY created_at DESC,calibration_id DESC LIMIT 1""",
+            (str(claim_id), int(user_id)))
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["calibration_id"],
+        "source_type": row["source_type"],
+        "source_snapshot_id": row["source_snapshot_id"],
+        "calibration_hash": row["calibration_hash"],
+        "calibration": json.loads(row["calibration_json"]),
+        "created_at": _iso(row["created_at"]),
+    }
+
+
 def refresh_claim(user_id: int, claim_id: str) -> Dict[str, Any]:
     if not enabled():
         raise projects.ProjectError("research_claim_ledger_disabled", 503)
@@ -521,6 +618,33 @@ def refresh_claim(user_id: int, claim_id: str) -> Dict[str, Any]:
     evidence = _evidence(user_id, claim)
     stage, wording = _stage_and_wording(claim, evidence)
     _upsert_edges(user_id, claim, evidence)
+    calibration = _latest_calibration(user_id, claim["id"])
+    if calibration is not None:
+        action = calibration["calibration"].get("claim_action")
+        reasons = calibration["calibration"].get("reasons") or []
+        reason_text = "; ".join(str(value) for value in reasons[:6] if value)
+        source_label = (
+            "Living reassessment"
+            if calibration["source_type"] == "living_reassessment"
+            else "Meta-analysis"
+        )
+        if action == "contradict":
+            stage = "contradicted"
+            wording = (
+                source_label
+                + " contradicts the claim; no affirmative conclusion is permitted: "
+                + claim["statement"]
+            )
+        elif action == "caution":
+            wording += (
+                " " + source_label + " calibration requires caution"
+                + (": " + reason_text if reason_text else ".")
+            )
+        else:
+            wording += (
+                " External evidence calibration does not promote the Claim Ledger stage; "
+                "promotion still requires preregistered dataset-distinct replication."
+            )
 
     evidence_snapshot = {
         "ledger_version": LEDGER_VERSION,
@@ -529,11 +653,14 @@ def refresh_claim(user_id: int, claim_id: str) -> Dict[str, Any]:
         "stage": stage,
         "source_ids": claim["source_ids"],
         "experiment_evidence": evidence,
+        "evidence_calibration": calibration,
         "wording_policy": {
             "exploratory": "not_confirmed",
             "preregistered": "single_preregistered_or_inconclusive",
             "replicated": "dataset_and_provenance_distinct_support",
             "contradicted": "affirmative_claim_prohibited",
+            "meta_analysis_policy": "may_caution_or_contradict_but_never_promote_stage",
+            "living_reassessment_policy": "may_caution_or_contradict_but_never_promote_stage",
         },
     }
     evidence_hash = _sha(evidence_snapshot)
