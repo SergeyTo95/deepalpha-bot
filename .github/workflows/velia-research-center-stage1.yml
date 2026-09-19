@@ -29,6 +29,9 @@ jobs:
       VELIA_RESEARCH_LITERATURE_ENABLED: 'false'
       VELIA_RESEARCH_REASONING_ENABLED: 'false'
       VELIA_RESEARCH_DIRECTOR_ENABLED: 'false'
+      VELIA_RESEARCH_COMPUTE_ENABLED: 'false'
+      VELIA_RESEARCH_EXPERIMENT_PIPELINE_ENABLED: 'false'
+      VELIA_RESEARCH_AUTO_REPORT_ENABLED: 'false'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,6 +53,7 @@ jobs:
           literature = Path('services/velia_research_literature_service.py').read_text()
           reasoning = Path('services/velia_research_reasoning_service.py').read_text()
           director = Path('services/velia_research_director_service.py').read_text()
+          pipeline = Path('services/velia_research_experiment_pipeline_service.py').read_text()
           report = Path('services/velia_research_report_service.py').read_text()
           worker = Path('run_velia_research_worker.py').read_text()
           routes = Path('velia_research_routes.py').read_text()
@@ -65,10 +69,13 @@ jobs:
           assert 'VELIA_RESEARCH_REASONING_ENABLED", False' in reasoning
           assert 'source_text_is_untrusted": True' in reasoning
           assert 'VELIA_RESEARCH_DIRECTOR_ENABLED", False' in director
-          assert 'experiment_execution": False' in director
+          assert 'experiment_execution": experiment_pipeline.enabled()' in director
+          assert 'VELIA_RESEARCH_AUTO_REPORT_ENABLED", False' in director
           assert 'subprocess' not in director
           assert 'os.system' not in director
           assert 'plan_experiment' not in director
+          assert 'VELIA_RESEARCH_EXPERIMENT_PIPELINE_ENABLED\", False' in pipeline
+          assert 'invented_numeric_data_allowed\": False' in pipeline
           assert 'extra_model_calls": 0' in report
           assert 'operational_harmful_instructions_allowed": False' in report
           assert 'subprocess' not in report

@@ -484,6 +484,33 @@ def get_run(user_id: int, run_id: str) -> Dict[str, Any]:
         return _row_to_run(row)
 
 
+def verify_reproducibility(user_id: int, run_id: str) -> Dict[str, Any]:
+    """Recompute one persisted allowlisted run without creating a second record."""
+    run = get_run(user_id, run_id)
+    stored_input = run.get("input") if isinstance(run.get("input"), dict) else {}
+    operation = str(run.get("operation") or "")
+    parameters = stored_input.get("parameters")
+    replay_request = {
+        "operation": operation,
+        "parameters": parameters,
+        "seed": run.get("seed"),
+    }
+    validated_operation, validated_parameters, seed = _validate_request(replay_request)
+    rng = random.Random(seed if seed is not None else 0)
+    replay_output = _HANDLERS[validated_operation](validated_parameters, rng)
+    observed_hash = _sha(replay_output)
+    expected_hash = str(run.get("result_hash") or "")
+    return {
+        "run_id": str(run_id),
+        "operation": validated_operation,
+        "seed": seed,
+        "expected_output_sha256": expected_hash,
+        "observed_output_sha256": observed_hash,
+        "match": bool(expected_hash) and observed_hash == expected_hash,
+        "recomputed_without_user_code": True,
+    }
+
+
 def list_runs(user_id: int, experiment_id: str, offset: int = 0) -> Dict[str, Any]:
     offset = int(offset)
     if offset < 0 or offset > 500:
