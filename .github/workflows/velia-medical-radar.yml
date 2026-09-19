@@ -56,8 +56,12 @@ jobs:
           assert 'subprocess' not in worker
           assert '9319f36642b6f3f4708c8e5c8844ab114d6e7b24' in adapter
           assert '0.0 <= score <= 1.0' in adapter
+          assert 'HF_HUB_OFFLINE' in adapter
+          assert 'TRANSFORMERS_OFFLINE' in adapter
+          assert 'bert-base-uncased' in adapter
           assert 'snapshot_download' in prep
           assert 'VELIA_MEDICAL_RADAR_NONCOMMERCIAL_ACK' in prep
+          assert 'bert-base-uncased/**' in prep
           assert 'checkpoint_radar_pretrain.pth' not in docker
           PY
       - name: Build medical worker image
