@@ -15,7 +15,9 @@ from typing import Any, Dict, List, Optional
 from services import velia_project_service as projects
 from services import velia_research_center_service as center
 from services import velia_research_compute_service as compute
+from services import velia_research_claim_service as claims
 from services import velia_research_dataset_service as datasets
+from services import velia_research_protocol_service as protocol
 from services import velia_research_safety_service as safety
 from services.velia_chat_service import _iso
 
@@ -53,6 +55,9 @@ def status() -> Dict[str, Any]:
         "replication_agent": "hash_verified_recompute",
         "dataset_registry_enabled": datasets.enabled(),
         "dataset_backed_plans": True,
+        "protocol_officer_enabled": protocol.enabled(),
+        "claim_ledger_enabled": claims.enabled(),
+        "preregistration_required_for_test_split": protocol.enabled(),
         "allowed_analysis_kinds": sorted(ANALYSIS_KIND_TO_OPERATION),
         "max_ready_per_run": MAX_READY_PER_RUN,
         "invented_numeric_data_allowed": False,
@@ -154,8 +159,14 @@ def _dataset_request(
     dataset_snapshot: Dict[str, Any],
     analysis_options: Dict[str, Any],
     seed: Any,
+    *,
+    confirmatory_authorized: bool = False,
 ) -> Dict[str, Any]:
-    values = datasets.materialize(user_id, dataset_snapshot)
+    values = datasets.materialize(
+        user_id,
+        dataset_snapshot,
+        confirmatory_authorized=confirmatory_authorized,
+    )
     columns = list(dataset_snapshot["columns"])
     if operation in {"descriptive_stats", "bootstrap_mean_ci"}:
         if len(columns) != 1:
@@ -194,7 +205,7 @@ def plan(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
         raise projects.ProjectError("research_experiment_pipeline_disabled", 503)
     if not isinstance(data, dict) or set(data) - {
         "hypothesis_id", "analysis_kind", "parameters", "seed", "question",
-        "dataset_id", "split", "columns", "analysis_options",
+        "dataset_id", "split", "columns", "analysis_options", "claim_id",
     }:
         raise projects.ProjectError("invalid_experiment_pipeline_plan")
 
@@ -204,6 +215,7 @@ def plan(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
     seed = data.get("seed")
     question = _text(data.get("question"), 600, "invalid_experiment_pipeline_plan")
     dataset_id = data.get("dataset_id")
+    claim_id = data.get("claim_id")
     split = data.get("split")
     selected_columns = data.get("columns")
     analysis_options = data.get("analysis_options") or {}
@@ -226,6 +238,8 @@ def plan(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
 
     dataset_mode = dataset_id is not None
     if dataset_mode:
+        if split == "train" and claim_id is not None:
+            raise projects.ProjectError("invalid_experiment_pipeline_plan")
         if parameters is not None or not datasets.enabled():
             raise projects.ProjectError("invalid_experiment_pipeline_plan")
         if operation == "monte_carlo_sum":
@@ -237,8 +251,27 @@ def plan(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
         dataset_snapshot = datasets.snapshot(user_id, dataset_id, split, selected_columns)
         if dataset_snapshot["mission_id"] != str(mission_id):
             raise projects.ProjectError("research_dataset_not_found", 404)
+        protocol_snapshot = None
+        analysis_mode = "exploratory"
+        if split == "test" and protocol.enabled():
+            if claims.enabled() and (not isinstance(claim_id, str) or not claim_id):
+                raise projects.ProjectError("research_claim_required", 409)
+            protocol_snapshot = protocol.authorize_test_plan(
+                user_id,
+                mission_id,
+                hypothesis_id,
+                dataset_snapshot,
+                str(analysis_kind),
+                claim_id,
+            )
+            analysis_mode = "confirmatory"
         validated = _dataset_request(
-            user_id, operation, dataset_snapshot, analysis_options, seed
+            user_id,
+            operation,
+            dataset_snapshot,
+            analysis_options,
+            seed,
+            confirmatory_authorized=(analysis_mode == "confirmatory"),
         )
         method = {
             "type": "safe_compute",
@@ -250,12 +283,14 @@ def plan(user_id: int, mission_id: str, data: Any) -> Dict[str, Any]:
             "data_origin": "dataset_registry",
             "dataset_snapshot": dataset_snapshot,
             "analysis_options": analysis_options,
+            "analysis_mode": analysis_mode,
+            "protocol_snapshot": protocol_snapshot,
             "invented_numeric_data": False,
         }
     else:
         if not isinstance(parameters, dict):
             raise projects.ProjectError("invalid_experiment_pipeline_plan")
-        if split is not None or selected_columns is not None or analysis_options:
+        if split is not None or selected_columns is not None or analysis_options or claim_id is not None:
             raise projects.ProjectError("invalid_experiment_pipeline_plan")
         compute_request = {"operation": operation, "parameters": parameters, "seed": seed}
         validated_operation, validated_parameters, validated_seed = compute._validate_request(compute_request)
@@ -432,7 +467,7 @@ def _request_from_method(user_id: int, method: Dict[str, Any]) -> Dict[str, Any]
         allowed_keys = {
             "type", "pipeline_version", "analysis_kind", "operation", "seed",
             "question", "data_origin", "dataset_snapshot", "analysis_options",
-            "invented_numeric_data",
+            "analysis_mode", "protocol_snapshot", "invented_numeric_data",
         }
         if set(method) - allowed_keys:
             raise projects.ProjectError("research_experiment_not_compute_ready", 409)
@@ -440,12 +475,30 @@ def _request_from_method(user_id: int, method: Dict[str, Any]) -> Dict[str, Any]
         if not isinstance(snapshot, dict):
             raise projects.ProjectError("research_experiment_not_compute_ready", 409)
         datasets.verify_snapshot(user_id, snapshot)
+        analysis_mode = method.get("analysis_mode")
+        protocol_snapshot = method.get("protocol_snapshot")
+        if snapshot.get("split") == "test" and protocol.enabled():
+            if analysis_mode != "confirmatory" or not isinstance(protocol_snapshot, dict):
+                raise projects.ProjectError("research_preregistration_required", 409)
+            verified_protocol = protocol.verify_authorization(user_id, protocol_snapshot)
+            if (
+                verified_protocol["dataset_id"] != snapshot["dataset_id"]
+                or verified_protocol["dataset_hash"] != snapshot["dataset_hash"]
+                or verified_protocol["split_hash"] != snapshot["split_hash"]
+                or verified_protocol["analysis_kind"] != method.get("analysis_kind")
+                or verified_protocol["selected_columns"] != snapshot["columns"]
+            ):
+                raise projects.ProjectError("research_protocol_snapshot_mismatch", 409)
+        elif snapshot.get("split") == "train":
+            if analysis_mode != "exploratory" or protocol_snapshot is not None:
+                raise projects.ProjectError("research_experiment_not_compute_ready", 409)
         return _dataset_request(
             user_id,
             operation,
             snapshot,
             method.get("analysis_options") or {},
             method.get("seed"),
+            confirmatory_authorized=(analysis_mode == "confirmatory"),
         )
 
     raise projects.ProjectError("research_experiment_not_compute_ready", 409)
@@ -465,7 +518,11 @@ def _execute_one(user_id: int, experiment: Dict[str, Any]) -> Dict[str, Any]:
     statistician = _statistician(run)
     skeptic = _skeptic(run, statistician)
     data_provenance = (
-        method.get("dataset_snapshot")
+        {
+            **(method.get("dataset_snapshot") or {}),
+            "analysis_mode": method.get("analysis_mode"),
+            "protocol_snapshot": method.get("protocol_snapshot"),
+        }
         if method.get("data_origin") == "dataset_registry"
         else {"data_origin": "explicit_structured_input"}
     )
@@ -535,7 +592,19 @@ def _execute_one(user_id: int, experiment: Dict[str, Any]) -> Dict[str, Any]:
             "experiment_pipeline_completed",
             event,
         )
-        return _review_row(row)
+        review = _review_row(row)
+
+    protocol_snapshot = method.get("protocol_snapshot")
+    if (
+        claims.enabled()
+        and isinstance(protocol_snapshot, dict)
+        and isinstance(protocol_snapshot.get("claim_id"), str)
+        and protocol_snapshot.get("claim_id")
+    ):
+        review["claim_snapshot"] = claims.refresh_claim(
+            user_id, protocol_snapshot["claim_id"]
+        )
+    return review
 
 
 def run_ready(user_id: int, mission_id: str, max_experiments: int = 1) -> Dict[str, Any]:
