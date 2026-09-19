@@ -16,11 +16,11 @@ RUN git clone https://github.com/alibaba-damo-academy/damo-radar.git /opt/damo-r
     && git checkout "$RADAR_COMMIT" \
     && test "$(git rev-parse HEAD)" = "$RADAR_COMMIT"
 
-RUN pip install --no-cache-dir -r /opt/damo-radar/requirements.txt \
-    && pip install --no-cache-dir -r /app/medical_worker/requirements.txt
-
 WORKDIR /app
 COPY medical_worker /app/medical_worker
+
+RUN pip install --no-cache-dir -r /opt/damo-radar/requirements.txt \
+    && pip install --no-cache-dir -r /app/medical_worker/requirements.txt
 
 RUN mkdir -p /models/radar /var/lib/velia-medical
 WORKDIR /app/medical_worker
