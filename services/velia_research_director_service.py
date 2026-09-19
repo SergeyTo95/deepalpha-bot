@@ -15,8 +15,10 @@ from typing import Any, Dict, List, Optional
 
 from services import velia_project_service as projects
 from services import velia_research_center_service as center
+from services import velia_research_experiment_pipeline_service as experiment_pipeline
 from services import velia_research_literature_service as literature
 from services import velia_research_reasoning_service as reasoning
+from services import velia_research_report_service as reports
 from services.velia_chat_service import _iso
 
 
@@ -43,6 +45,14 @@ def enabled() -> bool:
     )
 
 
+def auto_report_enabled() -> bool:
+    return (
+        enabled()
+        and experiment_pipeline.enabled()
+        and _env_bool("VELIA_RESEARCH_AUTO_REPORT_ENABLED", False)
+    )
+
+
 def status() -> Dict[str, Any]:
     return {
         "enabled": enabled(),
@@ -50,8 +60,10 @@ def status() -> Dict[str, Any]:
         "max_queries_per_iteration": MAX_QUERIES_PER_ITERATION,
         "max_attempts": MAX_ATTEMPTS,
         "worker_required": True,
-        "read_only_research_cycle": True,
-        "experiment_execution": False,
+        "read_only_research_cycle": not experiment_pipeline.enabled(),
+        "experiment_execution": experiment_pipeline.enabled(),
+        "experiment_pipeline_enabled": experiment_pipeline.enabled(),
+        "auto_report_enabled": auto_report_enabled(),
         "arbitrary_shell": False,
         "arbitrary_url_fetch": False,
     }
@@ -278,6 +290,14 @@ def _finish(run_id: str, user_id: int, worker: str, *,
             error_code: str = "") -> Dict[str, Any]:
     if status not in {"completed", "failed", "cancelled"}:
         raise ValueError("invalid_research_run_terminal_state")
+
+    final_summary = dict(summary)
+    if status == "completed" and auto_report_enabled():
+        current = _current_run(run_id, user_id, worker)
+        report = reports.build_report(user_id, str(current["mission_id"]))
+        final_summary["final_report_id"] = report["id"]
+        final_summary["final_report_hash"] = report["report_hash"]
+
     with projects.transaction(user_id) as cur:
         cur.execute("""UPDATE velia_research_autonomy_runs
             SET status=%s,completed_iterations=%s,worker_id=NULL,lease_until=NULL,
@@ -286,7 +306,7 @@ def _finish(run_id: str, user_id: int, worker: str, *,
             RETURNING *""",
             (
                 status, int(completed_iterations), str(stop_reason)[:120],
-                str(error_code)[:120] or None, _json(summary)[:24000],
+                str(error_code)[:120] or None, _json(final_summary)[:24000],
                 str(run_id), int(user_id), str(worker)[:160],
             ))
         row = cur.fetchone()
@@ -320,6 +340,9 @@ def execute_claimed(run: Dict[str, Any], worker: str) -> Dict[str, Any]:
         "latest_synthesis_id": "",
         "latest_confidence": "uncertain",
         "remaining_questions": [],
+        "experiment_reviews": [],
+        "final_report_id": "",
+        "final_report_hash": "",
     }
 
     try:
@@ -366,6 +389,22 @@ def execute_claimed(run: Dict[str, Any], worker: str) -> Dict[str, Any]:
             summary["latest_synthesis_id"] = str(synthesis.get("id") or "")
             summary["latest_confidence"] = confidence
             summary["remaining_questions"] = questions
+
+            if experiment_pipeline.enabled() and not mission["safety"].get("read_only_only"):
+                pipeline_result = experiment_pipeline.run_ready(
+                    user_id, mission_id, max_experiments=1
+                )
+                for review in pipeline_result.get("reviews", []):
+                    summary["experiment_reviews"].append({
+                        "review_id": review.get("id"),
+                        "experiment_id": review.get("experiment_id"),
+                        "compute_run_id": review.get("compute_run_id"),
+                        "operation": review.get("operation"),
+                        "result_hash": review.get("result_hash"),
+                        "replication_match": bool(
+                            (review.get("replication") or {}).get("match")
+                        ),
+                    })
 
             with projects.transaction(user_id) as cur:
                 cur.execute("""UPDATE velia_research_autonomy_runs

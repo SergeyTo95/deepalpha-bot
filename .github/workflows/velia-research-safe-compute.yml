@@ -1,0 +1,70 @@
+name: VELIA Research Safe Compute
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  research-safe-compute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: velia_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/velia_test
+      VELIA_RESEARCH_CENTER_ENABLED: 'false'
+      VELIA_RESEARCH_AUTONOMY_ENABLED: 'false'
+      VELIA_RESEARCH_EXPERIMENT_EXECUTION_ENABLED: 'false'
+      VELIA_RESEARCH_COMPUTE_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt pytest pytest-asyncio
+      - name: Safe compute tests
+        run: python -m pytest -q tests/test_velia_research_compute.py tests/test_velia_research_center.py
+      - name: Compile safe compute surface
+        run: python -m compileall -q services/velia_research_compute_service.py velia_research_routes.py
+      - name: Static execution boundary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          compute = Path('services/velia_research_compute_service.py').read_text()
+          routes = Path('velia_research_routes.py').read_text()
+          env = Path('.env.example').read_text()
+
+          assert 'VELIA_RESEARCH_COMPUTE_ENABLED", False' in compute
+          assert 'ALLOWED_OPERATIONS' in compute
+          assert '"dynamic_expression_eval": False' in compute
+          assert '"arbitrary_code": False' in compute
+          assert '"arbitrary_shell": False' in compute
+          assert '"arbitrary_file_access": False' in compute
+          assert '"arbitrary_url_fetch": False' in compute
+          assert 'safety.classify' in compute
+          assert 'center.experiment_execution_enabled()' in compute
+
+          forbidden = (
+              'subprocess', 'os.system', 'eval(', 'exec(', 'compile(',
+              '__import__(', 'requests.', 'aiohttp.', 'socket.', 'open(',
+          )
+          for token in forbidden:
+              assert token not in compute, token
+
+          assert '/experiments/{experiment_id}/compute' in routes
+          assert '/experiments/{experiment_id}/compute-runs' in routes
+          assert '/compute-runs/{run_id}' in routes
+          assert 'VELIA_RESEARCH_COMPUTE_ENABLED=false' in env
+          PY

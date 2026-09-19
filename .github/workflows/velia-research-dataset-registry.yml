@@ -1,0 +1,100 @@
+name: VELIA Research Dataset Registry
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  research-dataset-registry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: velia_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/velia_test
+      VELIA_RESEARCH_CENTER_ENABLED: 'false'
+      VELIA_RESEARCH_AUTONOMY_ENABLED: 'false'
+      VELIA_RESEARCH_DIRECTOR_ENABLED: 'false'
+      VELIA_RESEARCH_EXPERIMENT_EXECUTION_ENABLED: 'false'
+      VELIA_RESEARCH_COMPUTE_ENABLED: 'false'
+      VELIA_RESEARCH_EXPERIMENT_PIPELINE_ENABLED: 'false'
+      VELIA_RESEARCH_DATASET_REGISTRY_ENABLED: 'false'
+      VELIA_RESEARCH_AUTO_REPORT_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt pytest pytest-asyncio
+      - name: Dataset registry and downstream research tests
+        run: >
+          python -m pytest -q
+          tests/test_velia_research_dataset_registry.py
+          tests/test_velia_research_experiment_pipeline.py
+          tests/test_velia_research_compute.py
+          tests/test_velia_research_report.py
+          tests/test_velia_research_director.py
+      - name: Compile dataset registry surface
+        run: >
+          python -m compileall -q
+          services/velia_research_dataset_service.py
+          services/velia_research_compute_service.py
+          services/velia_research_experiment_pipeline_service.py
+          services/velia_research_report_service.py
+          services/velia_research_director_service.py
+          run_velia_research_worker.py
+          velia_research_routes.py
+      - name: Static dataset integrity boundary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          registry = Path('services/velia_research_dataset_service.py').read_text()
+          pipeline = Path('services/velia_research_experiment_pipeline_service.py').read_text()
+          report = Path('services/velia_research_report_service.py').read_text()
+          routes = Path('velia_research_routes.py').read_text()
+          env = Path('.env.example').read_text()
+
+          assert 'VELIA_RESEARCH_DATASET_REGISTRY_ENABLED", False' in registry
+          assert '"numeric_only": True' in registry
+          assert '"immutable_snapshots": True' in registry
+          assert '"deterministic_train_test_split": True' in registry
+          assert 'dataset_hash' in registry
+          assert 'split_hash' in registry
+          assert 'verify_snapshot' in registry
+          assert 'ALLOWED_SPLITS = {"train", "test"}' in registry
+          assert 'MAX_ROWS = 2000' in registry
+          assert 'MAX_COLUMNS = 16' in registry
+          assert 'safety.classify' in registry
+
+          forbidden = (
+              'subprocess', 'os.system', 'eval(', 'exec(', 'compile(',
+              '__import__(', 'requests.', 'aiohttp.', 'socket.', 'open(',
+          )
+          for token in forbidden:
+              assert token not in registry, token
+
+          assert 'dataset_snapshot' in pipeline
+          assert 'datasets.verify_snapshot' in pipeline
+          assert 'datasets.materialize' in pipeline
+          assert '"data_origin": "dataset_registry"' in pipeline
+          assert 'research_dataset_analysis_not_supported' in pipeline
+          assert '"immutable_dataset_hashes"' in report
+          assert '"immutable_dataset_split_hashes"' in report
+
+          assert '/missions/{mission_id}/datasets' in routes
+          assert '/datasets/{dataset_id}' in routes
+          assert 'MAX_DATASET_BODY = 512 * 1024' in routes
+          assert 'VELIA_RESEARCH_DATASET_REGISTRY_ENABLED=false' in env
+          PY
