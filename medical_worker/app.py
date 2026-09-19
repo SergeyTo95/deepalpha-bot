@@ -87,13 +87,16 @@ class JobStore:
             raise KeyError(job_id)
         return json.loads(path.read_text(encoding="utf-8"))
 
-    def cleanup(self, ttl_seconds: int) -> None:
+    def cleanup(self, result_ttl_seconds: int, upload_ttl_seconds: int) -> None:
         now = time.time()
         for folder in self.jobs_root.iterdir():
             try:
                 state = self.read(folder.name)
                 updated = float(state.get("updated_epoch") or 0)
-                if state.get("status") in {"completed", "failed"} and now - updated > ttl_seconds:
+                status = state.get("status")
+                expired_result = status in {"completed", "failed"} and now - updated > result_ttl_seconds
+                expired_upload = status == "uploading" and now - updated > upload_ttl_seconds
+                if expired_result or expired_upload:
                     shutil.rmtree(folder, ignore_errors=True)
             except Exception:
                 continue
@@ -496,10 +499,11 @@ async def create_app() -> web.Application:
                 queue.task_done()
 
     async def janitor_loop() -> None:
-        ttl = _env_int("VELIA_MEDICAL_RESULT_TTL_SECONDS", 86400, 3600, 604800)
+        result_ttl = _env_int("VELIA_MEDICAL_RESULT_TTL_SECONDS", 86400, 3600, 604800)
+        upload_ttl = _env_int("VELIA_MEDICAL_UPLOAD_TTL_SECONDS", 7200, 900, 86400)
         while True:
             await asyncio.sleep(900)
-            await asyncio.to_thread(store.cleanup, ttl)
+            await asyncio.to_thread(store.cleanup, result_ttl, upload_ttl)
 
     async def on_startup(_app: web.Application) -> None:
         # Recover queued/running jobs only if their raw upload is still present.
