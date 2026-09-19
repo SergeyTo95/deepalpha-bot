@@ -227,7 +227,24 @@ async def create_app() -> web.Application:
             "arbitrary_code_execution": False,
         })
 
-    async def create_job(request: web.Request) -> web.Response:
+    async def _owned_job(request: web.Request, job_id: str) -> Dict[str, Any]:
+        try:
+            uuid.UUID(job_id)
+            state = store.read(job_id)
+        except (ValueError, KeyError):
+            raise web.HTTPNotFound(
+                text='{"error":"medical_job_not_found"}',
+                content_type="application/json",
+            )
+        expected_case = str(request.headers.get("X-Velia-Medical-Case") or "")
+        if not expected_case or state.get("case_id") != expected_case:
+            raise web.HTTPNotFound(
+                text='{"error":"medical_job_not_found"}',
+                content_type="application/json",
+            )
+        return state
+
+    async def create_upload(request: web.Request) -> web.Response:
         await require_auth(request)
         if not _env_bool("VELIA_MEDICAL_RADAR_NONCOMMERCIAL_ACK", False):
             return _json_response({"error": "radar_weights_license_not_acknowledged"}, 503)
@@ -235,13 +252,13 @@ async def create_app() -> web.Application:
             return _json_response({"error": "radar_model_files_missing"}, 503)
 
         case_id = _safe_case_id(request.headers.get("X-Velia-Medical-Case", ""))
-        upload_format = str(request.headers.get("X-Velia-Medical-Format", "") or "").strip().lower()
+        upload_format = str(
+            request.headers.get("X-Velia-Medical-Format", "") or ""
+        ).strip().lower()
         if upload_format not in ALLOWED_FORMATS:
             return _json_response({"error": "medical_upload_format_not_supported"}, 415)
-
-        declared_bytes = request.headers.get("X-Velia-Medical-Bytes")
         try:
-            declared_size = int(declared_bytes or "0")
+            declared_size = int(request.headers.get("X-Velia-Medical-Bytes") or "0")
         except ValueError:
             return _json_response({"error": "invalid_medical_upload_size"}, 400)
         max_bytes = _env_int(
@@ -254,35 +271,140 @@ async def create_app() -> web.Application:
             return _json_response({"error": "medical_upload_size_rejected"}, 413)
 
         job_id = str(uuid.uuid4())
-        folder = store.job_dir(job_id)
-        folder.mkdir(parents=True, exist_ok=True)
-        upload_path = folder / "upload.bin"
-        digest = hashlib.sha256()
-        received = 0
-        try:
-            with upload_path.open("wb") as handle:
-                async for chunk in request.content.iter_chunked(1024 * 1024):
-                    received += len(chunk)
-                    if received > max_bytes or received > declared_size:
-                        raise ValueError("medical_upload_size_rejected")
-                    digest.update(chunk)
-                    handle.write(chunk)
-            if received != declared_size:
-                raise ValueError("medical_upload_size_mismatch")
-        except Exception:
-            shutil.rmtree(folder, ignore_errors=True)
-            return _json_response({"error": "medical_upload_failed"}, 400)
-
         state = {
             "job_id": job_id,
             "case_id": case_id,
-            "status": "queued",
+            "status": "uploading",
             "upload_format": upload_format,
-            "input_sha256": digest.hexdigest(),
+            "declared_bytes": declared_size,
+            "received_bytes": 0,
+            "next_chunk": 0,
+            "chunk_hashes": [],
+            "input_sha256": None,
             "result": None,
             "error": None,
             "updated_epoch": time.time(),
         }
+        store.write(job_id, state)
+        return _json_response({
+            "ok": True,
+            "job_id": job_id,
+            "status": "uploading",
+            "received_bytes": 0,
+            "next_chunk": 0,
+        }, 201)
+
+    async def upload_chunk(request: web.Request) -> web.Response:
+        await require_auth(request)
+        job_id = request.match_info["job_id"]
+        state = await _owned_job(request, job_id)
+        if state.get("status") != "uploading":
+            return _json_response({"error": "medical_upload_not_active"}, 409)
+        try:
+            chunk_index = int(request.match_info["chunk_index"])
+        except ValueError:
+            return _json_response({"error": "invalid_medical_chunk"}, 400)
+        if chunk_index < 0 or chunk_index > 1_000_000:
+            return _json_response({"error": "invalid_medical_chunk"}, 400)
+
+        chunk_limit = _env_int(
+            "VELIA_MEDICAL_CHUNK_BYTES",
+            8 * 1024 * 1024,
+            1 * 1024 * 1024,
+            32 * 1024 * 1024,
+        )
+        content_length = request.content_length
+        if content_length is None or content_length <= 0 or content_length > chunk_limit:
+            return _json_response({"error": "medical_chunk_size_rejected"}, 413)
+
+        raw = bytearray()
+        async for piece in request.content.iter_chunked(1024 * 1024):
+            raw.extend(piece)
+            if len(raw) > chunk_limit:
+                return _json_response({"error": "medical_chunk_size_rejected"}, 413)
+        if len(raw) != content_length:
+            return _json_response({"error": "medical_chunk_size_mismatch"}, 400)
+
+        digest = hashlib.sha256(raw).hexdigest()
+        expected_digest = str(request.headers.get("X-Velia-Chunk-SHA256") or "").lower()
+        if expected_digest != digest:
+            return _json_response({"error": "medical_chunk_hash_mismatch"}, 409)
+
+        next_chunk = int(state.get("next_chunk") or 0)
+        chunk_hashes = list(state.get("chunk_hashes") or [])
+        if chunk_index < next_chunk:
+            if chunk_index < len(chunk_hashes) and chunk_hashes[chunk_index] == digest:
+                return _json_response({
+                    "ok": True,
+                    "job_id": job_id,
+                    "status": "uploading",
+                    "received_bytes": int(state.get("received_bytes") or 0),
+                    "next_chunk": next_chunk,
+                    "replayed": True,
+                })
+            return _json_response({"error": "medical_chunk_conflict"}, 409)
+        if chunk_index != next_chunk:
+            return _json_response({
+                "error": "medical_chunk_out_of_order",
+                "next_chunk": next_chunk,
+            }, 409)
+
+        received = int(state.get("received_bytes") or 0)
+        declared = int(state.get("declared_bytes") or 0)
+        if received + len(raw) > declared:
+            return _json_response({"error": "medical_upload_size_rejected"}, 413)
+
+        upload_path = store.job_dir(job_id) / "upload.bin"
+        with upload_path.open("ab") as handle:
+            handle.write(raw)
+            handle.flush()
+        chunk_hashes.append(digest)
+        state["chunk_hashes"] = chunk_hashes
+        state["received_bytes"] = received + len(raw)
+        state["next_chunk"] = next_chunk + 1
+        state["updated_epoch"] = time.time()
+        store.write(job_id, state)
+        return _json_response({
+            "ok": True,
+            "job_id": job_id,
+            "status": "uploading",
+            "received_bytes": state["received_bytes"],
+            "next_chunk": state["next_chunk"],
+        })
+
+    async def complete_upload(request: web.Request) -> web.Response:
+        await require_auth(request)
+        job_id = request.match_info["job_id"]
+        state = await _owned_job(request, job_id)
+        if state.get("status") == "queued":
+            return _json_response({
+                "ok": True,
+                "job_id": job_id,
+                "status": "queued",
+                "input_sha256": state.get("input_sha256"),
+            }, 202)
+        if state.get("status") != "uploading":
+            return _json_response({"error": "medical_upload_not_active"}, 409)
+        if int(state.get("received_bytes") or 0) != int(state.get("declared_bytes") or 0):
+            return _json_response({
+                "error": "medical_upload_incomplete",
+                "received_bytes": int(state.get("received_bytes") or 0),
+                "declared_bytes": int(state.get("declared_bytes") or 0),
+            }, 409)
+
+        upload_path = store.job_dir(job_id) / "upload.bin"
+        if not upload_path.exists():
+            return _json_response({"error": "medical_upload_missing"}, 409)
+        digest = hashlib.sha256()
+        with upload_path.open("rb") as handle:
+            while True:
+                block = handle.read(4 * 1024 * 1024)
+                if not block:
+                    break
+                digest.update(block)
+        state["input_sha256"] = digest.hexdigest()
+        state["status"] = "queued"
+        state["updated_epoch"] = time.time()
         store.write(job_id, state)
         await queue.put(job_id)
         return _json_response({
@@ -307,7 +429,10 @@ async def create_app() -> web.Application:
             "ok": True,
             "job_id": job_id,
             "status": state["status"],
-            "input_sha256": state["input_sha256"],
+            "input_sha256": state.get("input_sha256"),
+            "received_bytes": int(state.get("received_bytes") or 0),
+            "declared_bytes": int(state.get("declared_bytes") or 0),
+            "next_chunk": int(state.get("next_chunk") or 0),
             "result": state.get("result"),
             "error": state.get("error"),
         })
@@ -402,13 +527,15 @@ async def create_app() -> web.Application:
                 task.cancel()
 
     app = web.Application(client_max_size=_env_int(
-        "VELIA_MEDICAL_MAX_UPLOAD_BYTES",
-        1024 * 1024 * 1024,
-        16 * 1024 * 1024,
-        2 * 1024 * 1024 * 1024,
-    ))
+        "VELIA_MEDICAL_CHUNK_BYTES",
+        8 * 1024 * 1024,
+        1 * 1024 * 1024,
+        32 * 1024 * 1024,
+    ) + 64 * 1024)
     app.router.add_get("/health", health)
-    app.router.add_post("/v1/jobs", create_job)
+    app.router.add_post("/v1/uploads", create_upload)
+    app.router.add_put("/v1/uploads/{job_id}/chunks/{chunk_index}", upload_chunk)
+    app.router.add_post("/v1/uploads/{job_id}/complete", complete_upload)
     app.router.add_get("/v1/jobs/{job_id}", get_job)
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
