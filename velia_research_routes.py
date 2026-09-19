@@ -16,6 +16,8 @@ from services import velia_research_reasoning_service as reasoning
 from services import velia_research_report_service as reports
 from services import velia_research_systematic_review_service as systematic_review
 from services import velia_research_living_service as living_research
+from services import velia_research_living_reassessment_service as living_reassessment
+from services import velia_research_timeline_service as knowledge_timeline
 from velia_mobile_routes import _json_response, _mobile_api_available, _require_mobile_auth
 
 
@@ -49,6 +51,8 @@ def setup_velia_research_routes(app):
             await asyncio.to_thread(meta_analysis.ensure_tables)
             await asyncio.to_thread(systematic_review.ensure_tables)
             await asyncio.to_thread(living_research.ensure_tables)
+            await asyncio.to_thread(living_reassessment.ensure_tables)
+            await asyncio.to_thread(knowledge_timeline.ensure_tables)
             await asyncio.to_thread(reasoning.ensure_tables)
             await asyncio.to_thread(director.ensure_tables)
             await asyncio.to_thread(reports.ensure_tables)
@@ -96,6 +100,8 @@ def setup_velia_research_routes(app):
         state["meta_analysis"] = meta_analysis.status()
         state["systematic_review"] = systematic_review.status()
         state["living_research"] = living_research.status()
+        state["living_reassessment"] = living_reassessment.status()
+        state["knowledge_timeline"] = knowledge_timeline.status()
         return _json_response({"ok": True, "research": state})
 
     async def mission_list(request, uid):
@@ -490,7 +496,16 @@ def setup_velia_research_routes(app):
             request.match_info["review_id"],
             trigger_kind="manual",
         )
-        return _json_response({"ok": True, "living_scan": item}, status=201)
+        reassessment = await asyncio.to_thread(
+            living_reassessment.enqueue_for_scan,
+            uid,
+            item["id"],
+        )
+        return _json_response({
+            "ok": True,
+            "living_scan": item,
+            "reassessment": reassessment,
+        }, status=201)
 
     async def living_scans_list(request, uid):
         result = await asyncio.to_thread(
@@ -508,6 +523,105 @@ def setup_velia_research_routes(app):
             request.match_info["scan_id"],
         )
         return _json_response({"ok": True, "living_scan": item})
+
+    async def living_reassessment_enqueue(request, uid):
+        item = await asyncio.to_thread(
+            living_reassessment.enqueue_for_scan,
+            uid,
+            request.match_info["scan_id"],
+        )
+        if item is None:
+            return _json_response({"ok": True, "reassessment": None})
+        return _json_response({"ok": True, "reassessment": item}, status=201)
+
+    async def living_reassessment_get_for_scan(request, uid):
+        item = await asyncio.to_thread(
+            living_reassessment.get_for_scan,
+            uid,
+            request.match_info["scan_id"],
+        )
+        return _json_response({"ok": True, "reassessment": item})
+
+    async def living_reassessment_get(request, uid):
+        item = await asyncio.to_thread(
+            living_reassessment.get_run,
+            uid,
+            request.match_info["run_id"],
+        )
+        return _json_response({"ok": True, "reassessment": item})
+
+    async def living_reassessment_list(request, uid):
+        result = await asyncio.to_thread(
+            living_reassessment.list_runs,
+            uid,
+            request.match_info["review_id"],
+            int(request.query.get("offset", 0)),
+        )
+        return _json_response({"ok": True, **result})
+
+    async def living_reassessment_extract(request, uid):
+        data = await _body(request)
+        item = await asyncio.to_thread(
+            living_reassessment.submit_extraction,
+            uid,
+            request.match_info["run_id"],
+            data,
+        )
+        return _json_response({"ok": True, "extraction": item}, status=201)
+
+    async def living_reassessment_run(request, uid):
+        item = await asyncio.to_thread(
+            living_reassessment.run_now,
+            uid,
+            request.match_info["run_id"],
+        )
+        return _json_response({"ok": True, "reassessment": item})
+
+    async def claim_timeline_get(request, uid):
+        result = await asyncio.to_thread(
+            knowledge_timeline.claim_timeline,
+            uid,
+            request.match_info["claim_id"],
+            int(request.query.get("offset", 0)),
+        )
+        return _json_response({"ok": True, **result})
+
+    async def claim_as_of_get(request, uid):
+        result = await asyncio.to_thread(
+            knowledge_timeline.claim_as_of,
+            uid,
+            request.match_info["claim_id"],
+            request.query.get("at"),
+        )
+        return _json_response({"ok": True, **result})
+
+    async def mission_report_as_of_get(request, uid):
+        result = await asyncio.to_thread(
+            knowledge_timeline.report_as_of,
+            uid,
+            request.match_info["mission_id"],
+            request.query.get("at"),
+        )
+        return _json_response({"ok": True, **result})
+
+    async def scientific_alerts_list(request, uid):
+        unread = str(request.query.get("unread_only", "")).lower() in {"1", "true", "yes"}
+        result = await asyncio.to_thread(
+            knowledge_timeline.list_alerts,
+            uid,
+            request.match_info["mission_id"],
+            int(request.query.get("offset", 0)),
+            unread,
+        )
+        return _json_response({"ok": True, **result})
+
+    async def scientific_alert_acknowledge(request, uid):
+        item = await asyncio.to_thread(
+            knowledge_timeline.acknowledge_alert,
+            uid,
+            request.match_info["alert_id"],
+        )
+        return _json_response({"ok": True, "alert": item})
 
     async def protocol_create(request, uid):
         data = await _body(request)
@@ -625,6 +739,17 @@ def setup_velia_research_routes(app):
     app.router.add_post(prefix + "/systematic-reviews/{review_id}/living-scan", guarded(living_scan_create))
     app.router.add_get(prefix + "/systematic-reviews/{review_id}/living-scans", guarded(living_scans_list))
     app.router.add_get(prefix + "/living-scans/{scan_id}", guarded(living_scan_get))
+    app.router.add_post(prefix + "/living-scans/{scan_id}/reassessment", guarded(living_reassessment_enqueue))
+    app.router.add_get(prefix + "/living-scans/{scan_id}/reassessment", guarded(living_reassessment_get_for_scan))
+    app.router.add_get(prefix + "/living-reassessments/{run_id}", guarded(living_reassessment_get))
+    app.router.add_post(prefix + "/living-reassessments/{run_id}/extractions", guarded(living_reassessment_extract))
+    app.router.add_post(prefix + "/living-reassessments/{run_id}/run", guarded(living_reassessment_run))
+    app.router.add_get(prefix + "/systematic-reviews/{review_id}/living-reassessments", guarded(living_reassessment_list))
+    app.router.add_get(prefix + "/claims/{claim_id}/timeline", guarded(claim_timeline_get))
+    app.router.add_get(prefix + "/claims/{claim_id}/as-of", guarded(claim_as_of_get))
+    app.router.add_get(prefix + "/missions/{mission_id}/report-as-of", guarded(mission_report_as_of_get))
+    app.router.add_get(prefix + "/missions/{mission_id}/scientific-alerts", guarded(scientific_alerts_list))
+    app.router.add_post(prefix + "/scientific-alerts/{alert_id}/acknowledge", guarded(scientific_alert_acknowledge))
     app.router.add_post(prefix + "/missions/{mission_id}/protocols", guarded(protocol_create))
     app.router.add_get(prefix + "/missions/{mission_id}/protocols", guarded(protocols_list))
     app.router.add_get(prefix + "/protocols/{protocol_id}", guarded(protocol_get))
