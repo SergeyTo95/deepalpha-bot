@@ -311,6 +311,57 @@ def serve_artifact(apk: Path, sha: str) -> None:
 
 
 
+
+def relay_patch_only() -> None:
+    if os.environ.get("APK_PATCH_RELAY_ONLY", "").strip() != "1":
+        return
+    app_id = os.environ["VELIA_GITHUB_APP_ID"].strip()
+    private_key = os.environ["VELIA_GITHUB_APP_PRIVATE_KEY"]
+    jwt = github_app_jwt(app_id, private_key)
+    token = installation_token_for_repo(jwt, "SergeyTo95/deepalpha-bot")
+    ref = "apkchatdelivery"
+    path = "tmp/VELIA-0.12.1.bsdiff.b64"
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/SergeyTo95/deepalpha-bot/contents/{path}?ref={ref}",
+        method="GET",
+    )
+    req.add_header("Accept", "application/vnd.github.raw+json")
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    with urllib.request.urlopen(req, timeout=60) as response:
+        b64_text = response.read().decode("utf-8").strip()
+    patch_bytes = base64.b64decode(b64_text)
+    expected = "0ae82c45822f06c9fda9d318dcf297b6da0ff1c54ddcaab1d847266c4787c754"
+    actual = hashlib.sha256(patch_bytes).hexdigest()
+    if actual != expected:
+        raise RuntimeError(f"patch sha mismatch {actual}")
+    patch = Path("/tmp/VELIA-0.12.1.bsdiff")
+    patch.write_bytes(patch_bytes)
+    attempts = [
+        ["curl","--fail","--silent","--show-error","--max-time","120","-T",str(patch),"https://qurl.sh"],
+        ["curl","--fail","--silent","--show-error","--max-time","120","-F",f"file=@{patch}","https://0x0.st"],
+    ]
+    url = ""
+    for cmd in attempts:
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+        print(f"APK_PATCH_RELAY_ATTEMPT code={proc.returncode} out={proc.stdout[:500]} err={proc.stderr[:300]}", flush=True)
+        if proc.returncode == 0:
+            raw = proc.stdout.strip()
+            m = re.search(r"https://\\S+", raw)
+            if m:
+                url = m.group(0).rstrip(".,)")
+                break
+    if not url:
+        raise RuntimeError("patch relay failed")
+    print(f"APK_PATCH_RELAY_URL {url}", flush=True)
+    print(f"APK_PATCH_RELAY_SHA256 {actual}", flush=True)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(patch, OUT_DIR / patch.name)
+    port = os.environ.get("PORT", "8080")
+    os.execvp("python3", ["python3", "-m", "http.server", port, "--directory", str(OUT_DIR)])
+
+
+
 def relay_only() -> None:
     if os.environ.get("APK_RELAY_ONLY", "").strip() != "1":
         return
@@ -437,6 +488,7 @@ def relay_only() -> None:
 
 
 def main() -> None:
+    relay_patch_only()
     relay_only()
     app_id = os.environ["VELIA_GITHUB_APP_ID"].strip()
     private_key = os.environ["VELIA_GITHUB_APP_PRIVATE_KEY"]
