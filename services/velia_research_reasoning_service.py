@@ -112,7 +112,7 @@ def ensure_tables() -> None:
 def _source_packet(user_id: int, mission_id: str, max_sources: int) -> tuple[List[Dict[str, Any]], str]:
     with projects.transaction() as cur:
         cur.execute("""SELECT EXISTS(
-            SELECT 1 FROM velia_research_sources
+            SELECT 1 FROM velia_research_literature_queries
             WHERE mission_id=%s AND user_id=%s AND quality_version=%s
         ) AS has_quality""", (
             str(mission_id), int(user_id), search_quality.QUALITY_VERSION,
