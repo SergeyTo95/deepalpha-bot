@@ -19,6 +19,7 @@ from services import velia_project_service as projects
 from services import velia_research_center_service as center
 from services import velia_research_literature_service as literature
 from services import velia_research_safety_service as safety
+from services import velia_research_search_quality_service as search_quality
 from services.velia_chat_service import _iso
 
 
@@ -110,10 +111,22 @@ def ensure_tables() -> None:
 
 def _source_packet(user_id: int, mission_id: str, max_sources: int) -> tuple[List[Dict[str, Any]], str]:
     with projects.transaction() as cur:
-        cur.execute("""SELECT source_id,provider,doi,title,authors_json,published_year,venue,
+        cur.execute("""SELECT EXISTS(
+            SELECT 1 FROM velia_research_sources
+            WHERE mission_id=%s AND user_id=%s AND quality_version=%s
+        ) AS has_quality""", (
+            str(mission_id), int(user_id), search_quality.QUALITY_VERSION,
+        ))
+        has_quality = bool(cur.fetchone()["has_quality"])
+        quality_clause = " AND quality_version=%s" if has_quality else ""
+        params: List[Any] = [str(mission_id), int(user_id)]
+        if has_quality:
+            params.append(search_quality.QUALITY_VERSION)
+        params.append(int(max_sources) * 4)
+        cur.execute(f"""SELECT source_id,provider,doi,title,authors_json,published_year,venue,
                    source_type,evidence_hint,source_url,excerpt,citation_count,metadata_hash,retrieved_at
             FROM velia_research_sources
-            WHERE mission_id=%s AND user_id=%s
+            WHERE mission_id=%s AND user_id=%s{quality_clause}
             ORDER BY
               CASE evidence_hint
                 WHEN 'meta_analysis' THEN 0
@@ -127,7 +140,7 @@ def _source_packet(user_id: int, mission_id: str, max_sources: int) -> tuple[Lis
               citation_count DESC,
               published_year DESC NULLS LAST,
               retrieved_at DESC
-            LIMIT %s""", (str(mission_id), int(user_id), int(max_sources) * 4))
+            LIMIT %s""", tuple(params))
         rows = list(cur.fetchall())
     if not rows:
         raise projects.ProjectError("research_evidence_required", 409)
