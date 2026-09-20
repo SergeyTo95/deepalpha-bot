@@ -56,6 +56,15 @@ def test_safety_bypass_cannot_unlock_dangerous_research():
     assert "safety_evasion" in result["categories"]
 
 
+@pytest.mark.parametrize("goal", [
+    "Pancreatic cancer early detection biomarkers",
+    "Oncology tumor screening evidence",
+    "Carcinoma imaging diagnostic accuracy",
+])
+def test_oncology_keywords_map_to_medicine_domain(goal):
+    assert center._domain(goal) == "medicine"
+
+
 def test_status_defaults_fail_closed(monkeypatch):
     monkeypatch.delenv("VELIA_RESEARCH_CENTER_ENABLED", raising=False)
     monkeypatch.delenv("VELIA_RESEARCH_AUTONOMY_ENABLED", raising=False)
