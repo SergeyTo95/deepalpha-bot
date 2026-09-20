@@ -421,9 +421,32 @@ def list_protocols(user_id: int, mission_id: str, offset: int = 0) -> Dict[str, 
     }
 
 
-def _review_sources(user_id: int, review: Dict[str, Any]) -> List[Dict[str, Any]]:
-    hashes = set(review["search_plan"]["query_hashes"])
+def _review_sources(
+    user_id: int,
+    review: Dict[str, Any],
+    actual_query_hashes: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
     with projects.transaction() as cur:
+        hashes = set(actual_query_hashes or [])
+        if not hashes:
+            cur.execute("""SELECT result_json FROM velia_research_review_search_runs
+                WHERE review_id=%s AND user_id=%s
+                ORDER BY attempt DESC,created_at DESC LIMIT 1""",
+                (review["id"], int(user_id)))
+            latest = cur.fetchone()
+            if latest and latest.get("result_json"):
+                try:
+                    payload = json.loads(latest["result_json"])
+                except ValueError:
+                    payload = {}
+                outcomes = payload.get("outcomes") if isinstance(payload, dict) else []
+                if isinstance(outcomes, list):
+                    for outcome in outcomes:
+                        if isinstance(outcome, dict) and outcome.get("query_hash"):
+                            hashes.add(str(outcome["query_hash"]))
+        if not hashes:
+            hashes = set(review["search_plan"]["query_hashes"])
+
         cur.execute("""SELECT source_id,query_hash,provider,external_id,doi,title,published_year,
                    source_type,evidence_hint,retrieved_at
             FROM velia_research_sources
@@ -492,7 +515,12 @@ def execute_search(user_id: int, review_id: str) -> Dict[str, Any]:
             })
             partial = True
 
-    sources = _review_sources(user_id, review)
+    actual_hashes = [
+        str(item.get("query_hash"))
+        for item in outcomes
+        if isinstance(item, dict) and item.get("query_hash") and item.get("source_ids")
+    ]
+    sources = _review_sources(user_id, review, actual_hashes)
     fingerprints: Dict[str, List[str]] = {}
     for source in sources:
         fingerprints.setdefault(source["publication_fingerprint"], []).append(source["source_id"])
