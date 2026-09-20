@@ -324,20 +324,60 @@ def relay_only() -> None:
     actual = hashlib.sha256(target.read_bytes()).hexdigest()
     if actual != expected:
         raise RuntimeError(f"relay sha mismatch: {actual} != {expected}")
-    proc = subprocess.run(
-        [
-            "curl", "--fail", "--silent", "--show-error",
-            "-F", "reqtype=fileupload",
-            "-F", "time=1h",
-            "-F", f"fileToUpload=@{target}",
-            "https://litterbox.catbox.moe/resources/internals/api.php",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=True,
-    )
-    url = proc.stdout.strip()
+    attempts = [
+        (
+            "pixeldrain",
+            [
+                "curl", "--fail", "--silent", "--show-error",
+                "-X", "PUT",
+                "--upload-file", str(target),
+                "https://pixeldrain.com/api/file/VELIA-0.12.1.apk",
+            ],
+        ),
+        (
+            "transfer",
+            [
+                "curl", "--fail", "--silent", "--show-error",
+                "--upload-file", str(target),
+                "https://transfer.sh/VELIA-0.12.1.apk",
+            ],
+        ),
+        (
+            "fileio",
+            [
+                "curl", "--fail", "--silent", "--show-error",
+                "-F", f"file=@{target}",
+                "https://file.io",
+            ],
+        ),
+    ]
+    url = ""
+    for name, command in attempts:
+        proc = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        print(f"APK_RELAY_ATTEMPT {name} code={proc.returncode} out={proc.stdout[:500]} err={proc.stderr[:300]}", flush=True)
+        if proc.returncode != 0:
+            continue
+        raw = proc.stdout.strip()
+        if name == "pixeldrain":
+            payload = json.loads(raw)
+            file_id = payload.get("id", "")
+            if file_id:
+                url = f"https://pixeldrain.com/api/file/{file_id}?download"
+        elif name == "fileio":
+            payload = json.loads(raw)
+            url = payload.get("link", "") or payload.get("url", "")
+        else:
+            url = raw
+        if url.startswith("http"):
+            break
+    if not url:
+        raise RuntimeError("all APK relay uploads failed")
     print(f"APK_RELAY_URL {url}", flush=True)
     print(f"APK_RELAY_SHA256 {actual}", flush=True)
     port = os.environ.get("PORT", "8080")
