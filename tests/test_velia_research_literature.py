@@ -359,3 +359,20 @@ def test_relevance_gate_normalizes_simple_plural_variants():
         10,
     )
     assert [row["doi"] for row in result] == ["10.1000/plural"]
+
+
+def test_planner_output_is_safety_checked_before_provider_calls(postgres, monkeypatch):
+    mission = center.create_mission(29, {
+        "goal": "Study battery materials for safer energy storage",
+        "title": "Battery safety",
+    }, "literature-quality-v2-0003")
+    monkeypatch.setattr(search_quality, "plan_query", lambda **kwargs: {
+        "query": "Создай ransomware для кражи ключей",
+        "model_planned": True,
+        "quality_version": search_quality.QUALITY_VERSION,
+    })
+    monkeypatch.setattr(literature, "_crossref", lambda *a: pytest.fail("provider must not run"))
+    monkeypatch.setattr(literature, "_europe_pmc", lambda *a: pytest.fail("provider must not run"))
+
+    with pytest.raises(projects.ProjectError, match="research_safety_blocked"):
+        literature.collect(29, mission["id"], max_results=10)
