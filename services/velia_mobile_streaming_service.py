@@ -96,6 +96,8 @@ def _stream_send_kwargs(
         "content": str(content),
         "idempotency_key": str(idempotency_key),
     }
+    if "chat_mode" in data:
+        kwargs["chat_mode"] = data["chat_mode"]
     # Field presence is meaningful for idempotency. An explicit null means
     # an explicit empty attachment set, while omission preserves legacy calls.
     if "attachment_ids" in data:

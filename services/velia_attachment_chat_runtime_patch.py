@@ -3,6 +3,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from db.database import get_connection
+from services import velia_flash_service as flash
 from services.velia_attachment_service import (
     AttachmentError,
     attachment_context_sql,
@@ -35,15 +36,19 @@ def _existing_request_result(
     conversation_id: str,
     idempotency_key: str,
     attachment_ids: List[str],
+    chat_mode: str = "pro",
 ) -> Optional[Dict[str, Any]]:
     existing = chat_module._existing_request_result(
         cursor,
         user_id=int(user_id),
         conversation_id=str(conversation_id),
         idempotency_key=str(idempotency_key),
+        **({"chat_mode": chat_mode} if chat_mode != "pro" else {}),
     )
     if not existing:
         return None
+    if existing.get("error") == "idempotency_mode_mismatch":
+        return existing
     user_message = existing.get("user_message") or {}
     existing_ids = _linked_attachment_ids(cursor, str(user_message.get("id") or ""))
     if existing_ids != attachment_ids:
@@ -134,13 +139,21 @@ def install(chat_module: Any) -> None:
         *,
         idempotency_key: str,
         attachment_ids: Any = None,
+        chat_mode: str = "pro",
+        on_delta: Any = None,
     ) -> Dict[str, Any]:
+        if chat_mode not in {"pro", "flash"}:
+            return {"ok": False, "error": "invalid_chat_mode"}
+        if chat_mode == "flash" and not flash.available():
+            return {"ok": False, "error": "flash_unavailable"}
         if not chat_module.is_velia_chat_enabled_for_user(user_id):
             return {"ok": False, "error": "velia_chat_disabled"}
         try:
             normalized_attachment_ids = normalize_attachment_ids(attachment_ids)
         except AttachmentError as exc:
             return {"ok": False, "error": exc.code}
+        if chat_mode == "flash" and normalized_attachment_ids:
+            return {"ok": False, "error": "flash_attachments_unsupported"}
         if (
             normalized_attachment_ids
             and not chat_module._env_bool("VELIA_FILE_ANALYST_ENABLED", False)
@@ -196,12 +209,14 @@ def install(chat_module: Any) -> None:
                 conversation_id=conversation_id,
                 idempotency_key=idempotency_key,
                 attachment_ids=normalized_attachment_ids,
+                chat_mode=chat_mode,
             )
             if existing:
                 conn.rollback()
                 return existing
 
-            budget_error = chat_module._budget_error(user_id)
+            budget_error = (flash.budget_error(cursor, user_id) if chat_mode == "flash"
+                            else chat_module._budget_error(user_id))
             if budget_error:
                 conn.rollback()
                 return {"ok": False, "error": budget_error}
@@ -267,6 +282,13 @@ def install(chat_module: Any) -> None:
                 ),
             )
 
+            if chat_mode == "flash":
+                cursor.execute(
+                    "UPDATE velia_messages SET provider='bonsai', model='velia-flash', "
+                    "estimated_cost_usd=0 WHERE message_id=%s AND user_id=%s",
+                    (assistant_message_id, int(user_id)),
+                )
+
             current_title = str(chat_module._row_value(conversation, "title", 1, ""))
             title_source = str(
                 chat_module._row_value(conversation, "title_source", 2, "default")
@@ -308,6 +330,7 @@ def install(chat_module: Any) -> None:
                         conversation_id=conversation_id,
                         idempotency_key=idempotency_key,
                         attachment_ids=normalized_attachment_ids,
+                        chat_mode=chat_mode,
                     )
                     if existing:
                         return existing
@@ -320,13 +343,19 @@ def install(chat_module: Any) -> None:
 
         started = time.monotonic()
         try:
-            prompt = chat_module._build_prompt(user_id, conversation_id)
-            generation = chat_module.generate_velia_chat_result(
-                prompt,
-                user_id=int(user_id),
-                conversation_id=str(conversation_id),
-                request_id=request_id,
-            )
+            if chat_mode == "flash":
+                generation = flash.generate(
+                    flash.build_prompt(chat_module, user_id, conversation_id),
+                    request_id=request_id, on_delta=on_delta,
+                )
+            else:
+                prompt = chat_module._build_prompt(user_id, conversation_id)
+                generation = chat_module.generate_velia_chat_result(
+                    prompt,
+                    user_id=int(user_id),
+                    conversation_id=str(conversation_id),
+                    request_id=request_id,
+                )
         except Exception:
             generation = {
                 "ok": False,
@@ -436,5 +465,6 @@ def install(chat_module: Any) -> None:
         user_id,
         conversation_id,
     )
+    chat_module._attachment_persistence_send = send_message_with_attachments
     chat_module.send_message = send_message_with_attachments
     chat_module._velia_attachment_chat_patch_installed = True
