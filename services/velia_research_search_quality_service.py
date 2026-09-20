@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Tuple
 
 from services import llm_service
 
-QUALITY_VERSION = "v3"
+QUALITY_VERSION = "v4"
 MAX_CANONICAL_QUERY_CHARS = 320
 MAX_QUERY_TERMS = 24
 
@@ -324,14 +324,19 @@ def rank_relevant(
 
     ranked.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
     output: List[Dict[str, Any]] = []
-    seen = set()
+    seen_dois = set()
+    seen_titles = set()
     for score, _, _, row in ranked:
-        doi = str(row.get("doi") or "").casefold()
+        doi = str(row.get("doi") or "").strip().casefold()
         title_key = re.sub(r"\W+", "", str(row.get("title") or "").casefold())
-        key = ("doi", doi) if doi else ("title", title_key)
-        if not key[1] or key in seen:
+        if (doi and doi in seen_dois) or (title_key and title_key in seen_titles):
             continue
-        seen.add(key)
+        if not doi and not title_key:
+            continue
+        if doi:
+            seen_dois.add(doi)
+        if title_key:
+            seen_titles.add(title_key)
         clean = dict(row)
         clean["_relevance_score"] = score
         output.append(clean)
