@@ -748,6 +748,7 @@ def collect(user_id: int, mission_id: str, query: str = "", max_results: int = 1
             provider_query,
             mission["domain"],
             max_results,
+            anchor_terms=list(plan.get("anchor_terms") or []),
         )
         if not rows:
             code = "research_literature_no_relevant_sources"
