@@ -326,6 +326,30 @@ def relay_only() -> None:
         raise RuntimeError(f"relay sha mismatch: {actual} != {expected}")
     attempts = [
         (
+            "qurl",
+            [
+                "curl", "--fail", "--silent", "--show-error", "--max-time", "180",
+                "-T", str(target),
+                "https://qurl.sh",
+            ],
+        ),
+        (
+            "0x0",
+            [
+                "curl", "--fail", "--silent", "--show-error", "--max-time", "180",
+                "-F", f"file=@{target}",
+                "https://0x0.st",
+            ],
+        ),
+        (
+            "oshi",
+            [
+                "curl", "--fail", "--silent", "--show-error", "--max-time", "180",
+                "-F", f"file=@{target}",
+                "https://oshi.at",
+            ],
+        ),
+        (
             "pixeldrain",
             [
                 "curl", "--fail", "--silent", "--show-error",
@@ -381,7 +405,13 @@ def relay_only() -> None:
         if proc.returncode != 0:
             continue
         raw = proc.stdout.strip()
-        if name == "pixeldrain":
+        if name == "qurl":
+            match = re.search(r"https://qurl\.sh/\S+", raw)
+            url = match.group(0).rstrip(".,)") if match else ""
+        elif name == "oshi":
+            match = re.search(r"https://\S+", raw)
+            url = match.group(0).rstrip(".,)") if match else ""
+        elif name == "pixeldrain":
             payload = json.loads(raw)
             file_id = payload.get("id", "")
             if file_id:
