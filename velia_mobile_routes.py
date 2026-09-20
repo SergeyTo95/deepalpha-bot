@@ -4,6 +4,7 @@ import os
 from typing import Any, Callable, Dict, Optional
 
 from aiohttp import web
+from services.velia_flash_service import public_capability, dispatch_send
 
 from db.database import get_user, get_subscription_until, is_subscribed
 from services.velia_chat_service import (
@@ -231,6 +232,7 @@ def setup_velia_mobile_routes(
                 },
                 "features": {
                     "chat": is_velia_chat_enabled_for_user(user_id),
+                    **public_capability(),
                     "debug_usage": is_debug_usage_enabled_for_user(user_id),
                 },
             }
@@ -351,11 +353,13 @@ def setup_velia_mobile_routes(
         idempotency_key = str(
             request.headers.get("Idempotency-Key") or data.get("idempotency_key") or ""
         ).strip()
-        result = send_message(
+        result = dispatch_send(
+            send_message,
             int(auth["user_id"]),
             request.match_info["conversation_id"],
             str(data.get("content") or ""),
             idempotency_key=idempotency_key,
+            chat_mode=data.get("chat_mode", "pro"),
         )
         if result.get("ok"):
             return _json_response(result, status=200 if result.get("duplicate") else 201)

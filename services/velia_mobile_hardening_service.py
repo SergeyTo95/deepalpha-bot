@@ -1,8 +1,10 @@
 import asyncio
+from functools import partial
 import os
 from typing import Any, Callable, Dict, Optional
 
 from aiohttp import web
+from services.velia_flash_service import dispatch_send
 
 
 _MESSAGE_ROUTE = "/mobile-api/v1/conversations/{conversation_id}/messages"
@@ -279,8 +281,11 @@ def replace_blocking_message_handler(app: web.Application, routes_module: Any) -
             data,
             idempotency_key=idempotency_key,
         )
+        mode = data.get("chat_mode", "pro")
+        sender = (routes_module.send_message if mode == "pro" else
+                  partial(dispatch_send, routes_module.send_message, chat_mode=mode))
         result = await asyncio.to_thread(
-            routes_module.send_message,
+            sender,
             int(auth["user_id"]),
             request.match_info["conversation_id"],
             str(data.get("content") or ""),
@@ -298,6 +303,8 @@ def replace_blocking_message_handler(app: web.Application, routes_module: Any) -
         elif error in {
             "generation_in_progress",
             "idempotency_attachment_mismatch",
+            "idempotency_mode_mismatch",
+            "flash_busy",
         } or result.get("pending"):
             status = 409
         elif error.endswith("limit_exceeded"):
@@ -305,9 +312,11 @@ def replace_blocking_message_handler(app: web.Application, routes_module: Any) -
         elif error in {
             "velia_chat_disabled",
             "velia_file_analyst_disabled",
+            "flash_unavailable",
         }:
             status = 503
         elif error in {
+            "flash_timeout", "flash_provider_error", "flash_invalid_response",
             "timeout",
             "connection_error",
             "rate_limit",
