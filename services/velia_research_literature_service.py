@@ -389,7 +389,9 @@ def live_discover(query: str, max_results: int = 12) -> Dict[str, Any]:
             errors.append(provider)
     if not rows and errors:
         raise projects.ProjectError("research_literature_unavailable", 502)
-    rows = _dedupe(rows, max_results)
+    rows = search_quality.rank_relevant(rows, provider_query, "general", max_results)
+    if not rows:
+        raise projects.ProjectError("research_literature_no_relevant_sources", 502)
     return {
         "query": provider_query,
         "query_hash": _hash_query(query),
@@ -397,6 +399,7 @@ def live_discover(query: str, max_results: int = 12) -> Dict[str, Any]:
         "partial": bool(errors),
         "provider_gaps": errors,
         "providers": providers,
+        "quality_version": search_quality.QUALITY_VERSION,
         "safety": decision,
         "sources": rows,
     }
