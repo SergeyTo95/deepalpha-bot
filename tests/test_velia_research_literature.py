@@ -240,7 +240,7 @@ def test_search_quality_planner_translates_long_russian_intent(monkeypatch):
     )
     assert result["model_planned"] is True
     assert result["query"] == "pancreatic cancer early detection ctDNA biomarkers"
-    assert result["anchor_terms"] == ["pancreatic"]
+    assert result["anchor_terms"] == ["pancreas"]
 
 
 def test_relevance_gate_rejects_unrelated_medical_and_materials_results():
