@@ -4,7 +4,7 @@ USER root
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates curl openssl python3 unzip \
+        ca-certificates curl openssl python3 unzip bsdiff \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl --fail --location --retry 3 \
