@@ -144,19 +144,71 @@ def generate(messages, *, request_id="", on_delta=None):
                    "max_tokens": output_limit, "temperature": 0.7,
                    "top_p": 0.8, "top_k": 20, "presence_penalty": 1.5,
                    "chat_template_kwargs": {"enable_thinking": False},
-                   "stream": False}
-        data = post("/v1/chat/completions", payload)
-        choice = (data.get("choices") or [{}])[0]
-        text = (choice.get("message") or {}).get("content")
-        if not isinstance(text, str) or not text.strip() or "<think>" in text:
-            return error("flash_invalid_response", request_id)
-        if callable(on_delta):
-            on_delta(text)
-        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-        return {"ok": True, "text": text.strip(), "provider": PROVIDER,
-                "model": MODEL, "request_id": request_id, "usage": usage,
-                "estimated_cost_usd": 0.0, "fallback_used": False,
-                "finish_reason": str(choice.get("finish_reason") or "stop")}
+                   "thinking_budget_tokens": 0,
+                   "stream": bool(callable(on_delta))}
+        if not callable(on_delta):
+            data = post("/v1/chat/completions", payload)
+            choice = (data.get("choices") or [{}])[0]
+            text = (choice.get("message") or {}).get("content")
+            if not isinstance(text, str) or not text.strip() or "<think>" in text:
+                return error("flash_invalid_response", request_id)
+            usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+            return {"ok": True, "text": text.strip(), "provider": PROVIDER,
+                    "model": MODEL, "request_id": request_id, "usage": usage,
+                    "estimated_cost_usd": 0.0, "fallback_used": False,
+                    "finish_reason": str(choice.get("finish_reason") or "stop")}
+
+        remaining = timeout - (time.monotonic() - started)
+        if remaining <= 0:
+            raise requests.Timeout()
+        response = session.post(endpoint() + "/v1/chat/completions", json=payload,
+                                timeout=(5, remaining), allow_redirects=False,
+                                stream=True)
+        try:
+            if response.status_code != 200:
+                raise ValueError("flash_provider_error")
+            pieces = []
+            usage = {}
+            finish_reason = "stop"
+            streamed_bytes = 0
+            for raw_line in response.iter_lines(decode_unicode=True):
+                if time.monotonic() - started >= timeout:
+                    raise requests.Timeout()
+                if not raw_line:
+                    continue
+                line = raw_line.decode("utf-8", "replace") if isinstance(raw_line, bytes) else str(raw_line)
+                if not line.startswith("data:"):
+                    continue
+                body = line[5:].strip()
+                if not body or body == "[DONE]":
+                    if body == "[DONE]":
+                        break
+                    continue
+                streamed_bytes += len(body.encode("utf-8"))
+                if streamed_bytes > 2_000_000:
+                    raise ValueError("flash_response_too_large")
+                event = json.loads(body)
+                if isinstance(event.get("usage"), dict):
+                    usage = event["usage"]
+                choice = (event.get("choices") or [{}])[0]
+                delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
+                piece = delta.get("content")
+                if not isinstance(piece, str):
+                    piece = choice.get("text")
+                if isinstance(piece, str) and piece:
+                    pieces.append(piece)
+                    on_delta(piece)
+                if choice.get("finish_reason"):
+                    finish_reason = str(choice["finish_reason"])
+            text = "".join(pieces).strip()
+            if not text or "<think>" in text:
+                return error("flash_invalid_response", request_id)
+            return {"ok": True, "text": text, "provider": PROVIDER,
+                    "model": MODEL, "request_id": request_id, "usage": usage,
+                    "estimated_cost_usd": 0.0, "fallback_used": False,
+                    "finish_reason": finish_reason}
+        finally:
+            response.close()
     except requests.Timeout:
         return error("flash_timeout", request_id)
     except (requests.RequestException, ValueError, TypeError, KeyError, IndexError):
