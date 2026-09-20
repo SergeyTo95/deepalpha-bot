@@ -284,6 +284,7 @@ def test_quality_v2_sources_hide_legacy_sources_from_mission_list(postgres, monk
     mission = center.create_mission(27, {
         "goal": "Pancreatic cancer early detection biomarkers",
         "title": "Pancreatic cancer",
+        "domain": "medicine",
     }, "literature-quality-v2-0001")
     monkeypatch.setattr(literature, "_europe_pmc", lambda query, limit: [{
         "provider": "europe_pmc", "external_id": "MED:quality", "doi": "10.1000/quality",
