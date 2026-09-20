@@ -116,11 +116,24 @@ def plan_query(
     return {"query": planned, "model_planned": True, "quality_version": QUALITY_VERSION}
 
 
+def _normalize_term(word: str) -> str:
+    word = word.strip("._-")
+    if len(word) > 5 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if (
+        len(word) > 4
+        and word.endswith("s")
+        and not word.endswith(("ss", "sis", "us"))
+    ):
+        return word[:-1]
+    return word
+
+
 def _tokenize(value: str) -> List[str]:
     words = re.findall(r"[a-z0-9][a-z0-9+._-]{1,}", str(value or "").casefold())
     output: List[str] = []
     for word in words:
-        word = word.strip("._-")
+        word = _normalize_term(word)
         if len(word) < 3 or word in STOPWORDS:
             continue
         if word not in output:
