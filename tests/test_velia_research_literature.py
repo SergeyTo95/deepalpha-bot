@@ -444,8 +444,40 @@ def test_medical_anchor_matches_pancreas_morphology():
     assert [row["doi"] for row in result] == ["10.1000/pancreas-word"]
 
 
-def test_quality_v3_query_hash_invalidates_v2_cache():
+def test_quality_v4_query_hash_invalidates_v3_cache():
     query = "Pancreatic cancer early detection"
-    old_hash = hashlib.sha256(("v2|" + query.casefold()).encode("utf-8")).hexdigest()
-    assert search_quality.QUALITY_VERSION == "v3"
+    old_hash = hashlib.sha256(("v3|" + query.casefold()).encode("utf-8")).hexdigest()
+    assert search_quality.QUALITY_VERSION == "v4"
     assert literature._hash_query(query) != old_hash
+
+
+def test_cross_provider_duplicate_title_is_kept_once_even_when_doi_metadata_differs():
+    rows = [
+        {
+            "provider": "europe_pmc",
+            "title": "Comparative analysis of circulating tumour cells detection and circulating tumor DNA in liquid biopsy for the diagnosis of early stage pancreatic adenocarcinoma",
+            "excerpt": "Pancreatic adenocarcinoma liquid biopsy ctDNA.",
+            "venue": "HPB",
+            "evidence_hint": "observational",
+            "citation_count": 11,
+            "doi": "",
+        },
+        {
+            "provider": "crossref",
+            "title": "Comparative analysis of circulating tumour cells detection and circulating tumor DNA in liquid biopsy for the diagnosis of early stage pancreatic adenocarcinoma",
+            "excerpt": "Pancreatic adenocarcinoma liquid biopsy ctDNA.",
+            "venue": "HPB",
+            "evidence_hint": "observational",
+            "citation_count": 10,
+            "doi": "10.1016/j.hpb.2018.06.2054",
+        },
+    ]
+    result = search_quality.rank_relevant(
+        rows,
+        "pancreatic adenocarcinoma liquid biopsy ctDNA early detection",
+        "medicine",
+        10,
+        anchor_terms=["pancreatic"],
+    )
+    assert len(result) == 1
+    assert result[0]["title"].startswith("Comparative analysis of circulating tumour cells")
