@@ -28,7 +28,12 @@ EVIDENCE_GRADES = {
     "in_vitro", "simulation", "expert_opinion", "unknown",
 }
 DOMAIN_HINTS = {
-    "medicine": ("medical", "medicine", "clinical", "disease", "therapy", "treatment", "медицин", "клинич", "заболев", "лечен", "терап"),
+    "medicine": (
+        "medical", "medicine", "clinical", "disease", "therapy", "treatment",
+        "cancer", "oncolog", "tumor", "tumour", "neoplasm", "carcinoma",
+        "медицин", "клинич", "заболев", "лечен", "терап", "рак", "онколог",
+        "опухол", "новообразован", "карцином",
+    ),
     "biology": ("biology", "genetic", "cell", "protein", "биолог", "генет", "клетк", "белок"),
     "materials": ("material", "battery", "alloy", "polymer", "материал", "аккумулятор", "сплав", "полимер"),
     "energy": ("energy", "solar", "reactor", "grid", "энерг", "солнеч", "реактор", "электросет"),
