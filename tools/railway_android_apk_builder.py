@@ -149,6 +149,50 @@ def run_build(source_dir: Path) -> Path:
 
 
 
+def emit_delta_from_artifact(app_jwt: str, apk: Path) -> None:
+    artifact_id = os.environ.get("ANDROID_DIFF_ARTIFACT_ID", "").strip()
+    if not artifact_id:
+        return
+    token = installation_token(app_jwt)
+    with tempfile.TemporaryDirectory(prefix="velia-apk-delta-") as temp:
+        work = Path(temp)
+        artifact_zip = work / "old.zip"
+        old_apk = work / "old.apk"
+        patch = work / "current.bsdiff"
+        subprocess.run(
+            [
+                "curl", "--fail", "--location", "--silent", "--show-error", "--retry", "3",
+                "-H", f"Authorization: Bearer {token}",
+                "-H", "Accept: application/vnd.github+json",
+                f"https://api.github.com/repos/{ANDROID_REPO}/actions/artifacts/{artifact_id}/zip",
+                "-o", str(artifact_zip),
+            ],
+            check=True,
+        )
+        subprocess.run(
+            ["unzip", "-p", str(artifact_zip), "app-debug.apk"],
+            stdout=old_apk.open("wb"),
+            check=True,
+        )
+        subprocess.run(["bsdiff", str(old_apk), str(apk), str(patch)], check=True)
+        patch_bytes = patch.read_bytes()
+        patch_sha = hashlib.sha256(patch_bytes).hexdigest()
+        encoded = base64.b64encode(patch_bytes).decode("ascii")
+        chunk_size = 6000
+        total = (len(encoded) + chunk_size - 1) // chunk_size
+        print(
+            f"APK_BSDIFF_META bytes={len(patch_bytes)} sha256={patch_sha} "
+            f"base64_chars={len(encoded)} chunks={total}",
+            flush=True,
+        )
+        if len(patch_bytes) > 2_000_000:
+            print("APK_BSDIFF_TOO_LARGE", flush=True)
+            return
+        for index in range(total):
+            part = encoded[index * chunk_size:(index + 1) * chunk_size]
+            print(f"APK_BSDIFF_CHUNK {index + 1}/{total} {part}", flush=True)
+
+
 def publish_release_asset(app_jwt: str, apk: Path, sha: str) -> None:
     repo = os.environ.get("ANDROID_PUBLISH_REPO", "").strip()
     if not repo:
@@ -234,6 +278,7 @@ def main() -> None:
         download_source(token, sha, work)
         print("ANDROID_SOURCE_DOWNLOAD_OK", flush=True)
         apk = run_build(work / "src")
+        emit_delta_from_artifact(jwt, apk)
         publish_release_asset(jwt, apk, sha)
         serve_artifact(apk, sha)
 
