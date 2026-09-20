@@ -43,18 +43,21 @@ def github_app_jwt(app_id: str, private_key: str) -> str:
     return f"{header}.{payload}.{b64url(proc.stdout)}"
 
 
-def request_json(url: str, token: str, method: str = "GET") -> dict:
-    req = urllib.request.Request(url, method=method)
+def request_json(url: str, token: str, method: str = "GET", payload: dict | None = None) -> dict:
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Accept", "application/vnd.github+json")
     req.add_header("X-GitHub-Api-Version", "2022-11-28")
     req.add_header("Authorization", f"Bearer {token}")
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
     with urllib.request.urlopen(req, timeout=60) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
-def installation_token(app_jwt: str) -> str:
+def installation_token_for_repo(app_jwt: str, repo: str) -> str:
     installation = request_json(
-        f"https://api.github.com/repos/{ANDROID_REPO}/installation",
+        f"https://api.github.com/repos/{repo}/installation",
         app_jwt,
     )
     installation_id = installation["id"]
@@ -64,6 +67,10 @@ def installation_token(app_jwt: str) -> str:
         method="POST",
     )
     return payload["token"]
+
+
+def installation_token(app_jwt: str) -> str:
+    return installation_token_for_repo(app_jwt, ANDROID_REPO)
 
 
 def download_source(token: str, sha: str, destination: Path) -> None:
@@ -141,6 +148,61 @@ def run_build(source_dir: Path) -> Path:
     return apk
 
 
+
+def publish_release_asset(app_jwt: str, apk: Path, sha: str) -> None:
+    repo = os.environ.get("ANDROID_PUBLISH_REPO", "").strip()
+    if not repo:
+        return
+    tag = os.environ.get("ANDROID_RELEASE_TAG", f"velia-android-{sha[:12]}").strip()
+    asset_name = os.environ.get("ANDROID_RELEASE_ASSET", "VELIA.apk").strip()
+    token = installation_token_for_repo(app_jwt, repo)
+    release = request_json(
+        f"https://api.github.com/repos/{repo}/releases",
+        token,
+        method="POST",
+        payload={
+            "tag_name": tag,
+            "target_commitish": "main",
+            "name": f"VELIA Android {sha[:12]}",
+            "body": f"Exact Android build from {sha}. Temporary delivery artifact.",
+            "draft": False,
+            "prerelease": True,
+        },
+    )
+    release_id = release["id"]
+    upload_url = (
+        f"https://uploads.github.com/repos/{repo}/releases/{release_id}/assets"
+        f"?name={asset_name}"
+    )
+    subprocess.run(
+        [
+            "curl",
+            "--fail",
+            "--location",
+            "--silent",
+            "--show-error",
+            "--retry",
+            "3",
+            "-X",
+            "POST",
+            "-H",
+            f"Authorization: Bearer {token}",
+            "-H",
+            "Accept: application/vnd.github+json",
+            "-H",
+            "X-GitHub-Api-Version: 2022-11-28",
+            "-H",
+            "Content-Type: application/vnd.android.package-archive",
+            "--data-binary",
+            f"@{apk}",
+            upload_url,
+        ],
+        check=True,
+    )
+    url = f"https://github.com/{repo}/releases/download/{tag}/{asset_name}"
+    print(f"APK_PUBLIC_RELEASE_URL {url}", flush=True)
+
+
 def serve_artifact(apk: Path, sha: str) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     output = OUT_DIR / f"VELIA-debug-{sha[:7]}.apk"
@@ -172,6 +234,7 @@ def main() -> None:
         download_source(token, sha, work)
         print("ANDROID_SOURCE_DOWNLOAD_OK", flush=True)
         apk = run_build(work / "src")
+        publish_release_asset(jwt, apk, sha)
         serve_artifact(apk, sha)
 
 
