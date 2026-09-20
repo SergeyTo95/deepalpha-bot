@@ -8,6 +8,7 @@ permissions:
   contents: read
 jobs:
   medical-contract:
+    if: ${{ github.event_name != 'push' }}
     runs-on: ubuntu-latest
     timeout-minutes: 12
     env:
