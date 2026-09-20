@@ -86,6 +86,41 @@ def test_real_template_budget_and_free_result(enabled, monkeypatch):
     assert session.trust_env is False
     assert all(not kwargs["allow_redirects"] for _, kwargs in session.calls)
     assert session.calls[-1][1]["json"]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert session.calls[-1][1]["json"]["thinking_budget_tokens"] == 0
+
+
+class StreamResponse(Response):
+    def iter_lines(self, decode_unicode=False):
+        events = [
+            'data: {"choices":[{"delta":{"content":"Hel"},"finish_reason":null}]}',
+            'data: {"choices":[{"delta":{"content":"lo"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}',
+            "data: [DONE]",
+        ]
+        return iter(events)
+
+
+class StreamSession(Session):
+    def post(self, url, **kwargs):
+        if not url.endswith("/v1/chat/completions"):
+            return super().post(url, **kwargs)
+        self.calls.append((url, kwargs))
+        assert kwargs["stream"] is True
+        return StreamResponse({})
+
+
+def test_flash_stream_forwards_incremental_deltas(enabled, monkeypatch):
+    session = StreamSession()
+    monkeypatch.setattr(flash.requests, "Session", lambda: session)
+    deltas = []
+    result = flash.generate(
+        [{"role": "user", "content": "Say hello"}],
+        on_delta=deltas.append,
+    )
+    assert result["ok"]
+    assert result["text"] == "Hello"
+    assert deltas == ["Hel", "lo"]
+    assert result["usage"]["total_tokens"] == 5
+    assert session.calls[-1][1]["json"]["thinking_budget_tokens"] == 0
 
 
 def test_provider_failure_does_not_retry_or_fallback(enabled, monkeypatch):
