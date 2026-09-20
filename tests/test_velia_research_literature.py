@@ -311,3 +311,32 @@ def test_quality_v2_sources_hide_legacy_sources_from_mission_list(postgres, monk
 
     visible = literature.list_sources(27, mission["id"])["sources"]
     assert [row["doi"] for row in visible] == ["10.1000/quality"]
+
+
+def test_failed_quality_v2_search_does_not_fall_back_to_legacy_sources(postgres):
+    mission = center.create_mission(28, {
+        "goal": "Pancreatic cancer early detection biomarkers",
+        "title": "Pancreatic cancer",
+    }, "literature-quality-v2-0002")
+    with projects.transaction() as cur:
+        cur.execute("""INSERT INTO velia_research_literature_queries(
+            mission_id,user_id,query_hash,query_text,status,safety_json,providers_json,
+            quality_version,result_count)
+            VALUES(%s,%s,'legacy-q','legacy','completed','{}','["crossref"]','legacy',1)""",
+            (mission["id"], 28))
+        cur.execute("""INSERT INTO velia_research_sources(
+            source_id,mission_id,user_id,query_hash,ordinal,provider,external_id,doi,title,
+            authors_json,published_year,venue,source_type,evidence_hint,source_url,excerpt,
+            citation_count,metadata_hash,quality_version)
+            VALUES('legacy-s',%s,%s,'legacy-q',0,'crossref','legacy','10.1000/legacy2',
+                   'Unrelated material science','[]',2021,'Materials','journal-article',
+                   'unknown','https://doi.org/10.1000/legacy2','materials',0,'legacy-meta2','legacy')""",
+            (mission["id"], 28))
+        cur.execute("""INSERT INTO velia_research_literature_queries(
+            mission_id,user_id,query_hash,query_text,status,safety_json,providers_json,
+            quality_version,result_count,error_code)
+            VALUES(%s,%s,'quality-q','pancreatic cancer early detection','failed',
+                   '{}','["europe_pmc","crossref"]',%s,0,'research_literature_no_relevant_sources')""",
+            (mission["id"], 28, search_quality.QUALITY_VERSION))
+
+    assert literature.list_sources(28, mission["id"])["sources"] == []
