@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export VELIA_RESEARCH_CENTER_ENABLED=false
+export VELIA_RESEARCH_AUTONOMY_ENABLED=false
+export VELIA_RESEARCH_EXPERIMENT_EXECUTION_ENABLED=false
+export VELIA_RESEARCH_LITERATURE_ENABLED=false
+export VELIA_RESEARCH_REASONING_ENABLED=false
+export VELIA_RESEARCH_DIRECTOR_ENABLED=false
+export VELIA_RESEARCH_COMPUTE_ENABLED=false
+export VELIA_RESEARCH_EXPERIMENT_PIPELINE_ENABLED=false
+export VELIA_RESEARCH_AUTO_REPORT_ENABLED=false
+export VELIA_RESEARCH_CLAIM_LEDGER_ENABLED=false
+export VELIA_RESEARCH_LIVING_RESEARCH_ENABLED=false
+export VELIA_RESEARCH_LIVING_REASSESSMENT_ENABLED=false
+export VELIA_RESEARCH_META_ANALYSIS_ENABLED=false
+export VELIA_RESEARCH_SYSTEMATIC_REVIEW_ENABLED=false
+export VELIA_RESEARCH_DATASET_REGISTRY_ENABLED=false
+export VELIA_RESEARCH_KNOWLEDGE_TIMELINE_ENABLED=false
+export VELIA_RESEARCH_PROTOCOL_OFFICER_ENABLED=false
+
+python -m pytest -q   tests/test_velia_research_center.py   tests/test_velia_research_literature.py   tests/test_velia_research_reasoning.py   tests/test_velia_research_evidence_claims.py   tests/test_velia_research_director.py   tests/test_velia_research_report.py   tests/test_velia_projects.py
+
+python -m compileall -q   services/velia_research_safety_service.py   services/velia_research_center_service.py   services/velia_research_literature_service.py   services/velia_research_search_quality_service.py   services/velia_research_reasoning_service.py   services/velia_research_evidence_claim_service.py   services/velia_research_director_service.py   services/velia_research_report_service.py   run_velia_research_worker.py   velia_research_routes.py   velia_project_routes.py
