@@ -676,6 +676,9 @@ def collect(user_id: int, mission_id: str, query: str = "", max_results: int = 1
         fallback_query=fallback_query,
     )
     provider_query = str(plan.get("query") or fallback_query)[:search_quality.MAX_CANONICAL_QUERY_CHARS]
+    provider_decision = safety.classify(provider_query, phase="literature")
+    if provider_decision["decision"] == "blocked":
+        raise projects.ProjectError("research_safety_blocked", 403)
     query_hash = _hash_query(query)
     cached = _claim(user_id, mission_id, provider_query, query_hash, decision)
     if cached is not None:
