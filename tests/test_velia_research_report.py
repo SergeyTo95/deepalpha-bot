@@ -50,6 +50,11 @@ def postgres(monkeypatch):
 
 
 def _seed_medical_evidence(monkeypatch, user_id, mission_id):
+    monkeypatch.setattr(literature.search_quality, "plan_query", lambda **kwargs: {
+        "query": "cancer therapy randomized trial",
+        "model_planned": True,
+        "quality_version": literature.search_quality.QUALITY_VERSION,
+    })
     monkeypatch.setattr(literature, "_europe_pmc", lambda query, limit: [{
         "provider": "europe_pmc",
         "external_id": "MED:777",
@@ -158,6 +163,11 @@ def test_sensitive_research_report_preserves_read_only_safety(postgres, monkeypa
     }, "report-mission-0004")
     assert mission["safety"]["read_only_only"] is True
 
+    monkeypatch.setattr(literature.search_quality, "plan_query", lambda **kwargs: {
+        "query": "defensive ransomware detection",
+        "model_planned": True,
+        "quality_version": literature.search_quality.QUALITY_VERSION,
+    })
     monkeypatch.setattr(literature, "_crossref", lambda query, limit: [{
         "provider": "crossref",
         "external_id": "10.1000/defense",
