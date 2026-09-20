@@ -192,6 +192,53 @@ def emit_delta_from_old(apk: Path, old_apk: Path | None) -> None:
             print(f"APK_BSDIFF_CHUNK {index + 1}/{total} {part}", flush=True)
 
 
+
+def build_delta(token: str, apk: Path) -> None:
+    artifact_id = os.environ.get("ANDROID_BASE_ARTIFACT_ID", "").strip()
+    if not artifact_id:
+        return
+    with tempfile.TemporaryDirectory(prefix="velia-delta-") as temp:
+        work = Path(temp)
+        archive = work / "base.zip"
+        subprocess.run(
+            [
+                "curl", "--fail", "--location", "--silent", "--show-error", "--retry", "3",
+                "-H", f"Authorization: Bearer {token}",
+                "-H", "Accept: application/vnd.github+json",
+                "-H", "X-GitHub-Api-Version: 2022-11-28",
+                f"https://api.github.com/repos/{ANDROID_REPO}/actions/artifacts/{artifact_id}/zip",
+                "-o", str(archive),
+            ],
+            check=True,
+        )
+        import zipfile
+        with zipfile.ZipFile(archive) as zf:
+            candidates = [n for n in zf.namelist() if n.endswith(".apk")]
+            if not candidates:
+                raise RuntimeError("Base artifact contains no APK")
+            base = work / "base.apk"
+            with zf.open(candidates[0]) as src, base.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+        patch = work / "VELIA-0.12.1.xdelta"
+        subprocess.run(["xdelta3", "-e", "-s", str(base), str(apk), str(patch)], check=True)
+        patch_bytes = patch.read_bytes()
+        print(
+            "APK_DELTA_READY "
+            f"base_sha256={hashlib.sha256(base.read_bytes()).hexdigest()} "
+            f"target_sha256={hashlib.sha256(apk.read_bytes()).hexdigest()} "
+            f"patch_sha256={hashlib.sha256(patch_bytes).hexdigest()} "
+            f"patch_size={len(patch_bytes)}",
+            flush=True,
+        )
+        encoded = base64.b64encode(patch_bytes).decode("ascii")
+        chunk_size = 6000
+        chunks = [encoded[i:i + chunk_size] for i in range(0, len(encoded), chunk_size)]
+        print(f"APK_DELTA_CHUNKS count={len(chunks)} chunk_size={chunk_size}", flush=True)
+        for index, chunk in enumerate(chunks):
+            print(f"APK_DELTA_{index:05d}={chunk}", flush=True)
+
+
+
 def publish_release_asset(app_jwt: str, apk: Path, sha: str) -> None:
     repo = os.environ.get("ANDROID_PUBLISH_REPO", "").strip()
     if not repo:
