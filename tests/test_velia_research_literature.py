@@ -1,3 +1,4 @@
+import hashlib
 import os
 import uuid
 
@@ -444,7 +445,7 @@ def test_medical_anchor_matches_pancreas_morphology():
 
 
 def test_quality_v3_query_hash_invalidates_v2_cache():
-    v2 = "v2|pancreatic cancer early detection".casefold()
-    v3 = search_quality.QUALITY_VERSION + "|pancreatic cancer early detection".casefold()
+    query = "Pancreatic cancer early detection"
+    old_hash = hashlib.sha256(("v2|" + query.casefold()).encode("utf-8")).hexdigest()
     assert search_quality.QUALITY_VERSION == "v3"
-    assert v2 != v3
+    assert literature._hash_query(query) != old_hash
