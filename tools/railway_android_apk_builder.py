@@ -344,7 +344,7 @@ def relay_only() -> None:
         (
             "oshi",
             [
-                "curl", "--fail", "--silent", "--show-error", "--max-time", "180",
+                "curl", "--fail", "--insecure", "--silent", "--show-error", "--max-time", "180",
                 "-F", f"file=@{target}",
                 "https://oshi.at",
             ],
