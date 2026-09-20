@@ -798,7 +798,7 @@ def list_sources(user_id: int, mission_id: str, offset: int = 0) -> Dict[str, An
         raise projects.ProjectError("invalid_offset")
     with projects.transaction() as cur:
         cur.execute("""SELECT EXISTS(
-            SELECT 1 FROM velia_research_sources
+            SELECT 1 FROM velia_research_literature_queries
             WHERE mission_id=%s AND user_id=%s AND quality_version=%s
         ) AS has_quality""", (
             str(mission_id), int(user_id), search_quality.QUALITY_VERSION,
