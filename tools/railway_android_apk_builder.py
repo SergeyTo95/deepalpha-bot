@@ -362,13 +362,26 @@ def relay_patch_only() -> None:
         print(f"APK_PATCH_RELAY_ATTEMPT code={proc.returncode} out={proc.stdout[:500]} err={proc.stderr[:300]}", flush=True)
         if proc.returncode == 0:
             raw = proc.stdout.strip()
-            m = re.search(r"https://\\S+", raw)
+            m = re.search(r"https://\S+", raw)
             if m:
                 url = m.group(0).rstrip(".,)")
                 break
     if not url:
         raise RuntimeError("patch relay failed")
     print(f"APK_PATCH_RELAY_URL {url}", flush=True)
+    link_paste = subprocess.run(
+        [
+            "curl", "--fail", "--silent", "--show-error", "--max-time", "30",
+            "--data-binary", "@-",
+            "https://paste.rs",
+        ],
+        input=url,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    print(f"APK_PATCH_LINK_PASTE code={link_paste.returncode} out={link_paste.stdout[:500]} err={link_paste.stderr[:300]}", flush=True)
     print(f"APK_PATCH_RELAY_SHA256 {actual}", flush=True)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     shutil.copy2(patch, OUT_DIR / patch.name)
