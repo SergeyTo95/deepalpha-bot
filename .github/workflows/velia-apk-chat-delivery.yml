@@ -1,0 +1,32 @@
+name: VELIA APK Chat Delivery
+
+on:
+  push:
+    branches:
+      - ops/apk-chat-delivery-0121
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download exact APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 4 \
+            "https://github.com/SergeyTo95/deepalpha-bot/releases/download/velia-0.12.1-9e1caad/VELIA-0.12.1.apk" \
+            -o VELIA-0.12.1.apk
+          echo "b858f3fca0ad2e95c58fcb0953421693aa0b0bf8909fb7fd7850a6a4a5c99bdb  VELIA-0.12.1.apk" | sha256sum -c -
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VELIA-0.12.1-apk
+          path: VELIA-0.12.1.apk
+          if-no-files-found: error
+          retention-days: 2
