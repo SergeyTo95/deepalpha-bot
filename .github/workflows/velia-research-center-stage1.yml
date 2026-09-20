@@ -65,7 +65,7 @@ jobs:
           assert 'ALLOWED_ENDPOINTS' in literature
           assert 'allow_redirects=False' in literature
           assert 'arbitrary_url_fetch": False' in literature
-          assert 'QUALITY_VERSION = "v2"' in search_quality
+          assert 'QUALITY_VERSION = "v3"' in search_quality
           assert 'rank_relevant' in search_quality
           assert 'scholarly_query_planner' in search_quality
           assert 'VELIA_RESEARCH_REASONING_ENABLED", False' in reasoning
