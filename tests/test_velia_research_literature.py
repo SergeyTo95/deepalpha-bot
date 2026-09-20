@@ -340,3 +340,22 @@ def test_failed_quality_v2_search_does_not_fall_back_to_legacy_sources(postgres)
             (mission["id"], 28, search_quality.QUALITY_VERSION))
 
     assert literature.list_sources(28, mission["id"])["sources"] == []
+
+
+def test_relevance_gate_normalizes_simple_plural_variants():
+    rows = [{
+        "provider": "europe_pmc",
+        "title": "Pancreatic cancer biomarker validation",
+        "excerpt": "Biomarker performance for early detection.",
+        "venue": "Cancer Biomarkers",
+        "evidence_hint": "observational",
+        "citation_count": 5,
+        "doi": "10.1000/plural",
+    }]
+    result = search_quality.rank_relevant(
+        rows,
+        "pancreatic cancers biomarkers early detection",
+        "medicine",
+        10,
+    )
+    assert [row["doi"] for row in result] == ["10.1000/plural"]
