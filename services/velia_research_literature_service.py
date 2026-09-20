@@ -21,6 +21,7 @@ import requests
 from services import velia_project_service as projects
 from services import velia_research_center_service as center
 from services import velia_research_safety_service as safety
+from services import velia_research_search_quality_service as search_quality
 from services.velia_chat_service import _iso
 
 
@@ -69,6 +70,9 @@ def status() -> Dict[str, Any]:
         "max_results_per_search": MAX_RESULTS,
         "max_searches_per_mission": MAX_SEARCHES_PER_MISSION,
         "max_sources_per_mission": MAX_SOURCES_PER_MISSION,
+        "search_quality_version": search_quality.QUALITY_VERSION,
+        "llm_query_planning": True,
+        "deterministic_relevance_gate": True,
     }
 
 
@@ -121,7 +125,8 @@ def _provider_query(value: str) -> str:
 
 
 def _hash_query(value: str) -> str:
-    return hashlib.sha256(value.casefold().encode("utf-8")).hexdigest()
+    frozen = search_quality.QUALITY_VERSION + "|" + value.casefold()
+    return hashlib.sha256(frozen.encode("utf-8")).hexdigest()
 
 
 def _clean(value: Any, limit: int) -> str:
@@ -384,7 +389,9 @@ def live_discover(query: str, max_results: int = 12) -> Dict[str, Any]:
             errors.append(provider)
     if not rows and errors:
         raise projects.ProjectError("research_literature_unavailable", 502)
-    rows = _dedupe(rows, max_results)
+    rows = search_quality.rank_relevant(rows, provider_query, "general", max_results)
+    if not rows:
+        raise projects.ProjectError("research_literature_no_relevant_sources", 502)
     return {
         "query": provider_query,
         "query_hash": _hash_query(query),
@@ -392,6 +399,7 @@ def live_discover(query: str, max_results: int = 12) -> Dict[str, Any]:
         "partial": bool(errors),
         "provider_gaps": errors,
         "providers": providers,
+        "quality_version": search_quality.QUALITY_VERSION,
         "safety": decision,
         "sources": rows,
     }
@@ -521,6 +529,7 @@ def ensure_tables() -> None:
             status TEXT NOT NULL,
             safety_json TEXT NOT NULL,
             providers_json TEXT NOT NULL,
+            quality_version TEXT NOT NULL DEFAULT 'legacy',
             result_count INTEGER NOT NULL DEFAULT 0,
             error_code TEXT NULL,
             created_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -529,6 +538,7 @@ def ensure_tables() -> None:
             CHECK(status IN ('running','completed','failed')),
             FOREIGN KEY(mission_id,user_id)
                 REFERENCES velia_research_missions(mission_id,user_id) ON DELETE CASCADE)""")
+        cur.execute("ALTER TABLE velia_research_literature_queries ADD COLUMN IF NOT EXISTS quality_version TEXT NOT NULL DEFAULT 'legacy'")
         cur.execute("""CREATE TABLE IF NOT EXISTS velia_research_sources (
             source_id TEXT PRIMARY KEY,
             mission_id TEXT NOT NULL,
@@ -548,11 +558,13 @@ def ensure_tables() -> None:
             excerpt TEXT NOT NULL DEFAULT '',
             citation_count INTEGER NOT NULL DEFAULT 0,
             metadata_hash TEXT NOT NULL,
+            quality_version TEXT NOT NULL DEFAULT 'legacy',
             retrieved_at TIMESTAMP NOT NULL DEFAULT NOW(),
             UNIQUE(mission_id,user_id,query_hash,provider,external_id),
             FOREIGN KEY(mission_id,user_id,query_hash)
                 REFERENCES velia_research_literature_queries(mission_id,user_id,query_hash)
                 ON DELETE CASCADE)""")
+        cur.execute("ALTER TABLE velia_research_sources ADD COLUMN IF NOT EXISTS quality_version TEXT NOT NULL DEFAULT 'legacy'")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_velia_research_sources_mission ON velia_research_sources(mission_id,user_id,retrieved_at DESC)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_velia_research_sources_doi ON velia_research_sources(doi) WHERE doi <> ''")
 
@@ -572,6 +584,7 @@ def _row_source(row: Dict[str, Any]) -> Dict[str, Any]:
         "url": row["source_url"],
         "excerpt": row["excerpt"],
         "citation_count": row["citation_count"],
+        "quality_version": row.get("quality_version") or "legacy",
         "retrieved_at": _iso(row["retrieved_at"]),
     }
 
@@ -581,6 +594,24 @@ def _sources_for_query(cur, user_id: int, mission_id: str, query_hash: str) -> L
         WHERE mission_id=%s AND user_id=%s AND query_hash=%s
         ORDER BY ordinal ASC,source_id ASC""", (str(mission_id), int(user_id), query_hash))
     return [_row_source(row) for row in cur.fetchall()]
+
+
+def _completed_query_cache(
+    user_id: int,
+    mission_id: str,
+    query_hash: str,
+) -> Dict[str, Any] | None:
+    with projects.transaction() as cur:
+        cur.execute("""SELECT query_text,quality_version FROM velia_research_literature_queries
+            WHERE mission_id=%s AND user_id=%s AND query_hash=%s AND status='completed'""",
+            (str(mission_id), int(user_id), query_hash))
+        row = cur.fetchone()
+        if not row or row.get("quality_version") != search_quality.QUALITY_VERSION:
+            return None
+        return {
+            "query": row["query_text"],
+            "sources": _sources_for_query(cur, user_id, mission_id, query_hash),
+        }
 
 
 def _claim(user_id: int, mission_id: str, query: str, query_hash: str, decision: Dict[str, Any]) -> List[Dict[str, Any]] | None:
@@ -621,9 +652,12 @@ def _claim(user_id: int, mission_id: str, query: str, query_hash: str, decision:
         if int(cur.fetchone()["count"]) >= MAX_SOURCES_PER_MISSION:
             raise projects.ProjectError("literature_source_limit_exceeded", 429)
         cur.execute("""INSERT INTO velia_research_literature_queries(
-            mission_id,user_id,query_hash,query_text,status,safety_json,providers_json)
-            VALUES(%s,%s,%s,%s,'running',%s,'[]')""",
-            (str(mission_id), int(user_id), query_hash, query, _json(decision)))
+            mission_id,user_id,query_hash,query_text,status,safety_json,providers_json,quality_version)
+            VALUES(%s,%s,%s,%s,'running',%s,'[]',%s)""",
+            (
+                str(mission_id), int(user_id), query_hash, query, _json(decision),
+                search_quality.QUALITY_VERSION,
+            ))
     return None
 
 
@@ -651,14 +685,42 @@ def collect(user_id: int, mission_id: str, query: str = "", max_results: int = 1
     if decision["decision"] == "blocked":
         raise projects.ProjectError("research_safety_blocked", 403)
 
-    provider_query = _provider_query(query)
     query_hash = _hash_query(query)
+    completed_cache = _completed_query_cache(user_id, mission_id, query_hash)
+    if completed_cache is not None:
+        provider_query = str(completed_cache["query"])
+        return {
+            "query_hash": query_hash,
+            "query": provider_query,
+            "query_compacted": provider_query != query,
+            "query_model_planned": provider_query != _provider_query(query),
+            "quality_version": search_quality.QUALITY_VERSION,
+            "cached": True,
+            "partial": False,
+            "safety": decision,
+            "sources": completed_cache["sources"],
+        }
+
+    fallback_query = _provider_query(query)
+    plan = search_quality.plan_query(
+        full_intent=query,
+        domain=mission["domain"],
+        user_id=int(user_id),
+        mission_id=str(mission_id),
+        fallback_query=fallback_query,
+    )
+    provider_query = str(plan.get("query") or fallback_query)[:search_quality.MAX_CANONICAL_QUERY_CHARS]
+    provider_decision = safety.classify(provider_query, phase="literature")
+    if provider_decision["decision"] == "blocked":
+        raise projects.ProjectError("research_safety_blocked", 403)
     cached = _claim(user_id, mission_id, provider_query, query_hash, decision)
     if cached is not None:
         return {
             "query_hash": query_hash,
             "query": provider_query,
             "query_compacted": provider_query != query,
+            "query_model_planned": bool(plan.get("model_planned")),
+            "quality_version": search_quality.QUALITY_VERSION,
             "cached": True,
             "partial": False,
             "safety": decision,
@@ -681,9 +743,14 @@ def collect(user_id: int, mission_id: str, query: str = "", max_results: int = 1
         except ValueError:
             errors.append("crossref_unavailable")
 
-        rows = _dedupe(provider_rows, max_results)
+        rows = search_quality.rank_relevant(
+            provider_rows,
+            provider_query,
+            mission["domain"],
+            max_results,
+        )
         if not rows:
-            code = "research_literature_unavailable"
+            code = "research_literature_no_relevant_sources"
             _mark_failed(user_id, mission_id, query_hash, code)
             raise projects.ProjectError(code, 502)
 
@@ -712,15 +779,15 @@ def collect(user_id: int, mission_id: str, query: str = "", max_results: int = 1
                 cur.execute("""INSERT INTO velia_research_sources(
                     source_id,mission_id,user_id,query_hash,ordinal,provider,external_id,doi,title,
                     authors_json,published_year,venue,source_type,evidence_hint,source_url,excerpt,
-                    citation_count,metadata_hash,retrieved_at)
-                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    citation_count,metadata_hash,quality_version,retrieved_at)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT(mission_id,user_id,query_hash,provider,external_id) DO NOTHING""",
                     (
                         source_id, str(mission_id), int(user_id), query_hash, ordinal,
                         row["provider"], row["external_id"], row["doi"], row["title"],
                         _json(row["authors"]), row["published_year"], row["venue"], row["source_type"],
                         row["evidence_hint"], row["url"], row["excerpt"], row["citation_count"],
-                        metadata_hash, now,
+                        metadata_hash, search_quality.QUALITY_VERSION, now,
                     ))
             cur.execute("""UPDATE velia_research_literature_queries
                 SET status='completed',providers_json=%s,result_count=%s,error_code=NULL,updated_at=NOW()
@@ -735,6 +802,8 @@ def collect(user_id: int, mission_id: str, query: str = "", max_results: int = 1
                 "result_count": len(rows),
                 "partial": bool(errors),
                 "provider_gaps": errors,
+                "quality_version": search_quality.QUALITY_VERSION,
+                "query_model_planned": bool(plan.get("model_planned")),
                 "safety": decision,
             })
             saved = _sources_for_query(cur, user_id, mission_id, query_hash)
@@ -743,6 +812,8 @@ def collect(user_id: int, mission_id: str, query: str = "", max_results: int = 1
             "query_hash": query_hash,
             "query": provider_query,
             "query_compacted": provider_query != query,
+            "query_model_planned": bool(plan.get("model_planned")),
+            "quality_version": search_quality.QUALITY_VERSION,
             "cached": False,
             "partial": bool(errors),
             "provider_gaps": errors,
@@ -762,10 +833,22 @@ def list_sources(user_id: int, mission_id: str, offset: int = 0) -> Dict[str, An
     if offset < 0 or offset > MAX_SOURCES_PER_MISSION:
         raise projects.ProjectError("invalid_offset")
     with projects.transaction() as cur:
-        cur.execute("""SELECT * FROM velia_research_sources
-            WHERE mission_id=%s AND user_id=%s
+        cur.execute("""SELECT EXISTS(
+            SELECT 1 FROM velia_research_literature_queries
+            WHERE mission_id=%s AND user_id=%s AND quality_version=%s
+        ) AS has_quality""", (
+            str(mission_id), int(user_id), search_quality.QUALITY_VERSION,
+        ))
+        has_quality = bool(cur.fetchone()["has_quality"])
+        quality_clause = " AND quality_version=%s" if has_quality else ""
+        params = [str(mission_id), int(user_id)]
+        if has_quality:
+            params.append(search_quality.QUALITY_VERSION)
+        params.append(offset)
+        cur.execute(f"""SELECT * FROM velia_research_sources
+            WHERE mission_id=%s AND user_id=%s{quality_clause}
             ORDER BY retrieved_at DESC,ordinal ASC,source_id ASC
-            LIMIT 51 OFFSET %s""", (str(mission_id), int(user_id), offset))
+            LIMIT 51 OFFSET %s""", tuple(params))
         rows = list(cur.fetchall())
         return {
             "sources": [_row_source(row) for row in rows[:50]],
