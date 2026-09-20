@@ -1,3 +1,4 @@
+import hashlib
 import os
 import uuid
 
@@ -239,6 +240,7 @@ def test_search_quality_planner_translates_long_russian_intent(monkeypatch):
     )
     assert result["model_planned"] is True
     assert result["query"] == "pancreatic cancer early detection ctDNA biomarkers"
+    assert result["anchor_terms"] == ["pancreas"]
 
 
 def test_relevance_gate_rejects_unrelated_medical_and_materials_results():
@@ -251,6 +253,15 @@ def test_relevance_gate_rejects_unrelated_medical_and_materials_results():
             "evidence_hint": "observational",
             "citation_count": 25,
             "doi": "10.1000/relevant",
+        },
+        {
+            "provider": "crossref",
+            "title": "Magnetic Resonance Imaging (MRI) in high-risk patients for early breast cancer detection",
+            "excerpt": "MRI screening and early detection of breast cancer.",
+            "venue": "Breast Cancer",
+            "evidence_hint": "observational",
+            "citation_count": 30,
+            "doi": "10.1000/breast-mri",
         },
         {
             "provider": "crossref",
@@ -380,3 +391,61 @@ def test_planner_output_is_safety_checked_before_provider_calls(postgres, monkey
 
     with pytest.raises(projects.ProjectError, match="research_safety_blocked"):
         literature.collect(29, mission["id"], max_results=10)
+
+
+def test_medical_anchor_rejects_other_cancer_with_shared_modalities():
+    rows = [
+        {
+            "provider": "crossref",
+            "title": "Preoperative staging of pancreatic cancer with CT and MRI",
+            "excerpt": "Pancreatic tumor staging and resectability assessment.",
+            "venue": "European Journal of Cancer",
+            "evidence_hint": "observational",
+            "citation_count": 20,
+            "doi": "10.1000/pancreatic-imaging",
+        },
+        {
+            "provider": "crossref",
+            "title": "MRI screening for early breast cancer detection",
+            "excerpt": "High-risk breast cancer screening with magnetic resonance imaging.",
+            "venue": "Breast Cancer",
+            "evidence_hint": "observational",
+            "citation_count": 80,
+            "doi": "10.1000/breast-imaging",
+        },
+    ]
+    result = search_quality.rank_relevant(
+        rows,
+        "pancreatic cancer early detection MRI CT",
+        "medicine",
+        10,
+        anchor_terms=["pancreatic"],
+    )
+    assert [row["doi"] for row in result] == ["10.1000/pancreatic-imaging"]
+
+
+def test_medical_anchor_matches_pancreas_morphology():
+    rows = [{
+        "provider": "europe_pmc",
+        "title": "Cancer of the pancreas: imaging and diagnosis",
+        "excerpt": "Pancreas malignancy detection.",
+        "venue": "Oncology",
+        "evidence_hint": "observational",
+        "citation_count": 10,
+        "doi": "10.1000/pancreas-word",
+    }]
+    result = search_quality.rank_relevant(
+        rows,
+        "pancreatic cancer imaging",
+        "medicine",
+        10,
+        anchor_terms=["pancreatic"],
+    )
+    assert [row["doi"] for row in result] == ["10.1000/pancreas-word"]
+
+
+def test_quality_v3_query_hash_invalidates_v2_cache():
+    query = "Pancreatic cancer early detection"
+    old_hash = hashlib.sha256(("v2|" + query.casefold()).encode("utf-8")).hexdigest()
+    assert search_quality.QUALITY_VERSION == "v3"
+    assert literature._hash_query(query) != old_hash
