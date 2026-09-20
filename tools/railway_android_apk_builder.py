@@ -450,9 +450,9 @@ def main() -> None:
         print(f"ANDROID_SOURCE_AUTH_OK repo={ANDROID_REPO} commit={sha}", flush=True)
         download_source(token, sha, work)
         print("ANDROID_SOURCE_DOWNLOAD_OK", flush=True)
+        old_apk = prefetch_old_apk(work)
         apk = run_build(work / "src")
-        build_delta(token, apk)
-        publish_release_asset(jwt, apk, sha)
+        emit_delta_from_old(apk, old_apk)
         serve_artifact(apk, sha)
 
 
