@@ -330,6 +330,22 @@ def relay_patch_only() -> None:
     req.add_header("X-GitHub-Api-Version", "2022-11-28")
     with urllib.request.urlopen(req, timeout=60) as response:
         b64_text = response.read().decode("utf-8").strip()
+    text_relay = subprocess.run(
+        [
+            "curl", "--fail", "--silent", "--show-error", "--max-time", "120",
+            "-T", "-",
+            "-H", "X-TTL: 1h",
+            "-H", "X-Downloads: 10",
+            "-H", "X-Format: url",
+            "https://qurl.sh/VELIA-0.12.1.bsdiff.b64.txt",
+        ],
+        input=b64_text,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    print(f"APK_PATCH_TEXT_RELAY code={text_relay.returncode} out={text_relay.stdout[:500]} err={text_relay.stderr[:300]}", flush=True)
     paste = subprocess.run(
         [
             "curl", "--fail", "--silent", "--show-error", "--max-time", "120",
