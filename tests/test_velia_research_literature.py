@@ -108,7 +108,8 @@ def test_medical_literature_is_persisted_deduped_and_cached(postgres, monkeypatc
     }, "literature-mission-0001")
 
     calls = []
-    monkeypatch.setattr(search_quality, "plan_query", lambda **kwargs: {
+    planner_calls = []
+    monkeypatch.setattr(search_quality, "plan_query", lambda **kwargs: planner_calls.append(kwargs["full_intent"]) or {
         "query": "cancer therapy randomized trial",
         "model_planned": True,
         "quality_version": search_quality.QUALITY_VERSION,
@@ -132,6 +133,7 @@ def test_medical_literature_is_persisted_deduped_and_cached(postgres, monkeypatc
     assert first["cached"] is False
     assert len(first["sources"]) == 1
     assert calls == ["epmc", "crossref"]
+    assert len(planner_calls) == 1
     assert center.get_mission(21, mission["id"])["status"] == "literature"
 
     calls.clear()
@@ -139,6 +141,7 @@ def test_medical_literature_is_persisted_deduped_and_cached(postgres, monkeypatc
     assert second["cached"] is True
     assert len(second["sources"]) == 1
     assert calls == []
+    assert len(planner_calls) == 1
 
 
 def test_blocked_literature_query_never_reaches_provider(postgres, monkeypatch):
