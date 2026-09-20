@@ -43,7 +43,7 @@ jobs:
       - name: Focused Research Center tests
         run: python -m pytest -q tests/test_velia_research_center.py tests/test_velia_research_literature.py tests/test_velia_research_reasoning.py tests/test_velia_research_evidence_claims.py tests/test_velia_research_director.py tests/test_velia_research_report.py tests/test_velia_projects.py
       - name: Compile Research Center surface
-        run: python -m compileall -q services/velia_research_safety_service.py services/velia_research_center_service.py services/velia_research_literature_service.py services/velia_research_reasoning_service.py services/velia_research_evidence_claim_service.py services/velia_research_director_service.py services/velia_research_report_service.py run_velia_research_worker.py velia_research_routes.py velia_project_routes.py
+        run: python -m compileall -q services/velia_research_safety_service.py services/velia_research_center_service.py services/velia_research_literature_service.py services/velia_research_search_quality_service.py services/velia_research_reasoning_service.py services/velia_research_evidence_claim_service.py services/velia_research_director_service.py services/velia_research_report_service.py run_velia_research_worker.py velia_research_routes.py velia_project_routes.py
       - name: Safety boundary static assertions
         run: |
           python - <<'PY'
@@ -51,6 +51,7 @@ jobs:
           center = Path('services/velia_research_center_service.py').read_text()
           safety = Path('services/velia_research_safety_service.py').read_text()
           literature = Path('services/velia_research_literature_service.py').read_text()
+          search_quality = Path('services/velia_research_search_quality_service.py').read_text()
           reasoning = Path('services/velia_research_reasoning_service.py').read_text()
           director = Path('services/velia_research_director_service.py').read_text()
           pipeline = Path('services/velia_research_experiment_pipeline_service.py').read_text()
@@ -66,6 +67,9 @@ jobs:
           assert 'ALLOWED_ENDPOINTS' in literature
           assert 'allow_redirects=False' in literature
           assert 'arbitrary_url_fetch": False' in literature
+          assert 'QUALITY_VERSION = "v2"' in search_quality
+          assert 'rank_relevant' in search_quality
+          assert 'scholarly_query_planner' in search_quality
           assert 'VELIA_RESEARCH_REASONING_ENABLED", False' in reasoning
           assert 'source_text_is_untrusted": True' in reasoning
           assert 'VELIA_RESEARCH_DIRECTOR_ENABLED", False' in director
