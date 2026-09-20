@@ -310,7 +310,44 @@ def serve_artifact(apk: Path, sha: str) -> None:
     os.execvp("python3", ["python3", "-m", "http.server", port, "--directory", str(OUT_DIR)])
 
 
+
+def relay_only() -> None:
+    if os.environ.get("APK_RELAY_ONLY", "").strip() != "1":
+        return
+    src = os.environ["APK_RELAY_SOURCE"].strip()
+    expected = os.environ["APK_RELAY_SHA256"].strip().lower()
+    target = Path("/tmp/VELIA-0.12.1.apk")
+    subprocess.run(
+        ["curl", "--fail", "--location", "--silent", "--show-error", "--retry", "3", src, "-o", str(target)],
+        check=True,
+    )
+    actual = hashlib.sha256(target.read_bytes()).hexdigest()
+    if actual != expected:
+        raise RuntimeError(f"relay sha mismatch: {actual} != {expected}")
+    proc = subprocess.run(
+        [
+            "curl", "--fail", "--silent", "--show-error",
+            "-F", "reqtype=fileupload",
+            "-F", "time=1h",
+            "-F", f"fileToUpload=@{target}",
+            "https://litterbox.catbox.moe/resources/internals/api.php",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=True,
+    )
+    url = proc.stdout.strip()
+    print(f"APK_RELAY_URL {url}", flush=True)
+    print(f"APK_RELAY_SHA256 {actual}", flush=True)
+    port = os.environ.get("PORT", "8080")
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(target, OUT_DIR / target.name)
+    os.execvp("python3", ["python3", "-m", "http.server", port, "--directory", str(OUT_DIR)])
+
+
 def main() -> None:
+    relay_only()
     app_id = os.environ["VELIA_GITHUB_APP_ID"].strip()
     private_key = os.environ["VELIA_GITHUB_APP_PRIVATE_KEY"]
     sha = os.environ.get("ANDROID_SOURCE_SHA", DEFAULT_SHA).strip().lower()
