@@ -596,6 +596,24 @@ def _sources_for_query(cur, user_id: int, mission_id: str, query_hash: str) -> L
     return [_row_source(row) for row in cur.fetchall()]
 
 
+def _completed_query_cache(
+    user_id: int,
+    mission_id: str,
+    query_hash: str,
+) -> Dict[str, Any] | None:
+    with projects.transaction() as cur:
+        cur.execute("""SELECT query_text,quality_version FROM velia_research_literature_queries
+            WHERE mission_id=%s AND user_id=%s AND query_hash=%s AND status='completed'""",
+            (str(mission_id), int(user_id), query_hash))
+        row = cur.fetchone()
+        if not row or row.get("quality_version") != search_quality.QUALITY_VERSION:
+            return None
+        return {
+            "query": row["query_text"],
+            "sources": _sources_for_query(cur, user_id, mission_id, query_hash),
+        }
+
+
 def _claim(user_id: int, mission_id: str, query: str, query_hash: str, decision: Dict[str, Any]) -> List[Dict[str, Any]] | None:
     with projects.transaction(user_id) as cur:
         cur.execute("SELECT status FROM velia_research_missions WHERE mission_id=%s AND user_id=%s FOR UPDATE",
@@ -667,6 +685,22 @@ def collect(user_id: int, mission_id: str, query: str = "", max_results: int = 1
     if decision["decision"] == "blocked":
         raise projects.ProjectError("research_safety_blocked", 403)
 
+    query_hash = _hash_query(query)
+    completed_cache = _completed_query_cache(user_id, mission_id, query_hash)
+    if completed_cache is not None:
+        provider_query = str(completed_cache["query"])
+        return {
+            "query_hash": query_hash,
+            "query": provider_query,
+            "query_compacted": provider_query != query,
+            "query_model_planned": provider_query != _provider_query(query),
+            "quality_version": search_quality.QUALITY_VERSION,
+            "cached": True,
+            "partial": False,
+            "safety": decision,
+            "sources": completed_cache["sources"],
+        }
+
     fallback_query = _provider_query(query)
     plan = search_quality.plan_query(
         full_intent=query,
@@ -679,7 +713,6 @@ def collect(user_id: int, mission_id: str, query: str = "", max_results: int = 1
     provider_decision = safety.classify(provider_query, phase="literature")
     if provider_decision["decision"] == "blocked":
         raise projects.ProjectError("research_safety_blocked", 403)
-    query_hash = _hash_query(query)
     cached = _claim(user_id, mission_id, provider_query, query_hash, decision)
     if cached is not None:
         return {
