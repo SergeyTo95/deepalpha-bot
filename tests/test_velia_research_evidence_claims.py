@@ -49,6 +49,11 @@ def postgres(monkeypatch):
 
 
 def _seed_source(monkeypatch, user_id, mission_id):
+    monkeypatch.setattr(literature.search_quality, "plan_query", lambda **kwargs: {
+        "query": "prospective biomarker early detection",
+        "model_planned": True,
+        "quality_version": literature.search_quality.QUALITY_VERSION,
+    })
     monkeypatch.setattr(literature, "_europe_pmc", lambda query, limit: [{
         "provider": "europe_pmc",
         "external_id": "MED:777",
