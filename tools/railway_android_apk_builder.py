@@ -149,31 +149,30 @@ def run_build(source_dir: Path) -> Path:
 
 
 
-def emit_delta_from_artifact(app_jwt: str, apk: Path) -> None:
-    artifact_id = os.environ.get("ANDROID_DIFF_ARTIFACT_ID", "").strip()
-    if not artifact_id:
+def prefetch_old_apk(work: Path) -> Path | None:
+    url = os.environ.get("ANDROID_DIFF_OLD_URL", "").strip()
+    if not url:
+        return None
+    artifact_zip = work / "old-artifact.zip"
+    old_apk = work / "old.apk"
+    subprocess.run(
+        ["curl", "--fail", "--location", "--silent", "--show-error", "--retry", "3", url, "-o", str(artifact_zip)],
+        check=True,
+    )
+    subprocess.run(
+        ["unzip", "-p", str(artifact_zip), "app-debug.apk"],
+        stdout=old_apk.open("wb"),
+        check=True,
+    )
+    print(f"APK_DELTA_BASE_READY bytes={old_apk.stat().st_size}", flush=True)
+    return old_apk
+
+
+def emit_delta_from_old(apk: Path, old_apk: Path | None) -> None:
+    if old_apk is None:
         return
-    token = installation_token(app_jwt)
     with tempfile.TemporaryDirectory(prefix="velia-apk-delta-") as temp:
-        work = Path(temp)
-        artifact_zip = work / "old.zip"
-        old_apk = work / "old.apk"
-        patch = work / "current.bsdiff"
-        subprocess.run(
-            [
-                "curl", "--fail", "--location", "--silent", "--show-error", "--retry", "3",
-                "-H", f"Authorization: Bearer {token}",
-                "-H", "Accept: application/vnd.github+json",
-                f"https://api.github.com/repos/{ANDROID_REPO}/actions/artifacts/{artifact_id}/zip",
-                "-o", str(artifact_zip),
-            ],
-            check=True,
-        )
-        subprocess.run(
-            ["unzip", "-p", str(artifact_zip), "app-debug.apk"],
-            stdout=old_apk.open("wb"),
-            check=True,
-        )
+        patch = Path(temp) / "current.bsdiff"
         subprocess.run(["bsdiff", str(old_apk), str(apk), str(patch)], check=True)
         patch_bytes = patch.read_bytes()
         patch_sha = hashlib.sha256(patch_bytes).hexdigest()
@@ -277,8 +276,9 @@ def main() -> None:
         print(f"ANDROID_SOURCE_AUTH_OK repo={ANDROID_REPO} commit={sha}", flush=True)
         download_source(token, sha, work)
         print("ANDROID_SOURCE_DOWNLOAD_OK", flush=True)
+        old_apk = prefetch_old_apk(work)
         apk = run_build(work / "src")
-        emit_delta_from_artifact(jwt, apk)
+        emit_delta_from_old(apk, old_apk)
         publish_release_asset(jwt, apk, sha)
         serve_artifact(apk, sha)
 
