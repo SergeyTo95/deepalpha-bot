@@ -7,6 +7,7 @@ from services import velia_chat_service as chat
 from services import velia_project_service as projects
 from services import velia_research_center_service as center
 from services import velia_research_literature_service as literature
+from services import velia_research_search_quality_service as search_quality
 
 
 def test_literature_defaults_fail_closed(monkeypatch):
@@ -107,6 +108,11 @@ def test_medical_literature_is_persisted_deduped_and_cached(postgres, monkeypatc
     }, "literature-mission-0001")
 
     calls = []
+    monkeypatch.setattr(search_quality, "plan_query", lambda **kwargs: {
+        "query": "cancer therapy randomized trial",
+        "model_planned": True,
+        "quality_version": search_quality.QUALITY_VERSION,
+    })
     monkeypatch.setattr(literature, "_europe_pmc", lambda query, limit: calls.append("epmc") or [{
         "provider": "europe_pmc", "external_id": "MED:1", "doi": "10.1000/shared",
         "title": "Randomized controlled trial of therapy", "authors": ["A"],
@@ -175,6 +181,11 @@ def test_long_research_goal_is_compacted_before_scholarly_providers(postgres, mo
     }, "literature-long-goal-0001")
 
     seen = []
+    monkeypatch.setattr(search_quality, "plan_query", lambda **kwargs: {
+        "query": "pancreatic cancer early detection",
+        "model_planned": True,
+        "quality_version": search_quality.QUALITY_VERSION,
+    })
     monkeypatch.setattr(literature, "_europe_pmc", lambda query, limit: seen.append(query) or [])
     monkeypatch.setattr(literature, "_crossref", lambda query, limit: seen.append(query) or [{
         "provider": "crossref", "external_id": "10.1000/pancreas", "doi": "10.1000/pancreas",
@@ -187,8 +198,9 @@ def test_long_research_goal_is_compacted_before_scholarly_providers(postgres, mo
     result = literature.collect(25, mission["id"], max_results=10)
 
     assert result["query_compacted"] is True
-    assert result["query"].startswith("Исследуй раннее выявление рака поджелудочной железы")
-    assert len(result["query"]) <= literature.MAX_PROVIDER_QUERY_CHARS
+    assert result["query_model_planned"] is True
+    assert result["query"] == "pancreatic cancer early detection"
+    assert len(result["query"]) <= search_quality.MAX_CANONICAL_QUERY_CHARS
     assert len(result["sources"]) == 1
     assert seen and all(len(query) <= literature.MAX_PROVIDER_QUERY_CHARS for query in seen)
 
@@ -206,3 +218,96 @@ def test_long_manual_query_is_safety_checked_before_compaction(postgres, monkeyp
 
     with pytest.raises(projects.ProjectError, match="research_safety_blocked"):
         literature.collect(26, mission["id"], dangerous)
+
+
+def test_search_quality_planner_translates_long_russian_intent(monkeypatch):
+    monkeypatch.setattr(search_quality.llm_service, "resolve_text_provider", lambda feature: "kimi")
+    monkeypatch.setattr(
+        search_quality.llm_service,
+        "_call_gemini",
+        lambda *args, **kwargs: '{"query":"pancreatic cancer early detection ctDNA biomarkers"}',
+    )
+    result = search_quality.plan_query(
+        full_intent="Исследуй раннее выявление рака поджелудочной железы и сравни ctDNA с визуализацией.",
+        domain="medicine",
+        user_id=1,
+        mission_id="mission-1",
+        fallback_query="Исследуй раннее выявление рака поджелудочной железы",
+    )
+    assert result["model_planned"] is True
+    assert result["query"] == "pancreatic cancer early detection ctDNA biomarkers"
+
+
+def test_relevance_gate_rejects_unrelated_medical_and_materials_results():
+    rows = [
+        {
+            "provider": "europe_pmc",
+            "title": "Early detection of pancreatic cancer using ctDNA biomarkers",
+            "excerpt": "Liquid biopsy biomarkers for pancreatic cancer detection.",
+            "venue": "Cancer Journal",
+            "evidence_hint": "observational",
+            "citation_count": 25,
+            "doi": "10.1000/relevant",
+        },
+        {
+            "provider": "crossref",
+            "title": "Aminoglycoside readthrough therapy in Kindler syndrome",
+            "excerpt": "Rare genetic skin disease.",
+            "venue": "Medical Conference",
+            "evidence_hint": "unknown",
+            "citation_count": 2,
+            "doi": "10.1000/kindler",
+        },
+        {
+            "provider": "crossref",
+            "title": "TiO2 kaolinite composite for photocatalytic degradation",
+            "excerpt": "Spectral sensitivity of materials.",
+            "venue": "Sorption Processes",
+            "evidence_hint": "unknown",
+            "citation_count": 8,
+            "doi": "10.1000/tio2",
+        },
+    ]
+    result = search_quality.rank_relevant(
+        rows,
+        "pancreatic cancer early detection ctDNA biomarkers",
+        "medicine",
+        10,
+    )
+    assert [row["doi"] for row in result] == ["10.1000/relevant"]
+
+
+def test_quality_v2_sources_hide_legacy_sources_from_mission_list(postgres, monkeypatch):
+    mission = center.create_mission(27, {
+        "goal": "Pancreatic cancer early detection biomarkers",
+        "title": "Pancreatic cancer",
+    }, "literature-quality-v2-0001")
+    monkeypatch.setattr(literature, "_europe_pmc", lambda query, limit: [{
+        "provider": "europe_pmc", "external_id": "MED:quality", "doi": "10.1000/quality",
+        "title": "Pancreatic cancer early detection biomarkers", "authors": [],
+        "published_year": 2026, "venue": "Cancer Journal", "source_type": "journal article",
+        "evidence_hint": "observational", "url": "https://europepmc.org/article/MED/quality",
+        "excerpt": "Pancreatic cancer biomarkers for early detection.", "citation_count": 12,
+    }])
+    monkeypatch.setattr(literature, "_crossref", lambda query, limit: [])
+    current = literature.collect(27, mission["id"], max_results=10)
+    assert current["quality_version"] == search_quality.QUALITY_VERSION
+
+    with projects.transaction() as cur:
+        legacy_hash = "legacy-hash"
+        cur.execute("""INSERT INTO velia_research_literature_queries(
+            mission_id,user_id,query_hash,query_text,status,safety_json,providers_json,
+            quality_version,result_count)
+            VALUES(%s,%s,%s,%s,'completed','{}','["crossref"]','legacy',1)""",
+            (mission["id"], 27, legacy_hash, "unrelated"))
+        cur.execute("""INSERT INTO velia_research_sources(
+            source_id,mission_id,user_id,query_hash,ordinal,provider,external_id,doi,title,
+            authors_json,published_year,venue,source_type,evidence_hint,source_url,excerpt,
+            citation_count,metadata_hash,quality_version)
+            VALUES(%s,%s,%s,%s,0,'crossref','legacy','10.1000/legacy',
+                   'Unrelated TiO2 material','[]',2021,'Materials','journal-article',
+                   'unknown','https://doi.org/10.1000/legacy','materials',0,'legacy-meta','legacy')""",
+            ("legacy-source", mission["id"], 27, legacy_hash))
+
+    visible = literature.list_sources(27, mission["id"])["sources"]
+    assert [row["doi"] for row in visible] == ["10.1000/quality"]
