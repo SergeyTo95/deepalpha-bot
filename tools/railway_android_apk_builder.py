@@ -343,9 +343,26 @@ def relay_only() -> None:
             ],
         ),
         (
-            "fileio",
+            "bashupload",
             [
                 "curl", "--fail", "--silent", "--show-error",
+                "-H", "X-Expiration-Seconds: 3600",
+                "-T", str(target),
+                "https://bashupload.app/VELIA-0.12.1.apk",
+            ],
+        ),
+        (
+            "0x0",
+            [
+                "curl", "--fail", "--silent", "--show-error",
+                "-F", f"file=@{target}",
+                "https://0x0.st",
+            ],
+        ),
+        (
+            "fileio",
+            [
+                "curl", "--fail", "--location", "--silent", "--show-error",
                 "-F", f"file=@{target}",
                 "https://file.io",
             ],
@@ -370,8 +387,11 @@ def relay_only() -> None:
             if file_id:
                 url = f"https://pixeldrain.com/api/file/{file_id}?download"
         elif name == "fileio":
-            payload = json.loads(raw)
-            url = payload.get("link", "") or payload.get("url", "")
+            try:
+                payload = json.loads(raw)
+                url = payload.get("link", "") or payload.get("url", "")
+            except Exception:
+                url = ""
         else:
             url = raw
         if url.startswith("http"):
