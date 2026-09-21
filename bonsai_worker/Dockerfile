@@ -9,9 +9,9 @@ RUN curl -fL --retry 3 --max-time 300 \
     && tar --no-same-owner -xzf runtime.tar.gz --strip-components=1 \
     && rm runtime.tar.gz
 RUN curl -fL --retry 3 --max-time 1800 \
-    https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/6ed5e12bf84b7a63069882c91dd9e9218647d17b/Ternary-Bonsai-2-27B-PTQ1_0.gguf \
+    https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/6ed5e12bf84b7a63069882c91dd9e9218647d17b/Ternary-Bonsai-2-27B-PQ2_0.gguf \
     -o model.gguf \
-    && echo '53107f530aa52eb00912263ab1ee29bd199261c87cd7b4ad4ca1318c1fe33ee3  model.gguf' | sha256sum -c -
+    && echo '3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1  model.gguf' | sha256sum -c -
 COPY start.py /opt/bonsai/start.py
 COPY probe.py /opt/bonsai/probe.py
 ENV PORT=8080 PYTHONUNBUFFERED=1

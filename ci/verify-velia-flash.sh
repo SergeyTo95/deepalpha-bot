@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-# Disposable PostgreSQL; no production database or provider credentials.
+# Disposable PostgreSQL; never connects to the production database.
 initdb -D /tmp/flash-postgres -A trust --no-locale > /tmp/flash-postgres-init.log
 pg_ctl -D /tmp/flash-postgres -l /tmp/flash-postgres.log \
   -o "-h 127.0.0.1 -p 55432 -k /tmp" -w start
@@ -15,3 +15,6 @@ export VELIA_FLASH_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/postg
   tests/test_velia_attachment_review_regressions.py \
   tests/test_velia_attachment_final_privacy_routing.py \
   tests/test_velia_attachment_final_review_regressions.py
+if [[ "${VELIA_FLASH_RUN_REAL_PROBE:-0}" == "1" ]]; then
+  PYTHONPATH=/app /opt/tests/bin/python /app/ci/probe-velia-flash.py
+fi
