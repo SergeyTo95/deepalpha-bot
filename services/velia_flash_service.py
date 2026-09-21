@@ -146,6 +146,8 @@ def generate(messages, *, request_id="", on_delta=None):
                    "chat_template_kwargs": {"enable_thinking": False},
                    "thinking_budget_tokens": 0,
                    "stream": bool(callable(on_delta))}
+        if callable(on_delta):
+            payload["stream_options"] = {"include_usage": True}
         if not callable(on_delta):
             data = post("/v1/chat/completions", payload)
             choice = (data.get("choices") or [{}])[0]
@@ -169,9 +171,11 @@ def generate(messages, *, request_id="", on_delta=None):
                 raise ValueError("flash_provider_error")
             pieces = []
             usage = {}
-            finish_reason = "stop"
+            finish_reason = None
             streamed_bytes = 0
-            for raw_line in response.iter_lines(decode_unicode=True):
+            pending = ""
+            forbidden = ("<think>", "</think>")
+            for raw_line in response.iter_lines(chunk_size=1, decode_unicode=True):
                 if time.monotonic() - started >= timeout:
                     raise requests.Timeout()
                 if not raw_line:
@@ -188,6 +192,8 @@ def generate(messages, *, request_id="", on_delta=None):
                 if streamed_bytes > 2_000_000:
                     raise ValueError("flash_response_too_large")
                 event = json.loads(body)
+                if not isinstance(event, dict) or event.get("error"):
+                    raise ValueError("flash_invalid_response")
                 if isinstance(event.get("usage"), dict):
                     usage = event["usage"]
                 choice = (event.get("choices") or [{}])[0]
@@ -197,12 +203,24 @@ def generate(messages, *, request_id="", on_delta=None):
                     piece = choice.get("text")
                 if isinstance(piece, str) and piece:
                     pieces.append(piece)
-                    on_delta(piece)
+                    # A tag can span SSE chunks. Keep only a possible tag prefix
+                    # until the next chunk, so private reasoning never reaches UI.
+                    pending += piece
+                    if any(tag in pending for tag in forbidden):
+                        raise ValueError("flash_invalid_response")
+                    held = max([0] + [size for tag in forbidden
+                        for size in range(1, len(tag)) if pending.endswith(tag[:size])])
+                    ready = pending[:-held] if held else pending
+                    pending = pending[-held:] if held else ""
+                    if ready:
+                        on_delta(ready)
                 if choice.get("finish_reason"):
                     finish_reason = str(choice["finish_reason"])
             text = "".join(pieces).strip()
-            if not text or "<think>" in text:
+            if not text or finish_reason not in {"stop", "length"}:
                 return error("flash_invalid_response", request_id)
+            if pending:
+                on_delta(pending)
             return {"ok": True, "text": text, "provider": PROVIDER,
                     "model": MODEL, "request_id": request_id, "usage": usage,
                     "estimated_cost_usd": 0.0, "fallback_used": False,

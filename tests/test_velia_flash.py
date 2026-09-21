@@ -90,7 +90,7 @@ def test_real_template_budget_and_free_result(enabled, monkeypatch):
 
 
 class StreamResponse(Response):
-    def iter_lines(self, decode_unicode=False):
+    def iter_lines(self, chunk_size=512, decode_unicode=False):
         events = [
             'data: {"choices":[{"delta":{"content":"Hel"},"finish_reason":null}]}',
             'data: {"choices":[{"delta":{"content":"lo"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}',
@@ -121,6 +121,30 @@ def test_flash_stream_forwards_incremental_deltas(enabled, monkeypatch):
     assert deltas == ["Hel", "lo"]
     assert result["usage"]["total_tokens"] == 5
     assert session.calls[-1][1]["json"]["thinking_budget_tokens"] == 0
+    assert session.calls[-1][1]["json"]["stream_options"]["include_usage"] is True
+
+
+@pytest.mark.parametrize("events", [
+    ['data: {"choices":[{"delta":{"content":"Incomplete"},"finish_reason":null}]}'],
+    ['data: {"choices":[{"delta":{"content":"Incomplete"},"finish_reason":null}]}',
+     'data: [DONE]'],
+    ['data: {"error":{"message":"inference failed"}}'],
+])
+def test_flash_stream_does_not_accept_truncated_or_failed_response(enabled, monkeypatch, events):
+    monkeypatch.setattr(StreamResponse, "iter_lines", lambda *a, **k: iter(events))
+    monkeypatch.setattr(flash.requests, "Session", StreamSession)
+    assert not flash.generate([{"role": "user", "content": "hi"}], on_delta=lambda _: None)["ok"]
+
+
+def test_flash_stream_blocks_reasoning_tag_split_across_chunks(enabled, monkeypatch):
+    events = ['data: ' + json.dumps({"choices": [{"delta": {"content": piece}}]})
+              for piece in ["<th", "ink>", "private reasoning"]]
+    monkeypatch.setattr(StreamResponse, "iter_lines", lambda *a, **k: iter(events))
+    monkeypatch.setattr(flash.requests, "Session", StreamSession)
+    deltas = []
+    result = flash.generate([{"role": "user", "content": "hi"}], on_delta=deltas.append)
+    assert not result["ok"]
+    assert not deltas
 
 
 def test_provider_failure_does_not_retry_or_fallback(enabled, monkeypatch):

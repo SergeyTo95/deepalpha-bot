@@ -26,7 +26,8 @@ if __name__ == "__main__":
             "-t", number("VELIA_FLASH_CPU_THREADS", 4, 1, 8),
             "-tb", number("VELIA_FLASH_CPU_THREADS", 4, 1, 8),
             "-b", "256", "-ub", "128", "-n", "512", "--jinja",
-            "--reasoning-budget", "0", "--reasoning-format", "none",
+            "--reasoning", "off", "--reasoning-budget", "0",
+            "--reasoning-format", "none", "--cache-ram", "0",
             "--chat-template-kwargs", '{"enable_thinking": false}',
             "--no-webui"]
     os.execv(args[0], args)

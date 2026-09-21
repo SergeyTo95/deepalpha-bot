@@ -13,5 +13,6 @@ RUN curl -fL --retry 3 --max-time 1800 \
     -o model.gguf \
     && echo '53107f530aa52eb00912263ab1ee29bd199261c87cd7b4ad4ca1318c1fe33ee3  model.gguf' | sha256sum -c -
 COPY start.py /opt/bonsai/start.py
+COPY probe.py /opt/bonsai/probe.py
 ENV PORT=8080 PYTHONUNBUFFERED=1
 CMD ["python3", "/opt/bonsai/start.py"]
