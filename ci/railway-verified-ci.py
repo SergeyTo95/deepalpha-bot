@@ -85,7 +85,7 @@ def test_group(group, sha):
     if os.geteuid() == 0:
         raise RuntimeError('PostgreSQL validation must run as an unprivileged build user')
     data = tempfile.mkdtemp(prefix='velia-ci-pg-')
-    run(f'initdb -D {data} -A trust --no-locale > {data}/../velia-initdb.log', env)
+    run(f'initdb -D {data} -A trust --no-locale --encoding=UTF8 > {data}/../velia-initdb.log', env)
     started = False
     results = []
     try:
