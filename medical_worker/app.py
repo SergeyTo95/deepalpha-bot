@@ -220,6 +220,8 @@ async def create_app() -> web.Application:
             "service": "velia-medical-worker",
             "provider": "radar",
             "upstream_commit": UPSTREAM_COMMIT,
+            "upstream_archive_sha256": readiness["upstream_archive_sha256"],
+            "source_accepted": readiness["source_accepted"],
             "weights_license": "CC-BY-NC-SA-4.0",
             "commercial_use_allowed_by_public_weights": False,
             "noncommercial_license_acknowledged": license_ack,

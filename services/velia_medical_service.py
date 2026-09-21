@@ -16,7 +16,8 @@ from typing import Any, Dict, Optional
 from services import velia_project_service as projects
 
 
-RADAR_UPSTREAM_COMMIT = "9319f36642b6f3f4708c8e5c8844ab114d6e7b24"
+RADAR_UPSTREAM_COMMIT = None
+RADAR_UPSTREAM_ARCHIVE_SHA256 = "777dbdccb1b925ef84e08578749fe6ff12cead60cd2f7245447e7ee22d1a854a"
 RADAR_CODE_LICENSE = "Apache-2.0"
 RADAR_WEIGHTS_LICENSE = "CC-BY-NC-SA-4.0"
 ALLOWED_MODALITIES = {"ct"}
@@ -91,6 +92,7 @@ def status() -> Dict[str, Any]:
         "unsupported_by_radar": ["xray", "mri", "ultrasound", "laboratory_results"],
         "radar": {
             "upstream_commit": RADAR_UPSTREAM_COMMIT,
+            "upstream_archive_sha256": RADAR_UPSTREAM_ARCHIVE_SHA256,
             "code_license": RADAR_CODE_LICENSE,
             "weights_license": RADAR_WEIGHTS_LICENSE,
             "commercial_use_allowed_by_public_weights": False,

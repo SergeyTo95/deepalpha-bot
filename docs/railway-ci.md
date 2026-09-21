@@ -35,3 +35,14 @@ deployment until the new release succeeds. A failed build never replaces it.
 
 This removes the dependency on paid/unlocked GitHub Actions. Railway resource
 usage, including builds and the Bonsai worker, remains billable to Railway.
+
+The first complete build exposed a separate upstream failure: the RADAR GitHub
+repository returned 404. The medical recipe now retrieves the authors' official
+Zenodo v3 source archive, DOI `10.5281/zenodo.21504519`, verified against SHA-256
+`777dbdccb1b925ef84e08578749fe6ff12cead60cd2f7245447e7ee22d1a854a`.
+Its embedded code license is Apache-2.0; the separate model weight restrictions
+remain unchanged. The archive cannot prove the former Git commit, so metadata
+reports a null commit and the actual archive digest. This source needs new
+inference acceptance: `VELIA_MEDICAL_ACCEPTED_SOURCE_SHA256` stays unset and
+readiness remains false even with weights present. Do not set it as part of the
+Flash rollout. The authenticated health and privacy/licensing tests remain gates.
