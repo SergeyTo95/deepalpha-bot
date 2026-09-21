@@ -30,4 +30,6 @@ if __name__ == "__main__":
             "--reasoning-format", "deepseek", "--cache-ram", "0",
             "--chat-template-kwargs", '{"enable_thinking": false}',
             "--no-webui"]
+    if os.getenv("VELIA_FLASH_REPACK", "true").lower() in {"false", "0", "no"}:
+        args.append("--no-repack")
     os.execv(args[0], args)

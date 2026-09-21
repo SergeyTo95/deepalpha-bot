@@ -22,6 +22,11 @@ def main():
     try:
         for _ in range(150):
             if server.poll() is not None:
+                events = Path("/sys/fs/cgroup/memory.events")
+                print("BONSAI_PROBE_EXIT " + json.dumps({
+                    "returncode": server.returncode,
+                    "memory_events": events.read_text() if events.exists() else "unavailable",
+                }), flush=True)
                 raise RuntimeError("worker stopped before health check")
             try:
                 with opener.open(base + "/health", timeout=2) as response:
