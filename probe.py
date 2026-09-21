@@ -16,6 +16,7 @@ def main():
     os.environ["PORT"] = "8080"
     server = subprocess.Popen([sys.executable, str(Path(__file__).with_name("start.py"))])
     base = "http://127.0.0.1:8080"
+    print("BONSAI_PROBE_FORMAT PQ2_0 threads=" + os.environ.get("VELIA_FLASH_CPU_THREADS", "4"), flush=True)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     deadline = threading.Timer(900, server.kill)
     deadline.start()
