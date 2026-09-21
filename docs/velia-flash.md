@@ -27,6 +27,17 @@ Worker:
 - `VELIA_FLASH_CPU_THREADS=4`
 - `VELIA_FLASH_CONTEXT_TOKENS=4096`
 
+The worker explicitly disables reasoning and the optional RAM prompt cache.
+Before enabling Flash, run `python3 /opt/bonsai/probe.py` as a one-shot Railway
+start command with restart policy `NEVER`. It checks three synthetic completions,
+prints latency and token usage, and always terminates the model afterward. It
+uses an ephemeral service key, accepts no user traffic and needs no public domain.
+An HTTP health check alone does not prove that inference is usable.
+
+The isolated PostgreSQL integration suite can also be run with
+`docker build -f ci/Dockerfile.velia-flash-verify -t velia-flash-verify .`
+and `docker run --rm velia-flash-verify`. It creates its own temporary database.
+
 Backend:
 - `VELIA_FLASH_ENABLED=false` until real inference acceptance passes.
 - `VELIA_FLASH_BASE_URL=http://<worker-private-domain>:8080`
