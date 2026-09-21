@@ -1,0 +1,58 @@
+{
+  "deepalpha-gram-access.yml": {
+    "group": "backend",
+    "steps": [
+      3,
+      4,
+      5
+    ],
+    "sha256": "1b5e49a7e19794009a490eba7d822688c05da992545ce0c8ad31ce9b01c1ff5f"
+  },
+  "deepalpha-manager-payouts.yml": {
+    "group": "backend",
+    "steps": [
+      3,
+      4
+    ],
+    "sha256": "bda7f98978defd7fd7057f5c5761e7953274abb1880b306c4df32d2fd39fe86a"
+  },
+  "velia-flash.yml": {
+    "group": "flash",
+    "steps": [
+      3
+    ],
+    "sha256": "bebe6ea806929d2b5dabc78621326ad4065b4d85ec8f5e59cd241bb97a8e92cd"
+  },
+  "velia-medical-radar.yml": {
+    "group": "backend",
+    "steps": [
+      3,
+      4,
+      5
+    ],
+    "sha256": "1bd24f1a3729e1bc418b3bf7410449452172e7ebd9b2fdebc30765b5613eaa04"
+  },
+  "velia-projects-deepalpha.yml": {
+    "group": "backend",
+    "steps": [
+      3,
+      4
+    ],
+    "sha256": "2ce2abf55d09bb30f16ff84be6a287d4af8790032b5883fa84796f512add613d"
+  },
+  "velia-research-center-stage1.yml": {
+    "group": "backend",
+    "steps": [
+      3,
+      4
+    ],
+    "sha256": "5826436fb23791e2e218e2a7f4f7bf5414289eb0b9f9df18987e7d3173684b21"
+  },
+  "velia-software-factory-stage8-final-hardening.yml": {
+    "group": "backend",
+    "steps": [
+      4
+    ],
+    "sha256": "78000b16e8f68c1924afca91f2bdcb1fb97374acfe00de0f2d4660afe6a1b85c"
+  }
+}
