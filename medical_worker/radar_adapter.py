@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 
-UPSTREAM_COMMIT = "9319f36642b6f3f4708c8e5c8844ab114d6e7b24"
+# The official archive does not attest a Git commit. Preserve that distinction.
+UPSTREAM_COMMIT = None
+UPSTREAM_ARCHIVE_SHA256 = "777dbdccb1b925ef84e08578749fe6ff12cead60cd2f7245447e7ee22d1a854a"
 SCORE_SEMANTICS = "model_score_not_calibrated_probability"
 
 
@@ -41,9 +43,12 @@ class RadarAdapter:
             self.model_root / "bert-base-uncased",
         ]
         missing = [str(path) for path in required if not path.exists()]
+        source_accepted = os.getenv('VELIA_MEDICAL_ACCEPTED_SOURCE_SHA256', '') == UPSTREAM_ARCHIVE_SHA256
         return {
-            "ready": not missing,
+            "ready": not missing and source_accepted,
             "missing": missing,
+            "source_accepted": source_accepted,
+            "upstream_archive_sha256": UPSTREAM_ARCHIVE_SHA256,
             "upstream_commit": UPSTREAM_COMMIT,
         }
 
@@ -174,6 +179,7 @@ class RadarAdapter:
             "model": "RADAR",
             "upstream_commit": UPSTREAM_COMMIT,
             "score_semantics": SCORE_SEMANTICS,
+            "upstream_archive_sha256": UPSTREAM_ARCHIVE_SHA256,
             "calibrated_probability": False,
             "diagnosis": False,
             "findings": findings,

@@ -90,6 +90,21 @@ def test_radar_adapter_parses_english_labels():
     assert finding == "Hepatocellular carcinoma"
 
 
+def test_archived_source_requires_separate_acceptance(tmp_path, monkeypatch):
+    module = _load_worker_module('radar_adapter')
+    monkeypatch.delenv('VELIA_MEDICAL_ACCEPTED_SOURCE_SHA256', raising=False)
+    adapter = module.RadarAdapter(upstream_root=str(tmp_path), model_root=str(tmp_path))
+    assert adapter.readiness()['source_accepted'] is False
+    assert adapter.readiness()['ready'] is False
+    assert adapter.readiness()['upstream_commit'] is None
+
+
+def test_source_archive_rejects_wrong_checksum(tmp_path):
+    module = _load_worker_module('upstream_source')
+    with pytest.raises(RuntimeError, match='checksum mismatch'):
+        module.unpack_source(b'untrusted archive', tmp_path)
+
+
 def test_case_requires_explicit_supported_scope(monkeypatch):
     monkeypatch.setenv("VELIA_MEDICAL_ENABLED", "true")
     monkeypatch.setenv("VELIA_MEDICAL_PROVIDER", "radar")

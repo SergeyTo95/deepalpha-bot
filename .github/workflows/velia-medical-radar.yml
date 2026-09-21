@@ -54,7 +54,8 @@ jobs:
           assert 'eval(' not in worker
           assert 'exec(' not in worker
           assert 'subprocess' not in worker
-          assert '9319f36642b6f3f4708c8e5c8844ab114d6e7b24' in adapter
+          assert '777dbdccb1b925ef84e08578749fe6ff12cead60cd2f7245447e7ee22d1a854a' in adapter
+          assert 'VELIA_MEDICAL_ACCEPTED_SOURCE_SHA256' in adapter
           assert '0.0 <= score <= 1.0' in adapter
           assert 'HF_HUB_OFFLINE' in adapter
           assert 'TRANSFORMERS_OFFLINE' in adapter
