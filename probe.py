@@ -16,7 +16,6 @@ def main():
     os.environ["PORT"] = "8080"
     server = subprocess.Popen([sys.executable, str(Path(__file__).with_name("start.py"))])
     base = "http://127.0.0.1:8080"
-    print("BONSAI_PROBE_FORMAT PQ2_0 threads=" + os.environ.get("VELIA_FLASH_CPU_THREADS", "4"), flush=True)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     deadline = threading.Timer(900, server.kill)
     deadline.start()
@@ -52,6 +51,20 @@ def main():
                     "Content-Type": "application/json",
                     "Authorization": "Bearer " + os.environ["VELIA_FLASH_API_KEY"],
                 })
+            # Exercise the backend's actual context-budget API contract too.
+            def post(path, data):
+                req = urllib.request.Request(base + path,
+                    data=json.dumps(data).encode(), headers=dict(request.headers))
+                with opener.open(req, timeout=15) as response:
+                    return json.load(response)
+            rendered = post("/apply-template", {
+                "messages": payload["messages"],
+                "chat_template_kwargs": {"enable_thinking": False},
+            })
+            tokens = post("/tokenize", {"content": rendered["prompt"], "add_special": True})
+            if not isinstance(tokens.get("tokens"), list):
+                raise RuntimeError("tokenizer contract failed")
+            print("BONSAI_PROBE_CONTEXT " + str(len(tokens["tokens"])), flush=True)
             started = time.monotonic()
             timer = threading.Timer(180, server.kill)
             timer.start()
