@@ -91,8 +91,10 @@ def generate(messages, *, request_id="", on_delta=None):
     if not available():
         return error("flash_unavailable", request_id)
     timeout = bounded_int("VELIA_FLASH_TIMEOUT_SECONDS", 180, 15, 300)
-    output_limit = bounded_int("VELIA_FLASH_MAX_OUTPUT_TOKENS", 256, 64, 512)
-    context_limit = bounded_int("VELIA_FLASH_CONTEXT_TOKENS", 4096, 2048, 8192)
+    output_limit = bounded_int("VELIA_FLASH_MAX_OUTPUT_TOKENS", 128, 64, 512)
+    context_limit = bounded_int("VELIA_FLASH_CONTEXT_TOKENS", 2048, 2048, 8192)
+    input_limit = min(context_limit - output_limit - 32,
+                      bounded_int("VELIA_FLASH_MAX_INPUT_TOKENS", 384, 128, 2048))
     system = {"role": "system", "content": (
         "You are VELIA Flash. Answer in the user's language. Be accurate and concise. "
         "This chat supports text and coding advice. You have no tools, browsing, "
@@ -131,7 +133,7 @@ def generate(messages, *, request_id="", on_delta=None):
             tokens = post("/tokenize", {"content": prompt, "add_special": True}).get("tokens")
             if not isinstance(tokens, list):
                 raise ValueError("flash_invalid_response")
-            if len(tokens) + output_limit + 32 <= context_limit:
+            if len(tokens) <= input_limit:
                 break
             if len(history) <= 1:
                 return error("flash_context_too_long", request_id)
@@ -144,6 +146,7 @@ def generate(messages, *, request_id="", on_delta=None):
                    "max_tokens": output_limit, "temperature": 0.7,
                    "top_p": 0.8, "top_k": 20, "presence_penalty": 1.5,
                    "chat_template_kwargs": {"enable_thinking": False},
+                   "reasoning_format": "deepseek",
                    "thinking_budget_tokens": 0,
                    "stream": bool(callable(on_delta))}
         if callable(on_delta):

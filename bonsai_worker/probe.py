@@ -22,6 +22,11 @@ def main():
     try:
         for _ in range(150):
             if server.poll() is not None:
+                events = Path("/sys/fs/cgroup/memory.events")
+                print("BONSAI_PROBE_EXIT " + json.dumps({
+                    "returncode": server.returncode,
+                    "memory_events": events.read_text() if events.exists() else "unavailable",
+                }), flush=True)
                 raise RuntimeError("worker stopped before health check")
             try:
                 with opener.open(base + "/health", timeout=2) as response:
@@ -51,6 +56,20 @@ def main():
                     "Content-Type": "application/json",
                     "Authorization": "Bearer " + os.environ["VELIA_FLASH_API_KEY"],
                 })
+            # Exercise the backend's actual context-budget API contract too.
+            def post(path, data):
+                req = urllib.request.Request(base + path,
+                    data=json.dumps(data).encode(), headers=dict(request.headers))
+                with opener.open(req, timeout=15) as response:
+                    return json.load(response)
+            rendered = post("/apply-template", {
+                "messages": payload["messages"],
+                "chat_template_kwargs": {"enable_thinking": False},
+            })
+            tokens = post("/tokenize", {"content": rendered["prompt"], "add_special": True})
+            if not isinstance(tokens.get("tokens"), list):
+                raise RuntimeError("tokenizer contract failed")
+            print("BONSAI_PROBE_CONTEXT " + str(len(tokens["tokens"])), flush=True)
             started = time.monotonic()
             timer = threading.Timer(180, server.kill)
             timer.start()
