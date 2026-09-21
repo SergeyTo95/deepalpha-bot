@@ -22,14 +22,14 @@ if __name__ == "__main__":
     args = ["/opt/bonsai/llama-server", "-m", "/opt/bonsai/model.gguf",
             "--alias", "velia-flash", "--host", "::", "--port", os.getenv("PORT", "8080"),
             "--api-key-file", str(key_path), "-ngl", "0", "--parallel", "1",
-            "-c", number("VELIA_FLASH_CONTEXT_TOKENS", 4096, 2048, 8192),
-            "-t", number("VELIA_FLASH_CPU_THREADS", 4, 1, 8),
-            "-tb", number("VELIA_FLASH_CPU_THREADS", 4, 1, 8),
+            "-c", number("VELIA_FLASH_CONTEXT_TOKENS", 2048, 2048, 8192),
+            "-t", number("VELIA_FLASH_CPU_THREADS", 8, 1, 8),
+            "-tb", number("VELIA_FLASH_CPU_THREADS", 8, 1, 8),
             "-b", "256", "-ub", "128", "-n", "512", "--jinja",
             "--reasoning", "off", "--reasoning-budget", "0",
             "--reasoning-format", "deepseek", "--cache-ram", "0",
             "--chat-template-kwargs", '{"enable_thinking": false}',
             "--no-webui"]
-    if os.getenv("VELIA_FLASH_REPACK", "true").lower() in {"false", "0", "no"}:
+    if os.getenv("VELIA_FLASH_REPACK", "false").lower() in {"false", "0", "no"}:
         args.append("--no-repack")
     os.execv(args[0], args)
