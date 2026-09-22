@@ -433,3 +433,13 @@ def test_flash_build_prompt_includes_attachment_description_without_raw_bytes(en
     assert "ATTACHMENT_DATA_UNTRUSTED" in messages[0]["content"]
     assert "ошибкой 404" in messages[0]["content"]
     assert "velia_message_attachments" in cursor.query
+
+
+def test_flash_context_bounding_preserves_head_and_tail():
+    value = "HEAD-" + ("x" * 2000) + "-TAIL"
+    packed = flash._bounded_context(value, 500)
+
+    assert len(packed) <= 500
+    assert packed.startswith("HEAD-")
+    assert packed.endswith("-TAIL")
+    assert "[context truncated]" in packed
