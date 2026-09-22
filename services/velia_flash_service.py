@@ -91,10 +91,10 @@ def _generate_once(messages, *, request_id="", on_delta=None):
     if not available():
         return error("flash_unavailable", request_id)
     timeout = bounded_int("VELIA_FLASH_TIMEOUT_SECONDS", 180, 15, 300)
-    output_limit = bounded_int("VELIA_FLASH_MAX_OUTPUT_TOKENS", 256, 64, 512)
+    output_limit = bounded_int("VELIA_FLASH_MAX_OUTPUT_TOKENS", 768, 64, 1024)
     context_limit = bounded_int("VELIA_FLASH_CONTEXT_TOKENS", 2048, 2048, 8192)
     input_limit = min(context_limit - output_limit - 32,
-                      bounded_int("VELIA_FLASH_MAX_INPUT_TOKENS", 512, 128, 2048))
+                      bounded_int("VELIA_FLASH_MAX_INPUT_TOKENS", 768, 128, 2048))
     system = {"role": "system", "content": (
         "You are VELIA Flash. Answer in the user's language. Be accurate and concise. "
         "This chat supports text and coding advice. You have no tools, browsing, "
