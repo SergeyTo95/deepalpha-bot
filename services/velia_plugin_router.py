@@ -104,11 +104,19 @@ def resolve_live_plugin_context(user_id: int, user_message: str) -> Dict[str, An
         return _empty_result()
 
     brave_ready = bool(str(os.getenv("BRAVE_SEARCH_API_KEY", "") or "").strip())
-    use_news_fallback = bool(news_topic and not brave_ready)
+    configured_search_ready = plugins._configured_search_ready()
+
+    if brave_ready:
+        runner = lambda: plugins._brave_search_context(bounded_query)
+    elif configured_search_ready:
+        runner = lambda: plugins._configured_web_search_context(bounded_query)
+    elif news_topic:
+        runner = lambda: plugins._google_news_context(bounded_query)
+    else:
+        runner = lambda: {"ok": False, "error": "web_search_not_configured"}
+
     return _run_selected_plugin(
         int(user_id),
         "web_search",
-        (lambda: plugins._google_news_context(bounded_query))
-        if use_news_fallback
-        else (lambda: plugins._brave_search_context(bounded_query)),
+        runner,
     )
