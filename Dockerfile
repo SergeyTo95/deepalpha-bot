@@ -1,4 +1,5 @@
 FROM ubuntu:24.04
+# AVX2 canary: pinned post-PR206 runtime
 
 ARG LLAMA_COMMIT=01ae597e3f7d4742909e1e831abb12fe3d24b2cf
 
