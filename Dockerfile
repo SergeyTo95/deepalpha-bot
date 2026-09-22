@@ -17,6 +17,7 @@ RUN git init llama.cpp \
     && cmake -B build \
        -DCMAKE_BUILD_TYPE=Release \
        -DGGML_NATIVE=OFF \
+       -DGGML_BACKEND_DL=ON \
        -DGGML_CPU_ALL_VARIANTS=ON \
     && cmake --build build -j"$(nproc)" --target llama-server
 
