@@ -10,6 +10,8 @@ from services import velia_flash_service as flash
 from services import velia_chat_service as chat
 from services import velia_attachment_chat_runtime_patch as attachment
 from services import velia_chat_streaming_runtime_patch as streaming
+from services import velia_plugin_router
+from services import velia_plugin_service
 from services.velia_mobile_streaming_service import _stream_send_kwargs
 
 
@@ -341,3 +343,93 @@ def test_postgres_flash_owner_quota_idempotency_and_zero_paid_path(enabled, monk
         assert cross_mode["error"] == "idempotency_mode_mismatch"
         cursor.execute("SELECT estimated_cost_usd FROM velia_messages WHERE role='assistant'")
         assert float(cursor.fetchone()[0]) == 0.0
+
+
+def test_flash_capabilities_enable_web_and_attachments_only_when_configured(enabled, monkeypatch):
+    monkeypatch.setenv("VELIA_FLASH_WEB_SEARCH_ENABLED", "true")
+    monkeypatch.setenv("WEB_SEARCH_PROVIDER", "serper")
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "search-key")
+    monkeypatch.setenv("VELIA_FLASH_ATTACHMENTS_ENABLED", "true")
+    monkeypatch.setenv("VELIA_FILE_ANALYST_ENABLED", "true")
+
+    capability = flash.public_capability()
+
+    assert capability["chat_flash"] is True
+    assert capability["chat_flash_web_search"] is True
+    assert capability["chat_flash_attachments"] is True
+
+
+def test_flash_live_context_is_bounded_and_attached_only_to_latest_user(enabled, monkeypatch):
+    monkeypatch.setenv("VELIA_FLASH_WEB_SEARCH_ENABLED", "true")
+    monkeypatch.setenv("WEB_SEARCH_PROVIDER", "serper")
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "search-key")
+    monkeypatch.setenv("VELIA_FLASH_WEB_CONTEXT_CHARS", "500")
+    monkeypatch.setattr(
+        velia_plugin_router,
+        "resolve_live_plugin_context",
+        lambda user_id, message: {
+            "ok": True,
+            "used": ["web_search"],
+            "context": "[1] Result\nFresh fact\nhttps://example.test/result",
+            "sources": [{"title": "Result", "url": "https://example.test/result"}],
+            "errors": [],
+        },
+    )
+    monkeypatch.setattr(
+        velia_plugin_service,
+        "plugin_context_for_prompt",
+        lambda result: "SOURCE " + ("x" * 900),
+    )
+
+    original = [
+        {"role": "user", "content": "older"},
+        {"role": "assistant", "content": "reply"},
+        {"role": "user", "content": "найди свежие данные"},
+    ]
+    packed = flash._with_live_context(original, 7)
+
+    assert packed[0]["content"] == "older"
+    assert packed[1]["content"] == "reply"
+    assert packed[2]["content"].startswith("найди свежие данные\n\nLIVE_WEB_CONTEXT_UNTRUSTED:")
+    assert len(packed[2]["content"].split("LIVE_WEB_CONTEXT_UNTRUSTED:\n", 1)[1]) == 500
+    assert original[2]["content"] == "найди свежие данные"
+
+
+def test_flash_build_prompt_includes_attachment_description_without_raw_bytes(enabled, monkeypatch):
+    monkeypatch.setenv("VELIA_FLASH_ATTACHMENTS_ENABLED", "true")
+    monkeypatch.setenv("VELIA_FILE_ANALYST_ENABLED", "true")
+    monkeypatch.setenv("VELIA_FLASH_WEB_SEARCH_ENABLED", "false")
+
+    class Cursor:
+        def __init__(self):
+            self.query = ""
+        def execute(self, query, params):
+            self.query = query
+        def fetchall(self):
+            return [{
+                "role": "user",
+                "content": "Что на фото?",
+                "attachment_context": '[BEGIN_ATTACHMENT name="screen.png" mime="image/png"]\n'
+                                      "На изображении окно приложения с ошибкой 404.\n"
+                                      "[END_ATTACHMENT]",
+            }]
+        def close(self):
+            pass
+
+    cursor = Cursor()
+    class Connection:
+        def close(self):
+            pass
+
+    fake_chat = SimpleNamespace(
+        get_connection=lambda: Connection(),
+        _dict_cursor=lambda conn: cursor,
+        _row_value=lambda row, key, index, default=None: row.get(key, default),
+    )
+
+    messages = flash.build_prompt(fake_chat, 7, "conversation-1")
+
+    assert len(messages) == 1
+    assert "ATTACHMENT_DATA_UNTRUSTED" in messages[0]["content"]
+    assert "ошибкой 404" in messages[0]["content"]
+    assert "velia_message_attachments" in cursor.query
