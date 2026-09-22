@@ -158,7 +158,7 @@ def run_streaming_send(
             from services.velia_flash_service import dispatch_send
             return dispatch_send(send_message, int(user_id), str(conversation_id),
                                  str(content), chat_mode=chat_mode, on_delta=on_delta,
-                                 **send_kwargs)
+                                 on_reset=on_reset, **send_kwargs)
         return send_message(
             int(user_id),
             str(conversation_id),

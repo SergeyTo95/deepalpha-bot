@@ -125,6 +125,98 @@ def test_flash_stream_forwards_incremental_deltas(enabled, monkeypatch):
     assert session.calls[-1][1]["json"]["stream_options"]["include_usage"] is True
 
 
+class Utf8StreamResponse(Response):
+    # Mirrors a provider that sends UTF-8 SSE without declaring charset.
+    # requests would otherwise be free to treat text/* as ISO-8859-1.
+    encoding = "ISO-8859-1"
+
+    def iter_lines(self, chunk_size=512, decode_unicode=False):
+        events = [
+            "data: " + json.dumps(
+                {"choices": [{"delta": {"content": "Привет! "}, "finish_reason": None}]},
+                ensure_ascii=False,
+            ),
+            "data: " + json.dumps(
+                {
+                    "choices": [{"delta": {"content": "Чем могу помочь?"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8},
+                },
+                ensure_ascii=False,
+            ),
+            "data: [DONE]",
+        ]
+        assert decode_unicode is False
+        return iter(event.encode("utf-8") for event in events)
+
+
+class Utf8StreamSession(StreamSession):
+    def post(self, url, **kwargs):
+        if not url.endswith("/v1/chat/completions"):
+            return super().post(url, **kwargs)
+        self.calls.append((url, kwargs))
+        assert kwargs["stream"] is True
+        return Utf8StreamResponse({})
+
+
+def test_flash_stream_decodes_utf8_cyrillic_from_raw_sse_bytes(enabled, monkeypatch):
+    session = Utf8StreamSession()
+    monkeypatch.setattr(flash.requests, "Session", lambda: session)
+    deltas = []
+    result = flash.generate(
+        [{"role": "user", "content": "привет"}],
+        on_delta=deltas.append,
+    )
+    assert result["ok"]
+    assert result["text"] == "Привет! Чем могу помочь?"
+    assert deltas == ["Привет! ", "Чем могу помочь?"]
+    assert result["usage"]["total_tokens"] == 8
+
+
+def test_flash_stream_recovers_once_with_reset_on_same_provider(enabled, monkeypatch):
+    calls = []
+    responses = [
+        flash.error("flash_provider_error", "recover-1"),
+        {
+            "ok": True,
+            "text": "Привет! Чем могу помочь?",
+            "provider": "bonsai",
+            "model": "velia-flash",
+            "request_id": "recover-1",
+            "usage": {"total_tokens": 8},
+            "estimated_cost_usd": 0.0,
+            "fallback_used": False,
+            "finish_reason": "stop",
+        },
+    ]
+
+    def generate_once(messages, *, request_id="", on_delta=None):
+        calls.append({"request_id": request_id, "streaming": callable(on_delta)})
+        return responses[len(calls) - 1]
+
+    monkeypatch.setattr(flash, "_generate_once", generate_once)
+    deltas = []
+    resets = []
+    result = flash.generate(
+        [{"role": "user", "content": "привет"}],
+        request_id="recover-1",
+        on_delta=deltas.append,
+        on_reset=lambda: resets.append(True),
+    )
+
+    assert result["ok"]
+    assert result["provider"] == "bonsai"
+    assert result["estimated_cost_usd"] == 0.0
+    assert not result["fallback_used"]
+    assert result["stream_recovered"] is True
+    assert result["stream_failure_reason"] == "flash_provider_error"
+    assert resets == [True]
+    assert deltas == ["Привет! Чем могу помочь?"]
+    assert calls == [
+        {"request_id": "recover-1", "streaming": True},
+        {"request_id": "recover-1", "streaming": False},
+    ]
+
+
 @pytest.mark.parametrize("events", [
     ['data: {"choices":[{"delta":{"content":"Incomplete"},"finish_reason":null}]}'],
     ['data: {"choices":[{"delta":{"content":"Incomplete"},"finish_reason":null}]}',
@@ -179,7 +271,7 @@ def test_stream_keeps_flash_selection_before_provider_chain(monkeypatch):
                                 content="hi", idempotency_key="request-123")
     assert streaming.run_streaming_send(lambda: pytest.fail("paid sender"),
         **kwargs, on_delta=lambda _: None, on_reset=lambda: None)["ok"]
-    assert calls[0]["chat_mode"] == "flash"
+    assert calls[0]["chat_mode"] == "flash"\n    assert callable(calls[0]["on_reset"])
 
 
 @pytest.fixture
