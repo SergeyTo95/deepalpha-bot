@@ -178,7 +178,10 @@ def _generate_once(messages, *, request_id="", on_delta=None):
             streamed_bytes = 0
             pending = ""
             forbidden = ("<think>", "</think>")
-            # requests may decode text/event-stream as ISO-8859-1 when the provider\n            # omits an explicit charset. Keep raw bytes and decode UTF-8 ourselves so\n            # Cyrillic and every other non-ASCII language survive streaming intact.\n            for raw_line in response.iter_lines(chunk_size=1, decode_unicode=False):
+            # requests may decode text/event-stream as ISO-8859-1 when the provider
+            # omits an explicit charset. Keep raw bytes and decode UTF-8 ourselves so
+            # Cyrillic and every other non-ASCII language survive streaming intact.
+            for raw_line in response.iter_lines(chunk_size=1, decode_unicode=False):
                 if time.monotonic() - started >= timeout:
                     raise requests.Timeout()
                 if not raw_line:
