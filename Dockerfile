@@ -8,9 +8,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/src
-RUN git clone https://github.com/PrismML-Eng/llama.cpp.git \
+RUN git init llama.cpp \
     && cd llama.cpp \
-    && git checkout "$LLAMA_COMMIT" \
+    && git remote add origin https://github.com/PrismML-Eng/llama.cpp.git \
+    && git fetch --depth 1 origin "$LLAMA_COMMIT" \
+    && git checkout --detach FETCH_HEAD \
     && test "$(git rev-parse HEAD)" = "$LLAMA_COMMIT" \
     && cmake -B build \
        -DCMAKE_BUILD_TYPE=Release \
