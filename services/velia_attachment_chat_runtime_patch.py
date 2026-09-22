@@ -141,6 +141,7 @@ def install(chat_module: Any) -> None:
         attachment_ids: Any = None,
         chat_mode: str = "pro",
         on_delta: Any = None,
+        on_reset: Any = None,
     ) -> Dict[str, Any]:
         if chat_mode not in {"pro", "flash"}:
             return {"ok": False, "error": "invalid_chat_mode"}
@@ -346,7 +347,7 @@ def install(chat_module: Any) -> None:
             if chat_mode == "flash":
                 generation = flash.generate(
                     flash.build_prompt(chat_module, user_id, conversation_id),
-                    request_id=request_id, on_delta=on_delta,
+                    request_id=request_id, on_delta=on_delta, on_reset=on_reset,
                 )
             else:
                 prompt = chat_module._build_prompt(user_id, conversation_id)
