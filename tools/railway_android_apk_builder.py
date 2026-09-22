@@ -419,6 +419,15 @@ def relay_only() -> None:
     actual = hashlib.sha256(target.read_bytes()).hexdigest()
     if actual != expected:
         raise RuntimeError(f"relay sha mismatch: {actual} != {expected}")
+    if os.environ.get("ANDROID_PUBLISH_REPO", "").strip():
+        try:
+            app_id = os.environ["VELIA_GITHUB_APP_ID"].strip()
+            private_key = os.environ["VELIA_GITHUB_APP_PRIVATE_KEY"]
+            jwt = github_app_jwt(app_id, private_key)
+            sha = os.environ.get("ANDROID_SOURCE_SHA", DEFAULT_SHA).strip().lower()
+            publish_release_asset(jwt, target, sha)
+        except Exception as exc:
+            print(f"APK_RELEASE_PUBLISH_FAILED {type(exc).__name__}: {exc}", flush=True)
     attempts = [
         (
             "qurl",
