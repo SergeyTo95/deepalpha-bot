@@ -125,6 +125,53 @@ def test_flash_stream_forwards_incremental_deltas(enabled, monkeypatch):
     assert session.calls[-1][1]["json"]["stream_options"]["include_usage"] is True
 
 
+class Utf8StreamResponse(Response):
+    # Mirrors a provider that sends UTF-8 SSE without declaring charset.
+    # requests would otherwise be free to treat text/* as ISO-8859-1.
+    encoding = "ISO-8859-1"
+
+    def iter_lines(self, chunk_size=512, decode_unicode=False):
+        events = [
+            "data: " + json.dumps(
+                {"choices": [{"delta": {"content": "Привет! "}, "finish_reason": None}]},
+                ensure_ascii=False,
+            ),
+            "data: " + json.dumps(
+                {
+                    "choices": [{"delta": {"content": "Чем могу помочь?"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8},
+                },
+                ensure_ascii=False,
+            ),
+            "data: [DONE]",
+        ]
+        assert decode_unicode is False
+        return iter(event.encode("utf-8") for event in events)
+
+
+class Utf8StreamSession(StreamSession):
+    def post(self, url, **kwargs):
+        if not url.endswith("/v1/chat/completions"):
+            return super().post(url, **kwargs)
+        self.calls.append((url, kwargs))
+        assert kwargs["stream"] is True
+        return Utf8StreamResponse({})
+
+
+def test_flash_stream_decodes_utf8_cyrillic_from_raw_sse_bytes(enabled, monkeypatch):
+    session = Utf8StreamSession()
+    monkeypatch.setattr(flash.requests, "Session", lambda: session)
+    deltas = []
+    result = flash.generate(
+        [{"role": "user", "content": "привет"}],
+        on_delta=deltas.append,
+    )
+    assert result["ok"]
+    assert result["text"] == "Привет! Чем могу помочь?"
+    assert deltas == ["Привет! ", "Чем могу помочь?"]
+    assert result["usage"]["total_tokens"] == 8
+
+
 @pytest.mark.parametrize("events", [
     ['data: {"choices":[{"delta":{"content":"Incomplete"},"finish_reason":null}]}'],
     ['data: {"choices":[{"delta":{"content":"Incomplete"},"finish_reason":null}]}',
