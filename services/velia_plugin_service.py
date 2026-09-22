@@ -169,17 +169,32 @@ def ensure_velia_plugin_tables() -> None:
         conn.close()
 
 
+def _configured_search_ready() -> bool:
+    provider = str(os.getenv("WEB_SEARCH_PROVIDER", "") or "").strip().lower()
+    api_key = str(os.getenv("WEB_SEARCH_API_KEY", "") or "").strip()
+    return bool(provider and provider != "disabled" and api_key)
+
+
 def _availability() -> Dict[str, Dict[str, Any]]:
     brave_ready = bool(str(os.getenv("BRAVE_SEARCH_API_KEY", "") or "").strip())
+    configured_search_ready = _configured_search_ready()
+    file_analyst_ready = _env_bool("VELIA_FILE_ANALYST_ENABLED", False)
     return {
         "weather": {"available": True, "requires_configuration": False},
         "web_search": {
-            "available": brave_ready or _env_bool("VELIA_NEWS_RSS_ENABLED", True),
-            "requires_configuration": not brave_ready,
+            "available": (
+                brave_ready
+                or configured_search_ready
+                or _env_bool("VELIA_NEWS_RSS_ENABLED", True)
+            ),
+            "requires_configuration": not (brave_ready or configured_search_ready),
         },
         "research": {"available": False, "requires_configuration": True},
         "image_generation": {"available": False, "requires_configuration": True},
-        "file_analyst": {"available": False, "requires_configuration": True},
+        "file_analyst": {
+            "available": file_analyst_ready,
+            "requires_configuration": not file_analyst_ready,
+        },
         "deepalpha_markets": {"available": False, "requires_configuration": True},
     }
 
@@ -441,6 +456,40 @@ def _brave_search_context(query: str) -> Dict[str, Any]:
     if not lines:
         return {"ok": False, "error": "web_search_no_results"}
     return {"ok": True, "plugin": "web_search", "context": "\n\n".join(lines), "sources": sources}
+
+
+def _configured_web_search_context(query: str) -> Dict[str, Any]:
+    if not _configured_search_ready():
+        return {"ok": False, "error": "web_search_not_configured"}
+    from services.web_search_service import search_web
+
+    limit = _env_int("VELIA_WEB_SEARCH_RESULTS", 5, 1, 8)
+    rows = search_web(str(query or "")[:500], limit=limit)
+    sources: List[Dict[str, str]] = []
+    lines: List[str] = []
+    for item in rows if isinstance(rows, list) else []:
+        if not isinstance(item, dict):
+            continue
+        url = _safe_public_url(item.get("url") or item.get("link"))
+        title = _safe_text(item.get("title"), 180)
+        description = _safe_text(item.get("snippet"), 500)
+        source = _safe_text(item.get("source"), 80)
+        if not url or not title:
+            continue
+        sources.append({"title": title, "url": url})
+        lines.append(
+            f"[{len(sources)}] {title}\n"
+            f"Source: {source or 'web'}\n"
+            f"{description}\n{url}"
+        )
+    if not lines:
+        return {"ok": False, "error": "web_search_no_results"}
+    return {
+        "ok": True,
+        "plugin": "web_search",
+        "context": "\n\n".join(lines),
+        "sources": sources,
+    }
 
 
 def _google_news_context(query: str) -> Dict[str, Any]:
