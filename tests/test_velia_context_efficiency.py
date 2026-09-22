@@ -136,3 +136,27 @@ def test_token_estimator_matches_sol_pi_style():
     assert efficiency.estimate_tokens("") == 0
     assert efficiency.estimate_tokens("abcd") == 1
     assert efficiency.estimate_tokens("abcde") == 2
+
+
+def test_research_prompt_uses_lossless_source_references_when_enabled(monkeypatch):
+    from services import velia_research_reasoning_service as reasoning
+
+    _enable(monkeypatch)
+    mission = {
+        "goal": "Compare the evidence",
+        "domain": "biology",
+        "safety": {"decision": "allowed"},
+    }
+    excerpt = "Repeated evidence sentence with enough detail."
+    prompt = reasoning._prompt(
+        mission,
+        [
+            {"source_id": "s1", "title": "One", "excerpt": excerpt},
+            {"source_id": "s2", "title": "Two", "excerpt": excerpt},
+        ],
+        user_id=7,
+    )
+
+    assert prompt.count(excerpt) == 1
+    assert '"excerpt_same_as":"s1"' in prompt
+    assert "Use ONLY the evidence records below" in prompt
