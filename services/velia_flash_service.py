@@ -87,7 +87,7 @@ def build_prompt(chat_module, user_id, conversation_id):
             for row in rows]
 
 
-def generate(messages, *, request_id="", on_delta=None):
+def _generate_once(messages, *, request_id="", on_delta=None):
     if not available():
         return error("flash_unavailable", request_id)
     timeout = bounded_int("VELIA_FLASH_TIMEOUT_SECONDS", 180, 15, 300)
@@ -238,8 +238,47 @@ def generate(messages, *, request_id="", on_delta=None):
         session.close()
 
 
+_RETRIABLE_STREAM_ERRORS = {
+    "flash_timeout",
+    "flash_provider_error",
+    "flash_invalid_response",
+}
+
+
+def generate(messages, *, request_id="", on_delta=None, on_reset=None):
+    """Generate once, with one same-provider recovery after a broken mobile stream."""
+    result = _generate_once(messages, request_id=request_id, on_delta=on_delta)
+    if result.get("ok") or not (callable(on_delta) and callable(on_reset)):
+        return result
+    reason = str(result.get("reason") or result.get("error") or "")
+    if reason not in _RETRIABLE_STREAM_ERRORS:
+        return result
+
+    # A partial SSE answer may already be visible in the Android bubble. Reset it
+    # before retrying, then replay only the clean final answer from the same free
+    # Bonsai worker. This path never reaches PRO or any paid provider.
+    try:
+        on_reset()
+    except Exception:
+        return result
+    retry = _generate_once(messages, request_id=request_id, on_delta=None)
+    retry["stream_failure_reason"] = reason
+    if not retry.get("ok"):
+        retry["stream_recovered"] = False
+        return retry
+    text = str(retry.get("text") or "")
+    if not text:
+        return error("flash_invalid_response", request_id)
+    try:
+        on_delta(text)
+    except Exception:
+        return error("flash_provider_error", request_id)
+    retry["stream_recovered"] = True
+    return retry
+
+
 def dispatch_send(sender, user_id, conversation_id, content, *, chat_mode="pro",
-                  on_delta=None, **kwargs):
+                  on_delta=None, on_reset=None, **kwargs):
     if chat_mode == "pro":
         return sender(user_id, conversation_id, content, **kwargs)
     if chat_mode != "flash":
@@ -279,7 +318,7 @@ def dispatch_send(sender, user_id, conversation_id, content, *, chat_mode="pro",
         if not global_lock:
             return {"ok": False, "error": "flash_busy"}
         return core(user_id, conversation_id, content, chat_mode="flash",
-                    on_delta=on_delta, **kwargs)
+                    on_delta=on_delta, on_reset=on_reset, **kwargs)
     finally:
         conn.rollback()
         if global_lock:
