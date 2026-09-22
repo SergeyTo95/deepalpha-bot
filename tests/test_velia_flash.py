@@ -271,7 +271,8 @@ def test_stream_keeps_flash_selection_before_provider_chain(monkeypatch):
                                 content="hi", idempotency_key="request-123")
     assert streaming.run_streaming_send(lambda: pytest.fail("paid sender"),
         **kwargs, on_delta=lambda _: None, on_reset=lambda: None)["ok"]
-    assert calls[0]["chat_mode"] == "flash"\n    assert callable(calls[0]["on_reset"])
+    assert calls[0]["chat_mode"] == "flash"
+    assert callable(calls[0]["on_reset"])
 
 
 @pytest.fixture
