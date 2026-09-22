@@ -1,0 +1,31 @@
+name: APK handoff 222f067
+
+on:
+  push:
+    branches:
+      - ops/apk-handoff-222f067
+
+permissions:
+  contents: read
+
+jobs:
+  handoff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download merged APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://velia-android-pr81-validation-production.up.railway.app/VELIA-debug-222f067.apk"
+          curl --fail --location --retry 5 --retry-all-errors "$url" -o VELIA-0.13.1-Flash-merged.apk
+          echo "d9143c5bf63200eb8d14f2d68cb735eb33c4ae6d32df2dd6822731b9dc6128f2  VELIA-0.13.1-Flash-merged.apk" | sha256sum -c -
+          test "$(stat -c %s VELIA-0.13.1-Flash-merged.apk)" = "168058060"
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VELIA-0.13.1-Flash-merged
+          path: VELIA-0.13.1-Flash-merged.apk
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
