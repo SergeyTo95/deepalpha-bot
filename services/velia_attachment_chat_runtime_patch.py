@@ -153,7 +153,11 @@ def install(chat_module: Any) -> None:
             normalized_attachment_ids = normalize_attachment_ids(attachment_ids)
         except AttachmentError as exc:
             return {"ok": False, "error": exc.code}
-        if chat_mode == "flash" and normalized_attachment_ids:
+        if (
+            chat_mode == "flash"
+            and normalized_attachment_ids
+            and not flash.attachments_available()
+        ):
             return {"ok": False, "error": "flash_attachments_unsupported"}
         if (
             normalized_attachment_ids
