@@ -224,3 +224,64 @@ def test_tool_failure_forces_honest_answer_context():
 
     assert "could not complete" in prompt
     assert "do not invent current data" in prompt
+
+
+def test_explicit_search_uses_configured_provider_when_brave_is_absent(monkeypatch):
+    monkeypatch.setattr(
+        velia_plugin_service,
+        "get_user_plugins",
+        lambda user_id: enabled_plugins(),
+    )
+    monkeypatch.setattr(
+        velia_plugin_service,
+        "_reserve_plugin_call",
+        lambda user_id, plugin_key: True,
+    )
+    monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
+    monkeypatch.setenv("WEB_SEARCH_PROVIDER", "serper")
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "configured-key")
+    monkeypatch.setattr(
+        velia_plugin_service,
+        "_configured_web_search_context",
+        lambda query: {
+            "ok": True,
+            "plugin": "web_search",
+            "context": "[1] Fresh result\nhttps://example.test/fresh",
+            "sources": [{"title": "Fresh result", "url": "https://example.test/fresh"}],
+        },
+    )
+
+    result = velia_plugin_router.resolve_live_plugin_context(
+        1,
+        "Найди в интернете свежую информацию о VELIA",
+    )
+
+    assert result["ok"] is True
+    assert result["used"] == ["web_search"]
+    assert "Fresh result" in result["context"]
+
+
+def test_configured_web_search_context_normalizes_results(monkeypatch):
+    monkeypatch.setenv("WEB_SEARCH_PROVIDER", "serper")
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "configured-key")
+    from services import web_search_service
+    monkeypatch.setattr(
+        web_search_service,
+        "search_web",
+        lambda query, limit=5: [{
+            "title": " Example result ",
+            "snippet": " Short factual snippet ",
+            "url": "https://example.test/page",
+            "source": "Serper",
+        }],
+    )
+
+    result = velia_plugin_service._configured_web_search_context("query")
+
+    assert result["ok"] is True
+    assert result["plugin"] == "web_search"
+    assert result["sources"] == [{
+        "title": "Example result",
+        "url": "https://example.test/page",
+    }]
+    assert "Short factual snippet" in result["context"]
