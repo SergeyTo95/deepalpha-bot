@@ -1,18 +1,39 @@
 FROM ubuntu:24.04
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl python3 libgomp1 \
+# AVX2 canary: pinned post-PR206 runtime
+
+ARG LLAMA_COMMIT=01ae597e3f7d4742909e1e831abb12fe3d24b2cf
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl python3 git cmake build-essential pkg-config libgomp1 \
     && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/src
+RUN git init llama.cpp \
+    && cd llama.cpp \
+    && git remote add origin https://github.com/PrismML-Eng/llama.cpp.git \
+    && git fetch --depth 1 origin "$LLAMA_COMMIT" \
+    && git checkout --detach FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = "$LLAMA_COMMIT" \
+    && cmake -B build \
+       -DCMAKE_BUILD_TYPE=Release \
+       -DGGML_NATIVE=OFF \
+       -DGGML_BACKEND_DL=ON \
+       -DGGML_CPU_ALL_VARIANTS=ON \
+    && cmake --build build -j"$(nproc)" --target llama-server
+
 WORKDIR /opt/bonsai
-# Official demo's tested runtime. Stock llama.cpp cannot load Bonsai 2.
-RUN curl -fL --retry 3 --max-time 300 \
-    https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10709-9a9394a/llama-prism-b10709-9a9394a-bin-ubuntu-x64.tar.gz -o runtime.tar.gz \
-    && echo '48b487f00fd2b27bc3ef77c701b43c1c23a4af484d2a203ae87d0efc41506728  runtime.tar.gz' | sha256sum -c - \
-    && tar --no-same-owner -xzf runtime.tar.gz --strip-components=1 \
-    && rm runtime.tar.gz
+RUN cp -a /opt/src/llama.cpp/build/bin/. /opt/bonsai/
+
 RUN curl -fL --retry 3 --max-time 1800 \
     https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/6ed5e12bf84b7a63069882c91dd9e9218647d17b/Ternary-Bonsai-2-27B-PQ2_0.gguf \
     -o model.gguf \
     && echo '3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1  model.gguf' | sha256sum -c -
+
 COPY start.py /opt/bonsai/start.py
 COPY probe.py /opt/bonsai/probe.py
-ENV PORT=8080 PYTHONUNBUFFERED=1
+
+ENV PORT=8080 \
+    PYTHONUNBUFFERED=1 \
+    LD_LIBRARY_PATH=/opt/bonsai
+
 CMD ["python3", "/opt/bonsai/start.py"]
