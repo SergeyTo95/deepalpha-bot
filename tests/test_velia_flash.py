@@ -172,6 +172,51 @@ def test_flash_stream_decodes_utf8_cyrillic_from_raw_sse_bytes(enabled, monkeypa
     assert result["usage"]["total_tokens"] == 8
 
 
+def test_flash_stream_recovers_once_with_reset_on_same_provider(enabled, monkeypatch):
+    calls = []
+    responses = [
+        flash.error("flash_provider_error", "recover-1"),
+        {
+            "ok": True,
+            "text": "Привет! Чем могу помочь?",
+            "provider": "bonsai",
+            "model": "velia-flash",
+            "request_id": "recover-1",
+            "usage": {"total_tokens": 8},
+            "estimated_cost_usd": 0.0,
+            "fallback_used": False,
+            "finish_reason": "stop",
+        },
+    ]
+
+    def generate_once(messages, *, request_id="", on_delta=None):
+        calls.append({"request_id": request_id, "streaming": callable(on_delta)})
+        return responses[len(calls) - 1]
+
+    monkeypatch.setattr(flash, "_generate_once", generate_once)
+    deltas = []
+    resets = []
+    result = flash.generate(
+        [{"role": "user", "content": "привет"}],
+        request_id="recover-1",
+        on_delta=deltas.append,
+        on_reset=lambda: resets.append(True),
+    )
+
+    assert result["ok"]
+    assert result["provider"] == "bonsai"
+    assert result["estimated_cost_usd"] == 0.0
+    assert not result["fallback_used"]
+    assert result["stream_recovered"] is True
+    assert result["stream_failure_reason"] == "flash_provider_error"
+    assert resets == [True]
+    assert deltas == ["Привет! Чем могу помочь?"]
+    assert calls == [
+        {"request_id": "recover-1", "streaming": True},
+        {"request_id": "recover-1", "streaming": False},
+    ]
+
+
 @pytest.mark.parametrize("events", [
     ['data: {"choices":[{"delta":{"content":"Incomplete"},"finish_reason":null}]}'],
     ['data: {"choices":[{"delta":{"content":"Incomplete"},"finish_reason":null}]}',
@@ -226,7 +271,7 @@ def test_stream_keeps_flash_selection_before_provider_chain(monkeypatch):
                                 content="hi", idempotency_key="request-123")
     assert streaming.run_streaming_send(lambda: pytest.fail("paid sender"),
         **kwargs, on_delta=lambda _: None, on_reset=lambda: None)["ok"]
-    assert calls[0]["chat_mode"] == "flash"
+    assert calls[0]["chat_mode"] == "flash"\n    assert callable(calls[0]["on_reset"])
 
 
 @pytest.fixture
