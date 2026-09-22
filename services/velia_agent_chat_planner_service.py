@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from db.database import get_connection
 from services import kimi_gateway_service as kimi_gateway
+from services import velia_context_efficiency_service as context_efficiency
 from services import velia_agent_job_service as jobs
 from services import velia_agent_runtime_service as runtime
 from services import velia_developer_fast_path_service as cost_service
@@ -341,6 +342,7 @@ def _model_plan(user_id: int, message: str) -> Dict[str, Any]:
     tools = _planner_tools()
     if not tools:
         raise AgentChatError("velia_agent_chat_tools_unavailable", status=503)
+    tools, _efficiency = context_efficiency.compact_tool_catalog(tools, user_id=int(user_id))
     prompt = _prompt(message, tools)
     max_tokens = _env_int("VELIA_AGENT_CHAT_PLAN_OUTPUT_TOKENS", 900, 400, 1400)
     budget = _env_float("VELIA_AGENT_CHAT_PLAN_MAX_COST_USD", 0.04, 0.005, 0.10)

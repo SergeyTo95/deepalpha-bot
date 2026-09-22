@@ -14,6 +14,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from db.database import get_connection
 from services import kimi_gateway
+from services import velia_context_efficiency_service as context_efficiency
 from services import velia_developer_fast_path_service as fast_path
 from services import velia_developer_github_service as github_service
 from services import velia_developer_github_write_service as write_service
@@ -648,6 +649,9 @@ def plan_job(
     evidence = _planning_evidence(project, queries, candidates)
     design_profile = taste_skill.classify(normalized_goal, paths)
     evidence = _design_plan_evidence(evidence, design_profile)
+    evidence, _efficiency = context_efficiency.compact_repeated_blocks(
+        evidence, user_id=int(user_id)
+    )
     prompt = _plan_prompt(
         project,
         normalized_goal,
