@@ -195,10 +195,14 @@ def compact_repeated_blocks(
             rendered.append(block)
             continue
         content_index += 1
-        if len(block) < minimum_block_chars:
+        # Paragraph separators belong to the projection, not to the evidence block.
+        # Normalize only boundary newlines for duplicate identity; keep the first
+        # rendered block byte-for-byte otherwise.
+        identity = block.strip("\r\n")
+        if len(identity) < minimum_block_chars:
             rendered.append(block)
             continue
-        digest = hashlib.sha256(block.encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         first = seen.get(digest)
         if first is None:
             seen[digest] = content_index
