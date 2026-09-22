@@ -178,12 +178,12 @@ def generate(messages, *, request_id="", on_delta=None):
             streamed_bytes = 0
             pending = ""
             forbidden = ("<think>", "</think>")
-            for raw_line in response.iter_lines(chunk_size=1, decode_unicode=True):
+            # requests may decode text/event-stream as ISO-8859-1 when the provider\n            # omits an explicit charset. Keep raw bytes and decode UTF-8 ourselves so\n            # Cyrillic and every other non-ASCII language survive streaming intact.\n            for raw_line in response.iter_lines(chunk_size=1, decode_unicode=False):
                 if time.monotonic() - started >= timeout:
                     raise requests.Timeout()
                 if not raw_line:
                     continue
-                line = raw_line.decode("utf-8", "replace") if isinstance(raw_line, bytes) else str(raw_line)
+                line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else str(raw_line)
                 if not line.startswith("data:"):
                     continue
                 body = line[5:].strip()
