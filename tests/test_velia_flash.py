@@ -88,6 +88,7 @@ def test_real_template_budget_and_free_result(enabled, monkeypatch):
     assert session.calls[-1][1]["json"]["chat_template_kwargs"] == {"enable_thinking": False}
     assert session.calls[-1][1]["json"]["thinking_budget_tokens"] == 0
     assert session.calls[-1][1]["json"]["reasoning_format"] == "deepseek"
+    assert session.calls[-1][1]["json"]["max_tokens"] == 256
 
 
 class StreamResponse(Response):
@@ -249,7 +250,7 @@ def test_provider_failure_does_not_retry_or_fallback(enabled, monkeypatch):
     assert not result["fallback_used"]
 
 
-@pytest.mark.parametrize("token_count", [385, 5000])
+@pytest.mark.parametrize("token_count", [513, 5000])
 def test_context_overflow_never_generates(enabled, monkeypatch, token_count):
     session = Session()
     original = session.post
