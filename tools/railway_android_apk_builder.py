@@ -756,6 +756,8 @@ def main() -> None:
         old_apk = prefetch_old_apk(work)
         apk = run_build(work / "src")
         emit_delta_from_old(apk, old_apk)
+        if os.environ.get("ANDROID_PUBLISH_REPO", "").strip():
+            publish_release_asset(jwt, apk, sha)
         serve_artifact(apk, sha)
 
 
