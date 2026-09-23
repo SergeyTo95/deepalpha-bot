@@ -672,22 +672,23 @@ def current_patch_delivery_only() -> None:
             old = work / "old.apk"
             with zf.open(candidates[0]) as src, old.open("wb") as dst:
                 shutil.copyfileobj(src, dst)
-        base = "https://velia-android-pr81-validation-production.up.railway.app"
-        build_meta = work / "build.json"
+        handoff = work / "handoff"
         subprocess.run(
-            ["curl","--fail","--location","--silent","--show-error","--retry","5",
-             base + "/build.json", "-o", str(build_meta)],
+            ["git","clone","--depth=1","--branch","ops/apk-handoff-222f067",
+             "https://github.com/SergeyTo95/deepalpha-bot.git", str(handoff)],
             check=True,
+            stdout=subprocess.DEVNULL,
         )
-        build_json = json.loads(build_meta.read_text(encoding="utf-8"))
-        if build_json.get("android_commit") != "222f067b1ff42b7a18817973dbc14a5f5b6c7983":
-            raise RuntimeError(f"unexpected android commit: {build_json}")
+        parts = handoff / "tmp" / "apk-binary-parts"
         new = work / "new.apk"
-        subprocess.run(
-            ["curl","--fail","--location","--silent","--show-error","--retry","5",
-             base + "/" + build_json["file"], "-o", str(new)],
-            check=True,
-        )
+        with new.open("wb") as out:
+            for name in ("VELIA.part00", "VELIA.part01", "VELIA.part02"):
+                with (parts / name).open("rb") as src:
+                    shutil.copyfileobj(src, out)
+        expected_target = "3aca2a1e93f0ae131ec97170b37986360ce310892e3845e50a763d1a7e4e629f"
+        assembled_sha = hashlib.sha256(new.read_bytes()).hexdigest()
+        if assembled_sha != expected_target:
+            raise RuntimeError(f"assembled target sha mismatch: {assembled_sha}")
         patch = work / "VELIA-0.13.1-current.bsdiff"
         subprocess.run(["bsdiff", str(old), str(new), str(patch)], check=True)
         patch_bytes = patch.read_bytes()
