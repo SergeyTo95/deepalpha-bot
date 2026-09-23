@@ -6,6 +6,7 @@ from services import polywar_service as polywar
 from services import polywar_map_service as m
 from services import polywar_sector_service as sectors
 from services import polywar_capital_service as capitals
+from services import polywar_leader_service as leaders
 
 _RATE_LOCK = threading.Lock(); _RATE: "OrderedDict[int, deque]" = OrderedDict(); _GET_RATE: "OrderedDict[int, deque]" = OrderedDict(); RATE_WINDOW = 10; RATE_MAX = 30; GET_RATE_MAX = 120; RATE_MAX_USERS = 5000
 
@@ -72,6 +73,7 @@ def init_polywar_governance_schema(conn=None):
         c.execute('''CREATE TABLE IF NOT EXISTS polywar_commander_votes (election_id INTEGER NOT NULL, voter_user_id BIGINT NOT NULL, candidate_user_id BIGINT NOT NULL, faction_id INTEGER NOT NULL, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL, UNIQUE(election_id,voter_user_id))''')
         c.execute(f'''CREATE TABLE IF NOT EXISTS polywar_faction_orders (id {id_sql}, season_id INTEGER NOT NULL, faction_id INTEGER NOT NULL, commander_user_id BIGINT NOT NULL, order_type TEXT NOT NULL, x INTEGER NOT NULL, y INTEGER NOT NULL, sector_x INTEGER NOT NULL, sector_y INTEGER NOT NULL, message TEXT, active INTEGER NOT NULL DEFAULT 1, created_at TIMESTAMP NOT NULL, expires_at TIMESTAMP NOT NULL, cancelled_at TIMESTAMP NULL, updated_at TIMESTAMP NOT NULL)''')
         c.execute('CREATE INDEX IF NOT EXISTS idx_polywar_orders_scope ON polywar_faction_orders(season_id,faction_id,active,expires_at)')
+        leaders.init_polywar_leader_schema(conn)
         if own: conn.commit()
     finally:
         if own: conn.close()
@@ -134,24 +136,32 @@ def _governance_context_in_transaction(conn, user_id, season_id):
 
 
 def _prepare_faction(conn,sid,fid):
-    now=datetime.utcnow(); finalize_due(conn,sid,int(fid),now); _ensure_election(conn,sid,int(fid),now)
+    now=datetime.utcnow()
+    if leaders.is_contribution_mode():
+        return leaders.refresh_faction_leader_in_transaction(conn,sid,int(fid),now=now)
+    finalize_due(conn,sid,int(fid),now); _ensure_election(conn,sid,int(fid),now)
 
 
 
 
 def _build_governance_response(conn, sid, player, faction_id, user_id, rules=None):
     required_contribution = int(rules["min_contribution"]) if rules is not None else min_contribution()
+    mode = leaders.leadership_mode()
     if not faction_id:
-        return {'ok': True, 'season_id': sid, 'faction_required': True, 'nomination_eligibility': {'eligible': int(player.get('faction_contribution') or 0) >= required_contribution}, 'rules': public_rules(rules)}
+        return {"ok": True, "season_id": sid, "faction_required": True, "leadership_mode": mode, "automatic_leadership": leaders.is_contribution_mode(), "nomination_eligibility": {"eligible": int(player.get("faction_contribution") or 0) >= required_contribution}, "rules": public_rules(rules)}
+    if leaders.is_contribution_mode():
+        leader = leaders.get_faction_leader(conn, sid, faction_id, refresh=True)
+        leaderboard, rank, contrib = leaders.get_faction_leaderboard(conn, sid, faction_id, current_user_id=user_id, limit=5)
+        return {"ok": True, "season_id": sid, "leadership_mode": "contribution", "automatic_leadership": True, "leader": leader, "commander": leader, "leaderboard": leaderboard, "current_user_is_leader": bool(leader and int(leader["user_id"]) == int(user_id)), "current_user_faction_rank": rank, "current_user_contribution": contrib, "active_election": None, "candidates": [], "current_user_vote": None, "current_user_is_candidate": False, "nomination_eligibility": {"eligible": False, "automatic": True, "reason": "leadership_automatic"}, "orders": list_orders(conn, sid, faction_id), "rules": public_rules(rules), "server_timestamp": int(time.time())}
     e = _active_election(conn, sid, faction_id)
-    stat = polywar._fetchone(conn.cursor(), 'SELECT commander_user_id,commander_since,commander_term_ends_at FROM polywar_faction_season_stats WHERE season_id=%s AND faction_id=%s', (sid, faction_id)) or {}
+    stat = polywar._fetchone(conn.cursor(), "SELECT commander_user_id,commander_since,commander_term_ends_at FROM polywar_faction_season_stats WHERE season_id=%s AND faction_id=%s", (sid, faction_id)) or {}
     candidates = []; vote = None
     if e:
-        rows = polywar._fetchall(conn.cursor(), '''SELECT c.user_id,c.statement,c.contribution_at_nomination,c.nominated_at,c.withdrawn_at,COUNT(v.voter_user_id) vote_count FROM polywar_commander_candidates c LEFT JOIN polywar_commander_votes v ON v.election_id=c.election_id AND v.candidate_user_id=c.user_id WHERE c.election_id=%s GROUP BY c.user_id,c.statement,c.contribution_at_nomination,c.nominated_at,c.withdrawn_at''', (e['id'],))
+        rows = polywar._fetchall(conn.cursor(), """SELECT c.user_id,c.statement,c.contribution_at_nomination,c.nominated_at,c.withdrawn_at,COUNT(v.voter_user_id) vote_count FROM polywar_commander_candidates c LEFT JOIN polywar_commander_votes v ON v.election_id=c.election_id AND v.candidate_user_id=c.user_id WHERE c.election_id=%s GROUP BY c.user_id,c.statement,c.contribution_at_nomination,c.nominated_at,c.withdrawn_at""", (e["id"],))
         candidates = [polywar._row_to_dict(None, r) for r in rows]
-        vr = polywar._fetchone(conn.cursor(), 'SELECT candidate_user_id FROM polywar_commander_votes WHERE election_id=%s AND voter_user_id=%s', (e['id'], user_id))
-        vote = vr and vr['candidate_user_id']
-    return {'ok': True, 'season_id': sid, 'commander': stat, 'active_election': e, 'candidates': candidates, 'current_user_vote': vote, 'current_user_is_candidate': any(int(c['user_id']) == user_id and not c.get('withdrawn_at') for c in candidates), 'nomination_eligibility': {'eligible': int(player.get('faction_contribution') or 0) >= required_contribution}, 'orders': list_orders(conn, sid, faction_id), 'rules': public_rules(rules), 'server_timestamp': int(time.time())}
+        vr = polywar._fetchone(conn.cursor(), "SELECT candidate_user_id FROM polywar_commander_votes WHERE election_id=%s AND voter_user_id=%s", (e["id"], user_id))
+        vote = vr and vr["candidate_user_id"]
+    return {"ok": True, "season_id": sid, "leadership_mode": "election", "automatic_leadership": False, "leader": None, "commander": stat, "leaderboard": [], "current_user_is_leader": False, "current_user_faction_rank": None, "current_user_contribution": int(player.get("faction_contribution") or 0), "active_election": e, "candidates": candidates, "current_user_vote": vote, "current_user_is_candidate": any(int(c["user_id"]) == user_id and not c.get("withdrawn_at") for c in candidates), "nomination_eligibility": {"eligible": int(player.get("faction_contribution") or 0) >= required_contribution}, "orders": list_orders(conn, sid, faction_id), "rules": public_rules(rules), "server_timestamp": int(time.time())}
 
 def get_governance(user_id:int):
     conn=polywar.get_connection()
@@ -170,6 +180,17 @@ def get_governance(user_id:int):
 
 
 def nominate(user_id:int, statement:str='', active=True):
+    if leaders.is_contribution_mode():
+        conn=polywar.get_connection(); c=conn.cursor()
+        try:
+            sid=_prepare_context_before_transaction(conn); _begin(conn,c); prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid)
+            conn.commit()
+            if not prepared.get('ok'):
+                return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': bool(prepared.get('season_finalized'))}
+            return {'ok': False, 'error': 'leadership_automatic', 'leadership_mode': 'contribution', 'automatic': True}
+        except Exception:
+            polywar._safe_rollback(conn); raise
+        finally: conn.close()
     conn=polywar.get_connection(); c=conn.cursor()
     try:
         if not isinstance(active,bool): raise ValueError('invalid_active')
@@ -203,6 +224,16 @@ def nominate(user_id:int, statement:str='', active=True):
 
 
 def vote(user_id:int,candidate_user_id:int):
+    if leaders.is_contribution_mode():
+        conn=polywar.get_connection(); c=conn.cursor()
+        try:
+            sid=_prepare_context_before_transaction(conn); _begin(conn,c); prepared=polywar.prepare_gameplay_mutation_in_transaction(conn,sid); conn.commit()
+            if not prepared.get('ok'):
+                return {'ok': False, 'error': prepared.get('error') or 'season_ended', 'season_finalized': bool(prepared.get('season_finalized'))}
+            return {'ok': False, 'error': 'leadership_automatic', 'leadership_mode': 'contribution', 'automatic': True}
+        except Exception:
+            polywar._safe_rollback(conn); raise
+        finally: conn.close()
     conn=polywar.get_connection(); c=conn.cursor()
     try:
         sid = _prepare_context_before_transaction(conn)
@@ -231,9 +262,15 @@ def vote(user_id:int,candidate_user_id:int):
     finally: conn.close()
 
 
-def _is_commander(conn,sid,fid,user_id):
+def _is_faction_leader(conn,sid,fid,user_id):
+    if leaders.is_contribution_mode():
+        leader=leaders.get_faction_leader(conn,sid,fid,refresh=True)
+        return bool(leader and int(leader.get('user_id') or 0)==int(user_id))
     r=polywar._fetchone(conn.cursor(),'SELECT commander_user_id,commander_term_ends_at FROM polywar_faction_season_stats WHERE season_id=%s AND faction_id=%s',(sid,fid))
-    return r and int(r.get('commander_user_id') or 0)==int(user_id) and _dt(r.get('commander_term_ends_at')) and _dt(r.get('commander_term_ends_at'))>datetime.utcnow()
+    return bool(r and int(r.get('commander_user_id') or 0)==int(user_id) and _dt(r.get('commander_term_ends_at')) and _dt(r.get('commander_term_ends_at'))>datetime.utcnow())
+
+def _is_commander(conn,sid,fid,user_id):
+    return _is_faction_leader(conn,sid,fid,user_id)
 
 
 def list_orders(conn,sid,fid):
@@ -285,7 +322,7 @@ def upsert_order(user_id:int, order_id, order_type, x:int, y:int, message:str=''
         fid=p.get('faction_id')
         if not fid: raise ValueError('faction_required')
         _prepare_faction(conn,sid,fid)
-        if not _is_commander(conn,sid,fid,user_id): raise ValueError('commander_required')
+        if not _is_faction_leader(conn,sid,fid,user_id): raise ValueError('leader_required' if leaders.is_contribution_mode() else 'commander_required')
         now=datetime.utcnow()
         if active is False:
             row=polywar._fetchone(c,'SELECT * FROM polywar_faction_orders WHERE id=%s AND season_id=%s AND faction_id=%s AND commander_user_id=%s',(order_id,sid,fid,user_id))
