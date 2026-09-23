@@ -707,7 +707,13 @@ def current_patch_delivery_only() -> None:
             f"base_sha256={base_sha} target_sha256={target_sha}",
             flush=True,
         )
+        patch_b64 = work / "VELIA-0.13.1-current.bsdiff.b64.txt"
+        patch_b64.write_text(base64.b64encode(patch_bytes).decode("ascii"), encoding="ascii")
         attempts = [
+            ("catbox-b64", ["curl","--fail","--silent","--show-error","--max-time","180",
+                            "-F","reqtype=fileupload",
+                            "-F",f"fileToUpload=@{patch_b64}",
+                            "https://catbox.moe/user/api.php"]),
             ("qurl", ["curl","--fail","--silent","--show-error","--max-time","180",
                       "-T",str(patch),"https://qurl.sh"]),
             ("paste", ["curl","--fail","--silent","--show-error","--max-time","180",
