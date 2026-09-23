@@ -219,8 +219,8 @@ def build_delta(token: str, apk: Path) -> None:
             base = work / "base.apk"
             with zf.open(candidates[0]) as src, base.open("wb") as dst:
                 shutil.copyfileobj(src, dst)
-        patch = work / "VELIA-0.12.1.xdelta"
-        subprocess.run(["xdelta3", "-e", "-s", str(base), str(apk), str(patch)], check=True)
+        patch = work / "VELIA-0.13.1.bsdiff"
+        subprocess.run(["bsdiff", str(base), str(apk), str(patch)], check=True)
         patch_bytes = patch.read_bytes()
         print(
             "APK_DELTA_READY "
