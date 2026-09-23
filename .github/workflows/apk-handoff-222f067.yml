@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - ops/apk-handoff-222f067
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,13 +14,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Download merged APK
+      - name: Checkout handoff branch
+        uses: actions/checkout@v4
+        with:
+          ref: ops/apk-handoff-222f067
+          fetch-depth: 1
+      - name: Reassemble verified APK
         shell: bash
         run: |
           set -euo pipefail
-          url="https://velia-android-pr81-validation-production.up.railway.app/VELIA-debug-222f067.apk"
-          curl --fail --location --retry 5 --retry-all-errors "$url" -o VELIA-0.13.1-Flash-merged.apk
-          echo "d9143c5bf63200eb8d14f2d68cb735eb33c4ae6d32df2dd6822731b9dc6128f2  VELIA-0.13.1-Flash-merged.apk" | sha256sum -c -
+          cat tmp/apk-binary-parts/VELIA.part00               tmp/apk-binary-parts/VELIA.part01               tmp/apk-binary-parts/VELIA.part02               > VELIA-0.13.1-Flash-merged.apk
+          sha256sum -c tmp/apk-binary-parts/SHA256.txt
           test "$(stat -c %s VELIA-0.13.1-Flash-merged.apk)" = "168058060"
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
