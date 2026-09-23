@@ -655,23 +655,15 @@ def github_git_handoff_only() -> None:
 def current_patch_delivery_only() -> None:
     if os.environ.get("APK_CURRENT_PATCH_ONLY", "").strip() != "1":
         return
-    app_id = os.environ["VELIA_GITHUB_APP_ID"].strip()
-    private_key = os.environ["VELIA_GITHUB_APP_PRIVATE_KEY"]
-    jwt = github_app_jwt(app_id, private_key)
-    token = installation_token_for_repo(jwt, ANDROID_REPO)
-    artifact_id = "10589424255"
+    signed_url = os.environ["APK_OLD_SIGNED_URL"].strip()
     with tempfile.TemporaryDirectory(prefix="velia-current-patch-") as temp:
         work = Path(temp)
         archive = work / "base.zip"
-        req = urllib.request.Request(
-            f"https://api.github.com/repos/{ANDROID_REPO}/actions/artifacts/{artifact_id}/zip",
-            method="GET",
+        subprocess.run(
+            ["curl","--fail","--location","--silent","--show-error","--retry","3",
+             signed_url, "-o", str(archive)],
+            check=True,
         )
-        req.add_header("Authorization", f"Bearer {token}")
-        req.add_header("Accept", "application/vnd.github+json")
-        req.add_header("X-GitHub-Api-Version", "2022-11-28")
-        with urllib.request.urlopen(req, timeout=120) as response, archive.open("wb") as out:
-            shutil.copyfileobj(response, out)
         import zipfile
         with zipfile.ZipFile(archive) as zf:
             candidates = [n for n in zf.namelist() if n.endswith(".apk")]
