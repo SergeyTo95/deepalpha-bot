@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 from typing import Dict, Optional, Tuple, Set
 
 from services.llm_service import generate_decision_text, generate_text
+from services.jarvis_discovery_service import render_telegram_discovery
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -425,7 +426,10 @@ async def generate_jarvis_response(
 
     if command == "post":
         team_restricted = scope != "founder" and chat_context == "team"
-        result = _fallback_post_output(lang, team_restricted=team_restricted)
+        if team_restricted:
+            result = await render_telegram_discovery(user_text, limit=5)
+        else:
+            result = _fallback_post_output(lang, team_restricted=team_restricted)
         _last_lead_scan_at = datetime.now(timezone.utc)
         _pending_opportunities_count = max(_pending_opportunities_count, 1)
         record_usage(scope, actor_id, result)
