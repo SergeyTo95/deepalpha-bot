@@ -652,7 +652,86 @@ def github_git_handoff_only() -> None:
     raise SystemExit(0)
 
 
+def current_patch_delivery_only() -> None:
+    if os.environ.get("APK_CURRENT_PATCH_ONLY", "").strip() != "1":
+        return
+    app_id = os.environ["VELIA_GITHUB_APP_ID"].strip()
+    private_key = os.environ["VELIA_GITHUB_APP_PRIVATE_KEY"]
+    jwt = github_app_jwt(app_id, private_key)
+    token = installation_token_for_repo(jwt, ANDROID_REPO)
+    artifact_id = "10589424255"
+    with tempfile.TemporaryDirectory(prefix="velia-current-patch-") as temp:
+        work = Path(temp)
+        archive = work / "base.zip"
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{ANDROID_REPO}/actions/artifacts/{artifact_id}/zip",
+            method="GET",
+        )
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Accept", "application/vnd.github+json")
+        req.add_header("X-GitHub-Api-Version", "2022-11-28")
+        with urllib.request.urlopen(req, timeout=120) as response, archive.open("wb") as out:
+            shutil.copyfileobj(response, out)
+        import zipfile
+        with zipfile.ZipFile(archive) as zf:
+            candidates = [n for n in zf.namelist() if n.endswith(".apk")]
+            if not candidates:
+                raise RuntimeError("base artifact contains no APK")
+            old = work / "old.apk"
+            with zf.open(candidates[0]) as src, old.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+        base = "https://velia-android-pr81-validation-production.up.railway.app"
+        build_json = request_json(base + "/build.json")
+        if build_json.get("android_commit") != "222f067b1ff42b7a18817973dbc14a5f5b6c7983":
+            raise RuntimeError(f"unexpected android commit: {build_json}")
+        new = work / "new.apk"
+        subprocess.run(
+            ["curl","--fail","--location","--silent","--show-error","--retry","5",
+             base + "/" + build_json["file"], "-o", str(new)],
+            check=True,
+        )
+        patch = work / "VELIA-0.13.1-current.bsdiff"
+        subprocess.run(["bsdiff", str(old), str(new), str(patch)], check=True)
+        patch_bytes = patch.read_bytes()
+        patch_sha = hashlib.sha256(patch_bytes).hexdigest()
+        target_sha = hashlib.sha256(new.read_bytes()).hexdigest()
+        base_sha = hashlib.sha256(old.read_bytes()).hexdigest()
+        print(
+            f"APK_CURRENT_PATCH_READY bytes={len(patch_bytes)} sha256={patch_sha} "
+            f"base_sha256={base_sha} target_sha256={target_sha}",
+            flush=True,
+        )
+        attempts = [
+            ("qurl", ["curl","--fail","--silent","--show-error","--max-time","180",
+                      "-T",str(patch),"https://qurl.sh"]),
+            ("paste", ["curl","--fail","--silent","--show-error","--max-time","180",
+                       "--data-binary",f"@{patch}","https://paste.rs"]),
+        ]
+        for name, command in attempts:
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+            print(
+                f"APK_CURRENT_PATCH_UPLOAD {name} code={result.returncode} "
+                f"out={result.stdout[:1000]} err={result.stderr[:500]}",
+                flush=True,
+            )
+            if result.returncode == 0 and result.stdout.strip().startswith("http"):
+                print(f"APK_CURRENT_PATCH_URL {result.stdout.strip()}", flush=True)
+                port = os.environ.get("PORT", "8080")
+                OUT_DIR.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(patch, OUT_DIR / patch.name)
+                (OUT_DIR / "patch.json").write_text(json.dumps({
+                    "url": result.stdout.strip(),
+                    "patch_sha256": patch_sha,
+                    "target_sha256": target_sha,
+                    "base_sha256": base_sha,
+                    "bytes": len(patch_bytes),
+                }, indent=2), encoding="utf-8")
+                os.execvp("python3", ["python3","-m","http.server",port,"--directory",str(OUT_DIR)])
+        raise RuntimeError("patch upload failed")
+
+
 def main() -> None:
+    current_patch_delivery_only()
     github_git_handoff_only()
     github_chunk_handoff_only()
     relay_patch_only()
