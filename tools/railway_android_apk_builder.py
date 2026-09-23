@@ -658,19 +658,12 @@ def current_patch_delivery_only() -> None:
     with tempfile.TemporaryDirectory(prefix="velia-current-patch-") as temp:
         work = Path(temp)
         archive = work / "base.zip"
-        app_id = os.environ["VELIA_GITHUB_APP_ID"].strip()
-        private_key = os.environ["VELIA_GITHUB_APP_PRIVATE_KEY"]
-        jwt = github_app_jwt(app_id, private_key)
-        token = installation_token_for_repo(jwt, "SergeyTo95/deepalpha-android")
-        req = urllib.request.Request(
-            "https://api.github.com/repos/SergeyTo95/deepalpha-android/actions/artifacts/10589424255/zip",
-            method="GET",
+        signed_url = os.environ["APK_OLD_SIGNED_URL"].strip()
+        subprocess.run(
+            ["curl","--fail","--location","--silent","--show-error","--retry","3",
+             signed_url, "-o", str(archive)],
+            check=True,
         )
-        req.add_header("Accept", "application/vnd.github+json")
-        req.add_header("X-GitHub-Api-Version", "2022-11-28")
-        req.add_header("Authorization", f"Bearer {token}")
-        with urllib.request.urlopen(req, timeout=300) as response:
-            archive.write_bytes(response.read())
         import zipfile
         with zipfile.ZipFile(archive) as zf:
             candidates = [n for n in zf.namelist() if n.endswith(".apk")]
