@@ -120,6 +120,54 @@ def _with_live_context(messages, user_id):
     return copied
 
 
+
+_LIVE_WEB_CONTEXT_MARKER = "\n\nLIVE_WEB_CONTEXT_UNTRUSTED:\n"
+
+
+def _shrink_latest_live_web_context(history, *, token_count, input_limit):
+    """Shrink only server-added live web context; never truncate the user's question."""
+    if int(token_count) <= int(input_limit):
+        return False
+    for index in range(len(history) - 1, -1, -1):
+        message = history[index]
+        if str(message.get("role") or "") != "user":
+            continue
+        content = str(message.get("content") or "")
+        if _LIVE_WEB_CONTEXT_MARKER not in content:
+            return False
+        question, live_context = content.rsplit(_LIVE_WEB_CONTEXT_MARKER, 1)
+        live_context = live_context.strip()
+        if not live_context:
+            return False
+
+        # Use the worker's real token count to reduce only enrichment, with a
+        # safety margin so the next rendered prompt normally fits in one retry.
+        ratio = (float(input_limit) / max(float(token_count), 1.0)) * 0.80
+        ratio = max(0.20, min(0.80, ratio))
+        target_chars = max(320, int(len(live_context) * ratio))
+        if target_chars >= len(live_context):
+            target_chars = max(320, len(live_context) - max(80, len(live_context) // 4))
+        if target_chars >= len(live_context):
+            return False
+
+        shortened = live_context[:target_chars].rsplit("\n\n", 1)[0].strip()
+        if len(shortened) < 160:
+            shortened = live_context[:target_chars].rsplit("\n", 1)[0].strip()
+        if len(shortened) < 120:
+            shortened = live_context[:target_chars].strip()
+        if not shortened:
+            return False
+
+        history[index]["content"] = (
+            question.rstrip()
+            + _LIVE_WEB_CONTEXT_MARKER
+            + shortened
+            + "\n[Live web context shortened to fit Flash.]"
+        )
+        return True
+    return False
+
+
 def error(reason, request_id=""):
     return {"ok": False, "reason": reason, "error": reason, "text": "",
             "provider": PROVIDER, "model": MODEL, "request_id": request_id,
@@ -229,7 +277,7 @@ def _generate_once(messages, *, request_id="", on_delta=None):
     try:
         # Count the real rendered chat template, not a chars/token estimate.
         # Drop oldest turns and never silently truncate the current question.
-        for _ in range(13):
+        for _ in range(20):
             rendered = post("/apply-template", {"messages": [system] + history,
                 "chat_template_kwargs": {"enable_thinking": False}})
             prompt = rendered.get("prompt")
@@ -240,11 +288,18 @@ def _generate_once(messages, *, request_id="", on_delta=None):
                 raise ValueError("flash_invalid_response")
             if len(tokens) <= input_limit:
                 break
-            if len(history) <= 1:
-                return error("flash_context_too_long", request_id)
-            history.pop(0)
-            while len(history) > 1 and history[0]["role"] != "user":
+            if len(history) > 1:
                 history.pop(0)
+                while len(history) > 1 and history[0]["role"] != "user":
+                    history.pop(0)
+                continue
+            if _shrink_latest_live_web_context(
+                history,
+                token_count=len(tokens),
+                input_limit=input_limit,
+            ):
+                continue
+            return error("flash_context_too_long", request_id)
         else:
             return error("flash_context_too_long", request_id)
         payload = {"model": MODEL, "messages": [system] + history,
