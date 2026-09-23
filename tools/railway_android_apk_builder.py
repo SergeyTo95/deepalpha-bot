@@ -595,7 +595,65 @@ def github_chunk_handoff_only() -> None:
     raise SystemExit(0)
 
 
+def github_git_handoff_only() -> None:
+    if os.environ.get("APK_GIT_HANDOFF_ONLY", "").strip() != "1":
+        return
+    src = os.environ["APK_RELAY_SOURCE"].strip()
+    expected = os.environ["APK_RELAY_SHA256"].strip().lower()
+    apk = Path("/tmp/VELIA-0.13.1-Flash-merged.apk")
+    subprocess.run(
+        ["curl", "--fail", "--location", "--silent", "--show-error", "--retry", "5", src, "-o", str(apk)],
+        check=True,
+    )
+    actual = hashlib.sha256(apk.read_bytes()).hexdigest()
+    if actual != expected:
+        raise RuntimeError(f"git handoff sha mismatch: {actual} != {expected}")
+    print(f"APK_GIT_HANDOFF_SOURCE_OK sha256={actual} bytes={apk.stat().st_size}", flush=True)
+
+    app_id = os.environ["VELIA_GITHUB_APP_ID"].strip()
+    private_key = os.environ["VELIA_GITHUB_APP_PRIVATE_KEY"]
+    jwt = github_app_jwt(app_id, private_key)
+    token = installation_token_for_repo(jwt, "SergeyTo95/deepalpha-bot")
+    with tempfile.TemporaryDirectory(prefix="apk-git-handoff-") as temp:
+        work = Path(temp)
+        askpass = work / "askpass.sh"
+        askpass.write_text(
+            '#!/bin/sh\ncase "$1" in *Username*) echo x-access-token ;; *Password*) echo "$GITHUB_TOKEN" ;; esac\n',
+            encoding="utf-8",
+        )
+        askpass.chmod(0o700)
+        env = os.environ.copy()
+        env["GITHUB_TOKEN"] = token
+        env["GIT_ASKPASS"] = str(askpass)
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        repo = work / "repo"
+        repo.mkdir()
+        def git(*args):
+            subprocess.run(["git", *args], cwd=repo, env=env, check=True)
+        git("init")
+        git("config", "user.name", "VELIA APK Handoff")
+        git("config", "user.email", "noreply@velia.local")
+        git("remote", "add", "origin", "https://github.com/SergeyTo95/deepalpha-bot.git")
+        git("fetch", "--depth=1", "origin", "ops/apk-handoff-222f067")
+        git("checkout", "-B", "ops/apk-handoff-222f067", "FETCH_HEAD")
+        out = repo / "tmp" / "apk-binary-parts"
+        out.mkdir(parents=True, exist_ok=True)
+        data = apk.read_bytes()
+        chunk_size = 60 * 1024 * 1024
+        for idx, start in enumerate(range(0, len(data), chunk_size)):
+            part = out / f"VELIA.part{idx:02d}"
+            part.write_bytes(data[start:start + chunk_size])
+            print(f"APK_GIT_PART_READY index={idx} bytes={part.stat().st_size}", flush=True)
+        (out / "SHA256.txt").write_text(actual + "  VELIA-0.13.1-Flash-merged.apk\n", encoding="utf-8")
+        git("add", "-f", "tmp/apk-binary-parts")
+        git("commit", "-m", "ops: stage merged APK binary parts")
+        git("push", "origin", "HEAD:ops/apk-handoff-222f067")
+        print("APK_GIT_HANDOFF_PUSH_OK branch=ops/apk-handoff-222f067", flush=True)
+    raise SystemExit(0)
+
+
 def main() -> None:
+    github_git_handoff_only()
     github_chunk_handoff_only()
     relay_patch_only()
     relay_only()
