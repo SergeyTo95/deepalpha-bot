@@ -267,6 +267,43 @@ def test_context_overflow_never_generates(enabled, monkeypatch, token_count):
     assert not any(url.endswith("completions") for url, _ in session.calls)
 
 
+def test_live_web_context_is_shrunk_to_fit_real_token_budget(enabled, monkeypatch):
+    class BudgetAwareSession(Session):
+        def post(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            if url.endswith("/apply-template"):
+                rendered = kwargs["json"]["messages"][-1]["content"]
+                return Response({"prompt": rendered})
+            if url.endswith("/tokenize"):
+                rendered = kwargs["json"]["content"]
+                return Response({"tokens": list(range(150 + len(rendered) // 2))})
+            return Response({
+                "choices": [{"message": {"content": "Свежая новость"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 500, "completion_tokens": 5},
+            })
+
+    session = BudgetAwareSession()
+    monkeypatch.setattr(flash.requests, "Session", lambda: session)
+    original = (
+        "найди новости Анталии на сегодня"
+        + flash._LIVE_WEB_CONTEXT_MARKER
+        + "SOURCE 1\n"
+        + ("x" * 1800)
+    )
+
+    result = flash.generate([{"role": "user", "content": original}])
+
+    assert result["ok"], result
+    completion = next(
+        kwargs["json"] for url, kwargs in session.calls
+        if url.endswith("/v1/chat/completions")
+    )
+    final_user = completion["messages"][-1]["content"]
+    assert final_user.startswith("найди новости Анталии на сегодня" + flash._LIVE_WEB_CONTEXT_MARKER)
+    assert len(final_user) < len(original)
+    assert "Live web context shortened to fit Flash" in final_user
+
+
 def test_stream_keeps_flash_selection_before_provider_chain(monkeypatch):
     calls = []
     monkeypatch.setattr(flash, "dispatch_send", lambda *a, **k: calls.append(k) or {"ok": True})
