@@ -545,7 +545,58 @@ def relay_only() -> None:
     os.execvp("python3", ["python3", "-m", "http.server", port, "--directory", str(OUT_DIR)])
 
 
+def github_chunk_handoff_only() -> None:
+    if os.environ.get("APK_GITHUB_CHUNK_ONLY", "").strip() != "1":
+        return
+    src = os.environ["APK_RELAY_SOURCE"].strip()
+    expected = os.environ["APK_RELAY_SHA256"].strip().lower()
+    target = Path("/tmp/VELIA-0.13.1-Flash-merged.apk")
+    subprocess.run(
+        ["curl", "--fail", "--location", "--silent", "--show-error", "--retry", "5", src, "-o", str(target)],
+        check=True,
+    )
+    actual = hashlib.sha256(target.read_bytes()).hexdigest()
+    if actual != expected:
+        raise RuntimeError(f"chunk handoff sha mismatch: {actual} != {expected}")
+    app_id = os.environ["VELIA_GITHUB_APP_ID"].strip()
+    private_key = os.environ["VELIA_GITHUB_APP_PRIVATE_KEY"]
+    jwt = github_app_jwt(app_id, private_key)
+    repo = "SergeyTo95/deepalpha-bot"
+    token = installation_token_for_repo(jwt, repo)
+    branch = "ops/apk-handoff-222f067"
+    chunk_size = 40 * 1024 * 1024
+    data = target.read_bytes()
+    for idx, start in enumerate(range(0, len(data), chunk_size)):
+        chunk = data[start:start + chunk_size]
+        path = f"tmp/apk-parts/VELIA.part{idx:02d}"
+        payload = json.dumps({
+            "message": f"ops: upload APK chunk {idx:02d}",
+            "content": base64.b64encode(chunk).decode("ascii"),
+            "branch": branch,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{repo}/contents/{path}",
+            data=payload,
+            method="PUT",
+        )
+        req.add_header("Accept", "application/vnd.github+json")
+        req.add_header("X-GitHub-Api-Version", "2022-11-28")
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=300) as response:
+            response.read()
+        print(
+            f"APK_GITHUB_CHUNK_OK index={idx} bytes={len(chunk)} "
+            f"url=https://raw.githubusercontent.com/{repo}/{branch}/{path}",
+            flush=True,
+        )
+    print(f"APK_GITHUB_CHUNK_SHA256 {actual}", flush=True)
+    print(f"APK_GITHUB_CHUNK_COUNT {(len(data)+chunk_size-1)//chunk_size}", flush=True)
+    raise SystemExit(0)
+
+
 def main() -> None:
+    github_chunk_handoff_only()
     relay_patch_only()
     relay_only()
     app_id = os.environ["VELIA_GITHUB_APP_ID"].strip()
