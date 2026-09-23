@@ -673,7 +673,13 @@ def current_patch_delivery_only() -> None:
             with zf.open(candidates[0]) as src, old.open("wb") as dst:
                 shutil.copyfileobj(src, dst)
         base = "https://velia-android-pr81-validation-production.up.railway.app"
-        build_json = request_json(base + "/build.json")
+        build_meta = work / "build.json"
+        subprocess.run(
+            ["curl","--fail","--location","--silent","--show-error","--retry","5",
+             base + "/build.json", "-o", str(build_meta)],
+            check=True,
+        )
+        build_json = json.loads(build_meta.read_text(encoding="utf-8"))
         if build_json.get("android_commit") != "222f067b1ff42b7a18817973dbc14a5f5b6c7983":
             raise RuntimeError(f"unexpected android commit: {build_json}")
         new = work / "new.apk"
