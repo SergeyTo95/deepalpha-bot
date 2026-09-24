@@ -1,0 +1,1 @@
+Trigger APK handoff only. No build, no deploy.
