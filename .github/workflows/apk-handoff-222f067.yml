@@ -14,23 +14,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout handoff branch
-        uses: actions/checkout@v4
-        with:
-          ref: ops/apk-handoff-222f067
-          fetch-depth: 1
-      - name: Reassemble verified APK
+      - name: Download verified Railway-built APK release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          cat tmp/apk-binary-parts/VELIA.part00               tmp/apk-binary-parts/VELIA.part01               tmp/apk-binary-parts/VELIA.part02               > VELIA-0.13.1-Flash-merged.apk
-          sha256sum -c tmp/apk-binary-parts/SHA256.txt
-          test "$(stat -c %s VELIA-0.13.1-Flash-merged.apk)" = "168058060"
+          gh release download velia-0.13.1-222f067-chat \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern 'VELIA-0.13.1.apk' \
+            --output VELIA-0.13.1-Flash.apk
+          test "$(stat -c %s VELIA-0.13.1-Flash.apk)" = "168058060"
+          echo "0b460be68c56f4921f0fc4519fdce50b361802a1f8125337234944e5a9de4b2c  VELIA-0.13.1-Flash.apk" | sha256sum -c -
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: VELIA-0.13.1-Flash-merged
-          path: VELIA-0.13.1-Flash-merged.apk
+          name: VELIA-0.13.1-Flash
+          path: VELIA-0.13.1-Flash.apk
           compression-level: 0
           retention-days: 1
           if-no-files-found: error
