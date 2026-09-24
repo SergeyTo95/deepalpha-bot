@@ -736,8 +736,6 @@ def current_patch_delivery_only() -> None:
 
 
 def exact_chat_patch_log_only() -> None:
-    if os.environ.get("APK_PATCH_LOG_ONLY", "").strip() != "1":
-        return
 
     expected_base = "7b9cbe825a69fddfb5b1cab21a7e6ef8a5d848641fac14cf2647bd762a9d7cf1"
     expected_target = "6c1bda3ef3d1b4e4e73fd39550d145e516478d6cb51dbe83b0b3b75b0212ea9b"
