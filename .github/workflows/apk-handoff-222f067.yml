@@ -1,10 +1,9 @@
-name: APK handoff 222f067
+name: APK handoff from Railway
 
 on:
   push:
     branches:
       - ops/apk-handoff-222f067
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,26 +11,18 @@ permissions:
 jobs:
   handoff:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     steps:
-      - name: Download verified Railway-built APK release asset
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
+      - name: Download exact Railway APK
         run: |
           set -euo pipefail
-          gh release download velia-0.13.1-222f067-chat \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern 'VELIA-0.13.1.apk' \
-            --output VELIA-0.13.1-Flash.apk
+          curl -fL --retry 3 --connect-timeout 20 --max-time 900             "https://velia-android-apk-c2205e4-production.up.railway.app/VELIA-debug-222f067.apk"             -o VELIA-0.13.1-Flash.apk
           test "$(stat -c %s VELIA-0.13.1-Flash.apk)" = "168058060"
-          echo "0b460be68c56f4921f0fc4519fdce50b361802a1f8125337234944e5a9de4b2c  VELIA-0.13.1-Flash.apk" | sha256sum -c -
+          echo "6c1bda3ef3d1b4e4e73fd39550d145e516478d6cb51dbe83b0b3b75b0212ea9b  VELIA-0.13.1-Flash.apk" | sha256sum -c -
 
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: VELIA-0.13.1-Flash
           path: VELIA-0.13.1-Flash.apk
           compression-level: 0
           retention-days: 1
-          if-no-files-found: error
