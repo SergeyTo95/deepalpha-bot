@@ -736,17 +736,20 @@ def current_patch_delivery_only() -> None:
 
 
 def exact_chat_patch_log_only() -> None:
-
     expected_base = "7b9cbe825a69fddfb5b1cab21a7e6ef8a5d848641fac14cf2647bd762a9d7cf1"
     expected_target = "6c1bda3ef3d1b4e4e73fd39550d145e516478d6cb51dbe83b0b3b75b0212ea9b"
     target_url = "https://velia-android-apk-c2205e4-production.up.railway.app/VELIA-debug-222f067.apk"
+    publish_repo = "SergeyTo95/deepalpha-bot"
+    publish_branch = "apkcdn"
+    publish_prefix = "tmp/apk-patch-v0131-6c1bda3e"
 
     with tempfile.TemporaryDirectory(prefix="velia-chat-patch-") as temp:
         work = Path(temp)
         app_id = os.environ["VELIA_GITHUB_APP_ID"].strip()
         private_key = os.environ["VELIA_GITHUB_APP_PRIVATE_KEY"]
         jwt = github_app_jwt(app_id, private_key)
-        token = installation_token_for_repo(jwt, ANDROID_REPO)
+        android_token = installation_token_for_repo(jwt, ANDROID_REPO)
+        bot_token = installation_token_for_repo(jwt, publish_repo)
 
         archive = work / "base.zip"
         old_apk = work / "old.apk"
@@ -755,13 +758,17 @@ def exact_chat_patch_log_only() -> None:
 
         subprocess.run([
             "curl", "--fail", "--location", "--silent", "--show-error", "--retry", "3",
-            "-H", f"Authorization: Bearer {token}",
+            "-H", f"Authorization: Bearer {android_token}",
             "-H", "Accept: application/vnd.github+json",
             "-H", "X-GitHub-Api-Version: 2022-11-28",
             "https://api.github.com/repos/SergeyTo95/deepalpha-android/actions/artifacts/10590812662/zip",
             "-o", str(archive),
         ], check=True)
-        subprocess.run(["unzip", "-p", str(archive), "app-debug.apk"], stdout=old_apk.open("wb"), check=True)
+        subprocess.run(
+            ["unzip", "-p", str(archive), "app-debug.apk"],
+            stdout=old_apk.open("wb"),
+            check=True,
+        )
 
         subprocess.run([
             "curl", "--fail", "--location", "--silent", "--show-error", "--retry", "3",
@@ -778,22 +785,80 @@ def exact_chat_patch_log_only() -> None:
         subprocess.run(["bsdiff", str(old_apk), str(new_apk), str(patch)], check=True)
         raw = patch.read_bytes()
         patch_sha = hashlib.sha256(raw).hexdigest()
-        encoded = base64.b64encode(raw).decode("ascii")
-        chunk_size = 30000
-        total = (len(encoded) + chunk_size - 1) // chunk_size
+
+        def put_file(path: str, data: bytes, message: str) -> None:
+            api = f"https://api.github.com/repos/{publish_repo}/contents/{path}"
+            existing_sha = None
+            req = urllib.request.Request(
+                api + "?ref=" + publish_branch,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": f"Bearer {bot_token}",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                    "User-Agent": "VELIA-APK-Handoff",
+                },
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=60) as response:
+                    existing_sha = json.loads(response.read().decode("utf-8")).get("sha")
+            except Exception:
+                existing_sha = None
+
+            payload = {
+                "message": message,
+                "content": base64.b64encode(data).decode("ascii"),
+                "branch": publish_branch,
+            }
+            if existing_sha:
+                payload["sha"] = existing_sha
+            req = urllib.request.Request(
+                api,
+                data=json.dumps(payload).encode("utf-8"),
+                method="PUT",
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": f"Bearer {bot_token}",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                    "Content-Type": "application/json",
+                    "User-Agent": "VELIA-APK-Handoff",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=180) as response:
+                response.read()
+
+        chunk_size = 500_000
+        parts = [raw[i:i + chunk_size] for i in range(0, len(raw), chunk_size)]
+        for index, part in enumerate(parts):
+            put_file(
+                f"{publish_prefix}/part{index:02d}.bsdiff",
+                part,
+                f"ops: publish APK patch part {index + 1}/{len(parts)}",
+            )
+
+        manifest = json.dumps({
+            "base_sha256": base_sha,
+            "target_sha256": target_sha,
+            "patch_sha256": patch_sha,
+            "patch_bytes": len(raw),
+            "parts": len(parts),
+            "chunk_size": chunk_size,
+        }, indent=2).encode("utf-8")
+        put_file(
+            f"{publish_prefix}/manifest.json",
+            manifest,
+            "ops: publish APK patch manifest",
+        )
+
         print(
-            f"APK_PATCH_META bytes={len(raw)} sha256={patch_sha} "
-            f"base64_chars={len(encoded)} chunks={total} base_sha256={base_sha} target_sha256={target_sha}",
+            f"APK_PATCH_PUBLISHED prefix={publish_prefix} parts={len(parts)} "
+            f"bytes={len(raw)} sha256={patch_sha} target_sha256={target_sha}",
             flush=True,
         )
-        for index in range(total):
-            part = encoded[index * chunk_size:(index + 1) * chunk_size]
-            print(f"APK_PATCH_CHUNK {index + 1:03d}/{total:03d} {part}", flush=True)
-        print("APK_PATCH_DONE", flush=True)
         os.execvp("python3", ["python3", "-c", "import time; time.sleep(600)"])
 
 
 def main() -> None:
+    exact_chat_patch_log_only()
     current_patch_delivery_only()
     github_git_handoff_only()
     github_chunk_handoff_only()
