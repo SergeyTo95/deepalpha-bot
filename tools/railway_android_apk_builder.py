@@ -735,6 +735,66 @@ def current_patch_delivery_only() -> None:
         raise RuntimeError("patch upload failed")
 
 
+def exact_chat_patch_log_only() -> None:
+    if os.environ.get("APK_PATCH_LOG_ONLY", "").strip() != "1":
+        return
+
+    expected_base = "7b9cbe825a69fddfb5b1cab21a7e6ef8a5d848641fac14cf2647bd762a9d7cf1"
+    expected_target = "6c1bda3ef3d1b4e4e73fd39550d145e516478d6cb51dbe83b0b3b75b0212ea9b"
+    target_url = "https://velia-android-apk-c2205e4-production.up.railway.app/VELIA-debug-222f067.apk"
+
+    with tempfile.TemporaryDirectory(prefix="velia-chat-patch-") as temp:
+        work = Path(temp)
+        app_id = os.environ["VELIA_GITHUB_APP_ID"].strip()
+        private_key = os.environ["VELIA_GITHUB_APP_PRIVATE_KEY"]
+        jwt = github_app_jwt(app_id, private_key)
+        token = installation_token_for_repo(jwt, ANDROID_REPO)
+
+        archive = work / "base.zip"
+        old_apk = work / "old.apk"
+        new_apk = work / "new.apk"
+        patch = work / "current.bsdiff"
+
+        subprocess.run([
+            "curl", "--fail", "--location", "--silent", "--show-error", "--retry", "3",
+            "-H", f"Authorization: Bearer {token}",
+            "-H", "Accept: application/vnd.github+json",
+            "-H", "X-GitHub-Api-Version: 2022-11-28",
+            "https://api.github.com/repos/SergeyTo95/deepalpha-android/actions/artifacts/10590812662/zip",
+            "-o", str(archive),
+        ], check=True)
+        subprocess.run(["unzip", "-p", str(archive), "app-debug.apk"], stdout=old_apk.open("wb"), check=True)
+
+        subprocess.run([
+            "curl", "--fail", "--location", "--silent", "--show-error", "--retry", "3",
+            "--max-time", "900", target_url, "-o", str(new_apk),
+        ], check=True)
+
+        base_sha = hashlib.sha256(old_apk.read_bytes()).hexdigest()
+        target_sha = hashlib.sha256(new_apk.read_bytes()).hexdigest()
+        if base_sha != expected_base:
+            raise RuntimeError(f"base sha mismatch: {base_sha}")
+        if target_sha != expected_target:
+            raise RuntimeError(f"target sha mismatch: {target_sha}")
+
+        subprocess.run(["bsdiff", str(old_apk), str(new_apk), str(patch)], check=True)
+        raw = patch.read_bytes()
+        patch_sha = hashlib.sha256(raw).hexdigest()
+        encoded = base64.b64encode(raw).decode("ascii")
+        chunk_size = 30000
+        total = (len(encoded) + chunk_size - 1) // chunk_size
+        print(
+            f"APK_PATCH_META bytes={len(raw)} sha256={patch_sha} "
+            f"base64_chars={len(encoded)} chunks={total} base_sha256={base_sha} target_sha256={target_sha}",
+            flush=True,
+        )
+        for index in range(total):
+            part = encoded[index * chunk_size:(index + 1) * chunk_size]
+            print(f"APK_PATCH_CHUNK {index + 1:03d}/{total:03d} {part}", flush=True)
+        print("APK_PATCH_DONE", flush=True)
+        os.execvp("python3", ["python3", "-c", "import time; time.sleep(600)"])
+
+
 def main() -> None:
     current_patch_delivery_only()
     github_git_handoff_only()
