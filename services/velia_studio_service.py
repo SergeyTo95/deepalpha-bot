@@ -131,6 +131,7 @@ def ensure_velia_studio_tables() -> None:
         cur.execute("ALTER TABLE velia_studio_generations ADD COLUMN IF NOT EXISTS worker_updated_at TIMESTAMP NULL")
         cur.execute("ALTER TABLE velia_studio_generations ADD COLUMN IF NOT EXISTS lyrics TEXT NOT NULL DEFAULT ''")
         cur.execute("ALTER TABLE velia_studio_generations ADD COLUMN IF NOT EXISTS instrumental BOOLEAN NOT NULL DEFAULT FALSE")
+        cur.execute("ALTER TABLE velia_studio_generations ADD COLUMN IF NOT EXISTS image_provider TEXT NOT NULL DEFAULT 'velia_image'")
         # Existing production tables were created before Music mode existed.
         # Replace only the two generated CHECK constraints when their current
         # definition does not yet include music.
@@ -441,9 +442,9 @@ def _generation(user_id: int, *, generation_id: Optional[str]=None, client_reque
     conn=get_connection(); cur=conn.cursor()
     try:
         if generation_id:
-            cur.execute("SELECT generation_id,session_id,generation_type,prompt,reference_asset_ids_json,status,output_request_id,estimated_cost_usd,error_code,created_at,completed_at,client_request_id,duration_seconds,worker_status,progress_percent,estimated_seconds_remaining,estimated_completion_at,lyrics,instrumental FROM velia_studio_generations WHERE generation_id=%s AND user_id=%s LIMIT 1",(generation_id,int(user_id)))
+            cur.execute("SELECT generation_id,session_id,generation_type,prompt,reference_asset_ids_json,status,output_request_id,estimated_cost_usd,error_code,created_at,completed_at,client_request_id,duration_seconds,worker_status,progress_percent,estimated_seconds_remaining,estimated_completion_at,lyrics,instrumental,image_provider FROM velia_studio_generations WHERE generation_id=%s AND user_id=%s LIMIT 1",(generation_id,int(user_id)))
         else:
-            cur.execute("SELECT generation_id,session_id,generation_type,prompt,reference_asset_ids_json,status,output_request_id,estimated_cost_usd,error_code,created_at,completed_at,client_request_id,duration_seconds,worker_status,progress_percent,estimated_seconds_remaining,estimated_completion_at,lyrics,instrumental FROM velia_studio_generations WHERE client_request_id=%s AND user_id=%s LIMIT 1",(str(client_request_id),int(user_id)))
+            cur.execute("SELECT generation_id,session_id,generation_type,prompt,reference_asset_ids_json,status,output_request_id,estimated_cost_usd,error_code,created_at,completed_at,client_request_id,duration_seconds,worker_status,progress_percent,estimated_seconds_remaining,estimated_completion_at,lyrics,instrumental,image_provider FROM velia_studio_generations WHERE client_request_id=%s AND user_id=%s LIMIT 1",(str(client_request_id),int(user_id)))
         row=cur.fetchone()
     finally:
         cur.close(); conn.close()
@@ -453,7 +454,7 @@ def _generation(user_id: int, *, generation_id: Optional[str]=None, client_reque
     except Exception: ref_ids=[]
     media=_generation_media(gen_type,out,gen_id,int(user_id))
     refs=[m for m in (reference_asset_metadata(str(i),user_id) for i in ref_ids) if m]
-    return {"id":gen_id,"session_id":str(_rv(row,"session_id",1,"")),"type":gen_type,"prompt":str(_rv(row,"prompt",3,"")),"client_request_id":str(_rv(row,"client_request_id",11,"") or ""),"references":refs,"status":str(_rv(row,"status",5,"pending")),"media":media,"estimated_cost_usd":float(_rv(row,"estimated_cost_usd",7,0) or 0),"error_code":_rv(row,"error_code",8),"duration_seconds":int(_rv(row,"duration_seconds",12,5) or 5),"worker_status":str(_rv(row,"worker_status",13,"") or "") or None,"progress_percent":max(0,min(100,int(_rv(row,"progress_percent",14,0) or 0))),"estimated_seconds_remaining":int(_rv(row,"estimated_seconds_remaining",15,0)) if _rv(row,"estimated_seconds_remaining",15) is not None else None,"estimated_completion_at":_iso(_rv(row,"estimated_completion_at",16)),"lyrics":str(_rv(row,"lyrics",17,"") or ""),"instrumental":bool(_rv(row,"instrumental",18,False)),"created_at":_iso(_rv(row,"created_at",9)),"completed_at":_iso(_rv(row,"completed_at",10))}
+    return {"id":gen_id,"session_id":str(_rv(row,"session_id",1,"")),"type":gen_type,"prompt":str(_rv(row,"prompt",3,"")),"client_request_id":str(_rv(row,"client_request_id",11,"") or ""),"references":refs,"status":str(_rv(row,"status",5,"pending")),"media":media,"estimated_cost_usd":float(_rv(row,"estimated_cost_usd",7,0) or 0),"error_code":_rv(row,"error_code",8),"duration_seconds":int(_rv(row,"duration_seconds",12,5) or 5),"worker_status":str(_rv(row,"worker_status",13,"") or "") or None,"progress_percent":max(0,min(100,int(_rv(row,"progress_percent",14,0) or 0))),"estimated_seconds_remaining":int(_rv(row,"estimated_seconds_remaining",15,0)) if _rv(row,"estimated_seconds_remaining",15) is not None else None,"estimated_completion_at":_iso(_rv(row,"estimated_completion_at",16)),"lyrics":str(_rv(row,"lyrics",17,"") or ""),"instrumental":bool(_rv(row,"instrumental",18,False)),"image_provider":str(_rv(row,"image_provider",19,"velia_image") or "velia_image"),"created_at":_iso(_rv(row,"created_at",9)),"completed_at":_iso(_rv(row,"completed_at",10))}
 
 
 def list_messages(user_id: int, session_id: str, *, limit: int=200) -> List[Dict[str, Any]]:
@@ -467,10 +468,10 @@ def list_messages(user_id: int, session_id: str, *, limit: int=200) -> List[Dict
     return [{"id":str(_rv(r,"message_id",0,"")),"role":str(_rv(r,"role",1,"")),"content":str(_rv(r,"content",2,"")),"status":str(_rv(r,"status",3,"completed")),"generation":_generation(user_id,generation_id=str(_rv(r,"generation_id",4,"") or "")) if _rv(r,"generation_id",4) else None,"created_at":_iso(_rv(r,"created_at",5))} for r in rows]
 
 
-def _insert_turn(user_id: int, session_id: str, mode: str, prompt: str, client_request_id: str, refs: List[str], *, duration_seconds: int = 5, lyrics: str = "", instrumental: bool = False) -> str:
+def _insert_turn(user_id: int, session_id: str, mode: str, prompt: str, client_request_id: str, refs: List[str], *, duration_seconds: int = 5, lyrics: str = "", instrumental: bool = False, image_provider: str = "velia_image") -> str:
     generation_id=str(uuid.uuid4()); now=datetime.utcnow(); message_id=str(uuid.uuid4()); conn=get_connection(); cur=conn.cursor()
     try:
-        cur.execute("INSERT INTO velia_studio_generations(generation_id,session_id,user_id,client_request_id,generation_type,prompt,reference_asset_ids_json,status,duration_seconds,lyrics,instrumental,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s)",(generation_id,str(session_id),int(user_id),client_request_id,mode,prompt,json.dumps(refs),int(duration_seconds),str(lyrics),bool(instrumental),now))
+        cur.execute("INSERT INTO velia_studio_generations(generation_id,session_id,user_id,client_request_id,generation_type,prompt,reference_asset_ids_json,status,duration_seconds,lyrics,instrumental,image_provider,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s,%s,%s,%s)",(generation_id,str(session_id),int(user_id),client_request_id,mode,prompt,json.dumps(refs),int(duration_seconds),str(lyrics),bool(instrumental),str(image_provider or "velia_image"),now))
         cur.execute("INSERT INTO velia_studio_messages(message_id,session_id,user_id,role,content,status,generation_id,created_at) VALUES(%s,%s,%s,'user',%s,'completed',%s,%s)",(message_id,str(session_id),int(user_id),prompt,generation_id,now))
         cur.execute("UPDATE velia_studio_sessions SET title=CASE WHEN title='' THEN %s ELSE title END,updated_at=%s WHERE session_id=%s AND user_id=%s",(_auto_title(prompt),now,str(session_id),int(user_id))); conn.commit()
     except Exception:
