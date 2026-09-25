@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import json
@@ -393,6 +394,74 @@ def generate_image(*, prompt: str, request_id: str) -> Dict[str, Any]:
         "mime_type": "image/png",
         "width": int(actual_width),
         "height": int(actual_height),
+        "external_request_id": artifact.job_id,
+        "artifact_id": artifact.artifact_id,
+        "sha256": artifact.sha256,
+    }
+
+
+def generate_velia_image_2(
+    *,
+    prompt: str,
+    request_id: str,
+    references: list[Dict[str, Any]] | None = None,
+    transparent_background: bool = False,
+) -> Dict[str, Any]:
+    """Run the product provider Velia Image 2 on the self-hosted media worker.
+
+    No legacy fallback is permitted here. If the worker or Velia Image 2 engine
+    is unavailable, MediaWorkerError propagates to the Studio layer.
+    """
+    width = _env_int("VELIA_MEDIA_WORKER_IMAGE_2_WIDTH", 1024, 256, 1536)
+    height = _env_int("VELIA_MEDIA_WORKER_IMAGE_2_HEIGHT", 1024, 256, 1536)
+    width -= width % 16
+    height -= height % 16
+    normalized_prompt = str(prompt or "").strip()
+    if not normalized_prompt:
+        raise MediaWorkerError("velia_image_2_prompt_missing")
+
+    encoded_references = []
+    for reference in list(references or []):
+        raw = bytes(reference.get("content_bytes") or b"")
+        mime_type = str(reference.get("mime_type") or "").strip().lower()
+        if mime_type not in {"image/jpeg", "image/png", "image/webp"} or not raw:
+            raise MediaWorkerError("velia_image_2_reference_invalid")
+        encoded_references.append({
+            "media_type": mime_type,
+            "content_base64": base64.b64encode(raw).decode("ascii"),
+        })
+
+    payload = {
+        "provider": "velia_image_2",
+        "prompt": normalized_prompt,
+        "width": width,
+        "height": height,
+        "references": encoded_references,
+        "transparent_background": bool(transparent_background),
+    }
+    artifact = _run_job(
+        kind="images",
+        request_id=request_id,
+        payload=payload,
+        expected_media_type="image/png",
+    )
+    try:
+        with Image.open(io.BytesIO(artifact.content)) as image:
+            image.verify()
+        with Image.open(io.BytesIO(artifact.content)) as image:
+            actual_width, actual_height = image.size
+            image_format = str(image.format or "").upper()
+            has_alpha = image.mode in {"RGBA", "LA"} or "transparency" in image.info
+    except Exception as exc:
+        raise MediaWorkerError("velia_image_2_image_invalid") from exc
+    if image_format != "PNG":
+        raise MediaWorkerError("velia_image_2_image_format_invalid")
+    return {
+        "image_bytes": artifact.content,
+        "mime_type": "image/png",
+        "width": int(actual_width),
+        "height": int(actual_height),
+        "has_alpha": bool(has_alpha),
         "external_request_id": artifact.job_id,
         "artifact_id": artifact.artifact_id,
         "sha256": artifact.sha256,
