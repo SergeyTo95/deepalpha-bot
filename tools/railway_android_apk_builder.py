@@ -252,7 +252,7 @@ def publish_release_asset(app_jwt: str, apk: Path, sha: str) -> None:
         method="POST",
         payload={
             "tag_name": tag,
-            "target_commitish": "main",
+            "target_commitish": os.environ.get("ANDROID_RELEASE_TARGET", "develop").strip() or "develop",
             "name": f"VELIA Android {sha[:12]}",
             "body": f"Exact Android build from {sha}. Temporary delivery artifact.",
             "draft": False,
@@ -857,7 +857,31 @@ def exact_chat_patch_log_only() -> None:
         os.execvp("python3", ["python3", "-c", "import time; time.sleep(600)"])
 
 
+def github_release_relay_only() -> None:
+    if os.environ.get("APK_GITHUB_RELEASE_RELAY_ONLY", "").strip() != "1":
+        return
+    src = os.environ["APK_RELAY_SOURCE"].strip()
+    expected = os.environ["APK_RELAY_SHA256"].strip().lower()
+    sha = os.environ["ANDROID_SOURCE_SHA"].strip().lower()
+    target = Path("/tmp/VELIA.apk")
+    subprocess.run(
+        ["curl", "--fail", "--location", "--silent", "--show-error", "--retry", "3",
+         "--max-time", "900", src, "-o", str(target)],
+        check=True,
+    )
+    actual = hashlib.sha256(target.read_bytes()).hexdigest()
+    if actual != expected:
+        raise RuntimeError(f"GitHub release relay sha mismatch: {actual} != {expected}")
+    app_id = os.environ["VELIA_GITHUB_APP_ID"].strip()
+    private_key = os.environ["VELIA_GITHUB_APP_PRIVATE_KEY"]
+    jwt = github_app_jwt(app_id, private_key)
+    publish_release_asset(jwt, target, sha)
+    print(f"APK_GITHUB_RELEASE_RELAY_OK sha256={actual} bytes={target.stat().st_size}", flush=True)
+    raise SystemExit(0)
+
+
 def main() -> None:
+    github_release_relay_only()
     # The exact-chat patch relay was a temporary handoff mode. Keep it opt-in
     # so the APK builder can build an exact Android commit normally.
     if os.environ.get("APK_EXACT_CHAT_PATCH_ONLY", "").strip() == "1":
