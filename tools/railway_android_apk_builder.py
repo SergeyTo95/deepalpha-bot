@@ -858,7 +858,11 @@ def exact_chat_patch_log_only() -> None:
 
 
 def main() -> None:
-    exact_chat_patch_log_only()
+    # The exact-chat patch relay was a temporary handoff mode. Keep it opt-in
+    # so the APK builder can build an exact Android commit normally.
+    if os.environ.get("APK_EXACT_CHAT_PATCH_ONLY", "").strip() == "1":
+        exact_chat_patch_log_only()
+        return
     current_patch_delivery_only()
     github_git_handoff_only()
     github_chunk_handoff_only()
