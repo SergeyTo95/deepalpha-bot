@@ -1,0 +1,9 @@
+FROM ubuntu:24.04
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    ca-certificates curl jq openssl tar gzip git libicu74 libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /runner
+COPY runner.sh /runner/runner.sh
+RUN chmod +x /runner/runner.sh
+ENV RUNNER_ALLOW_RUNASROOT=1
+CMD ["/bin/bash","/runner/runner.sh"]
