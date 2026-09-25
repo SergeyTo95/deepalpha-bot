@@ -2,6 +2,13 @@ from typing import Any, Dict
 
 import services.velia_studio_service as studio_service
 from services.velia_images_service import _failure_text, _success_text
+from services.velia_image_2_service import (
+    VELIA_IMAGE_2_MAX_REFERENCES,
+    VELIA_IMAGE_2_PROVIDER,
+    VELIA_IMAGE_PROVIDER,
+    generate_and_store_velia_image_2,
+    normalize_image_provider,
+)
 from services.velia_studio_image_reference_service import (
     generate_and_store_reference_image,
 )
@@ -26,6 +33,8 @@ def generate_studio_turn(
     prompt: str,
     client_request_id: str,
     reference_asset_ids: Any = None,
+    image_provider: str = VELIA_IMAGE_PROVIDER,
+    transparent_background: bool = False,
     duration_seconds: int = 5,
     lyrics_mode: str = "auto",
     lyrics: str = "",
@@ -64,6 +73,60 @@ def generate_studio_turn(
     reference_ids = studio_service._reference_ids(reference_asset_ids)
     mode = str(session["mode"])
     duration = int(duration_seconds or 5)
+    try:
+        normalized_image_provider = normalize_image_provider(image_provider)
+    except ValueError as exc:
+        raise studio_service.StudioError(str(exc), status=400) from exc
+    if mode != "image" and normalized_image_provider != VELIA_IMAGE_PROVIDER:
+        raise studio_service.StudioError("studio_image_provider_only_for_images", status=400)
+
+    if mode == "image" and normalized_image_provider == VELIA_IMAGE_2_PROVIDER:
+        if len(reference_ids) > VELIA_IMAGE_2_MAX_REFERENCES:
+            raise studio_service.StudioError("velia_image_2_too_many_references", status=413)
+        references = studio_service._load_refs(
+            int(user_id),
+            str(session_id),
+            reference_ids,
+        )
+        generation_id = studio_service._insert_turn(
+            int(user_id),
+            str(session_id),
+            "image",
+            normalized_prompt,
+            normalized_client_request_id,
+            reference_ids,
+            image_provider=VELIA_IMAGE_2_PROVIDER,
+        )
+        result = generate_and_store_velia_image_2(
+            user_id=int(user_id),
+            session_id=str(session_id),
+            request_id=generation_id,
+            prompt=normalized_prompt,
+            references=references,
+            transparent_background=bool(transparent_background),
+        )
+        created = bool(result.get("image_created"))
+        error_code = str(result.get("error_code") or "") or None
+        studio_service._finish(
+            int(user_id),
+            str(session_id),
+            generation_id,
+            created=created,
+            cost=0.0,
+            error_code=error_code,
+            text=(
+                _success_text(normalized_prompt)
+                if created
+                else _failure_text(normalized_prompt, error_code or "velia_image_2_unavailable")
+            ),
+        )
+        return {
+            "duplicate": False,
+            "generation": studio_service._generation(
+                int(user_id),
+                generation_id=generation_id,
+            ),
+        }
 
     if mode == "music":
         if not self_hosted_music_active():

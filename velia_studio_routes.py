@@ -23,6 +23,7 @@ from services.velia_studio_service import (
 from services.velia_studio_upload_quota import assert_studio_upload_capacity
 from services.velia_studio_video_duration_client import studio_video_duration_options
 from services.velia_studio_music_duration_client import studio_music_duration_options
+from services.velia_image_2_service import velia_image_2_capability
 
 MAX_JSON_BYTES = 96 * 1024
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
@@ -76,7 +77,22 @@ def setup_velia_studio_routes(app: web.Application) -> None:
             "ok": True,
             "enabled": studio_enabled(),
             "modes": ["image", "video", "music"],
-            "image": {"max_references": 4, "reference_editing": True},
+            "image": {
+                "max_references": 4,
+                "reference_editing": True,
+                "default_provider": "velia_image",
+                "providers": [
+                    {
+                        "id": "velia_image",
+                        "label": "Velia Image",
+                        "enabled": True,
+                        "max_references": 4,
+                        "reference_editing": True,
+                        "transparent_background": False,
+                    },
+                    velia_image_2_capability(),
+                ],
+            },
             "video": {
                 "draft": True,
                 # Compatibility default for older APKs. New clients must use
@@ -241,6 +257,8 @@ def setup_velia_studio_routes(app: web.Application) -> None:
                 prompt=str(data.get("prompt") or ""),
                 client_request_id=key,
                 reference_asset_ids=data.get("reference_asset_ids"),
+                image_provider=str(data.get("image_provider") or "velia_image"),
+                transparent_background=bool(data.get("transparent_background", False)),
                 duration_seconds=duration_seconds,
                 lyrics_mode=str(data.get("lyrics_mode") or "auto"),
                 lyrics=str(data.get("lyrics") or ""),
