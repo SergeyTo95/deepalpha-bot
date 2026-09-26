@@ -73,12 +73,15 @@ def test_forged_or_stale_callback_rejected():
     assert 'expires_at' in text
     assert 'ton_seed_reveal_confirm' not in text
 
-def test_two_polling_instances_second_does_not_start():
+def test_polling_lock_contention_waits_for_zero_downtime_handoff():
     text = open('app.py', encoding='utf-8').read()
-    assert 'BOT_POLLING_ENABLED' in text
-    assert 'pg_try_advisory_lock' in text
-    assert 'exiting polling path' in text
-    assert 'while True' not in text[text.index('async def run_polling'):text.index('async def main')]
+    polling = text[text.index('async def run_polling'):text.index('async def main')]
+    assert 'BOT_POLLING_ENABLED' in polling
+    assert 'pg_try_advisory_lock' in polling
+    assert 'waiting for lock handoff' in polling
+    assert 'BOT_POLLING_LOCK_RETRY_SECONDS' in polling
+    assert 'while True' in polling
+    assert 'exiting polling path' not in polling
 
 def test_production_logs_do_not_contain_seed_material():
     for path in ['services/ton_wallet_service.py','telegram_bot.py','app.py']:
@@ -226,27 +229,65 @@ def test_cancel_invalidates_token_removes_keyboard_and_rejects_wrong_user_messag
     assert ns['_pop_ton_seed_reveal_token'](42, second, 100, 201)['wallet_id'] == 7
 
 
-def test_polling_disabled_and_busy_lock_do_not_start(monkeypatch):
+def test_polling_disabled_and_busy_lock_waits_then_starts(monkeypatch):
     import asyncio, os, zlib, sys, types
     src = Path('app.py').read_text(); start = src.index('async def run_polling'); end = src.index('\n\nasync def main', start)
     calls = []
+    sleeps = []
+    lock_results = iter([False, True])
+    closed = []
+
     class DP:
-        async def start_polling(self, **kwargs): calls.append(kwargs)
+        async def start_polling(self, **kwargs):
+            calls.append(kwargs)
+
     class Cur:
-        def execute(self,*a,**k): pass
-        def fetchone(self): return [False]
+        def execute(self, *a, **k):
+            pass
+
+        def fetchone(self):
+            return [next(lock_results)]
+
     class Conn:
-        def cursor(self): return Cur()
-        def close(self): pass
-    dbmod = types.SimpleNamespace(get_connection=lambda: Conn(), _db_identifier_redacted=lambda: 'postgres://host/db')
+        def cursor(self):
+            return Cur()
+
+        def close(self):
+            closed.append(True)
+
+    class FakeAsyncio:
+        CancelledError = asyncio.CancelledError
+
+        @staticmethod
+        async def sleep(seconds):
+            sleeps.append(seconds)
+
+    dbmod = types.SimpleNamespace(
+        get_connection=lambda: Conn(),
+        _db_identifier_redacted=lambda: 'postgres://host/db',
+    )
     monkeypatch.setitem(sys.modules, 'db.database', dbmod)
-    ns = {'os': os, 'zlib': zlib, 'telegram_bot': types.SimpleNamespace(dp=DP())}
+    ns = {
+        'os': os,
+        'zlib': zlib,
+        'asyncio': FakeAsyncio,
+        'telegram_bot': types.SimpleNamespace(dp=DP()),
+    }
     exec(src[start:end], ns)
+
     monkeypatch.delenv('BOT_POLLING_ENABLED', raising=False)
     asyncio.run(ns['run_polling']())
-    monkeypatch.setenv('BOT_POLLING_ENABLED', 'true')
-    asyncio.run(ns['run_polling']())
     assert calls == []
+    assert sleeps == []
+
+    monkeypatch.setenv('BOT_POLLING_ENABLED', 'true')
+    monkeypatch.setenv('BOT_POLLING_LOCK_RETRY_SECONDS', '1')
+    asyncio.run(ns['run_polling']())
+
+    assert sleeps == [1]
+    assert len(calls) == 1
+    assert calls[0]['reset_webhook'] is True
+    assert len(closed) == 2
 
 
 def test_conftest_has_only_sqlite_adapter_no_dependency_stubs():
