@@ -81,8 +81,10 @@ def _should_stream_message(message: str) -> bool:
     return True
 
 
-def _reasoning_effort_for_message(message: str) -> str:
+def _reasoning_effort_for_message(message: str, *, voice_turn: bool = False) -> str:
     default_effort = kimi_gateway.kimi_reasoning_effort()
+    if bool(voice_turn) and _env_bool("VELIA_VOICE_FAST_PATH_ENABLED", True):
+        return "low"
     if not _env_bool("VELIA_CHAT_ADAPTIVE_REASONING_ENABLED", True):
         return default_effort
     return "low" if _is_casual_message(message) else default_effort
@@ -139,13 +141,16 @@ def run_streaming_send(
     idempotency_key: str,
     attachment_ids: Any = None,
     chat_mode: str = "pro",
+    voice_turn: bool = False,
     on_delta: Callable[[str], None],
     on_reset: Callable[[], None],
 ) -> Dict[str, Any]:
     previous_delta = getattr(_STREAM_CONTEXT, "on_delta", None)
     previous_reset = getattr(_STREAM_CONTEXT, "on_reset", None)
+    previous_voice_turn = getattr(_STREAM_CONTEXT, "voice_turn", None)
     _STREAM_CONTEXT.on_delta = on_delta
     _STREAM_CONTEXT.on_reset = on_reset
+    _STREAM_CONTEXT.voice_turn = bool(voice_turn)
     try:
         send_kwargs: Dict[str, Any] = {
             "idempotency_key": str(idempotency_key),
@@ -157,8 +162,8 @@ def run_streaming_send(
         if chat_mode != "pro":
             from services.velia_flash_service import dispatch_send
             return dispatch_send(send_message, int(user_id), str(conversation_id),
-                                 str(content), chat_mode=chat_mode, on_delta=on_delta,
-                                 on_reset=on_reset, **send_kwargs)
+                                 str(content), chat_mode=chat_mode, voice_turn=bool(voice_turn),
+                                 on_delta=on_delta, on_reset=on_reset, **send_kwargs)
         return send_message(
             int(user_id),
             str(conversation_id),
@@ -180,6 +185,13 @@ def run_streaming_send(
                 pass
         else:
             _STREAM_CONTEXT.on_reset = previous_reset
+        if previous_voice_turn is None:
+            try:
+                delattr(_STREAM_CONTEXT, "voice_turn")
+            except AttributeError:
+                pass
+        else:
+            _STREAM_CONTEXT.voice_turn = previous_voice_turn
 
 
 def install(chat_module: Any) -> None:
@@ -217,7 +229,11 @@ def install(chat_module: Any) -> None:
 
         started = time.monotonic()
         primary_provider = resolve_velia_provider()
-        selected_reasoning = _reasoning_effort_for_message(message)
+        voice_turn = bool(getattr(_STREAM_CONTEXT, "voice_turn", False))
+        selected_reasoning = _reasoning_effort_for_message(
+            message,
+            voice_turn=voice_turn,
+        )
         result = call_kimi_stream(
             prompt=str(prompt),
             feature="velia_chat",
@@ -227,7 +243,11 @@ def install(chat_module: Any) -> None:
             is_background=False,
             request_id=str(request_id or ""),
             cycle_id=str(conversation_id),
-            max_tokens=_env_int("VELIA_CHAT_MAX_OUTPUT_TOKENS", 1536, 128, 8192),
+            max_tokens=(
+                _env_int("VELIA_VOICE_MAX_OUTPUT_TOKENS", 256, 64, 1024)
+                if voice_turn and _env_bool("VELIA_VOICE_FAST_PATH_ENABLED", True)
+                else _env_int("VELIA_CHAT_MAX_OUTPUT_TOKENS", 1536, 128, 8192)
+            ),
             user_id=int(user_id),
             prompt_cache_key=_prompt_cache_key_for_conversation(str(conversation_id)),
             reasoning_effort=selected_reasoning,
