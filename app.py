@@ -1093,26 +1093,60 @@ async def run_polling():
     if (os.getenv("BOT_POLLING_ENABLED") or "false").lower() != "true":
         print("ℹ️ Telegram polling disabled by BOT_POLLING_ENABLED=false")
         return
-    conn = None
+
+    from db.database import get_connection, _db_identifier_redacted
+
     try:
-        from db.database import get_connection, _db_identifier_redacted
-        conn = get_connection()
-        cur = conn.cursor()
-        lock_key = zlib.crc32(b"deepalpha:telegram_polling")
-        cur.execute("SELECT pg_try_advisory_lock(%s)", (lock_key,))
-        locked = bool((cur.fetchone() or [False])[0])
-        print(f"polling_guard db={_db_identifier_redacted()} railway_service={os.getenv('RAILWAY_SERVICE_NAME') or os.getenv('RAILWAY_SERVICE_ID') or 'unknown'} railway_environment={os.getenv('RAILWAY_ENVIRONMENT_NAME') or os.getenv('RAILWAY_ENVIRONMENT_ID') or 'unknown'} commit_sha={(os.getenv('RAILWAY_GIT_COMMIT_SHA') or os.getenv('GIT_COMMIT_SHA') or 'unknown')[:12]} lock_acquired={locked}")
-        if not locked:
-            print("⚠️ Telegram polling lock is busy; exiting polling path")
+        lock_retry_seconds = int(os.getenv("BOT_POLLING_LOCK_RETRY_SECONDS", "5") or "5")
+    except (TypeError, ValueError):
+        lock_retry_seconds = 5
+    lock_retry_seconds = max(1, min(lock_retry_seconds, 30))
+    lock_key = zlib.crc32(b"deepalpha:telegram_polling")
+    wait_attempt = 0
+
+    # Railway performs zero-downtime deployment overlap. During that overlap the
+    # previous healthy replica legitimately owns the PostgreSQL session lock.
+    # Keep this bot process alive until the old replica releases the lock instead
+    # of exiting into Supervisor's finite start-retry budget and becoming FATAL.
+    while True:
+        conn = None
+        try:
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (lock_key,))
+            locked = bool((cur.fetchone() or [False])[0])
+            print(f"polling_guard db={_db_identifier_redacted()} railway_service={os.getenv('RAILWAY_SERVICE_NAME') or os.getenv('RAILWAY_SERVICE_ID') or 'unknown'} railway_environment={os.getenv('RAILWAY_ENVIRONMENT_NAME') or os.getenv('RAILWAY_ENVIRONMENT_ID') or 'unknown'} commit_sha={(os.getenv('RAILWAY_GIT_COMMIT_SHA') or os.getenv('GIT_COMMIT_SHA') or 'unknown')[:12]} lock_acquired={locked}")
+            if not locked:
+                wait_attempt += 1
+                if wait_attempt == 1 or wait_attempt % 12 == 0:
+                    print(
+                        "⏳ Telegram polling lock is busy; waiting for lock handoff "
+                        f"retry_seconds={lock_retry_seconds} attempt={wait_attempt}"
+                    )
+                conn.close()
+                conn = None
+                await asyncio.sleep(lock_retry_seconds)
+                continue
+
+            print("✅ Starting polling...")
+            await telegram_bot.dp.start_polling(
+                reset_webhook=True,
+                timeout=20,
+                relax=0.5,
+                fast=True,
+            )
             return
-        print("✅ Starting polling...")
-        await telegram_bot.dp.start_polling(reset_webhook=True, timeout=20, relax=0.5, fast=True)
-    except Exception as e:
-        print(f"Polling error: {e.__class__.__name__}")
-    finally:
-        if conn:
-            try: conn.close()
-            except Exception: pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"Polling error: {e.__class__.__name__}")
+            return
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
 
 async def main():
