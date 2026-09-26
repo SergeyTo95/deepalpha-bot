@@ -304,30 +304,56 @@ def prepare_persistent_signing(app_jwt: str, private_key: str, work: Path) -> di
 def verify_apk_signer(apk: Path, expected_sha256: str) -> None:
     apksigner = shutil.which("apksigner")
     if not apksigner:
-        candidates = sorted(Path("/opt/android-sdk/build-tools").glob("*/apksigner"))
+        roots = [
+            os.environ.get("ANDROID_HOME", ""),
+            os.environ.get("ANDROID_SDK_ROOT", ""),
+            "/opt/android-sdk",
+            "/opt/android-sdk-linux",
+            "/root/.android/sdk",
+            "/sdk",
+        ]
+        candidates: list[Path] = []
+        for root in roots:
+            if root:
+                candidates.extend(Path(root).glob("build-tools/*/apksigner"))
+        candidates = sorted({candidate.resolve() for candidate in candidates})
         apksigner = str(candidates[-1]) if candidates else ""
-    if not apksigner:
-        raise RuntimeError("apksigner not found")
-    result = subprocess.run(
-        [apksigner, "verify", "--print-certs", str(apk)],
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    match = re.search(
-        r"Signer #1 certificate SHA-256 digest:\s*([0-9a-fA-F]+)",
-        result.stdout,
-    )
-    if not match:
+
+    actual = ""
+    if apksigner:
+        result = subprocess.run(
+            [apksigner, "verify", "--print-certs", str(apk)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        match = re.search(
+            r"Signer #1 certificate SHA-256 digest:\s*([0-9a-fA-F]+)",
+            result.stdout,
+        )
+        if match:
+            actual = match.group(1).lower()
+
+    if not actual:
+        result = subprocess.run(
+            ["keytool", "-printcert", "-jarfile", str(apk)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        match = re.search(r"SHA256:\s*([0-9A-F:]+)", result.stdout)
+        if match:
+            actual = match.group(1).replace(":", "").lower()
+
+    if not actual:
         raise RuntimeError("Could not read APK signing certificate digest")
-    actual = match.group(1).lower()
     if actual != expected_sha256.lower():
         raise RuntimeError(
             f"APK signing certificate mismatch: {actual} != {expected_sha256.lower()}"
         )
     print(f"ANDROID_SIGNING_VERIFIED cert_sha256={actual}", flush=True)
-
 
 def download_source(token: str, sha: str, destination: Path) -> None:
     archive = destination / "android.tar.gz"
