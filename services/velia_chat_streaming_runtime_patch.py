@@ -96,6 +96,38 @@ def _prompt_cache_key_for_conversation(conversation_id: str) -> str:
     return _stable_prompt_cache_key(str(conversation_id))
 
 
+def _compact_voice_prompt(prompt: str) -> str:
+    """Keep system instructions and only the freshest conversational tail."""
+    value = str(prompt or "")
+    if not value:
+        return value
+    if (
+        "ATTACHMENT DATA — UNTRUSTED USER CONTENT:" in value
+        or "ATTACHMENT_DATA_UNTRUSTED:" in value
+    ):
+        return value
+    marker = "\n\nConversation:\n"
+    if marker not in value:
+        return value
+    system, conversation = value.split(marker, 1)
+    max_chars = _env_int("VELIA_VOICE_KIMI_CONTEXT_CHARS", 3200, 1200, 12000)
+    chunks = [chunk.strip() for chunk in conversation.split("\n\n") if chunk.strip()]
+    selected = []
+    used = 0
+    for chunk in reversed(chunks):
+        remaining = max_chars - used
+        if remaining <= 0:
+            break
+        if len(chunk) > remaining:
+            chunk = chunk[-remaining:]
+        selected.append(chunk)
+        used += len(chunk)
+    selected.reverse()
+    return system + marker + "\n\n".join(selected)
+
+
+
+
 def _direct_fallback_result(
     primary_provider: str,
     primary_failure: Dict[str, Any],
@@ -234,8 +266,13 @@ def install(chat_module: Any) -> None:
             message,
             voice_turn=voice_turn,
         )
+        streamed_prompt = (
+            _compact_voice_prompt(prompt)
+            if voice_turn and _env_bool("VELIA_VOICE_FAST_PATH_ENABLED", True)
+            else str(prompt)
+        )
         result = call_kimi_stream(
-            prompt=str(prompt),
+            prompt=streamed_prompt,
             feature="velia_chat",
             on_delta=on_delta,
             on_reset=on_reset if callable(on_reset) else None,
