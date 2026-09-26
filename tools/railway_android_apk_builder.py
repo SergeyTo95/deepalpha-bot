@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import tarfile
@@ -16,6 +17,10 @@ ANDROID_REPO = "SergeyTo95/deepalpha-android"
 DEFAULT_SHA = "3cc927d23a71a52b798e540a4db7a92932291c26"
 GRADLE_BIN = "/opt/gradle-9.5.0/bin/gradle"
 OUT_DIR = Path("/srv")
+SIGNING_REPO = "SergeyTo95/deepalpha-bot"
+SIGNING_BRANCH = "apk-signing"
+SIGNING_PATH = "secure/velia-android-signing-v1.enc"
+SIGNING_ALIAS = "velia-stable"
 
 
 def b64url(data: bytes) -> str:
@@ -73,6 +78,257 @@ def installation_token(app_jwt: str) -> str:
     return installation_token_for_repo(app_jwt, ANDROID_REPO)
 
 
+def _github_content_bytes(token: str, repo: str, branch: str, path: str) -> tuple[bytes | None, str | None]:
+    url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None, None
+        raise
+    return base64.b64decode(payload["content"]), payload.get("sha")
+
+
+def _github_put_bytes(
+    token: str,
+    repo: str,
+    branch: str,
+    path: str,
+    data: bytes,
+    message: str,
+    existing_sha: str | None = None,
+) -> None:
+    payload = {
+        "message": message,
+        "content": base64.b64encode(data).decode("ascii"),
+        "branch": branch,
+    }
+    if existing_sha:
+        payload["sha"] = existing_sha
+    request_json(
+        f"https://api.github.com/repos/{repo}/contents/{path}",
+        token,
+        method="PUT",
+        payload=payload,
+    )
+
+
+def _signing_passphrase(private_key: str) -> str:
+    material = (private_key + "\nVELIA_ANDROID_SIGNING_V1").encode("utf-8")
+    return hashlib.sha256(material).hexdigest()
+
+
+def _encrypt_signing_bundle(bundle: bytes, private_key: str, work: Path) -> bytes:
+    plain = work / "signing-bundle.json"
+    encrypted = work / "signing-bundle.enc"
+    passfile = work / "signing-pass.txt"
+    plain.write_bytes(bundle)
+    passfile.write_text(_signing_passphrase(private_key), encoding="ascii")
+    try:
+        subprocess.run(
+            [
+                "openssl",
+                "enc",
+                "-aes-256-cbc",
+                "-salt",
+                "-pbkdf2",
+                "-iter",
+                "300000",
+                "-md",
+                "sha256",
+                "-pass",
+                f"file:{passfile}",
+                "-in",
+                str(plain),
+                "-out",
+                str(encrypted),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return encrypted.read_bytes()
+    finally:
+        plain.unlink(missing_ok=True)
+        passfile.unlink(missing_ok=True)
+
+
+def _decrypt_signing_bundle(encrypted_bytes: bytes, private_key: str, work: Path) -> dict:
+    encrypted = work / "signing-bundle.enc"
+    plain = work / "signing-bundle.json"
+    passfile = work / "signing-pass.txt"
+    encrypted.write_bytes(encrypted_bytes)
+    passfile.write_text(_signing_passphrase(private_key), encoding="ascii")
+    try:
+        subprocess.run(
+            [
+                "openssl",
+                "enc",
+                "-d",
+                "-aes-256-cbc",
+                "-pbkdf2",
+                "-iter",
+                "300000",
+                "-md",
+                "sha256",
+                "-pass",
+                f"file:{passfile}",
+                "-in",
+                str(encrypted),
+                "-out",
+                str(plain),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        payload = json.loads(plain.read_text(encoding="utf-8"))
+    finally:
+        plain.unlink(missing_ok=True)
+        passfile.unlink(missing_ok=True)
+    required = {"keystore_b64", "store_password", "key_alias", "key_password", "cert_sha256"}
+    if not required.issubset(payload):
+        raise RuntimeError("Invalid persistent signing bundle")
+    return payload
+
+
+def _create_signing_bundle(private_key: str, work: Path) -> dict:
+    store_password = secrets.token_urlsafe(32)
+    key_password = secrets.token_urlsafe(32)
+    keystore = work / "velia-stable.jks"
+    subprocess.run(
+        [
+            "keytool",
+            "-genkeypair",
+            "-keystore",
+            str(keystore),
+            "-storetype",
+            "JKS",
+            "-storepass",
+            store_password,
+            "-keypass",
+            key_password,
+            "-alias",
+            SIGNING_ALIAS,
+            "-keyalg",
+            "RSA",
+            "-keysize",
+            "4096",
+            "-validity",
+            "10000",
+            "-dname",
+            "CN=VELIA Android, OU=VELIA, O=Velyon, C=TR",
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    listing = subprocess.run(
+        [
+            "keytool",
+            "-list",
+            "-v",
+            "-keystore",
+            str(keystore),
+            "-storepass",
+            store_password,
+            "-alias",
+            SIGNING_ALIAS,
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    ).stdout
+    match = re.search(r"SHA256:\s*([0-9A-F:]+)", listing)
+    if not match:
+        raise RuntimeError("Could not read signing certificate fingerprint")
+    cert_sha256 = match.group(1).replace(":", "").lower()
+    return {
+        "keystore_b64": base64.b64encode(keystore.read_bytes()).decode("ascii"),
+        "store_password": store_password,
+        "key_alias": SIGNING_ALIAS,
+        "key_password": key_password,
+        "cert_sha256": cert_sha256,
+    }
+
+
+def prepare_persistent_signing(app_jwt: str, private_key: str, work: Path) -> dict[str, str]:
+    token = installation_token_for_repo(app_jwt, SIGNING_REPO)
+    encrypted, existing_sha = _github_content_bytes(
+        token,
+        SIGNING_REPO,
+        SIGNING_BRANCH,
+        SIGNING_PATH,
+    )
+    if encrypted is None:
+        payload = _create_signing_bundle(private_key, work)
+        encrypted = _encrypt_signing_bundle(
+            json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+            private_key,
+            work,
+        )
+        _github_put_bytes(
+            token,
+            SIGNING_REPO,
+            SIGNING_BRANCH,
+            SIGNING_PATH,
+            encrypted,
+            "ops(signing): initialize encrypted VELIA Android signing bundle",
+            existing_sha,
+        )
+        print(
+            f"ANDROID_SIGNING_INITIALIZED cert_sha256={payload['cert_sha256']}",
+            flush=True,
+        )
+    else:
+        payload = _decrypt_signing_bundle(encrypted, private_key, work)
+        print(
+            f"ANDROID_SIGNING_REUSED cert_sha256={payload['cert_sha256']}",
+            flush=True,
+        )
+    return {
+        "VELIA_ANDROID_SIGNING_STORE_B64": payload["keystore_b64"],
+        "VELIA_ANDROID_SIGNING_STORE_PASSWORD": payload["store_password"],
+        "VELIA_ANDROID_SIGNING_KEY_ALIAS": payload["key_alias"],
+        "VELIA_ANDROID_SIGNING_KEY_PASSWORD": payload["key_password"],
+        "VELIA_ANDROID_SIGNING_CERT_SHA256": payload["cert_sha256"],
+    }
+
+
+def verify_apk_signer(apk: Path, expected_sha256: str) -> None:
+    apksigner = shutil.which("apksigner")
+    if not apksigner:
+        candidates = sorted(Path("/opt/android-sdk/build-tools").glob("*/apksigner"))
+        apksigner = str(candidates[-1]) if candidates else ""
+    if not apksigner:
+        raise RuntimeError("apksigner not found")
+    result = subprocess.run(
+        [apksigner, "verify", "--print-certs", str(apk)],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    match = re.search(
+        r"Signer #1 certificate SHA-256 digest:\s*([0-9a-fA-F]+)",
+        result.stdout,
+    )
+    if not match:
+        raise RuntimeError("Could not read APK signing certificate digest")
+    actual = match.group(1).lower()
+    if actual != expected_sha256.lower():
+        raise RuntimeError(
+            f"APK signing certificate mismatch: {actual} != {expected_sha256.lower()}"
+        )
+    print(f"ANDROID_SIGNING_VERIFIED cert_sha256={actual}", flush=True)
+
+
 def download_source(token: str, sha: str, destination: Path) -> None:
     archive = destination / "android.tar.gz"
     subprocess.run(
@@ -125,9 +381,11 @@ def tune_build_memory(source_dir: Path) -> None:
     print("ANDROID_BUILD_MEMORY_TUNED heap=5g workers=1", flush=True)
 
 
-def run_build(source_dir: Path) -> Path:
+def run_build(source_dir: Path, extra_env: dict[str, str] | None = None) -> Path:
     tune_build_memory(source_dir)
     env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
     env.setdefault("GRADLE_USER_HOME", "/tmp/gradle-home")
     subprocess.run(
         [
@@ -905,7 +1163,9 @@ def main() -> None:
         download_source(token, sha, work)
         print("ANDROID_SOURCE_DOWNLOAD_OK", flush=True)
         old_apk = prefetch_old_apk(work)
-        apk = run_build(work / "src")
+        signing_env = prepare_persistent_signing(jwt, private_key, work)
+        apk = run_build(work / "src", signing_env)
+        verify_apk_signer(apk, signing_env["VELIA_ANDROID_SIGNING_CERT_SHA256"])
         emit_delta_from_old(apk, old_apk)
         if os.environ.get("ANDROID_PUBLISH_REPO", "").strip():
             publish_release_asset(jwt, apk, sha)
