@@ -59,8 +59,8 @@ def _voice_fast_enabled():
 def _voice_bounded_history(messages):
     """Keep voice turns conversational while preserving the latest question."""
     source = [dict(m) for m in messages or [] if m.get("role") in {"user", "assistant"}]
-    max_messages = bounded_int("VELIA_VOICE_CONTEXT_MESSAGES", 6, 2, 10)
-    max_chars = bounded_int("VELIA_VOICE_CONTEXT_CHARS", 1600, 600, 4000)
+    max_messages = bounded_int("VELIA_VOICE_CONTEXT_MESSAGES", 4, 2, 10)
+    max_chars = bounded_int("VELIA_VOICE_CONTEXT_CHARS", 900, 500, 4000)
     selected = []
     used = 0
     for message in reversed(source[-max_messages:]):
@@ -283,7 +283,7 @@ def _generate_once(messages, *, request_id="", on_delta=None):
     timeout = bounded_int("VELIA_FLASH_TIMEOUT_SECONDS", 180, 15, 300)
     voice_fast = _voice_fast_enabled()
     output_limit = (
-        bounded_int("VELIA_VOICE_MAX_OUTPUT_TOKENS", 160, 64, 1024)
+        bounded_int("VELIA_VOICE_MAX_OUTPUT_TOKENS", 128, 64, 1024)
         if voice_fast
         else bounded_int("VELIA_FLASH_MAX_OUTPUT_TOKENS", 768, 64, 1024)
     )
