@@ -301,3 +301,18 @@ def test_compact_voice_prompt_does_not_trim_attachment_context(monkeypatch):
         "USER: photo\nATTACHMENT_DATA_UNTRUSTED:\nimportant"
     )
     assert runtime._compact_voice_prompt(prompt) == prompt
+
+
+def test_compact_voice_prompt_adds_asr_context_instruction(monkeypatch):
+    monkeypatch.setenv("VELIA_VOICE_KIMI_CONTEXT_CHARS", "1200")
+    prompt = (
+        "SYSTEM RULES"
+        "\n\nConversation:\n"
+        "USER: Последние новости в Ванталии"
+    )
+
+    compact = runtime._compact_voice_prompt(prompt)
+
+    assert "VOICE TRANSCRIPT NOTE:" in compact
+    assert "phonetic substitutions" in compact
+    assert "USER: Последние новости в Ванталии" in compact

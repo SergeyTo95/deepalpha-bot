@@ -110,7 +110,14 @@ def _compact_voice_prompt(prompt: str) -> str:
     if marker not in value:
         return value
     system, conversation = value.split(marker, 1)
-    max_chars = _env_int("VELIA_VOICE_KIMI_CONTEXT_CHARS", 3200, 1200, 12000)
+    max_chars = _env_int("VELIA_VOICE_KIMI_CONTEXT_CHARS", 2400, 1200, 12000)
+    voice_instruction = (
+        "\n\nVOICE TRANSCRIPT NOTE: The latest user message came from automatic speech "
+        "recognition and may contain phonetic substitutions. Infer the intended wording "
+        "from recent context and ordinary proper nouns (people, places, brands, products, "
+        "technical terms). Do not invent a correction when genuinely ambiguous. Keep the "
+        "spoken answer concise by default.\n"
+    )
     chunks = [chunk.strip() for chunk in conversation.split("\n\n") if chunk.strip()]
     selected = []
     used = 0
@@ -123,7 +130,7 @@ def _compact_voice_prompt(prompt: str) -> str:
         selected.append(chunk)
         used += len(chunk)
     selected.reverse()
-    return system + marker + "\n\n".join(selected)
+    return system + voice_instruction + marker + "\n\n".join(selected)
 
 
 
@@ -282,7 +289,7 @@ def install(chat_module: Any) -> None:
             request_id=str(request_id or ""),
             cycle_id=str(conversation_id),
             max_tokens=(
-                _env_int("VELIA_VOICE_MAX_OUTPUT_TOKENS", 256, 64, 1024)
+                _env_int("VELIA_VOICE_MAX_OUTPUT_TOKENS", 192, 64, 1024)
                 if voice_turn and _env_bool("VELIA_VOICE_FAST_PATH_ENABLED", True)
                 else _env_int("VELIA_CHAT_MAX_OUTPUT_TOKENS", 1536, 128, 8192)
             ),
