@@ -268,7 +268,12 @@ def build_prompt(chat_module, user_id, conversation_id):
         messages.append({"role": role, "content": content})
 
     if _voice_fast_enabled():
-        return _voice_bounded_history(messages)
+        # Intent routing is local and cheap for ordinary speech. Preserve live
+        # weather/search capability only when the existing router actually
+        # recognizes a live-data request, then bound the enriched prompt.
+        return _voice_bounded_history(
+            _with_live_context(messages, int(user_id))
+        )
     return _with_live_context(messages, int(user_id))
 
 
