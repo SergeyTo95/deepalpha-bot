@@ -110,7 +110,7 @@ def _compact_voice_prompt(prompt: str) -> str:
     if marker not in value:
         return value
     system, conversation = value.split(marker, 1)
-    max_chars = _env_int("VELIA_VOICE_KIMI_CONTEXT_CHARS", 3200, 1200, 12000)
+    max_chars = _env_int("VELIA_VOICE_KIMI_CONTEXT_CHARS", 1800, 900, 12000)
     chunks = [chunk.strip() for chunk in conversation.split("\n\n") if chunk.strip()]
     selected = []
     used = 0
@@ -292,7 +292,7 @@ def install(chat_module: Any) -> None:
             request_id=str(request_id or ""),
             cycle_id=str(conversation_id),
             max_tokens=(
-                _env_int("VELIA_VOICE_MAX_OUTPUT_TOKENS", 160, 64, 1024)
+                _env_int("VELIA_VOICE_MAX_OUTPUT_TOKENS", 128, 64, 1024)
                 if voice_turn and _env_bool("VELIA_VOICE_FAST_PATH_ENABLED", True)
                 else _env_int("VELIA_CHAT_MAX_OUTPUT_TOKENS", 1536, 128, 8192)
             ),
