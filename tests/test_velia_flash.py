@@ -470,3 +470,29 @@ def test_flash_build_prompt_includes_attachment_description_without_raw_bytes(en
     assert "ATTACHMENT_DATA_UNTRUSTED" in messages[0]["content"]
     assert "ошибкой 404" in messages[0]["content"]
     assert "velia_message_attachments" in cursor.query
+
+
+def test_voice_fast_path_is_short_and_feminine(enabled, monkeypatch):
+    session = Session()
+    monkeypatch.setattr(flash.requests, "Session", lambda: session)
+    monkeypatch.setenv("VELIA_VOICE_FAST_PATH_ENABLED", "true")
+    flash._VOICE_CONTEXT.enabled = True
+    try:
+        result = flash.generate([{"role": "user", "content": "Как дела?"}])
+    finally:
+        try:
+            delattr(flash._VOICE_CONTEXT, "enabled")
+        except AttributeError:
+            pass
+
+    assert result["ok"] is True
+    completion = next(
+        kwargs["json"] for url, kwargs in session.calls
+        if url.endswith("/v1/chat/completions")
+    )
+    system = completion["messages"][0]["content"]
+    assert completion["max_tokens"] == 160
+    assert "female AI assistant" in system
+    assert "'поняла'" in system
+    assert "1 to 2 short spoken sentences" in system
+    assert "Never use a numbered clarification questionnaire" in system
