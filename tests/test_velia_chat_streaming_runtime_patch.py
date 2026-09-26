@@ -228,3 +228,47 @@ def test_direct_fallback_returns_primary_failure_when_not_configured(monkeypatch
     )
 
     assert result is primary
+
+
+def test_voice_turn_forces_low_reasoning(monkeypatch):
+    monkeypatch.setattr(runtime.kimi_gateway, "kimi_reasoning_effort", lambda: "max")
+    monkeypatch.setenv("VELIA_VOICE_FAST_PATH_ENABLED", "true")
+    monkeypatch.setenv("VELIA_CHAT_ADAPTIVE_REASONING_ENABLED", "false")
+
+    assert runtime._reasoning_effort_for_message(
+        "Объясни это подробно",
+        voice_turn=True,
+    ) == "low"
+    assert runtime._reasoning_effort_for_message(
+        "Объясни это подробно",
+        voice_turn=False,
+    ) == "max"
+
+
+def test_run_streaming_send_scopes_voice_turn(monkeypatch):
+    from services import velia_flash_service
+
+    observed = []
+
+    def fake_dispatch(sender, user_id, conversation_id, content, **kwargs):
+        observed.append(kwargs)
+        assert runtime._STREAM_CONTEXT.voice_turn is True
+        return {"ok": True, "text": "voice"}
+
+    monkeypatch.setattr(velia_flash_service, "dispatch_send", fake_dispatch)
+
+    result = runtime.run_streaming_send(
+        lambda *args, **kwargs: {"ok": True},
+        user_id=7,
+        conversation_id="conversation",
+        content="Как дела?",
+        idempotency_key="request-voice",
+        chat_mode="flash",
+        voice_turn=True,
+        on_delta=lambda text: None,
+        on_reset=lambda: None,
+    )
+
+    assert result["ok"] is True
+    assert observed[0]["voice_turn"] is True
+    assert not hasattr(runtime._STREAM_CONTEXT, "voice_turn")
