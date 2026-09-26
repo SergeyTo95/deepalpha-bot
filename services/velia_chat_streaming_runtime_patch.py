@@ -81,8 +81,10 @@ def _should_stream_message(message: str) -> bool:
     return True
 
 
-def _reasoning_effort_for_message(message: str) -> str:
+def _reasoning_effort_for_message(message: str, *, voice_turn: bool = False) -> str:
     default_effort = kimi_gateway.kimi_reasoning_effort()
+    if bool(voice_turn) and _env_bool("VELIA_VOICE_FAST_PATH_ENABLED", True):
+        return "low"
     if not _env_bool("VELIA_CHAT_ADAPTIVE_REASONING_ENABLED", True):
         return default_effort
     return "low" if _is_casual_message(message) else default_effort
@@ -92,6 +94,38 @@ def _prompt_cache_key_for_conversation(conversation_id: str) -> str:
     if not _env_bool("VELIA_CHAT_PROMPT_CACHE_KEY_ENABLED", True):
         return ""
     return _stable_prompt_cache_key(str(conversation_id))
+
+
+def _compact_voice_prompt(prompt: str) -> str:
+    """Keep system instructions and only the freshest conversational tail."""
+    value = str(prompt or "")
+    if not value:
+        return value
+    if (
+        "ATTACHMENT DATA — UNTRUSTED USER CONTENT:" in value
+        or "ATTACHMENT_DATA_UNTRUSTED:" in value
+    ):
+        return value
+    marker = "\n\nConversation:\n"
+    if marker not in value:
+        return value
+    system, conversation = value.split(marker, 1)
+    max_chars = _env_int("VELIA_VOICE_KIMI_CONTEXT_CHARS", 3200, 1200, 12000)
+    chunks = [chunk.strip() for chunk in conversation.split("\n\n") if chunk.strip()]
+    selected = []
+    used = 0
+    for chunk in reversed(chunks):
+        remaining = max_chars - used
+        if remaining <= 0:
+            break
+        if len(chunk) > remaining:
+            chunk = chunk[-remaining:]
+        selected.append(chunk)
+        used += len(chunk)
+    selected.reverse()
+    return system + marker + "\n\n".join(selected)
+
+
 
 
 def _direct_fallback_result(
@@ -139,13 +173,16 @@ def run_streaming_send(
     idempotency_key: str,
     attachment_ids: Any = None,
     chat_mode: str = "pro",
+    voice_turn: bool = False,
     on_delta: Callable[[str], None],
     on_reset: Callable[[], None],
 ) -> Dict[str, Any]:
     previous_delta = getattr(_STREAM_CONTEXT, "on_delta", None)
     previous_reset = getattr(_STREAM_CONTEXT, "on_reset", None)
+    previous_voice_turn = getattr(_STREAM_CONTEXT, "voice_turn", None)
     _STREAM_CONTEXT.on_delta = on_delta
     _STREAM_CONTEXT.on_reset = on_reset
+    _STREAM_CONTEXT.voice_turn = bool(voice_turn)
     try:
         send_kwargs: Dict[str, Any] = {
             "idempotency_key": str(idempotency_key),
@@ -157,8 +194,8 @@ def run_streaming_send(
         if chat_mode != "pro":
             from services.velia_flash_service import dispatch_send
             return dispatch_send(send_message, int(user_id), str(conversation_id),
-                                 str(content), chat_mode=chat_mode, on_delta=on_delta,
-                                 on_reset=on_reset, **send_kwargs)
+                                 str(content), chat_mode=chat_mode, voice_turn=bool(voice_turn),
+                                 on_delta=on_delta, on_reset=on_reset, **send_kwargs)
         return send_message(
             int(user_id),
             str(conversation_id),
@@ -180,6 +217,13 @@ def run_streaming_send(
                 pass
         else:
             _STREAM_CONTEXT.on_reset = previous_reset
+        if previous_voice_turn is None:
+            try:
+                delattr(_STREAM_CONTEXT, "voice_turn")
+            except AttributeError:
+                pass
+        else:
+            _STREAM_CONTEXT.voice_turn = previous_voice_turn
 
 
 def install(chat_module: Any) -> None:
@@ -217,9 +261,19 @@ def install(chat_module: Any) -> None:
 
         started = time.monotonic()
         primary_provider = resolve_velia_provider()
-        selected_reasoning = _reasoning_effort_for_message(message)
+        voice_turn = bool(getattr(_STREAM_CONTEXT, "voice_turn", False))
+        selected_reasoning = (
+            _reasoning_effort_for_message(message, voice_turn=True)
+            if voice_turn
+            else _reasoning_effort_for_message(message)
+        )
+        streamed_prompt = (
+            _compact_voice_prompt(prompt)
+            if voice_turn and _env_bool("VELIA_VOICE_FAST_PATH_ENABLED", True)
+            else str(prompt)
+        )
         result = call_kimi_stream(
-            prompt=str(prompt),
+            prompt=streamed_prompt,
             feature="velia_chat",
             on_delta=on_delta,
             on_reset=on_reset if callable(on_reset) else None,
@@ -227,7 +281,11 @@ def install(chat_module: Any) -> None:
             is_background=False,
             request_id=str(request_id or ""),
             cycle_id=str(conversation_id),
-            max_tokens=_env_int("VELIA_CHAT_MAX_OUTPUT_TOKENS", 1536, 128, 8192),
+            max_tokens=(
+                _env_int("VELIA_VOICE_MAX_OUTPUT_TOKENS", 256, 64, 1024)
+                if voice_turn and _env_bool("VELIA_VOICE_FAST_PATH_ENABLED", True)
+                else _env_int("VELIA_CHAT_MAX_OUTPUT_TOKENS", 1536, 128, 8192)
+            ),
             user_id=int(user_id),
             prompt_cache_key=_prompt_cache_key_for_conversation(str(conversation_id)),
             reasoning_effort=selected_reasoning,

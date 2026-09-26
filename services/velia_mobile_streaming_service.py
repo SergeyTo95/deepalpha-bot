@@ -98,6 +98,8 @@ def _stream_send_kwargs(
     }
     if "chat_mode" in data:
         kwargs["chat_mode"] = data["chat_mode"]
+    if "voice_turn" in data:
+        kwargs["voice_turn"] = bool(data.get("voice_turn"))
     # Field presence is meaningful for idempotency. An explicit null means
     # an explicit empty attachment set, while omission preserves legacy calls.
     if "attachment_ids" in data:
