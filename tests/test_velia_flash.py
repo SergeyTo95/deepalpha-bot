@@ -491,7 +491,7 @@ def test_voice_fast_path_is_short_and_feminine(enabled, monkeypatch):
         if url.endswith("/v1/chat/completions")
     )
     system = completion["messages"][0]["content"]
-    assert completion["max_tokens"] == 160
+    assert completion["max_tokens"] == 128
     assert "female AI assistant" in system
     assert "'поняла'" in system
     assert "1 to 2 short spoken sentences" in system
