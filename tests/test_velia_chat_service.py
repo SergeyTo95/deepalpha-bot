@@ -42,3 +42,27 @@ def test_shared_http_security_recognizes_mobile_api_paths():
     assert _is_api_path("/mobile-api/v1/me") is True
     assert _is_api_path("/mobile-api/v1/conversations") is True
     assert _is_api_path("/mobile-connect") is False
+
+
+def test_build_prompt_enforces_feminine_velia_persona(monkeypatch):
+    class Cursor:
+        def execute(self, query, params):
+            pass
+        def fetchall(self):
+            return []
+        def close(self):
+            pass
+
+    class Connection:
+        def close(self):
+            pass
+
+    cursor = Cursor()
+    monkeypatch.setattr(velia_chat_service, "get_connection", lambda: Connection())
+    monkeypatch.setattr(velia_chat_service, "_dict_cursor", lambda conn: cursor)
+
+    prompt = velia_chat_service._build_prompt(1, "conversation")
+
+    assert "female AI assistant" in prompt
+    assert "'поняла'" in prompt
+    assert "never use masculine self-reference" in prompt

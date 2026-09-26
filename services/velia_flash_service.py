@@ -59,8 +59,8 @@ def _voice_fast_enabled():
 def _voice_bounded_history(messages):
     """Keep voice turns conversational while preserving the latest question."""
     source = [dict(m) for m in messages or [] if m.get("role") in {"user", "assistant"}]
-    max_messages = bounded_int("VELIA_VOICE_CONTEXT_MESSAGES", 6, 2, 10)
-    max_chars = bounded_int("VELIA_VOICE_CONTEXT_CHARS", 1600, 600, 4000)
+    max_messages = bounded_int("VELIA_VOICE_CONTEXT_MESSAGES", 4, 2, 10)
+    max_chars = bounded_int("VELIA_VOICE_CONTEXT_CHARS", 900, 500, 4000)
     selected = []
     used = 0
     for message in reversed(source[-max_messages:]):
@@ -283,7 +283,7 @@ def _generate_once(messages, *, request_id="", on_delta=None):
     timeout = bounded_int("VELIA_FLASH_TIMEOUT_SECONDS", 180, 15, 300)
     voice_fast = _voice_fast_enabled()
     output_limit = (
-        bounded_int("VELIA_VOICE_MAX_OUTPUT_TOKENS", 256, 64, 1024)
+        bounded_int("VELIA_VOICE_MAX_OUTPUT_TOKENS", 128, 64, 1024)
         if voice_fast
         else bounded_int("VELIA_FLASH_MAX_OUTPUT_TOKENS", 768, 64, 1024)
     )
@@ -291,7 +291,11 @@ def _generate_once(messages, *, request_id="", on_delta=None):
     input_limit = min(context_limit - output_limit - 32,
                       bounded_int("VELIA_FLASH_MAX_INPUT_TOKENS", 768, 128, 2048))
     system = {"role": "system", "content": (
-        "You are VELIA Flash. Answer in the user's language. Be accurate and concise. "
+        "You are VELIA Flash, a female AI assistant. Your persona is feminine. "
+        "In languages with grammatical gender, always refer to yourself in feminine forms. "
+        "In Russian use forms such as 'поняла', 'готова', 'рада', 'сделала' and never "
+        "masculine self-reference such as 'понял', 'готов', 'рад' or 'сделал' about yourself. "
+        "Answer in the user's language. Be accurate and concise. "
         "This chat supports text and coding advice. You cannot perform external actions. "
         "When LIVE_WEB_CONTEXT_UNTRUSTED is present, it was retrieved read-only by VELIA; "
         "use it for current facts and cite the supplied source URLs. When "
@@ -301,9 +305,12 @@ def _generate_once(messages, *, request_id="", on_delta=None):
         "corresponding context is actually present. Do not invent current facts. "
         "Return only the final answer, never private reasoning. "
         + (
-            "This is a live voice conversation: answer naturally in 1 to 3 short spoken "
-            "sentences unless the user explicitly asks for detail. Start with the answer, "
-            "avoid headings, lists and filler. "
+            "This is a live voice conversation: answer naturally in 1 to 2 short spoken "
+            "sentences unless the user explicitly asks for detail. Start with the answer. "
+            "If speech recognition wording is imperfect, infer the intended meaning from "
+            "the recent conversation before asking. If clarification is truly required, "
+            "ask at most one short question. Never use a numbered clarification questionnaire. "
+            "Avoid headings, lists and filler. "
             if voice_fast else ""
         )
     )}
