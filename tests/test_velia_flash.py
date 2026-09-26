@@ -428,7 +428,7 @@ def test_flash_live_context_is_bounded_and_attached_only_to_latest_user(enabled,
     assert packed[0]["content"] == "older"
     assert packed[1]["content"] == "reply"
     assert packed[2]["content"].startswith("найди свежие данные\n\nLIVE_WEB_CONTEXT_UNTRUSTED:")
-    assert len(packed[2]["content"].split("LIVE_WEB_CONTEXT_UNTRUSTED:\n", 1)[1]) == 500
+    assert len(packed[2]["content"].split("LIVE_WEB_CONTEXT_UNTRUSTED:\n", 1)[1]) <= 500
     assert original[2]["content"] == "найди свежие данные"
 
 
@@ -470,3 +470,13 @@ def test_flash_build_prompt_includes_attachment_description_without_raw_bytes(en
     assert "ATTACHMENT_DATA_UNTRUSTED" in messages[0]["content"]
     assert "ошибкой 404" in messages[0]["content"]
     assert "velia_message_attachments" in cursor.query
+
+
+def test_flash_context_bounding_preserves_head_and_tail():
+    value = "HEAD-" + ("x" * 2000) + "-TAIL"
+    packed = flash._bounded_context(value, 500)
+
+    assert len(packed) <= 500
+    assert packed.startswith("HEAD-")
+    assert packed.endswith("-TAIL")
+    assert "[context truncated]" in packed

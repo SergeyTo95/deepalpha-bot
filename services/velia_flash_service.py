@@ -109,6 +109,15 @@ def public_capability():
     }
 
 
+def _bounded_context(text, limit):
+    value = str(text or "").strip()
+    if len(value) <= limit:
+        return value
+    marker = "\n...[context truncated]...\n"
+    keep = max(1, (limit - len(marker)) // 2)
+    return value[:keep] + marker + value[-keep:]
+
+
 def _latest_user_message(messages):
     for message in reversed(messages or []):
         if str(message.get("role") or "") == "user":
@@ -140,8 +149,8 @@ def _with_live_context(messages, user_id):
     if not prompt:
         return copied
 
-    max_chars = bounded_int("VELIA_FLASH_WEB_CONTEXT_CHARS", 2200, 500, 6000)
-    live_context = str(prompt).strip()[:max_chars]
+    max_chars = bounded_int("VELIA_FLASH_WEB_CONTEXT_CHARS", 1800, 500, 6000)
+    live_context = _bounded_context(prompt, max_chars)
     for index in range(len(copied) - 1, -1, -1):
         if str(copied[index].get("role") or "") != "user":
             continue
@@ -260,10 +269,13 @@ def build_prompt(chat_module, user_id, conversation_id):
                 chat_module._row_value(row, "attachment_context", 2, "") or ""
             ).strip()
             if attachment_context:
+                max_attachment_chars = bounded_int(
+                    "VELIA_FLASH_ATTACHMENT_CONTEXT_CHARS", 1400, 500, 5000
+                )
                 content = (
                     content.rstrip()
                     + "\n\nATTACHMENT_DATA_UNTRUSTED:\n"
-                    + attachment_context
+                    + _bounded_context(attachment_context, max_attachment_chars)
                 )
         messages.append({"role": role, "content": content})
 
