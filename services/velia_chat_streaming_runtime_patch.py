@@ -262,9 +262,10 @@ def install(chat_module: Any) -> None:
         started = time.monotonic()
         primary_provider = resolve_velia_provider()
         voice_turn = bool(getattr(_STREAM_CONTEXT, "voice_turn", False))
-        selected_reasoning = _reasoning_effort_for_message(
-            message,
-            voice_turn=voice_turn,
+        selected_reasoning = (
+            _reasoning_effort_for_message(message, voice_turn=True)
+            if voice_turn
+            else _reasoning_effort_for_message(message)
         )
         streamed_prompt = (
             _compact_voice_prompt(prompt)
