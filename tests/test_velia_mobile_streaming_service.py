@@ -67,3 +67,17 @@ def test_worker_exception_code_is_stable_and_does_not_leak_details():
 
     assert service._worker_exception_code(PublicError("secret detail")) == "developer_deadline_exceeded"
     assert service._worker_exception_code(RuntimeError("database password leaked")) == "stream_worker_failed"
+
+
+def test_stream_send_kwargs_forwards_voice_turn_only_when_explicit():
+    base = dict(
+        user_id=7,
+        conversation_id="conversation",
+        content="Привет",
+        idempotency_key="request-1",
+    )
+    normal = service._stream_send_kwargs({}, **base)
+    voice = service._stream_send_kwargs({"voice_turn": True}, **base)
+
+    assert "voice_turn" not in normal
+    assert voice["voice_turn"] is True
