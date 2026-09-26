@@ -59,8 +59,8 @@ def _voice_fast_enabled():
 def _voice_bounded_history(messages):
     """Keep voice turns conversational while preserving the latest question."""
     source = [dict(m) for m in messages or [] if m.get("role") in {"user", "assistant"}]
-    max_messages = bounded_int("VELIA_VOICE_CONTEXT_MESSAGES", 6, 2, 10)
-    max_chars = bounded_int("VELIA_VOICE_CONTEXT_CHARS", 1600, 600, 4000)
+    max_messages = bounded_int("VELIA_VOICE_CONTEXT_MESSAGES", 4, 2, 10)
+    max_chars = bounded_int("VELIA_VOICE_CONTEXT_CHARS", 1400, 600, 4000)
     selected = []
     used = 0
     for message in reversed(source[-max_messages:]):
@@ -283,7 +283,7 @@ def _generate_once(messages, *, request_id="", on_delta=None):
     timeout = bounded_int("VELIA_FLASH_TIMEOUT_SECONDS", 180, 15, 300)
     voice_fast = _voice_fast_enabled()
     output_limit = (
-        bounded_int("VELIA_VOICE_MAX_OUTPUT_TOKENS", 256, 64, 1024)
+        bounded_int("VELIA_VOICE_MAX_OUTPUT_TOKENS", 192, 64, 1024)
         if voice_fast
         else bounded_int("VELIA_FLASH_MAX_OUTPUT_TOKENS", 768, 64, 1024)
     )
@@ -301,9 +301,13 @@ def _generate_once(messages, *, request_id="", on_delta=None):
         "corresponding context is actually present. Do not invent current facts. "
         "Return only the final answer, never private reasoning. "
         + (
-            "This is a live voice conversation: answer naturally in 1 to 3 short spoken "
-            "sentences unless the user explicitly asks for detail. Start with the answer, "
-            "avoid headings, lists and filler. "
+            "This is a live voice conversation. The user's message is an automatic "
+            "speech transcript and may contain phonetic substitutions. Infer the most likely "
+            "intended wording from recent context and ordinary proper nouns such as people, "
+            "places, brands, products and technical terms. Do not invent a correction when "
+            "multiple meanings remain plausible; ask one brief clarification instead. "
+            "Answer naturally in 1 to 2 short spoken sentences unless the user explicitly "
+            "asks for detail. Start with the answer and avoid headings, lists and filler. "
             if voice_fast else ""
         )
     )}
