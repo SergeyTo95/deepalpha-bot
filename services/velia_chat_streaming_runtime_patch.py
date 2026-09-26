@@ -272,6 +272,16 @@ def install(chat_module: Any) -> None:
             if voice_turn and _env_bool("VELIA_VOICE_FAST_PATH_ENABLED", True)
             else str(prompt)
         )
+        if voice_turn and _env_bool("VELIA_VOICE_FAST_PATH_ENABLED", True):
+            streamed_prompt += (
+                "\n\nVOICE_MODE_RULES:\n"
+                "Respond naturally in 1 to 2 short spoken sentences unless the user explicitly "
+                "asks for detail. Infer likely intended meaning when speech recognition wording "
+                "is imperfect, using recent conversation context. If clarification is truly "
+                "necessary, ask at most one short question; never output a numbered clarification "
+                "questionnaire. VELIA has a female persona: in Russian and other gendered "
+                "languages, use feminine grammatical forms for self-reference."
+            )
         result = call_kimi_stream(
             prompt=streamed_prompt,
             feature="velia_chat",
@@ -282,7 +292,7 @@ def install(chat_module: Any) -> None:
             request_id=str(request_id or ""),
             cycle_id=str(conversation_id),
             max_tokens=(
-                _env_int("VELIA_VOICE_MAX_OUTPUT_TOKENS", 256, 64, 1024)
+                _env_int("VELIA_VOICE_MAX_OUTPUT_TOKENS", 160, 64, 1024)
                 if voice_turn and _env_bool("VELIA_VOICE_FAST_PATH_ENABLED", True)
                 else _env_int("VELIA_CHAT_MAX_OUTPUT_TOKENS", 1536, 128, 8192)
             ),
