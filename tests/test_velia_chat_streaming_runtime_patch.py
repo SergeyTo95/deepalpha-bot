@@ -272,3 +272,32 @@ def test_run_streaming_send_scopes_voice_turn(monkeypatch):
     assert result["ok"] is True
     assert observed[0]["voice_turn"] is True
     assert not hasattr(runtime._STREAM_CONTEXT, "voice_turn")
+
+
+def test_compact_voice_prompt_keeps_system_and_latest_turns(monkeypatch):
+    monkeypatch.setenv("VELIA_VOICE_KIMI_CONTEXT_CHARS", "1200")
+    prompt = (
+        "SYSTEM RULES"
+        "\n\nConversation:\n"
+        + "\n\n".join(
+            [
+                "USER: old " + "a" * 900,
+                "ASSISTANT: old " + "b" * 900,
+                "USER: latest question",
+            ]
+        )
+    )
+
+    compact = runtime._compact_voice_prompt(prompt)
+
+    assert compact.startswith("SYSTEM RULES\n\nConversation:\n")
+    assert "USER: latest question" in compact
+    assert len(compact) < len(prompt)
+
+
+def test_compact_voice_prompt_does_not_trim_attachment_context(monkeypatch):
+    prompt = (
+        "SYSTEM\n\nConversation:\n"
+        "USER: photo\nATTACHMENT_DATA_UNTRUSTED:\nimportant"
+    )
+    assert runtime._compact_voice_prompt(prompt) == prompt
