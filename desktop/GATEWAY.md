@@ -1,6 +1,6 @@
 # Isolated VELIA Desktop gateway
 
-The Desktop service uses `Dockerfile.gateway` independently of the full VELIA backend. It has no database, Telegram bot or payment workers. Existing VELIA device pairing and refresh are relayed only to the configured HTTPS identity authority. Every model request verifies the device token through that authority's `/mobile-api/v1/me`; there is no authentication cache or test-token bypass.
+The Desktop service uses `Dockerfile.gateway` independently of the full VELIA backend. It runs no Telegram bot or payment workers. Existing VELIA device pairing and refresh are relayed only to the configured HTTPS identity authority. Desktop and signed-in Web requests verify the device token through that authority's `/mobile-api/v1/me`; there is no authentication cache or test-token bypass. Optional Web guests use a separate Flash-only route and the existing preview PostgreSQL solely for persistent trial counters; see [WEB.md](WEB.md).
 
 Pairing/refresh responses are checked against the same account allowlist before any tokens are returned. Sessions issued to accounts outside the allowlist are revoked. Identity and model redirects are refused. Browser cookies and upstream response headers are never relayed. Authentication payloads are limited to 16 KiB; unexpected fields are rejected. Authentication POSTs are limited to 60 per minute per process.
 
@@ -20,9 +20,9 @@ VELIA_DESKTOP_PRO_MODEL=${{deepalpha-bot.KIMI_MODEL}}
 VELIA_DESKTOP_REASONING_EFFORT=low
 ```
 
-Use references within the existing PR environment; do not copy provider keys to the client. The single replica is a controlled owner-only preview. Existing model limits remain one concurrent request per user, two per process, 30 per hour, 4096 output tokens and 1 MiB input. Kimi K3 requests use an explicit low reasoning budget. Commercial accounting and distributed quotas are still outside this preview.
+Use references within the existing PR environment; do not copy provider keys to the client. Authenticated accounts in the single-replica preview remain allowlisted; optional Web guests have only the 30-request Flash trial. Shared model admission remains one concurrent request per identity, two per process and 30 per hour. PRO permits 4096 output tokens and requires positive real Credits; Flash permits 512 output tokens. The input cap is 1 MiB. Kimi K3 requests use an explicit low reasoning budget. Commercial debit tariffs and distributed active-generation locking are still outside this preview.
 
-The build runs `tests/test_velia_desktop_gateway.py`, `tests/test_velia_desktop_relay.py` and `tests/test_velia_desktop_flash.py`. The independent service's pre-deploy command is `python -m desktop.probe_gateway --live`. The PRO probe makes two bounded provider calls: a correlated test-tool exchange and an SSE answer. It also checks that existing device authentication is enabled and rejects requests without a token. It does not create an account session or establish real-owner pairing. It is not an HTTP endpoint.
+The build runs the three Desktop gateway/relay/Flash test files and the Web account and guest HTTP tests. The independent service's pre-deploy command is `python -m desktop.probe_gateway --live`. The PRO probe makes two bounded provider calls: a correlated test-tool exchange and an SSE answer. It also checks that existing device authentication is enabled and rejects requests without a token. When guests are enabled, private probe keys verify the persistent PostgreSQL limit under parallel reservations. The probe does not create an account session or establish real-owner pairing. It is not an HTTP endpoint.
 
 ## Flash in Desktop
 
