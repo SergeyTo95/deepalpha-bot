@@ -41,6 +41,14 @@ Build on the target OS and architecture so native addons match the bundled Node 
 
 The paths-scoped workflow provides unsigned NSIS Windows installers and DMG/ZIP Mac previews for both Apple silicon and Intel. It runs the adapter tests, upstream build, native UI/storage checks and installed-runtime tool round trip before uploading artifacts. Pushes to the preview branch or manual dispatch trigger packaging; PR checks run the lightweight adapter suite. Signing, notarization, auto-updates and public release are subsequent work. See `VERIFICATION.md` for the actual results and external blockers; a configured job is not a successful installer build.
 
+## Railway Windows builder
+
+`Dockerfile.railway-windows` builds an unsigned Windows x64 NSIS preview independently of GitHub Actions. The Wine image is pinned by digest; Linux and Windows Node archives use official SHA-256 checksums. Harness is built on Linux, and production deployment includes Windows optional dependencies and the package's Windows prebuilt PTY/FFI binaries. Windows Node under Wine must load those native modules, run the actual read-tool round trip, and open the authenticated Web page. The packaging hook repeats these checks from the final resources and rejects a runtime whose platform differs from the installer.
+
+Deploy a separate builder branch with `desktop/railway-windows.toml` copied to root `railway.toml`. The final image contains only the installer, build manifest and a small read-only download server; it does not start the VELIA backend or retain build credentials. `/health`, `/manifest.json`, and the installer support verification and resumable downloads. Source code belongs in the existing preview PR; the builder branch's root Railway config is kept separate from backend deployment settings.
+
+Wine qualification does not establish native Windows GUI, OS credential-store or terminal acceptance. Real VELIA model access still requires the opt-in gateway deployment. macOS installers use the native macOS jobs. See `VERIFICATION.md` for the actual current builder result.
+
 ## Backend preview
 
 Routes are mounted by `run_web_process.py` and disabled by default. A controlled deployment requires:

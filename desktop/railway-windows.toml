@@ -1,0 +1,11 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "desktop/Dockerfile.railway-windows"
+watchPatterns = ["desktop/**", "railway.toml"]
+
+[deploy]
+startCommand = "python /usr/local/bin/serve-velia-artifacts.py"
+healthcheckPath = "/health"
+healthcheckTimeout = 60
+restartPolicyType = "NEVER"
+sleepApplication = true

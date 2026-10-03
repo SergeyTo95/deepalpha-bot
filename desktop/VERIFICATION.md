@@ -30,3 +30,9 @@ The Linux Electron GUI attempt in this execution environment could not complete 
 - Flash tool support, vision, voice, Studio and mobile history synchronization.
 
 Production was not changed, and this pull request remains a developer preview.
+
+## Railway Windows lane
+
+The separate Docker/Wine builder is prepared to build Windows x64 independently of Actions. It requires actual Windows Node and native PTY/FFI modules to load, then qualifies the streamed read-tool loop and authenticated Web profile both before packaging and from final resources. The final artifact service verifies the installer SHA-256 at startup and supports byte-range downloads.
+
+Preparation checks passed: 17 Node behavior tests (including regular-file transport of process output and exit status), two actual HTTP/checksum artifact-server tests, and syntax checks. These transport unit tests use a simulated Wine executable; they do not establish a successful Windows build. Railway deployment, its packaged-resource qualification and native Windows GUI/storage/terminal acceptance remain pending until separately recorded.

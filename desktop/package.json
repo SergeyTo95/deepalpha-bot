@@ -12,6 +12,7 @@
     "start": "electron .",
     "connect": "electron .",
     "prepare:runtime": "node scripts/prepare-runtime.mjs",
+    "package:windows:railway": "node scripts/package-windows-railway.mjs",
     "package:preview": "npm run prepare:runtime && electron-builder --publish never",
     "qualify:ui": "electron tests/electron-smoke.mjs",
     "qualify:runtime": "node scripts/smoke-harness.mjs",

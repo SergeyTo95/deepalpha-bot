@@ -4,6 +4,8 @@ const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { readdir, lstat, realpath } = require('node:fs/promises');
 const { relative, isAbsolute, sep } = require('node:path');
+const { readFile } = require('node:fs/promises');
+const { pathToFileURL } = require('node:url');
 
 async function checkLinks(root, directory = root) {
   for (const name of await readdir(directory)) {
@@ -23,10 +25,16 @@ module.exports = async context => {
   await cp(join(context.packager.projectDir, '.runtime', 'package', 'harness'), join(resources, 'harness'),
     { recursive: true, verbatimSymlinks: true });
   await checkLinks(join(resources, 'harness'));
-  const node = join(resources, 'node', process.platform === 'win32' ? 'node.exe' : 'node');
-  await promisify(execFile)(node, [join(resources, 'harness', 'lib', 'bin.js'), '--version'], { timeout: 30000 });
-  for (const script of ['smoke-harness.mjs', 'smoke-web.mjs']) {
-    await promisify(execFile)(process.execPath, [join(context.packager.projectDir, 'scripts', script)],
+  const build = JSON.parse(await readFile(join(resources, 'notices', 'BUILD.json'), 'utf8'));
+  if (build.platform !== context.packager.platform.nodeName) throw new Error('Runtime and installer target differ');
+  const { qualificationRuntime, runtimeProbe } = await import(pathToFileURL(join(context.packager.projectDir,
+    'scripts', 'qualification-runtime.mjs')).href);
+  await runtimeProbe(qualificationRuntime(resources));
+  const scripts = ['smoke-harness.mjs', 'smoke-web.mjs'];
+  if (build.platform === 'win32') scripts.unshift('smoke-windows-deps.mjs');
+  for (const script of scripts) {
+    const result = await promisify(execFile)(process.execPath, [join(context.packager.projectDir, 'scripts', script)],
       { timeout: 60000, env: { ...process.env, VELIA_QUALIFICATION_RESOURCES: resources } });
+    process.stdout.write(result.stdout);
   }
 };

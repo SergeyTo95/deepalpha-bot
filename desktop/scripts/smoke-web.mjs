@@ -1,22 +1,21 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { once } from 'node:events';
 import { profilePatch, launchURL } from '../src/config.mjs';
-import { runtimePaths } from '../src/runtime.mjs';
+import { qualificationRuntime } from './qualification-runtime.mjs';
 
 const root = resolve(import.meta.dirname, '..');
-const paths = runtimePaths({ packaged: true, resources: process.env.VELIA_QUALIFICATION_RESOURCES || join(root, '.runtime', 'package'), platform: process.platform });
+const paths = qualificationRuntime(process.env.VELIA_QUALIFICATION_RESOURCES || join(root, '.runtime', 'package'));
 const home = await mkdtemp(join(tmpdir(), 'velia-web-'));
 let child;
 try {
   const credentials = join(home, 'credentials.json'), patch = join(home, 'patch.json');
   await writeFile(credentials, JSON.stringify({ version: 1, refs: { VELIA_ACCESS_TOKEN: 'local_qualification_only' }, records: {} }), { mode: 0o600 });
-  await writeFile(patch, JSON.stringify(profilePatch('https://velia.example/desktop-api/v1', credentials)), { mode: 0o600 });
-  child = spawn(paths.node, [paths.bin, '--profile', 'web', '--patch', patch, '--host', '127.0.0.1', '--port', '0', '--no-open'],
-    { cwd: home, env: { ...process.env, DSH_HOME: join(home, 'home'), DSH_PERMISSION_MODE: 'workspace-write' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  await writeFile(patch, JSON.stringify(profilePatch('https://velia.example/desktop-api/v1', paths.targetPath(credentials))), { mode: 0o600 });
+  child = paths.start(['--profile', 'web', '--patch', paths.targetPath(patch), '--host', '127.0.0.1', '--port', '0', '--no-open'],
+    { cwd: home, env: { ...process.env, DSH_HOME: paths.targetPath(join(home, 'home')), DSH_PERMISSION_MODE: 'workspace-write' } });
   let output = '', errors = '';
   child.stderr.on('data', chunk => { errors = (errors + chunk.toString()).slice(-65536); });
   const url = await new Promise((ok, fail) => {
@@ -39,7 +38,7 @@ try {
   }
   assert.equal(response.status, 200);
   assert.match(await response.text(), /<html/i);
-  console.log('VELIA_WEB_QUALIFIED', JSON.stringify({ authenticated: true, html: true, platform: process.platform }));
+  console.log('VELIA_WEB_QUALIFIED', JSON.stringify({ authenticated: true, html: true, platform: paths.platform, wine: paths.wine }));
 } finally {
   if (child?.exitCode === null && child.signalCode === null) {
     const exited = once(child, 'exit'); child.kill();
