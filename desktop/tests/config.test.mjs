@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { gatewayURL, launchURL, profilePatch } from '../src/config.mjs';
+import { gatewayURL, launchURL, profilePatch, defaultHome } from '../src/config.mjs';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+test('preview data can be isolated without modifying the existing account store', () => {
+  assert.equal(defaultHome(''), join(homedir(), '.velia-desktop'));
+  assert.equal(defaultHome(join(tmpdir(), 'velia-preview')), join(tmpdir(), 'velia-preview'));
+  assert.throws(() => defaultHome('relative-preview'));
+});
 
 test('gateway refuses credentials and insecure URLs', () => {
   for (const url of ['http://api.example/v1', 'https://user:secret@api.example/v1', 'https://api.example/v1?key=secret']) {

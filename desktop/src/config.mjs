@@ -1,8 +1,14 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 export const HARNESS_COMMIT = '5badb15009ae1756c3afe0ae0cef1faafc290ccc';
-export const defaultHome = () => join(homedir(), '.velia-desktop');
+export function defaultHome(value = process.env.VELIA_DESKTOP_HOME) {
+  if (!value) return join(homedir(), '.velia-desktop');
+  if (typeof value !== 'string' || !isAbsolute(value)) {
+    throw new Error('VELIA data directory must be an absolute path');
+  }
+  return value;
+}
 
 export function gatewayURL(value) {
   const url = new URL(value);

@@ -17,6 +17,8 @@ The app opens a Russian connection window. Get an existing VELIA device code in 
 
 Optional `VELIA_GATEWAY_URL` selects an HTTPS gateway ending in `/desktop-api/v1`; its origin must match the paired account. `VELIA_NODE_PATH` selects the development Node executable. Packaged apps use their bundled runtime and need neither Node.js nor a Harness checkout installed by the user.
 
+The isolated gateway update also accepts an absolute `VELIA_DESKTOP_HOME` for preview account data. Its launcher selects this separate directory, preserving any existing account session. See `GATEWAY.md` for the isolated service, authentication and live-model checks.
+
 ## Session storage and local tools
 
 Persistent device sessions use Electron safeStorage: the OS provides encryption, and the app refuses unavailable encryption or Linux's plaintext backend. A legacy `session.json` is removed only after encrypted migration succeeds. Windows app-data permissions are restricted with icacls; POSIX app data is owner-only. Concurrent model requests share one refresh operation, preserving backend refresh-token rotation.

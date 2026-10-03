@@ -4,6 +4,7 @@ Preview access is restricted to explicitly configured user ids. This route does
 not execute tools: Harness executes them on the user's computer.
 """
 import asyncio
+import inspect
 import json
 import os
 import time
@@ -13,6 +14,10 @@ from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
 MAX_BODY = 1024 * 1024
 MODEL_ID = "velia-pro"
+
+
+class AuthenticationUnavailable(Exception):
+    """The identity authority could not verify a device session."""
 
 
 def validate_payload(data):
@@ -52,6 +57,9 @@ def validate_payload(data):
     result = {"model": os.getenv("VELIA_DESKTOP_PRO_MODEL", "kimi-k3"),
               "messages": normalized_messages, "max_completion_tokens": limit,
               "stream": data.get("stream", False)}
+    if result["model"].lower().startswith("kimi-k3"):
+        effort = os.getenv("VELIA_DESKTOP_REASONING_EFFORT", "low")
+        result["reasoning_effort"] = effort if effort in {"low", "medium", "high"} else "low"
     if tools:
         result["tools"] = tools
     if "tool_choice" in data:
@@ -76,7 +84,15 @@ def setup_velia_desktop_routes(app, authenticate):
             return None, error("desktop_api_disabled", 503)
         header = request.headers.get("Authorization", "")
         token = header[7:] if header.lower().startswith("bearer ") else ""
-        identity = await asyncio.to_thread(authenticate, token) if token else None
+        try:
+            if not token:
+                identity = None
+            elif inspect.iscoroutinefunction(authenticate):
+                identity = await authenticate(token)
+            else:
+                identity = await asyncio.to_thread(authenticate, token)
+        except AuthenticationUnavailable:
+            return None, error("authentication_unavailable", 503)
         if not identity:
             return None, error("unauthorized", 401)
         allowed = {value.strip() for value in os.getenv("VELIA_DESKTOP_PREVIEW_USER_IDS", "").split(",")}
