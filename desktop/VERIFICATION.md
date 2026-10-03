@@ -4,8 +4,8 @@ Harness revision: `5badb15009ae1756c3afe0ae0cef1faafc290ccc`. Backend base: `aab
 
 ## Passed locally
 
-- 19 backend gateway tests, including HTTP streaming, a correlated tool-result round trip and rejection of a provider redirect before it receives a provider secret.
-- 17 desktop behavior tests: HTTPS/loopback configuration, encrypted-session migration and refusal of plaintext storage, pairing-code normalization, token lifetime validation, concurrent refresh coalescing, local proxy authentication, streamed tool bodies and cancellation, plus output/exit-status transport for Wine qualifications.
+- 33 backend gateway/relay tests, including authoritative remote identity verification, owner-only pairing and refresh, revocation of a non-allowlisted session, body limits, cookie isolation, sanitized authority outages, HTTP streaming and rejection of identity/provider redirects before they receive credentials.
+- 18 desktop behavior tests: isolated absolute preview data directories, HTTPS/loopback configuration, encrypted-session migration and refusal of plaintext storage, pairing-code normalization, token lifetime validation, concurrent refresh coalescing, local proxy authentication, streamed tool bodies and cancellation, plus output/exit-status transport for Wine qualifications.
 - Python compilation of the gateway and route registration; JavaScript syntax checks of shell, scripts and renderer.
 - Branded client library build (TypeScript and tsdown) and Web build using the pinned frontend's Vite binary.
 - Production runtime deployment, with 89 missing workspace peers included in the carrier. Hoisted dependencies and copied vendor overrides remove references to the build checkout. Bundled Node 24.19.0 and dsh version probe passed on Linux x64.
@@ -24,7 +24,7 @@ The Linux Electron GUI attempt in this execution environment could not complete 
 
 ## Not yet verified or released
 
-- Real VELIA pairing and live model streaming/tool behavior against a deployed, explicitly enabled preview gateway.
+- Real-owner VELIA pairing and a Desktop tool round trip through that owner's live account. The separate operator-only provider probe below passed; it does not establish owner pairing or local file execution with the live model.
 - Successful installer installation and application startup on Windows/macOS, including subprocess cleanup and native credential storage.
 - Signing/notarization, automatic updates, distributed quotas and commercial accounting.
 - Flash tool support, vision, voice, Studio and mobile history synchronization.
@@ -47,4 +47,16 @@ Passed in the actual builder:
 
 Artifact: `VELIA-Desktop-0.2.0-win-x64.zip`, 421,480,717 bytes. SHA-256: `54b6ed86541bcd7ce9e874d5d997630c51c905f43f751eb8b88c3db2fdc50bf9`. Built at `2026-10-03T13:44:20.407Z`. Download: <https://velia-desktop-windows-build-production.up.railway.app/>; machine-readable evidence is available at `/manifest.json`.
 
-This is a portable archive, not an NSIS installer. The NSIS uninstaller-generation helper could not execute in Railway with either the image's Wine or the pinned Wine 11 toolset, so the Railway lane explicitly emits a ZIP; native Windows jobs retain NSIS. Physical Windows Electron GUI, native credential-store, terminal and live VELIA gateway acceptance remain unverified. macOS builds remain blocked by the Actions account issue above. Production backend deployment and the public model gateway were not changed.
+This is a portable archive, not an NSIS installer. The NSIS uninstaller-generation helper could not execute in Railway with either the image's Wine or the pinned Wine 11 toolset, so the Railway lane explicitly emits a ZIP; native Windows jobs retain NSIS. Physical Windows Electron GUI, native credential-store, terminal and real-owner VELIA gateway acceptance remain unverified. macOS builds remain blocked by the Actions account issue above. Production backend deployment was not changed.
+
+## Isolated live Desktop gateway
+
+Gateway source commit: `6ae399541b39ebbc5089b6dc68629ce5ac822321`. Railway deploy branch `ci/velia-desktop-gateway-railway` adds the independent root Dockerfile without changing the feature PR's backend Dockerfile. Deployment `c6fe8a78-ca7b-445c-a487-5e830736fef5` succeeded at commit `0d6274bae08a65fe2dee182d813eefac19005278` on 2026-10-03. New service `velia-desktop-gateway` (`5948f776-4da6-4907-afa6-bbca0d1532f2`) runs only in `deepalpha-bot-pr-577`, with one replica. No existing production service, variables or deployment gates were changed.
+
+The build executed all 33 HTTP/payload tests. The pre-deploy operator probe made exactly two bounded real-provider requests: a `read_probe` tool call, its correlated fixed test result, then a complete SSE answer `VELIA_LIVE_TOOL_OK`. Receipt `VELIA_DESKTOP_LIVE_PROBE` records the exact deployment commit, successful identity health, unauthenticated identity rejection, tool/SSE success and `owner_pairing_verified=false`. This probe does not authenticate as the owner or read local user files.
+
+Public endpoint: <https://velia-desktop-gateway-deepalpha-bot-pr-577.up.railway.app>. Public checks passed: `/health` 200, model catalog without a token 401, model catalog with a malformed token 401, browser pairing redirect 302 to the existing VELIA `/mobile-connect`, and malformed pairing input 400 without contacting the identity authority. Account identity is checked on every model request through the unchanged existing VELIA Mobile API. Provider keys are referenced inside the PR environment and remain server-side. Only the explicitly configured owner account can use this preview.
+
+The full-backend PR preview still fails its independent Flash/Bonsai pre-deploy probe. Its full gate was preserved. The Desktop service has its own focused build tests and Pro/provider probe. GitHub Actions remains blocked by the account billing lock; these Railway results do not imply all PR checks are green or permission to merge/deploy production.
+
+The Windows live-chat resource update reuses the original qualified ZIP and its native runtime. Only `src/config.mjs` changes inside `app.asar`, adding the explicit preview data directory; all other archived modules/assets are byte-identical. Base ASAR SHA-256: `83371622ba0227124282a1520d8bbabac68ac6c9a22dfae4062a752c385218bc`; updated ASAR: `839594ccb6a9d84d16b38a6bc71163a33ca540cd33bc0eadb82d5e3fe14b75ef`. The extracted update matches reviewed source and passes JS syntax checks. The existing Windows executable's ASAR integrity fuse is disabled; no executable/fuse change is made. `VELIA-Live-Chat.cmd` selects the new gateway and a separate `%LOCALAPPDATA%\VELIA\DesktopGatewayPreview` store. First pairing through the owner's browser and native Windows launch still require the owner's machine.
