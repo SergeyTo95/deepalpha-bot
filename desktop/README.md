@@ -51,7 +51,7 @@ The builder checks Windows filename compatibility, archives every packaged file,
 
 Use a separate builder branch with the Desktop Dockerfile also copied to root `Dockerfile`; configure only the builder service using the source/settings recorded in `railway-windows-service.json`. New Railway services no longer accept the deprecated `railway.toml` configuration, so these settings are applied directly through the Railway service API. The final image contains only the ZIP, build manifest and a small read-only download server; it does not start the VELIA backend or retain build credentials. `/health`, `/manifest.json`, and the ZIP support verification and resumable downloads. Source code belongs in the existing preview PR; the builder branch's root Dockerfile is kept separate from backend deployment settings.
 
-Wine qualification does not establish native Windows GUI, OS credential-store or terminal acceptance. Real VELIA model access still requires the opt-in gateway deployment. macOS installers use the native macOS jobs. See `VERIFICATION.md` for the actual current builder result.
+Wine qualification does not establish native Windows GUI, OS credential-store or terminal acceptance. The isolated owner-only Desktop gateway is now deployed and passed its live provider tool/SSE probe; first real-owner pairing remains to be completed on the owner's machine. macOS installers use the native macOS jobs. See `VERIFICATION.md` for the actual current results.
 
 ## Backend preview
 
@@ -65,7 +65,7 @@ VELIA_DESKTOP_PRO_MODEL=<verified tool-capable model served by KIMI_BASE_URL>
 
 The gateway authenticates existing `va_` device tokens and keeps provider keys server-side. It forwards text Chat Completions, tool definitions, tool results and SSE; it executes no local tools on Railway. Preview limits are one active request per user, two per process, 30 calls per user per hour, 1 MiB input and 4096 output tokens. Limits are process-local, and production billing/distributed reservations are not implemented. Provider redirects and raw upstream errors are rejected or hidden.
 
-Only PRO/text is exposed. Flash tools, vision, Studio, voice and history sync need separate integration and validation. The existing HTTPS backend is enough for controlled preview; a new domain is unnecessary. No production deployment or real-model acceptance is implied by this developer preview.
+Only PRO/text is exposed. Flash tools, vision, Studio, voice and history sync need separate integration and validation. The independent service described in `GATEWAY.md` uses the existing backend for account authentication. Its live provider probe passed; this does not establish real-owner Desktop pairing or production release.
 
 ## Checks
 

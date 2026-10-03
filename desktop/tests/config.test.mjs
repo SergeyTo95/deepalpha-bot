@@ -27,6 +27,9 @@ test('launch accepts only the child loopback port', () => {
 test('profile uses a credential reference and turns analytics off', () => {
   const patch = profilePatch('https://api.example/v1');
   assert.equal(patch[0].config.providers.velia.apiKeyEnv, 'VELIA_ACCESS_TOKEN');
+  assert.deepEqual(patch[0].config.providers.velia.models.map(m => m.id), ['velia-pro', 'velia-flash']);
+  assert.equal(patch[0].config.providers.velia.models[1].contextWindow, 8192);
+  assert.equal(patch[0].config.providers.velia.models[1].maxTokens, 512);
   assert.equal(patch.find(p => p.id === 'product-analytics').disabled, true);
   assert.equal(patch.find(p => p.id === 'desktop-product-telemetry').disabled, true);
 });

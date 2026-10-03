@@ -36,6 +36,10 @@ export function profilePatch(baseURL, credentialPath, localGateway) {
       retryPolicy: { mode: 'normal', maxRetries: 0 },
       models: [
         { id: 'velia-pro', name: 'VELIA PRO', contextWindow: 32768, maxTokens: 4096, input: ['text'] },
+        { id: 'velia-flash', name: 'VELIA FLASH', contextWindow: 8192, maxTokens: 512,
+          input: ['text'], reasoningEfforts: false,
+          compat: { maxTokensField: 'max_tokens', supportsDeveloperRole: false,
+            supportsReasoningEffort: false, supportsStrictMode: false } },
       ],
     } } } },
     { id: 'agent-default-model', config: { provider: 'velia', model: 'velia-pro' } },

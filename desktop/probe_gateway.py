@@ -5,13 +5,66 @@ fixed test value, not user data. This does not claim owner-account pairing.
 """
 import argparse
 import asyncio
+import hmac
 import json
 import os
+from pathlib import Path
+import secrets
 from urllib.parse import urlsplit
 
-from aiohttp import ClientSession, ClientTimeout, DummyCookieJar
+from aiohttp import ClientSession, ClientTimeout, DummyCookieJar, web
 from desktop.gateway import GatewayConfig
-from velia_desktop_routes import validate_payload
+from velia_desktop_routes import flash_enabled, setup_velia_desktop_routes, validate_payload
+
+
+async def run_flash_probe():
+    """Use shipped Harness and a live worker in this private pre-deploy process.
+
+    The fixture identity is unrelated to any user and listens on loopback only.
+    This server and its synthetic allowlist never run in the public gateway.
+    """
+    if not flash_enabled():
+        raise RuntimeError("flash_configuration_unavailable")
+    fixture_id = "desktop-operator-probe"
+    fixture_token = secrets.token_hex(32)
+    async def authenticate(token):
+        return {"user_id": fixture_id} if hmac.compare_digest(token, fixture_token) else None
+    app = web.Application()
+    setup_velia_desktop_routes(app, authenticate)
+    runner = web.AppRunner(app, access_log=None, handler_cancellation=True)
+    previous = os.environ.get("VELIA_DESKTOP_PREVIEW_USER_IDS")
+    os.environ["VELIA_DESKTOP_PREVIEW_USER_IDS"] = fixture_id
+    child = None
+    try:
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        runtime = os.getenv("VELIA_DESKTOP_QUALIFICATION_RUNTIME", "/opt/velia-qualification/harness")
+        script = Path(__file__).parent / "scripts" / "probe-live-flash.mjs"
+        child = await asyncio.create_subprocess_exec("node", str(script), f"http://127.0.0.1:{port}",
+            fixture_token, runtime, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env={"PATH": os.environ.get("PATH", ""), "LANG": "C.UTF-8"})
+        stdout, stderr = await asyncio.wait_for(child.communicate(), timeout=570)
+        if child.returncode:
+            # Child has no provider or account credentials. Keep failures bounded.
+            print("VELIA_FLASH_HARNESS_FAILURE " + stderr.decode(errors="replace")[-8000:], flush=True)
+            raise RuntimeError("flash_harness_qualification_failed")
+        receipt = next((line for line in stdout.decode().splitlines()
+                        if line.startswith("VELIA_FLASH_HARNESS_PROBE ")), None)
+        if not receipt or json.loads(receipt.split(" ", 1)[1]).get("ok") is not True:
+            raise RuntimeError("flash_harness_receipt_missing")
+        print(receipt, flush=True)
+        return {"flash_live_harness": True, "flash_paid_fallback": False}
+    finally:
+        if child and child.returncode is None:
+            child.kill()
+            await child.wait()
+        await runner.cleanup()
+        if previous is None:
+            os.environ.pop("VELIA_DESKTOP_PREVIEW_USER_IDS", None)
+        else:
+            os.environ["VELIA_DESKTOP_PREVIEW_USER_IDS"] = previous
 
 
 async def run_probe():
@@ -71,10 +124,13 @@ async def run_probe():
                     raise RuntimeError("provider_probe_output_too_large")
         if not done or text.strip() != marker:
             raise RuntimeError("provider_stream_verification_failed")
-    return {"ok": True, "commit": os.getenv("RAILWAY_GIT_COMMIT_SHA"),
+    receipt = {"ok": True, "commit": os.getenv("RAILWAY_GIT_COMMIT_SHA"),
             "identity_health": True, "identity_rejects_no_token": True,
             "live_tool_call": True, "correlated_tool_result": True,
             "live_sse": True, "model_calls": 2, "owner_pairing_verified": False}
+    if os.getenv("VELIA_DESKTOP_FLASH_ENABLED", "").lower() in {"true", "1"}:
+        receipt.update(await run_flash_probe())
+    return receipt
 
 
 if __name__ == "__main__":

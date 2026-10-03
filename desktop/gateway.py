@@ -173,4 +173,5 @@ def create_app(config=None, *, check_identity=True):
 
 
 if __name__ == "__main__":
-    web.run_app(create_app(), host="0.0.0.0", port=int(os.getenv("PORT", "8080")), access_log=None)
+    web.run_app(create_app(), host="0.0.0.0", port=int(os.getenv("PORT", "8080")), access_log=None,
+                handler_cancellation=True)
