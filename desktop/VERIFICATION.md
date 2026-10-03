@@ -2,7 +2,7 @@
 
 Validated against Harness commit `5badb15009ae1756c3afe0ae0cef1faafc290ccc` and backend base `aabf3a8ae0d24203761d653918ba35a1a4fa7069`.
 
-- Backend gateway tests: 16 passed. Covers opt-in gating, authentication, user allowlist, tool-call correlation, malformed bodies, unsupported vision and bounded output.
+- Backend gateway tests: 17 passed. Covers opt-in gating, authentication, user allowlist, tool-call correlation, Harness text-content blocks, malformed bodies, unsupported vision and bounded output.
 - Desktop configuration and session tests: 5 passed. Covers HTTPS endpoints, loopback launch URLs, credential references, disabled telemetry, refresh-token rotation, and failed refresh retention.
 - Python compilation of `velia_desktop_routes.py` and `run_web_process.py`: passed.
 - JavaScript syntax checks for the shell and preparation/connection scripts: passed.

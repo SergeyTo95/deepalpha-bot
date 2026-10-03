@@ -23,6 +23,13 @@ def test_tool_round_trip_retains_tool_call_ids(monkeypatch):
     assert result['tools'][0]['function']['name'] == 'read'
 
 
+def test_accepts_harness_text_content_blocks():
+    result = validate_payload({'model': 'velia-pro', 'messages': [
+        {'role': 'user', 'content': [{'type': 'text', 'text': 'Read file'},
+                                    {'type': 'text', 'text': 'Then summarize'}]}]})
+    assert result['messages'][0]['content'] == 'Read file\nThen summarize'
+
+
 @pytest.mark.parametrize('change', [
     {'model': 'provider-arbitrary'}, {'max_tokens': 999999}, {'max_tokens': True},
     {'stream': 'true'}, {'messages': []},

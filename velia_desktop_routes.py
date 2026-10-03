@@ -25,9 +25,17 @@ def validate_payload(data):
            {"system", "developer", "user", "assistant", "tool"} for m in messages):
         raise ValueError("invalid_messages")
     # Text-only preview. Reject images instead of silently charging for vision.
-    if any(m.get("content") is not None and not isinstance(m.get("content"), str)
-           for m in messages):
-        raise ValueError("text_only_preview")
+    normalized_messages = []
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            if any(not isinstance(part, dict) or part.get("type") != "text"
+                   or not isinstance(part.get("text"), str) for part in content):
+                raise ValueError("text_only_preview")
+            content = "\n".join(part["text"] for part in content)
+        elif content is not None and not isinstance(content, str):
+            raise ValueError("text_only_preview")
+        normalized_messages.append({**message, "content": content})
     tools = data.get("tools", [])
     if not isinstance(tools, list) or len(tools) > 128:
         raise ValueError("invalid_tools")
@@ -42,7 +50,7 @@ def validate_payload(data):
     if type(data.get("stream", False)) is not bool:
         raise ValueError("invalid_stream")
     result = {"model": os.getenv("VELIA_DESKTOP_PRO_MODEL", "kimi-k3"),
-              "messages": messages, "max_completion_tokens": limit,
+              "messages": normalized_messages, "max_completion_tokens": limit,
               "stream": data.get("stream", False)}
     if tools:
         result["tools"] = tools
