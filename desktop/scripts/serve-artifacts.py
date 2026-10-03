@@ -1,4 +1,4 @@
-"""Serve only the verified Desktop preview installer and its build manifest."""
+"""Serve only the verified Desktop preview artifact and its build manifest."""
 
 from hashlib import sha256
 from html import escape
@@ -16,20 +16,21 @@ def load_artifacts(directory):
     files = {}
     for item in manifest["files"]:
         name = item["name"]
-        if not re.fullmatch(r"VELIA-Desktop-[A-Za-z0-9_.-]+\.exe", name):
-            raise ValueError("Invalid installer filename")
+        if not re.fullmatch(r"VELIA-Desktop-[A-Za-z0-9_.-]+\.(?:zip|exe)", name):
+            raise ValueError("Invalid artifact filename")
         path = root / name
         if path.is_symlink() or path.stat().st_size != item["bytes"]:
-            raise ValueError("Installer size differs from the manifest")
+            raise ValueError("Artifact size differs from the manifest")
         digest = sha256()
         with path.open("rb") as source:
             for chunk in iter(lambda: source.read(1024 * 1024), b""):
                 digest.update(chunk)
         if digest.hexdigest() != item["sha256"]:
-            raise ValueError("Installer checksum differs from the manifest")
-        files["/" + name] = (path, "application/vnd.microsoft.portable-executable")
+            raise ValueError("Artifact checksum differs from the manifest")
+        mime = "application/zip" if path.suffix == ".zip" else "application/vnd.microsoft.portable-executable"
+        files["/" + name] = (path, mime)
     if len(files) != 1:
-        raise ValueError("Expected one Windows installer")
+        raise ValueError("Expected one Windows artifact")
     files["/manifest.json"] = (root / "manifest.json", "application/json")
     return manifest, files
 
@@ -50,11 +51,15 @@ def artifact_handler(manifest, files):
                 return
             if path == "/":
                 name = manifest["files"][0]["name"]
+                portable = name.endswith(".zip")
+                label = "Скачать переносимую версию (ZIP)" if portable else "Скачать установщик"
+                instruction = ("Распакуйте архив целиком и запустите VELIA Desktop Preview.exe." if portable
+                               else "Запустите установщик.")
                 content = ("<!doctype html><html lang='ru'><meta charset='utf-8'>"
                            "<title>VELIA Desktop Preview</title>"
                            "<h1>VELIA Desktop Preview</h1><p>Windows x64 · тестовая сборка</p>"
-                           f"<p><a href='/{escape(name)}'>Скачать установщик</a></p>"
-                           "<p>Установщик пока без цифровой подписи. Запуск интерфейса и подключение "
+                           f"<p><a href='/{escape(name)}'>{label}</a></p><p>{instruction}</p>"
+                           "<p>Тестовая сборка без цифровой подписи. Запуск интерфейса и подключение "
                            "к живой модели ещё требуют проверки на Windows.</p>"
                            "<p><a href='/manifest.json'>Версия и контрольная сумма</a></p></html>").encode()
                 self.send_bytes(content, "text/html; charset=utf-8", body)
@@ -83,7 +88,7 @@ def artifact_handler(manifest, files):
             self.send_header("X-Content-Type-Options", "nosniff")
             if ranged:
                 self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-            if filename.suffix == ".exe":
+            if filename.suffix in (".zip", ".exe"):
                 self.send_header("Content-Disposition", f'attachment; filename="{filename.name}"')
             self.end_headers()
             if body:
