@@ -5,7 +5,7 @@ Harness revision: `5badb15009ae1756c3afe0ae0cef1faafc290ccc`. Backend base: `aab
 ## Passed locally
 
 - 19 backend gateway tests, including HTTP streaming, a correlated tool-result round trip and rejection of a provider redirect before it receives a provider secret.
-- 14 desktop behavior tests: HTTPS/loopback configuration, encrypted-session migration and refusal of plaintext storage, pairing-code normalization, token lifetime validation, concurrent refresh coalescing, local proxy authentication, streamed tool bodies and cancellation.
+- 17 desktop behavior tests: HTTPS/loopback configuration, encrypted-session migration and refusal of plaintext storage, pairing-code normalization, token lifetime validation, concurrent refresh coalescing, local proxy authentication, streamed tool bodies and cancellation, plus output/exit-status transport for Wine qualifications.
 - Python compilation of the gateway and route registration; JavaScript syntax checks of shell, scripts and renderer.
 - Branded client library build (TypeScript and tsdown) and Web build using the pinned frontend's Vite binary.
 - Production runtime deployment, with 89 missing workspace peers included in the carrier. Hoisted dependencies and copied vendor overrides remove references to the build checkout. Bundled Node 24.19.0 and dsh version probe passed on Linux x64.
@@ -33,6 +33,18 @@ Production was not changed, and this pull request remains a developer preview.
 
 ## Railway Windows lane
 
-The separate Docker/Wine builder is prepared to build Windows x64 independently of Actions. It requires actual Windows Node and native PTY/FFI modules to load, then qualifies the streamed read-tool loop and authenticated Web profile both before packaging and from final resources. The final artifact service verifies the installer SHA-256 at startup and supports byte-range downloads.
+Railway deployment `47919d99-39d2-4656-ad3c-0d14c68729b4` succeeded with builder commit `781a1cd4b23d8d9944fac1fb3b42a387cee3324c`. Service `velia-desktop-windows-build` is isolated from the VELIA backend. The final image contains only the portable ZIP, manifest and read-only download server. Its startup SHA-256 verification and `/health` check passed.
 
-Preparation checks passed: 17 Node behavior tests (including regular-file transport of process output and exit status), two actual HTTP/checksum artifact-server tests, and syntax checks. These transport unit tests use a simulated Wine executable; they do not establish a successful Windows build. Railway deployment, its packaged-resource qualification and native Windows GUI/storage/terminal acceptance remain pending until separately recorded.
+Passed in the actual builder:
+
+- 17 Node behavior tests and two HTTP/checksum artifact-server tests. The transport unit tests use a simulated Wine executable; the following integration gates execute actual Windows binaries.
+- Official Windows Node 24.19.0 x64 under Wine, native AMD64 PE module loading for `node-pty` ConPTY and Koffi, and a real Windows API call through Koffi.
+- Actual streamed agent loop through the account-isolating local proxy: two provider rounds, real local file reading, correlated tool result and VELIA persona. The provider is deterministic; no live model was called.
+- Authenticated bundled Web profile, token-to-cookie handoff and HTML HTTP 200.
+- Native-module, read-tool and authenticated Web gates repeated from the final unpacked Windows resources.
+- Internal deployment links materialized for Windows. Portable archive paths checked for Windows filename compatibility and case-insensitive collisions. ZIP CRCs passed; all 26,515 physical packaged files matched their extracted SHA-256 hashes.
+- Native-module, read-tool and authenticated Web gates passed again from the extracted ZIP resources, followed by `VELIA_WINDOWS_PORTABLE_QUALIFIED` and `VELIA_WINDOWS_PORTABLE_BUILT`.
+
+Artifact: `VELIA-Desktop-0.2.0-win-x64.zip`, 421,480,717 bytes. SHA-256: `54b6ed86541bcd7ce9e874d5d997630c51c905f43f751eb8b88c3db2fdc50bf9`. Built at `2026-10-03T13:44:20.407Z`. Download: <https://velia-desktop-windows-build-production.up.railway.app/>; machine-readable evidence is available at `/manifest.json`.
+
+This is a portable archive, not an NSIS installer. The NSIS uninstaller-generation helper could not execute in Railway with either the image's Wine or the pinned Wine 11 toolset, so the Railway lane explicitly emits a ZIP; native Windows jobs retain NSIS. Physical Windows Electron GUI, native credential-store, terminal and live VELIA gateway acceptance remain unverified. macOS builds remain blocked by the Actions account issue above. Production backend deployment and the public model gateway were not changed.
