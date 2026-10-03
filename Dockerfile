@@ -20,13 +20,15 @@ ENV WINEDLLOVERRIDES="mscoree,mshtml=" CSC_IDENTITY_AUTO_DISCOVERY=false
 WORKDIR /app/desktop
 COPY desktop/package.json desktop/package-lock.json ./
 RUN npm ci --ignore-scripts
+COPY desktop/src/config.mjs ./src/config.mjs
+COPY desktop/scripts/prepare-harness.mjs ./scripts/prepare-harness.mjs
+RUN npm run build:harness
 COPY desktop/src/ ./src/
 COPY desktop/scripts/ ./scripts/
 COPY desktop/ui/ ./ui/
 COPY desktop/tests/ ./tests/
 RUN npm test \
     && python3 -m unittest discover -s tests -p 'test_artifact_server.py'
-RUN npm run build:harness
 ARG RAILWAY_GIT_COMMIT_SHA
 ENV RAILWAY_GIT_COMMIT_SHA=${RAILWAY_GIT_COMMIT_SHA}
 RUN xvfb-run -a sh -c 'wineboot --init && winecfg -v win10 && node scripts/package-windows-railway.mjs'
