@@ -64,3 +64,45 @@ class GuestStore:
         with closing(self.connect()) as conn, closing(conn.cursor()) as cur:
             self.execute(cur, "DELETE FROM velia_web_guest_usage WHERE quota_key IN (?, ?)", tuple(keys))
             conn.commit()
+
+    def initialize_search(self):
+        with closing(self.connect()) as conn, closing(conn.cursor()) as cur:
+            cur.execute("""CREATE TABLE IF NOT EXISTS velia_web_search_context (
+                request_key TEXT PRIMARY KEY, query_hash TEXT NOT NULL,
+                context_key TEXT NOT NULL, question_length INTEGER NOT NULL,
+                result_json TEXT NOT NULL, CHECK (question_length >= 0))""")
+            cur.execute("CREATE INDEX IF NOT EXISTS velia_web_search_context_key ON velia_web_search_context(context_key)")
+            conn.commit()
+
+    def cached_search(self, request_key, query_hash):
+        import json
+        with closing(self.connect()) as conn, closing(conn.cursor()) as cur:
+            self.execute(cur, "SELECT query_hash, result_json FROM velia_web_search_context WHERE request_key = ?", (request_key,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            if row[0] != query_hash:
+                raise ValueError("search_request_mismatch")
+            return json.loads(row[1])
+
+    def remember_search(self, request_key, query_hash, context_key, length, result):
+        import json
+        with closing(self.connect()) as conn, closing(conn.cursor()) as cur:
+            self.execute(cur, """INSERT INTO velia_web_search_context
+                (request_key, query_hash, context_key, question_length, result_json)
+                VALUES (?, ?, ?, ?, ?) ON CONFLICT (request_key) DO NOTHING""",
+                (request_key, query_hash, context_key, length, json.dumps(result, ensure_ascii=False)))
+            conn.commit()
+
+    def search_metadata(self, keys):
+        import json
+        with closing(self.connect()) as conn, closing(conn.cursor()) as cur:
+            placeholders = ", ".join("?" for _ in keys)
+            self.execute(cur, "SELECT context_key, question_length, result_json FROM velia_web_search_context WHERE context_key IN (" + placeholders + ")", tuple(keys))
+            return [(row[0], row[1], json.loads(row[2])) for row in cur.fetchall()]
+
+    def delete_search_probe(self, request_key):
+        """Remove one private operator qualification record only."""
+        with closing(self.connect()) as conn, closing(conn.cursor()) as cur:
+            self.execute(cur, "DELETE FROM velia_web_search_context WHERE request_key = ?", (request_key,))
+            conn.commit()

@@ -19,7 +19,7 @@ LIFETIME = 365 * 24 * 3600
 GUEST = web.RequestKey("velia_guest_cookie", str)
 
 
-def setup_guest_routes(app, *, origin, handlers, json_response, store=None):
+def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_search=None):
     secret = os.environ["VELIA_WEB_SESSION_KEY"].encode()
     cipher = Fernet(secret)
     store = store or GuestStore(os.environ["VELIA_WEB_GUEST_DATABASE_URL"])
@@ -72,7 +72,8 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None):
         except Exception:
             return error("guest_service_unavailable", 503)
         return json_response({"ok": True, "guest": True, "account": digest(sid)[:24],
-            "limit": LIMIT, "remaining": remaining, "models": [FLASH_ID] if flash_enabled() else []})
+            "limit": LIMIT, "remaining": remaining, "models": [FLASH_ID] if flash_enabled() else [],
+            "web_search": bool(web_search and web_search.available)})
 
     async def chat(request):
         if (request.headers.get("Origin") != origin or request.headers.get("X-Velia-Request") != "1"
@@ -113,6 +114,12 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None):
                     return error("guest_limit_reached", 429)
                 except Exception:
                     return error("guest_service_unavailable", 503)
+                from desktop.web_search import SEARCH, SearchUnavailable
+                if request.get(SEARCH):
+                    if web_search is None:
+                        raise SearchUnavailable()
+                    payload = await web_search.enrich(request, payload)
+                    await check_flash_context(client, endpoint, headers, payload)
                 async with client.post(endpoint + "/v1/chat/completions", json=payload, headers=headers, allow_redirects=False) as upstream:
                     if upstream.status != 200 or "text/event-stream" not in upstream.headers.get("Content-Type", ""):
                         return error("model_request_failed", 502)

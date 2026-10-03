@@ -5,6 +5,7 @@ import {
   loadChats,
   chatPayload,
   apiError,
+  safeSearch,
 } from "./core.mjs";
 const $ = (id) => document.getElementById(id);
 const icons = {
@@ -36,6 +37,8 @@ let profile = null,
   guest = null,
   guestLoading = null,
   ready = false,
+  internet = false,
+  internetAvailable = false,
   chats = [],
   currentId = null,
   storageKey = null,
@@ -212,6 +215,10 @@ function messageNode(message, index) {
         ? '<div class="thinking" aria-label="Велия готовит ответ"><span></span><span></span><span></span></div>'
         : "";
   article.append(content);
+  if (message.role === "assistant" && message.search) {
+    const sources = sourceNode(message.search);
+    if (sources) article.append(sources);
+  }
   if (message.role === "assistant" && !busy) {
     const actions = document.createElement("div");
     actions.className = "message-actions";
@@ -241,6 +248,31 @@ function messageNode(message, index) {
   }
   return article;
 }
+function sourceNode(value) {
+  const result = safeSearch(value);
+  if (!result.sources.length) return null;
+  const section = document.createElement("div");
+  section.className = "message-sources";
+  const label = document.createElement("span");
+  label.textContent = "Источники";
+  section.append(label);
+  result.sources.forEach((source, index) => {
+    const link = document.createElement("a");
+    link.href = source.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = "[" + (index + 1) + "] " + source.title;
+    section.append(link);
+  });
+  if (result.retrieved_at) section.title = "Поиск выполнен: " + result.retrieved_at;
+  return section;
+}
+function updateInternet(available) {
+  internetAvailable = !!available;
+  if (!internetAvailable) internet = false;
+  $("internet").disabled = busy || !internetAvailable;
+  $("internet").setAttribute("aria-pressed", String(internet));
+}
 function render() {
   const chat = current(),
     nonempty = !!chat?.messages.length;
@@ -262,6 +294,7 @@ function setBusy(value) {
   $("stop").hidden = !value;
   $("prompt").disabled = value;
   $("model-button").disabled = value;
+  $("internet").disabled = value || !internetAvailable;
   $("new-chat").disabled = value;
   $("account").disabled = value;
   $("send").disabled = value || !$("prompt").value.trim();
@@ -308,6 +341,8 @@ async function openChat(chat) {
         model: m.chat_mode === "flash" ? "velia-flash" : "velia-pro",
         pending: m.status === "pending",
         failed: m.status === "error" ? "Не удалось получить ответ. Можно повторить запрос." : undefined,
+        internet: m.web_search === true,
+        search: m.role === "assistant" && m.web_search ? safeSearch(m.web_search) : undefined,
       }));
       chat.loaded = true;
     } catch (error) { toast(error.message); }
@@ -349,6 +384,7 @@ async function copyText(text) {
 function applyProfile(value) {
   const changed = profile?.account !== value.account;
   profile = value;
+  updateInternet(value.web_search);
   $("guest-notice").hidden = true;
   storageKey = "velia-web-chats-v1:" + value.account;
   if (changed) {
@@ -382,6 +418,7 @@ function applyGuest(value) {
   if (profile) return;
   const changed = guest?.account !== value.account || storageKey !== "velia-web-guest-v1:" + value.account;
   guest = value;
+  updateInternet(value.web_search);
   storageKey = "velia-web-guest-v1:" + value.account;
   if (changed) {
     chats = loadChats(browserStorage, storageKey);
@@ -444,7 +481,7 @@ async function generate(retry = false) {
       chats = chats.slice(0, 100);
       currentId = chat.id;
     }
-    chat.messages.push({ role: "user", content: text, requestId: crypto.randomUUID() });
+    chat.messages.push({ role: "user", content: text, requestId: crypto.randomUUID(), internet });
     $("prompt").value = "";
     resizePrompt();
   }
@@ -453,6 +490,7 @@ async function generate(retry = false) {
     payload = chat.remote ? {content: user.content, model: selected,
       idempotency_key: user.requestId || (user.requestId = crypto.randomUUID())} : chatPayload(chat, selected),
     answer = { role: "assistant", content: "", model: selected, pending: true };
+  if (user.internet) payload.web_search = true;
   chat.messages.push(answer);
   chat.updated = Date.now();
   abort = new AbortController();
@@ -460,7 +498,7 @@ async function generate(retry = false) {
   render();
   scrollDown(true);
   save();
-  $("generation-status").textContent = "Велия готовит ответ…";
+  $("generation-status").textContent = user.internet ? "Ищу информацию в интернете…" : "Велия готовит ответ…";
   slowTimer = setTimeout(() => {
     $("generation-status").textContent =
       selected === "velia-flash"
@@ -486,6 +524,14 @@ async function generate(retry = false) {
       $("generation-status").textContent = "";
       scheduleSave();
       if (shouldScroll) scrollDown(true);
+    }, (search) => {
+      answer.search = search;
+      const article = $("messages").lastElementChild;
+      article.querySelector(".message-sources")?.remove();
+      const sources = sourceNode(search);
+      if (sources) article.append(sources);
+      $("generation-status").textContent = "Велия изучает источники…";
+      scheduleSave();
     });
     answer.finish = result.finish;
   } catch (error) {
@@ -583,6 +629,13 @@ for (const suggestion of document.querySelectorAll(".suggestion"))
   };
 $("auth-close").onclick = () => $("auth-dialog").close();
 $("guest-login").onclick = openAuth;
+$("internet").onclick = () => {
+  if (!busy && internetAvailable) {
+    internet = !internet;
+    $("internet").setAttribute("aria-pressed", String(internet));
+    $("prompt").focus();
+  }
+};
 $("pairing-link").onclick = () => {
   try { sessionStorage.setItem("velia-auth-pending", "1"); } catch {}
   $("auth-title").textContent = "Введи код из Telegram";

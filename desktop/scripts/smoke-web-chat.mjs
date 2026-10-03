@@ -72,18 +72,23 @@ try {
     .waitFor();
   assert.equal(calls.length, 0);
   await page.getByText("Без регистрации · осталось 30 из 30 сообщений", {exact: true}).waitFor();
+  await page.locator("#internet").click();
+  assert.equal(await page.locator("#internet").getAttribute("aria-pressed"), "true");
   await page.locator("#prompt").fill("Привет без регистрации");
   await page.locator("#send").click();
   await page.locator(".message-actions").waitFor();
   assert.equal(await page.locator("#auth-dialog").isVisible(), false);
+  await page.locator('.message-sources a[href="https://www.python.org/downloads/"]').waitFor();
   await page.getByText("Без регистрации · осталось 29 из 30 сообщений", {exact: true}).waitFor();
   assert.ok((await context.cookies()).find((c) => c.name === "__Host-velia-guest")?.httpOnly);
   await page.reload();
   await page.getByText("Без регистрации · осталось 29 из 30 сообщений", {exact: true}).waitFor();
   await page.locator("#messages").getByText("Привет без регистрации", {exact: true}).waitFor();
+  await page.locator('.message-sources a[href="https://www.python.org/downloads/"]').waitFor();
   assert.equal(await page.locator('[data-model="velia-pro"]').isDisabled(), true);
   await page.screenshot({path: root + "/VELIA-Web-guest.png"});
   await page.locator("#new-chat").click();
+  await page.locator("#internet").click();
   await page.locator("#prompt").fill("Привет, Велия");
   await page.locator("#account").click();
   await page.locator("#auth-dialog").waitFor({ state: "visible" });
@@ -139,6 +144,7 @@ try {
   assert.equal(await page.locator(".code-block").count(), 1);
   await page.reload();
   await page.locator(".assistant .message-actions").waitFor();
+  await page.locator('.message-sources a[href="https://www.python.org/downloads/"]').waitFor();
   assert.ok(
     (await page.locator("#messages").innerText()).includes("Привет, Велия"),
   );
@@ -148,6 +154,7 @@ try {
   await page.waitForFunction(() => !document.querySelector('[data-model="velia-pro"]').disabled);
   await page.locator("#model-button").click();
   await page.getByRole("option", { name: /VELIA PRO/ }).click();
+  await page.locator("#internet").click();
   await page.locator("#prompt").fill("Продолжи");
   await page.locator("#send").click();
   await page.locator(".message-actions").last().waitFor();
@@ -219,6 +226,9 @@ try {
       returnToCode: true,
       guestFlash: true,
       guestCounterPersists: true,
+      internetGuest: true,
+      internetAccount: true,
+      sourceLinksPersist: true,
       login: true,
       logout: true,
       cookieHttpOnly: true,

@@ -5,6 +5,7 @@ import {
   readCompletion,
   chatPayload,
   loadChats,
+  safeSearch,
 } from "../core.mjs";
 
 test("untrusted markup, attributes, fenced languages and links cannot inject HTML", () => {
@@ -44,6 +45,20 @@ function response(text, chunkSize = 1) {
     { headers: { "content-type": "text/event-stream" } },
   );
 }
+test("search sources survive streaming and unsafe source links are ignored", async () => {
+  const sources = {sources:[{title:"Python",url:"https://www.python.org/"},{title:"bad",url:"javascript:alert(1)"}],
+    retrieved_at:"2026-10-03T20:00:00Z", provider:"private", api_key:"private"};
+  let metadata;
+  const result = await readCompletion(response(
+    'data: ' + JSON.stringify({web_search:sources}) + '\n\ndata: {"choices":[{"delta":{"content":"Ответ [1]"}}]}\n\ndata: [DONE]\n\n'),
+    () => {}, (value) => {metadata=value;});
+  assert.equal(result.text, "Ответ [1]");
+  assert.deepEqual(result.search, metadata);
+  assert.deepEqual(metadata, safeSearch(sources));
+  assert.equal(metadata.sources.length, 1);
+  assert.equal(metadata.provider, undefined);
+  assert.equal(metadata.api_key, undefined);
+});
 test("one-byte UTF-8 SSE boundaries retain Russian content and ignore reasoning", async () => {
   let visible = "";
   const result = await readCompletion(

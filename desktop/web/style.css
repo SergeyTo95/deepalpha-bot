@@ -1146,11 +1146,31 @@ dialog::backdrop {
   color: var(--muted);
   padding-top: 12px;
  }
- .guest-notice button {
+.guest-notice button {
   border: 0;
   background: transparent;
   color: var(--text);
   font: inherit;
   text-decoration: underline;
   cursor: pointer;
- }
+}
+.internet-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  padding: 7px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.internet-button .icon { width: 15px; height: 15px; }
+.internet-button[aria-pressed="true"] { color: var(--text); border-color: var(--text); }
+.internet-button:disabled { opacity: .4; cursor: default; }
+.message-sources { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; font-size: 12px; }
+.message-sources > span { flex-basis: 100%; color: var(--muted); }
+.message-sources a { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; overflow-wrap: anywhere; max-width: 100%; }
+.message-sources a:hover { text-decoration: underline; }

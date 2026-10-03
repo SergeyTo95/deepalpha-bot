@@ -167,11 +167,25 @@ export function apiError(code) {
       empty_response: "Не удалось получить текст ответа. Попробуй ещё раз.",
       model_request_failed: "Не удалось получить ответ. Повтори запрос.",
       model_connection_failed: "Соединение прервалось. Попробуй ещё раз.",
+      web_search_unavailable: "Не удалось выполнить поиск в интернете. Повтори позже или выключи «Интернет».",
+      web_search_context_too_long: "В этот диалог не помещаются веб-источники. Начни новый диалог или выключи «Интернет».",
     }[code] || "Не удалось выполнить запрос. Попробуй ещё раз."
   );
 }
 /** Decode arbitrary UTF-8/SSE boundaries and distinguish completion from disconnect. */
-export async function readCompletion(response, onText) {
+export function safeSearch(value) {
+  const sources = [];
+  for (const source of Array.isArray(value?.sources) ? value.sources.slice(0, 3) : []) {
+    try {
+      const url = new URL(source.url);
+      if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) continue;
+      if (typeof source.title !== "string" || source.title.length > 160 || source.url.length > 512) continue;
+      sources.push({title: source.title, url: url.href});
+    } catch {}
+  }
+  return {sources, retrieved_at: typeof value?.retrieved_at === "string" ? value.retrieved_at.slice(0, 40) : ""};
+}
+export async function readCompletion(response, onText, onSearch = () => {}) {
   if (!response.ok) {
     let data;
     try {
@@ -191,7 +205,8 @@ export async function readCompletion(response, onText) {
   let pending = "",
     done = false,
     output = "",
-    finish = null;
+    finish = null,
+    search = null;
   const consume = (frame) => {
     const data = frame
       .split("\n")
@@ -210,6 +225,10 @@ export async function readCompletion(response, onText) {
       throw new Error(apiError("stream_incomplete"));
     }
     if (event.error) throw new Error(apiError(event.error.message || event.error));
+    if (event.web_search) {
+      search = safeSearch(event.web_search);
+      onSearch(search);
+    }
     if (event.reset === true) {
       output = "";
       onText(output);
@@ -240,7 +259,7 @@ export async function readCompletion(response, onText) {
     }
     if (!done) throw new Error(apiError("stream_incomplete"));
     if (!output.trim()) throw new Error(apiError("empty_response"));
-    return { text: output, finish };
+    return { text: output, finish, ...(search ? {search} : {}) };
   } finally {
     await reader.cancel().catch(() => {});
     reader.releaseLock();

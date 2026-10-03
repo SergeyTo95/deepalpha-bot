@@ -36,10 +36,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
 COPY desktop/requirements-gateway.txt /app/desktop/requirements-gateway.txt
 RUN pip install --no-cache-dir -r desktop/requirements-gateway.txt pytest==8.4.2
 COPY velia_desktop_routes.py /app/velia_desktop_routes.py
-COPY desktop/gateway.py desktop/probe_gateway.py desktop/web_routes.py desktop/account_routes.py desktop/guest_routes.py desktop/guest_store.py /app/desktop/
+COPY desktop/gateway.py desktop/probe_gateway.py desktop/web_routes.py desktop/account_routes.py desktop/guest_routes.py desktop/guest_store.py desktop/web_search.py /app/desktop/
 COPY desktop/web /app/desktop/web
-COPY tests/test_velia_desktop_gateway.py tests/test_velia_desktop_relay.py tests/test_velia_desktop_flash.py tests/test_velia_web_chat.py tests/test_velia_web_guest.py /app/tests/
-RUN python -m pytest -q -p no:cacheprovider tests/test_velia_desktop_gateway.py tests/test_velia_desktop_relay.py tests/test_velia_desktop_flash.py tests/test_velia_web_chat.py tests/test_velia_web_guest.py
+COPY tests/test_velia_desktop_gateway.py tests/test_velia_desktop_relay.py tests/test_velia_desktop_flash.py tests/test_velia_web_chat.py tests/test_velia_web_guest.py tests/test_velia_web_search.py /app/tests/
+RUN python -m pytest -q -p no:cacheprovider tests/test_velia_desktop_gateway.py tests/test_velia_desktop_relay.py tests/test_velia_desktop_flash.py tests/test_velia_web_chat.py tests/test_velia_web_guest.py tests/test_velia_web_search.py
 
 FROM python:3.12-slim-bookworm
 WORKDIR /app

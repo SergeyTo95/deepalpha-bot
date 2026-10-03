@@ -169,7 +169,7 @@ def validate_payload(data):
     return result
 
 
-def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filter_stream=None, authorize_model=None):
+def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filter_stream=None, authorize_model=None, enrich_payload=None):
     """Mount a disabled-by-default, bounded preview using mobile access tokens."""
     calls = {}
     active = set()
@@ -285,6 +285,8 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
             async with ClientSession(timeout=timeout) as client:
                 endpoint = flash_endpoint() if is_flash else os.getenv("KIMI_BASE_URL", "https://api.moonshot.ai/v1").rstrip("/")
                 headers = {"Authorization": "Bearer " + key}
+                if enrich_payload is not None:
+                    payload = await enrich_payload(request, payload)
                 if is_flash:
                     await check_flash_context(client, endpoint, headers, payload)
                 async with client.post(endpoint + ("/v1/chat/completions" if is_flash else "/chat/completions"), json=payload,

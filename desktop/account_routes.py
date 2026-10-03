@@ -3,6 +3,7 @@ import json
 import re
 from aiohttp import ClientError, web
 from velia_desktop_routes import AuthenticationUnavailable, FLASH_ID, MODEL_ID, flash_enabled
+from desktop.web_search import SearchUnavailable, source_event
 
 ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 REQUEST_ID = re.compile(r"[A-Za-z0-9:_-]{8,128}\Z")
@@ -71,7 +72,7 @@ async def account_events(source, model):
 
 
 def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_stream,
-                         authorize_model, handlers, json_response):
+                         authorize_model, handlers, json_response, web_search=None):
     def error(code, status):
         return json_response({"ok": False, "error": code}, status)
 
@@ -136,6 +137,9 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
         if result.get("ok"):
             result = {"ok": True, "messages": [message(v) for v in result.get("messages", [])[:200]
                 if v.get("role") in {"user", "assistant"}]}
+            if web_search:
+                result["messages"] = await web_search.restore_messages(request[ACCOUNT_SESSION].user_id,
+                    request.match_info["conversation_id"], result["messages"])
         return json_response(result, status)
 
     async def delete(request):
@@ -147,7 +151,9 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
 
     async def send(request):
         data = await read_body(request)
-        if (set(data) != {"content", "model", "idempotency_key"} or data.get("model") not in {FLASH_ID, MODEL_ID}
+        if (set(data) - {"web_search"} != {"content", "model", "idempotency_key"}
+                or ("web_search" in data and type(data["web_search"]) is not bool)
+                or data.get("model") not in {FLASH_ID, MODEL_ID}
                 or not isinstance(data.get("content"), str) or not data["content"].strip()
                 or len(data["content"]) > 12000 or not REQUEST_ID.fullmatch(str(data.get("idempotency_key", "")))):
             return error("invalid_request", 400)
@@ -161,13 +167,22 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
         if failure is not None:
             return failure
         response = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+        source = stream = None
         try:
+            content, result = data["content"], None
+            if data.get("web_search"):
+                if web_search is None:
+                    raise SearchUnavailable()
+                content, result = await web_search.account_question(session.user_id,
+                    request.match_info["conversation_id"], data["idempotency_key"], content, data["model"])
             source = upstream_stream("/mobile-api/v1/conversations/" + request.match_info["conversation_id"] + "/messages/stream",
-                token=session.access, data={"content": data["content"], "chat_mode": "flash" if data["model"] == FLASH_ID else "pro",
+                token=session.access, data={"content": content, "chat_mode": "flash" if data["model"] == FLASH_ID else "pro",
                     "idempotency_key": data["idempotency_key"]})
             stream = account_events(source, data["model"])
             first = await anext(stream)
             await response.prepare(request)
+            if result:
+                await response.write(source_event(result))
             await response.write(first)
             async for chunk in stream:
                 await response.write(chunk)
@@ -180,10 +195,12 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
             return error("account_service_unavailable", 503)
         finally:
             try:
-                await stream.aclose()
+                if stream is not None:
+                    await stream.aclose()
             finally:
                 try:
-                    await source.aclose()
+                    if source is not None:
+                        await source.aclose()
                 finally:
                     handlers["release"](session.user_id)
 
