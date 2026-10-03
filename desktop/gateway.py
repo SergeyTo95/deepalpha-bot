@@ -1,7 +1,8 @@
 """Isolated Desktop and optional Web preview using VELIA device authentication.
 
-No database, Telegram bot or payment workers are used here. The opt-in Web
-adapter uses its own encrypted, HttpOnly cookie; authority cookies are ignored.
+Account data stays with the fixed identity authority. Optional guest access
+uses the existing preview database only for persistent quota counters. The Web
+adapter uses encrypted, HttpOnly cookies; authority cookies are ignored.
 Only a fixed identity authority receives account tokens; model keys stay here.
 """
 from collections import deque
@@ -61,7 +62,7 @@ def valid_session(data):
             and 1 <= data["access_expires_in"] <= 86400)
 
 
-def create_app(config=None, *, check_identity=True, web_origin=None):
+def create_app(config=None, *, check_identity=True, web_origin=None, guest_store=None):
     config = config or GatewayConfig.from_env()
     app = web.Application(client_max_size=MAX_AUTH_BODY)
     exchanges = deque()
@@ -200,6 +201,9 @@ def create_app(config=None, *, check_identity=True, web_origin=None):
         setup_web_routes(app, origin=origin, upstream=upstream, authenticate=authenticate,
             allowed=allowed, valid_session=valid_session, json_response=json_response, handlers=handlers,
             account_balance=account_balance, authorize_model=authorize_model, upstream_stream=upstream_stream)
+        if os.getenv("VELIA_WEB_GUEST_ENABLED") == "true":
+            from desktop.guest_routes import setup_guest_routes
+            setup_guest_routes(app, origin=origin, handlers=handlers, json_response=json_response, store=guest_store)
     else:
         app.router.add_get("/", pairing_page)
     return app

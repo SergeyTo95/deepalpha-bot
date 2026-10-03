@@ -1,7 +1,7 @@
 # VELIA Web Preview
 
 The browser chat uses the existing isolated VELIA gateway and existing Flash
-worker. It adds no model copy, database, paid fallback, or public provider key.
+worker. It adds no model copy, database service, paid fallback, or public provider key.
 Production Android, the Telegram bot and the production backend stay unchanged.
 
 Enable only on the isolated preview gateway:
@@ -16,8 +16,36 @@ The root serves the responsive monochrome chat. The Web sign-in dialog opens
 the existing Telegram `velia_connect` pairing flow directly, keeps the input
 step open and focuses it when the browser regains focus. The explicit
 “Код уже есть — ввести” button also focuses the field. Pending sign-in resumes
-after a page reload. `/mobile-connect` remains the existing Desktop/WebApp path. Access remains limited to the
-explicit owner allowlist. Publicly accessible HTML does not grant model access.
+after a page reload. `/mobile-connect` remains the existing Desktop/WebApp path.
+Authenticated preview accounts remain limited to the explicit owner allowlist.
+
+Guest access is enabled on the same isolated preview gateway with:
+
+```text
+VELIA_WEB_GUEST_ENABLED=true
+VELIA_WEB_GUEST_DATABASE_URL=${{Postgres.DATABASE_URL}}
+VELIA_WEB_GUEST_TRUST_RAILWAY_IP=true
+```
+
+Visitors can use Flash without registration, for 30 admitted model requests
+per guest browser. The remaining allowance appears below the composer. At zero,
+the browser offers sign-in; PRO always requires an authenticated account with
+positive Credits. Guest history is local and isolated from account history;
+signing out restores the browser's guest history. No guest credentials can read
+account conversations or use the raw Desktop endpoint.
+
+The encrypted Secure, HttpOnly, SameSite=Lax `__Host-velia-guest` cookie lasts
+365 days and uses the existing stable session key. The primary quota has no
+automatic replenishment. The existing preview PostgreSQL stores only hashed
+quota keys and bounded integer counters in `velia_web_guest_usage`, so server
+restarts do not reset the allowance. A separate 30-request-per-UTC-day network
+guard limits cookie clearing; shared networks share that guard. Only Railway's
+`X-Real-IP` header is trusted with the explicit flag above; arbitrary forwarded
+headers are ignored. Database transactions lock both rows and reserve quota
+atomically. Invalid input and context overflow do not spend the allowance;
+admitted attempts, including stopped or failed provider calls, do. Database
+outages deny guest generation. The trial is a browser/network allowance, not a
+verified per-person identity limit.
 
 Account-backed VELIA FLASH and VELIA PRO stream through the existing mobile
 conversation API and share gateway admission counters with Desktop: one concurrent request per user, two per process and 30
@@ -59,13 +87,17 @@ broad paid launch remains separate from this positive-balance access condition.
 Validation: the gateway Docker build runs the focused Python gateway/Web HTTP
 tests and Web stream/Markdown unit tests. `scripts/smoke-web-chat.mjs` starts its
 own loopback-only synthetic authority and model, then checks real browser login,
-Flash/PRO routing, reload/history, stop, deletion/search, logout, theme and mobile
+guest Flash and persistent remaining allowance, Flash/PRO routing, reload/history,
+stop, deletion/search, logout, theme and mobile
 navigation. It needs Playwright and a Chromium binary; module/executable paths
 can be supplied with `VELIA_PLAYWRIGHT_MODULE`, `VELIA_CHROMIUM_MODULE` and
 `VELIA_CHROMIUM_EXECUTABLE`. `serve-web-fixture.py` is never copied into the
 public image. Browser fixtures do not establish real-owner pairing or live
 model acceptance. The existing `python -m desktop.probe_gateway --live`
 pre-deploy gate still checks real providers and the actual shipped Harness.
+With guest access enabled, it also checks the actual PostgreSQL using private
+random probe keys: 30 concurrent reservations succeed, excess reservations fail,
+and a fresh store sees the exhausted quota. Only those probe rows are removed.
 
 ## User decisions — 2026-10-03
 

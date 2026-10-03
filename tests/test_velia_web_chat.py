@@ -113,7 +113,7 @@ async def fixture(monkeypatch, **state):
             "VELIA_DESKTOP_FLASH_BASE_URL": str(source.make_url("/")).rstrip("/")}.items():
             monkeypatch.setenv(key, value)
         config = GatewayConfig(str(source.make_url("/")).rstrip("/"), "https://deepalpha-ai.com")
-        async with TestServer(create_app(config)) as server, ClientSession(cookie_jar=DummyCookieJar()) as client:
+        async with TestServer(create_app(config, guest_store=state.get("guest_store"))) as server, ClientSession(cookie_jar=DummyCookieJar()) as client:
             yield server, client, state
 
 

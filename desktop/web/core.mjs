@@ -134,6 +134,10 @@ export function apiError(code) {
   return (
     {
       unauthorized: "Войди в VELIA, чтобы продолжить.",
+      guest_limit_reached: "30 гостевых сообщений использованы. Войди в VELIA, чтобы продолжить.",
+      guest_session_required: "Обнови страницу, чтобы начать гостевой разговор.",
+      guest_flash_only: "Без регистрации доступен только Flash. Для PRO войди в аккаунт с токенами.",
+      guest_service_unavailable: "Гостевой режим сейчас недоступен. Попробуй позже или войди.",
       pairing_failed: "Код не принят. Получи новый код подключения.",
       invalid_pairing_request: "Введи код подключения из 16 символов.",
       preview_access_required: "Preview пока доступен аккаунту владельца.",
