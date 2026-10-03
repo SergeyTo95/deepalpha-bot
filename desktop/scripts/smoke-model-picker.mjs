@@ -60,6 +60,7 @@ try {
   const flash = page.getByRole('menuitemradio', { name: 'VELIA FLASH', exact: true });
   const pro = page.getByRole('menuitemradio', { name: 'VELIA PRO', exact: true });
   await flash.waitFor(); await pro.waitFor();
+  assert.deepEqual((await page.getByRole('menuitemradio').allTextContents()).map(value => value.trim()), ['VELIA PRO', 'VELIA FLASH']);
   await flash.click();
   await page.waitForFunction(() => document.querySelector('button[title^="VELIA FLASH"]'));
   await page.reload();

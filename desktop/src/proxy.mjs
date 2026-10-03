@@ -37,9 +37,19 @@ export async function startProxy(gateway, getSession, fetcher = fetch) {
       if (new URL(session.origin).origin !== new URL(endpoint).origin) {
         reply(401, 'account_origin_mismatch'); return;
       }
-      const body = Buffer.concat(chunks);
+      let body = Buffer.concat(chunks);
       let flash = false;
-      try { flash = JSON.parse(body.toString()).model === 'velia-flash'; } catch { /* Gateway validates JSON. */ }
+      try {
+        const payload = JSON.parse(body.toString());
+        flash = payload.model === 'velia-flash';
+        // pi-ai reserves 4096 tokens above its estimate. The shipped tool set
+        // makes that heuristic reduce Flash's 512-token budget to one token.
+        // The gateway renders/tokenizes the real prompt and reserves the full
+        // answer before inference, so restore the declared budget for this case.
+        if (flash && payload.max_tokens === 1 && Array.isArray(payload.tools) && payload.tools.length) {
+          body = Buffer.from(JSON.stringify({ ...payload, max_tokens: 512 }));
+        }
+      } catch { /* Gateway validates JSON. */ }
       const upstream = await fetcher(endpoint + request.url.slice(3), {
         method: request.method, redirect: 'error',
         headers: { Authorization: 'Bearer ' + session.access_token, 'Content-Type': 'application/json' },
