@@ -4,8 +4,10 @@ import base64
 import json
 import os
 import uuid
+import tempfile
 from aiohttp import web
 from desktop.gateway import GatewayConfig, create_app
+from desktop.guest_store import GuestStore
 
 
 async def main():
@@ -116,7 +118,10 @@ async def main():
         KIMI_API_KEY="fixture", KIMI_BASE_URL="http://127.0.0.1:18181/v1",
         VELIA_DESKTOP_FLASH_ENABLED="true", VELIA_DESKTOP_FLASH_API_KEY="fixture",
         VELIA_DESKTOP_FLASH_BASE_URL="http://127.0.0.1:18181")
-    app = create_app(GatewayConfig("http://127.0.0.1:18181", "https://deepalpha-ai.com"), web_origin="http://127.0.0.1:18180")
+    os.environ["VELIA_WEB_GUEST_ENABLED"] = "true"
+    temp = tempfile.TemporaryDirectory(prefix="velia-guest-fixture-")
+    app = create_app(GatewayConfig("http://127.0.0.1:18181", "https://deepalpha-ai.com"), web_origin="http://127.0.0.1:18180",
+        guest_store=GuestStore(sqlite_path=temp.name + "/guest.sqlite"))
     gateway = web.AppRunner(app, access_log=None, handler_cancellation=True)
     await gateway.setup()
     await web.TCPSite(gateway, "127.0.0.1", 18180).start()

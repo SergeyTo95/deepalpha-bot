@@ -71,8 +71,21 @@ try {
     .filter({ hasText: "VELIA FLASH" })
     .waitFor();
   assert.equal(calls.length, 0);
-  await page.locator("#prompt").fill("Привет, Велия");
+  await page.getByText("Без регистрации · осталось 30 из 30 сообщений", {exact: true}).waitFor();
+  await page.locator("#prompt").fill("Привет без регистрации");
   await page.locator("#send").click();
+  await page.locator(".message-actions").waitFor();
+  assert.equal(await page.locator("#auth-dialog").isVisible(), false);
+  await page.getByText("Без регистрации · осталось 29 из 30 сообщений", {exact: true}).waitFor();
+  assert.ok((await context.cookies()).find((c) => c.name === "__Host-velia-guest")?.httpOnly);
+  await page.reload();
+  await page.getByText("Без регистрации · осталось 29 из 30 сообщений", {exact: true}).waitFor();
+  await page.locator("#messages").getByText("Привет без регистрации", {exact: true}).waitFor();
+  assert.equal(await page.locator('[data-model="velia-pro"]').isDisabled(), true);
+  await page.screenshot({path: root + "/VELIA-Web-guest.png"});
+  await page.locator("#new-chat").click();
+  await page.locator("#prompt").fill("Привет, Велия");
+  await page.locator("#account").click();
   await page.locator("#auth-dialog").waitFor({ state: "visible" });
   await context.route("https://t.me/**", (route) => route.fulfill({contentType: "text/html", body: "<p>Telegram fixture</p>"}));
   const popupReady = page.waitForEvent("popup");
@@ -164,7 +177,8 @@ try {
       .getElementById("account-label")
       .textContent.startsWith("Войти в VELIA"),
   );
-  assert.equal(await page.locator(".history-row").count(), 0);
+  await page.getByText("Без регистрации · осталось 29 из 30 сообщений", {exact: true}).waitFor();
+  assert.equal(await page.locator(".history-row").count(), 1);
   assert.equal(
     (await context.cookies()).filter((c) => c.name === "__Host-velia-web")
       .length,
@@ -173,7 +187,12 @@ try {
   const mobile = await context.newPage();
   await mobile.setViewportSize({ width: 390, height: 844 });
   await mobile.goto("http://127.0.0.1:18180/");
+  await mobile.locator("#guest-notice").waitFor();
+  await mobile.locator("#menu").click();
+  await mobile.locator("#sidebar.open").waitFor();
+  await mobile.locator("#new-chat").click();
   await mobile.locator("#welcome").waitFor();
+  await mobile.waitForFunction(() => document.getElementById("sidebar").getBoundingClientRect().right <= 1);
   assert.ok(
     await mobile.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
@@ -198,6 +217,8 @@ try {
       accountHistory: true,
       proRequiresTokens: true,
       returnToCode: true,
+      guestFlash: true,
+      guestCounterPersists: true,
       login: true,
       logout: true,
       cookieHttpOnly: true,

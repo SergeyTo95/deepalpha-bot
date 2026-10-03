@@ -33,6 +33,9 @@ const icon = (name) =>
 for (const el of document.querySelectorAll("[data-icon]"))
   el.innerHTML = icon(el.dataset.icon);
 let profile = null,
+  guest = null,
+  guestLoading = null,
+  ready = false,
   chats = [],
   currentId = null,
   storageKey = null,
@@ -105,7 +108,7 @@ function closeModels() {
   $("model-button").setAttribute("aria-expanded", "false");
 }
 function setModel(value) {
-  if (busy || !MODELS[value] || (profile && !profile.models.includes(value))) return;
+  if (busy || !MODELS[value] || (profile && !profile.models.includes(value)) || (!profile && value !== "velia-flash")) return;
   model = value;
   $("model-label").textContent = MODELS[value];
   $("model-icon").innerHTML = icon(value === "velia-flash" ? "bolt" : "spark");
@@ -114,8 +117,7 @@ function setModel(value) {
       "aria-selected",
       String(option.dataset.model === value),
     );
-    option.disabled =
-      !!profile && !profile.models.includes(option.dataset.model);
+    option.disabled = profile ? !profile.models.includes(option.dataset.model) : option.dataset.model !== "velia-flash";
   }
   try {
     localStorage.setItem("velia-web-model", value);
@@ -130,7 +132,7 @@ function sidebar(open) {
 function resizePrompt() {
   $("prompt").style.height = "auto";
   $("prompt").style.height = Math.min(180, $("prompt").scrollHeight) + "px";
-  $("send").disabled = busy || !$("prompt").value.trim();
+  $("send").disabled = !ready || busy || !$("prompt").value.trim();
 }
 function renderHistory() {
   $("history").replaceChildren();
@@ -148,7 +150,7 @@ function renderHistory() {
       ? "Диалоги не найдены."
       : profile
         ? "Здесь будут твои разговоры с Велией."
-        : "Войди, чтобы начать свой первый диалог.";
+        : "Начни разговор без регистрации. Flash доступен сразу.";
     $("history").append(p);
     return;
   }
@@ -290,8 +292,8 @@ async function jsonRequest(path, data) {
   return value;
 }
 async function openChat(chat) {
-  if (busy || !profile) return;
-  const account = profile.account;
+  if (busy || (!profile && !guest)) return;
+  const account = profile?.account;
   currentId = chat.id;
   sidebar(false);
   if (chat.remote) {
@@ -347,6 +349,7 @@ async function copyText(text) {
 function applyProfile(value) {
   const changed = profile?.account !== value.account;
   profile = value;
+  $("guest-notice").hidden = true;
   storageKey = "velia-web-chats-v1:" + value.account;
   if (changed) {
     chats = loadChats(browserStorage, storageKey);
@@ -375,13 +378,45 @@ function applyProfile(value) {
   render();
   syncHistory();
 }
-async function generate(retry = false) {
-  if (busy) return;
-  if (!profile) {
-    openAuth();
-    return;
+function applyGuest(value) {
+  if (profile) return;
+  const changed = guest?.account !== value.account || storageKey !== "velia-web-guest-v1:" + value.account;
+  guest = value;
+  storageKey = "velia-web-guest-v1:" + value.account;
+  if (changed) {
+    chats = loadChats(browserStorage, storageKey);
+    try { currentId = localStorage.getItem(storageKey + ":active"); } catch { currentId = null; }
+    if (!current()) currentId = null;
+    for (const c of chats) for (const m of c.messages) if (m.pending) { m.pending = false; m.stopped = true; }
   }
-  if (!profile.models.includes(model)) {
+  model = "velia-flash";
+  setModel(model);
+  $("history-state").textContent = "Гостевая история в этом браузере";
+  $("account-label").innerHTML = "Войти в VELIA<small>Синхронизация истории и доступ к PRO</small>";
+  $("pro-description").textContent = "Войди в аккаунт с токенами для PRO";
+  $("guest-notice").hidden = false;
+  $("guest-counter").textContent = value.remaining > 0 ? "Без регистрации · осталось " + value.remaining + " из 30 сообщений" : "30 гостевых сообщений использованы. Войди, чтобы продолжить.";
+  save(); render();
+}
+async function refreshGuest() {
+  if (profile) return;
+  if (guestLoading) return guestLoading;
+  guestLoading = (async () => {
+  try {
+    const response = await request("guest", undefined, AbortSignal.timeout(15000));
+    if (response.ok && !profile) applyGuest(await response.json());
+  } catch {}
+  })();
+  try { await guestLoading; } finally { guestLoading = null; }
+}
+async function generate(retry = false) {
+  if (busy || !ready) return;
+  if (!profile) {
+    if (!guest) await refreshGuest();
+    if (busy) return;
+    if (!guest || guest.remaining <= 0) { openAuth(); return; }
+  }
+  if (profile && !profile.models.includes(model)) {
     toast(apiError(profile.pro_locked_reason || "pro_tokens_required"));
     return;
   }
@@ -393,6 +428,9 @@ async function generate(retry = false) {
     chat.messages.pop();
   } else {
     if (!chat) {
+      if (!profile) {
+        chat = {id: crypto.randomUUID(), title: text.replace(/\s+/g, " ").slice(0, 70), updated: Date.now(), messages: []};
+      } else {
       setBusy(true);
       try {
         const result = await jsonRequest("conversations", {title: text.replace(/\s+/g, " ").slice(0, 70)});
@@ -401,6 +439,7 @@ async function generate(retry = false) {
         toast(error.message);
         return;
       } finally { setBusy(false); }
+      }
       chats.unshift(chat);
       chats = chats.slice(0, 100);
       currentId = chat.id;
@@ -429,7 +468,11 @@ async function generate(retry = false) {
         : "Велия работает над ответом…";
   }, 20000);
   try {
-    const response = await request(chat.remote ? "conversations/" + chat.id + "/messages/stream" : "chat/completions", payload, abort.signal);
+    const response = await request(!profile ? "guest/chat/completions" : chat.remote ? "conversations/" + chat.id + "/messages/stream" : "chat/completions", payload, abort.signal);
+    if (!profile && guest && response.headers.has("X-Velia-Guest-Remaining")) {
+      guest.remaining = Number(response.headers.get("X-Velia-Guest-Remaining"));
+      $("guest-counter").textContent = guest.remaining > 0 ? "Без регистрации · осталось " + guest.remaining + " из 30 сообщений" : "30 гостевых сообщений использованы. Войди, чтобы продолжить.";
+    }
     const result = await readCompletion(response, (content) => {
       const shouldScroll =
         $("conversation-scroll").scrollHeight -
@@ -458,6 +501,10 @@ async function generate(retry = false) {
       if (error.status === 402 || error.status === 503) {
         request("session").then(async (r) => { if (r.ok) applyProfile(await r.json()); }).catch(() => {});
       }
+      if (!profile && error.status === 429) {
+        await refreshGuest();
+        if (guest?.remaining === 0) openAuth();
+      }
     }
   } finally {
     clearTimeout(slowTimer);
@@ -471,6 +518,7 @@ async function generate(retry = false) {
     render();
     scrollDown();
     $("prompt").focus();
+    if (!profile) refreshGuest();
   }
 }
 $("composer").onsubmit = (e) => {
@@ -534,6 +582,7 @@ for (const suggestion of document.querySelectorAll(".suggestion"))
     $("prompt").focus();
   };
 $("auth-close").onclick = () => $("auth-dialog").close();
+$("guest-login").onclick = openAuth;
 $("pairing-link").onclick = () => {
   try { sessionStorage.setItem("velia-auth-pending", "1"); } catch {}
   $("auth-title").textContent = "Введи код из Telegram";
@@ -599,6 +648,7 @@ $("account").onclick = async () => {
     $("history-state").textContent = "История в твоём аккаунте";
     render();
     toast("Ты вышел из аккаунта.");
+    await refreshGuest();
   } catch {
     toast("Не удалось выйти. Попробуй ещё раз.");
   }
@@ -638,8 +688,11 @@ try {
     AbortSignal.timeout(20000),
   );
   if (response.ok) applyProfile(await response.json());
+  else if (response.status === 401) await refreshGuest();
   else if (response.status !== 401)
     toast("Сервис входа временно недоступен. Попробуй позже.");
 } catch {
   toast("Не удалось проверить вход. Можно попробовать войти вручную.");
 }
+ready = true;
+resizePrompt();

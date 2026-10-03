@@ -8,6 +8,7 @@ import asyncio
 import hmac
 import json
 import os
+import secrets
 from pathlib import Path
 import secrets
 from urllib.parse import urlsplit
@@ -89,6 +90,30 @@ async def run_flash_probe():
 
 
 async def run_probe():
+    guest_receipt = {}
+    if os.getenv("VELIA_WEB_GUEST_ENABLED") == "true":
+        from concurrent.futures import ThreadPoolExecutor
+        from desktop.guest_store import GuestStore, GuestLimitReached
+        store = GuestStore(os.environ["VELIA_WEB_GUEST_DATABASE_URL"])
+        await asyncio.to_thread(store.initialize)
+        nonce = "private-qualification:" + secrets.token_hex(24)
+        quota_keys = (nonce + ":guest", nonce + ":network")
+        def reserve():
+            try:
+                store.reserve(quota_keys)
+                return True
+            except GuestLimitReached:
+                return False
+        def qualify():
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                results = list(pool.map(lambda _: reserve(), range(38)))
+            if sum(results) != 30 or GuestStore(os.environ["VELIA_WEB_GUEST_DATABASE_URL"]).remaining(quota_keys) != 0:
+                raise RuntimeError("guest_quota_qualification_failed")
+            return {"ok": True, "persistent": True, "atomic_limit": 30, "accepted": 30, "rejected": 8}
+        try:
+            guest_receipt = {"guest_quota": await asyncio.to_thread(qualify)}
+        finally:
+            await asyncio.to_thread(store.delete_probe_keys, quota_keys)
     config = GatewayConfig.from_env()
     key = os.environ["KIMI_API_KEY"].strip()
     base = os.getenv("KIMI_BASE_URL", "https://api.moonshot.ai/v1").rstrip("/")
@@ -151,6 +176,7 @@ async def run_probe():
             "live_sse": True, "model_calls": 2, "owner_pairing_verified": False}
     if os.getenv("VELIA_DESKTOP_FLASH_ENABLED", "").lower() in {"true", "1"}:
         receipt.update(await run_flash_probe())
+    receipt.update(guest_receipt)
     return receipt
 
 
