@@ -25,6 +25,7 @@ const proxy = await startProxy(origin + '/desktop-api/v1', async () => ({ origin
   if (options.body) {
     const payload = JSON.parse(options.body);
     assert.equal(payload.model, 'velia-flash');
+    assert.equal(payload.max_tokens, 512, 'Flash tool requests must retain the declared output budget');
     persona ||= payload.messages.some(m => typeof m.content === 'string' && m.content.includes('Ты Велия'));
     declaredRead ||= payload.tools?.some(t => t.function?.name === 'read');
     tools = Math.max(tools, payload.tools?.length || 0);

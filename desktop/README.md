@@ -65,7 +65,7 @@ VELIA_DESKTOP_PRO_MODEL=<verified tool-capable model served by KIMI_BASE_URL>
 
 The gateway authenticates existing `va_` device tokens and keeps provider keys server-side. It forwards text Chat Completions, tool definitions, tool results and SSE; it executes no local tools on Railway. Preview limits are one active request per user, two per process, 30 calls per user per hour, 1 MiB input and 4096 output tokens. Limits are process-local, and production billing/distributed reservations are not implemented. Provider redirects and raw upstream errors are rejected or hidden.
 
-Only PRO/text is exposed. Flash tools, vision, Studio, voice and history sync need separate integration and validation. The independent service described in `GATEWAY.md` uses the existing backend for account authentication. Its live provider probe passed; this does not establish real-owner Desktop pairing or production release.
+PRO and opt-in Bonsai Flash support text and local Harness tools. Select VELIA PRO or VELIA FLASH in the composer's model menu after opening a working folder. Flash uses a separate private model route and never falls back to a paid provider; its context and output are bounded to 8192 and 512 tokens. Vision, Studio, voice and mobile history sync are not included. The independent service described in `GATEWAY.md` uses the existing backend for account authentication. Live-model acceptance is recorded in `VERIFICATION.md`; it does not establish real-owner Desktop pairing or production release.
 
 ## Checks
 

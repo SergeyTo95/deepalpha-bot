@@ -19,6 +19,30 @@ test('proxy forwards streaming/tool bodies with account auth kept out of Harness
     assert.equal(response.status, 200); assert.match(await response.text(), /\[DONE\]/);
   } finally { await proxy.close(); }
 });
+test('Flash restores the SDK one-token tool budget while preserving other requests', async () => {
+  const seen = [];
+  const proxy = await startProxy('https://api.example/desktop-api/v1',
+    async () => ({ origin: 'https://api.example', access_token: 'va_fixture' }), async (_, options) => {
+      seen.push(JSON.parse(options.body));
+      return new Response('{}', { headers: { 'Content-Type': 'application/json' } });
+    });
+  const template = { messages: [{ role: 'user', content: 'Прочитай probe.txt' }], stream: true,
+    tools: [{ type: 'function', function: { name: 'read', parameters: { type: 'object', properties: { file_path: { type: 'string' } } } } }] };
+  const cases = [
+    { ...template, model: 'velia-flash', max_tokens: 1 },
+    { ...template, model: 'velia-flash', max_tokens: 128 },
+    { ...template, model: 'velia-pro', max_tokens: 1 },
+    { ...template, tools: [], model: 'velia-flash', max_tokens: 1 },
+  ];
+  try {
+    for (const body of cases) {
+      const response = await fetch(proxy.url + '/chat/completions', { method: 'POST',
+        headers: { Authorization: 'Bearer ' + proxy.key }, body: JSON.stringify(body) });
+      assert.equal(response.status, 200); await response.text();
+    }
+    assert.deepEqual(seen, [{ ...cases[0], max_tokens: 512 }, ...cases.slice(1)]);
+  } finally { await proxy.close(); }
+});
 test('proxy rejects strangers, unsupported routes and a mismatched account', async () => {
   let calls = 0;
   const proxy = await startProxy('https://api.example/v1', async () => ({ origin: 'https://other.example' }), () => { calls++; });
