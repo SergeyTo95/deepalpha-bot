@@ -6,9 +6,13 @@ import { HARNESS_COMMIT } from '../src/config.mjs';
 const root = resolve(import.meta.dirname, '..');
 const checkout = join(root, '.runtime', 'harness');
 function run(command, args, cwd = root) {
+  if (command === 'pnpm') {
+    args = [join(root, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'), ...args];
+    command = process.execPath;
+  }
   const result = spawnSync(command, args, { cwd, stdio: 'inherit',
     env: { ...process.env, DSH_CLIENT_TITLE: 'VELIA Desktop' },
-    shell: process.platform === 'win32' && command === 'pnpm' });
+  });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} failed (${result.status})`);
 }

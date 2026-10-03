@@ -12,12 +12,21 @@ export function gatewayURL(value) {
   return url.href.replace(/\/$/, '');
 }
 
-export function profilePatch(baseURL, credentialPath) {
+export function profilePatch(baseURL, credentialPath, localGateway) {
+  let providerURL = gatewayURL(baseURL);
+  if (localGateway) {
+    const local = new URL(localGateway);
+    if (local.protocol !== 'http:' || local.hostname !== '127.0.0.1' || !local.port
+        || local.username || local.password || local.search || local.hash || local.pathname !== '/v1') {
+      throw new Error('Unexpected local VELIA gateway');
+    }
+    providerURL = local.href;
+  }
   return [
     ...(credentialPath ? [{ id: 'credentials', config: { path: credentialPath } }] : []),
     { id: 'llm-pi-ai', config: { providers: { velia: {
       displayName: 'VELIA', apiKeyEnv: 'VELIA_ACCESS_TOKEN',
-      api: 'openai-completions', baseURL: gatewayURL(baseURL),
+      api: 'openai-completions', baseURL: providerURL,
       retryPolicy: { mode: 'normal', maxRetries: 0 },
       models: [
         { id: 'velia-pro', name: 'VELIA PRO', contextWindow: 32768, maxTokens: 4096, input: ['text'] },

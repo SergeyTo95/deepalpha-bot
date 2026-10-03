@@ -131,7 +131,8 @@ def setup_velia_desktop_routes(app, authenticate):
             async with ClientSession(timeout=ClientTimeout(total=180, sock_read=90)) as client:
                 endpoint = os.getenv("KIMI_BASE_URL", "https://api.moonshot.ai/v1").rstrip("/")
                 async with client.post(endpoint + "/chat/completions", json=payload,
-                                       headers={"Authorization": "Bearer " + key}) as upstream:
+                                       headers={"Authorization": "Bearer " + key},
+                                       allow_redirects=False) as upstream:
                     if upstream.status != 200:
                         return error("model_request_failed", 502)
                     if payload["stream"]:

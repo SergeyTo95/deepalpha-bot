@@ -74,3 +74,81 @@ def test_invalid_body_never_reaches_model_provider(monkeypatch):
         SimpleNamespace(headers={'Authorization': 'Bearer va_test'}, content=Content())))
     assert result.status == 400
     assert json.loads(result.text)['error']['message'] == 'invalid_json'
+
+
+def test_streaming_and_tool_round_trip_through_http_gateway(monkeypatch):
+    async def scenario():
+        from aiohttp import ClientSession
+        from aiohttp.test_utils import TestServer
+        received = []
+        async def provider(request):
+            assert request.headers['Authorization'] == 'Bearer provider-secret'
+            payload = await request.json()
+            received.append(payload)
+            if payload['stream']:
+                response = web.StreamResponse(headers={'Content-Type': 'text/event-stream'})
+                await response.prepare(request)
+                for fragment in [b'data: {"choices":[{"delta":{"content":"Hello"}}]}', b'\n\ndata: [DONE]\n\n']:
+                    await response.write(fragment)
+                await response.write_eof()
+                return response
+            return web.json_response({'model': 'internal-provider', 'choices': [{'message': {'role': 'assistant', 'content': 'Read file'}}]})
+        upstream = web.Application()
+        upstream.router.add_post('/v1/chat/completions', provider)
+        async with TestServer(upstream) as provider_server:
+            monkeypatch.setenv('VELIA_DESKTOP_API_ENABLED', 'true')
+            monkeypatch.setenv('VELIA_DESKTOP_PREVIEW_USER_IDS', '7')
+            monkeypatch.setenv('KIMI_API_KEY', 'provider-secret')
+            monkeypatch.setenv('KIMI_BASE_URL', str(provider_server.make_url('/v1')))
+            gateway = web.Application()
+            setup_velia_desktop_routes(gateway, lambda token: {'user_id': 7} if token == 'va_test' else None)
+            async with TestServer(gateway) as server, ClientSession() as client:
+                endpoint = server.make_url('/desktop-api/v1/chat/completions')
+                headers = {'Authorization': 'Bearer va_test'}
+                payload = {'model': 'velia-pro', 'messages': [{'role': 'user', 'content': 'Read file'}], 'stream': True}
+                async with client.post(endpoint, headers=headers, json=payload) as response:
+                    assert response.status == 200
+                    assert response.headers['Content-Type'].startswith('text/event-stream')
+                    assert '[DONE]' in await response.text()
+                payload.update(stream=False, messages=[
+                    {'role': 'assistant', 'content': None, 'tool_calls': [{'id': 'call_1', 'type': 'function', 'function': {'name': 'read', 'arguments': '{}'}}]},
+                    {'role': 'tool', 'tool_call_id': 'call_1', 'content': 'actual file text'},
+                ])
+                async with client.post(endpoint, headers=headers, json=payload) as response:
+                    result = await response.json()
+                    assert response.status == 200
+                    assert result['model'] == 'velia-pro'
+                assert received[-1]['messages'][1]['tool_call_id'] == 'call_1'
+                assert received[-1]['messages'][1]['content'] == 'actual file text'
+    asyncio.run(scenario())
+
+
+def test_gateway_does_not_forward_provider_secret_to_redirect(monkeypatch):
+    async def scenario():
+        from aiohttp import ClientSession
+        from aiohttp.test_utils import TestServer
+        contacted = []
+        async def target(request):
+            contacted.append(request.headers.get('Authorization'))
+            return web.json_response({'choices': []})
+        destination = web.Application()
+        destination.router.add_route('*', '/target', target)
+        async with TestServer(destination) as redirect_server:
+            async def provider(request):
+                raise web.HTTPTemporaryRedirect(location=str(redirect_server.make_url('/target')))
+            upstream = web.Application()
+            upstream.router.add_post('/v1/chat/completions', provider)
+            async with TestServer(upstream) as provider_server:
+                monkeypatch.setenv('VELIA_DESKTOP_API_ENABLED', 'true')
+                monkeypatch.setenv('VELIA_DESKTOP_PREVIEW_USER_IDS', '7')
+                monkeypatch.setenv('KIMI_API_KEY', 'provider-secret')
+                monkeypatch.setenv('KIMI_BASE_URL', str(provider_server.make_url('/v1')))
+                gateway = web.Application()
+                setup_velia_desktop_routes(gateway, lambda _: {'user_id': 7})
+                async with TestServer(gateway) as server, ClientSession() as client:
+                    async with client.post(server.make_url('/desktop-api/v1/chat/completions'), headers={'Authorization': 'Bearer va_test'},
+                            json={'model': 'velia-pro', 'messages': [{'role': 'user', 'content': 'Hello'}]}) as response:
+                        assert response.status == 502
+                        assert (await response.json())['error']['message'] == 'model_request_failed'
+                assert contacted == []
+    asyncio.run(scenario())
