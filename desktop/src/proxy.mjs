@@ -37,11 +37,14 @@ export async function startProxy(gateway, getSession, fetcher = fetch) {
       if (new URL(session.origin).origin !== new URL(endpoint).origin) {
         reply(401, 'account_origin_mismatch'); return;
       }
+      const body = Buffer.concat(chunks);
+      let flash = false;
+      try { flash = JSON.parse(body.toString()).model === 'velia-flash'; } catch { /* Gateway validates JSON. */ }
       const upstream = await fetcher(endpoint + request.url.slice(3), {
         method: request.method, redirect: 'error',
         headers: { Authorization: 'Bearer ' + session.access_token, 'Content-Type': 'application/json' },
-        ...(request.method === 'POST' ? { body: Buffer.concat(chunks) } : {}),
-        signal: AbortSignal.any([cancellation.signal, AbortSignal.timeout(180000)]),
+        ...(request.method === 'POST' ? { body } : {}),
+        signal: AbortSignal.any([cancellation.signal, AbortSignal.timeout(flash ? 360000 : 180000)]),
       });
       response.writeHead(upstream.status, { 'Content-Type': upstream.headers.get('Content-Type') || 'application/json',
         'Cache-Control': 'no-store' });

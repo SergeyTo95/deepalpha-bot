@@ -9,11 +9,103 @@ import json
 import os
 import time
 from collections import deque
+from urllib.parse import urlsplit
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
 MAX_BODY = 1024 * 1024
 MODEL_ID = "velia-pro"
+FLASH_ID = "velia-flash"
+
+
+def flash_endpoint():
+    value = os.getenv("VELIA_DESKTOP_FLASH_BASE_URL", "").strip().rstrip("/")
+    parsed = urlsplit(value)
+    private = (parsed.hostname or "").endswith(".railway.internal")
+    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+            or parsed.username or parsed.password or parsed.query or parsed.fragment
+            or parsed.path not in {"", "/"}
+            or (parsed.scheme == "http" and not (private or parsed.hostname in {"127.0.0.1", "localhost", "::1"}))):
+        return ""
+    return value
+
+
+def flash_enabled():
+    return (os.getenv("VELIA_DESKTOP_FLASH_ENABLED", "").lower() in {"true", "1"}
+            and bool(flash_endpoint()) and bool(os.getenv("VELIA_DESKTOP_FLASH_API_KEY", "").strip()))
+
+
+def flash_messages(messages):
+    # Bonsai's pinned template requires one leading system message. Reasoning
+    # echoes impair its tool-loop cache; provider reasoning is disabled here.
+    instructions, conversation = [], []
+    for message in messages:
+        if message["role"] in {"system", "developer"}:
+            if message.get("content"):
+                instructions.append(message["content"])
+            continue
+        item = {key: value for key, value in message.items()
+                if key not in {"reasoning", "reasoning_content", "reasoning_text"}}
+        if item.get("tool_calls") is not None:
+            if not isinstance(item["tool_calls"], list) or len(item["tool_calls"]) > 32:
+                raise ValueError("invalid_tool_calls")
+            calls = []
+            for call in item["tool_calls"]:
+                if (not isinstance(call, dict) or call.get("type") != "function"
+                        or not isinstance(call.get("id"), str) or not call["id"]
+                        or not isinstance(call.get("function"), dict)
+                        or not isinstance(call["function"].get("name"), str)):
+                    raise ValueError("invalid_tool_calls")
+                function = dict(call["function"])
+                arguments = function.get("arguments")
+                if arguments is None or arguments == "":
+                    arguments = "{}"
+                try:
+                    parsed = json.loads(arguments) if isinstance(arguments, str) else arguments
+                except (ValueError, TypeError):
+                    raise ValueError("invalid_tool_arguments") from None
+                if not isinstance(parsed, dict):
+                    raise ValueError("invalid_tool_arguments")
+                function["arguments"] = json.dumps(parsed, ensure_ascii=False)
+                calls.append({**call, "function": function})
+            item["tool_calls"] = calls
+        conversation.append(item)
+    return [{"role": "system", "content": "\n\n".join(instructions)}] + conversation
+
+
+class FlashContextTooLong(Exception):
+    pass
+
+
+async def check_flash_context(client, endpoint, headers, payload):
+    template = {"messages": payload["messages"], "chat_template_kwargs": {"enable_thinking": False},
+                "add_generation_prompt": True}
+    if payload.get("tools"):
+        template["tools"] = payload["tools"]
+    if "tool_choice" in payload:
+        template["tool_choice"] = payload["tool_choice"]
+    async def post(path, data):
+        async with client.post(endpoint + path, json=data, headers=headers, allow_redirects=False) as response:
+            if response.status != 200:
+                raise ValueError("flash_context_validation_failed")
+            body = bytearray()
+            async for chunk in response.content.iter_chunked(65536):
+                body.extend(chunk)
+                if len(body) > 4 * 1024 * 1024:
+                    raise ValueError("flash_context_validation_failed")
+            return json.loads(body)
+    rendered = await post("/apply-template", template)
+    if not isinstance(rendered, dict) or not isinstance(rendered.get("prompt"), str):
+        raise ValueError("flash_context_validation_failed")
+    result = await post("/tokenize", {"content": rendered["prompt"], "add_special": True})
+    if not isinstance(result, dict) or not isinstance(result.get("tokens"), list):
+        raise ValueError("flash_context_validation_failed")
+    try:
+        context = min(8192, max(2048, int(os.getenv("VELIA_DESKTOP_FLASH_CONTEXT_TOKENS", "8192"))))
+    except ValueError:
+        context = 8192
+    if len(result["tokens"]) + payload["max_tokens"] + 64 > context:
+        raise FlashContextTooLong()
 
 
 class AuthenticationUnavailable(Exception):
@@ -21,7 +113,7 @@ class AuthenticationUnavailable(Exception):
 
 
 def validate_payload(data):
-    if not isinstance(data, dict) or data.get("model") != MODEL_ID:
+    if not isinstance(data, dict) or data.get("model") not in {MODEL_ID, FLASH_ID}:
         raise ValueError("unsupported_model")
     messages = data.get("messages")
     if not isinstance(messages, list) or not 1 <= len(messages) <= 256:
@@ -54,10 +146,17 @@ def validate_payload(data):
         raise ValueError("invalid_output_limit")
     if type(data.get("stream", False)) is not bool:
         raise ValueError("invalid_stream")
-    result = {"model": os.getenv("VELIA_DESKTOP_PRO_MODEL", "kimi-k3"),
+    is_flash = data["model"] == FLASH_ID
+    result = {"model": os.getenv("VELIA_DESKTOP_PRO_MODEL", "kimi-k3") if not is_flash else FLASH_ID,
               "messages": normalized_messages, "max_completion_tokens": limit,
               "stream": data.get("stream", False)}
-    if result["model"].lower().startswith("kimi-k3"):
+    if is_flash:
+        result["messages"] = flash_messages(normalized_messages)
+        result["max_tokens"] = min(result.pop("max_completion_tokens"), 512)
+        result.update(temperature=0.7, top_p=0.8, top_k=20, min_p=0.05,
+                      chat_template_kwargs={"enable_thinking": False}, reasoning_effort="none",
+                      reasoning_format="deepseek", thinking_budget_tokens=0, parallel_tool_calls=False)
+    elif result["model"].lower().startswith("kimi-k3"):
         effort = os.getenv("VELIA_DESKTOP_REASONING_EFFORT", "low")
         result["reasoning_effort"] = effort if effort in {"low", "medium", "high"} else "low"
     if tools:
@@ -105,9 +204,12 @@ def setup_velia_desktop_routes(app, authenticate):
         _, failure = await authorize(request)
         if failure is not None:
             return failure
-        return web.json_response({"object": "list", "data": [
+        catalog = [
             {"id": MODEL_ID, "object": "model", "owned_by": "velia"}
-        ]}, headers={"Cache-Control": "no-store"})
+        ]
+        if flash_enabled():
+            catalog.append({"id": FLASH_ID, "object": "model", "owned_by": "velia"})
+        return web.json_response({"object": "list", "data": catalog}, headers={"Cache-Control": "no-store"})
 
     async def complete(request):
         user_id, failure = await authorize(request)
@@ -127,12 +229,17 @@ def setup_velia_desktop_routes(app, authenticate):
             if len(body) > MAX_BODY:
                 return error("request_too_large", 413)
         try:
-            payload = validate_payload(json.loads(body))
+            data = json.loads(body)
+            if isinstance(data, dict) and data.get("model") == FLASH_ID and not flash_enabled():
+                return error("flash_unavailable", 503)
+            payload = validate_payload(data)
         except (ValueError, TypeError, UnicodeDecodeError) as exc:
             return error(str(exc) if str(exc) in {"unsupported_model", "invalid_messages", "text_only_preview",
-                         "invalid_tools", "invalid_output_limit", "invalid_stream", "invalid_tool_choice"}
+                         "invalid_tools", "invalid_output_limit", "invalid_stream", "invalid_tool_choice",
+                         "invalid_tool_calls", "invalid_tool_arguments"}
                          else "invalid_json", 400)
-        key = os.getenv("KIMI_API_KEY", "").strip()
+        is_flash = data["model"] == FLASH_ID
+        key = os.getenv("VELIA_DESKTOP_FLASH_API_KEY" if is_flash else "KIMI_API_KEY", "").strip()
         if not key:
             return error("model_unavailable", 503)
         # Body reading yields: repeat admission immediately before reserving.
@@ -144,10 +251,14 @@ def setup_velia_desktop_routes(app, authenticate):
         queue.append(now)
         response = None
         try:
-            async with ClientSession(timeout=ClientTimeout(total=180, sock_read=90)) as client:
-                endpoint = os.getenv("KIMI_BASE_URL", "https://api.moonshot.ai/v1").rstrip("/")
-                async with client.post(endpoint + "/chat/completions", json=payload,
-                                       headers={"Authorization": "Bearer " + key},
+            timeout = ClientTimeout(total=360, sock_read=300) if is_flash else ClientTimeout(total=180, sock_read=90)
+            async with ClientSession(timeout=timeout) as client:
+                endpoint = flash_endpoint() if is_flash else os.getenv("KIMI_BASE_URL", "https://api.moonshot.ai/v1").rstrip("/")
+                headers = {"Authorization": "Bearer " + key}
+                if is_flash:
+                    await check_flash_context(client, endpoint, headers, payload)
+                async with client.post(endpoint + ("/v1/chat/completions" if is_flash else "/chat/completions"), json=payload,
+                                       headers=headers,
                                        allow_redirects=False) as upstream:
                     if upstream.status != 200:
                         return error("model_request_failed", 502)
@@ -164,8 +275,10 @@ def setup_velia_desktop_routes(app, authenticate):
                     result = await upstream.json()
                     if not isinstance(result, dict) or not isinstance(result.get("choices"), list):
                         return error("invalid_model_response", 502)
-                    result["model"] = MODEL_ID
+                    result["model"] = data["model"]
                     return web.json_response(result, headers={"Cache-Control": "no-store"})
+        except FlashContextTooLong:
+            return error("flash_context_too_long", 400)
         except (TimeoutError, OSError, ClientError, ValueError):
             if response is not None and response.prepared:
                 response.force_close()
