@@ -9,6 +9,7 @@ from aiohttp.test_utils import TestServer
 import pytest
 from desktop.gateway import GatewayConfig, create_app
 from desktop.web_routes import COOKIE
+from desktop.web_search import WebSearch
 
 TOKEN = "va_" + "a" * 48
 ROTATED = "va_" + "b" * 48
@@ -24,6 +25,16 @@ async def fixture(monkeypatch, **state):
     state.setdefault("credits", 100)
     state.setdefault("conversations", {})
     state["account_calls"] = []
+    state["search_queries"] = []
+    async def search(request):
+        data = await request.json()
+        assert data["api_key"] == "fixture-search-key"
+        assert request.headers.get("Cookie") is None
+        state["search_queries"].append(data["query"])
+        return web.json_response(state.get("search_response", {"results": [
+            {"title":"Python official", "url":"https://www.python.org/downloads/", "content":"Python test release, official source."},
+            {"title":"Docs", "url":"https://docs.python.org/", "content":"Python documentation."}]}),
+            status=state.get("search_status", 200))
     async def health(request):
         return web.json_response({"ok": True, "enabled": True})
     async def me(request):
@@ -104,6 +115,7 @@ async def fixture(monkeypatch, **state):
     authority.router.add_post("/v1/chat/completions", model)
     authority.router.add_post("/apply-template", template)
     authority.router.add_post("/tokenize", tokenize)
+    authority.router.add_post("/search", search)
     async with TestServer(authority) as source:
         for key, value in {"VELIA_WEB_ENABLED": "true", "VELIA_WEB_ORIGIN": ORIGIN,
             "VELIA_WEB_SESSION_KEY": base64.urlsafe_b64encode(b"t" * 32).decode(),
@@ -113,7 +125,10 @@ async def fixture(monkeypatch, **state):
             "VELIA_DESKTOP_FLASH_BASE_URL": str(source.make_url("/")).rstrip("/")}.items():
             monkeypatch.setenv(key, value)
         config = GatewayConfig(str(source.make_url("/")).rstrip("/"), "https://deepalpha-ai.com")
-        async with TestServer(create_app(config, guest_store=state.get("guest_store"))) as server, ClientSession(cookie_jar=DummyCookieJar()) as client:
+        search_service = WebSearch(provider="tavily", api_key="fixture-search-key",
+            endpoint=str(source.make_url("/search")), store=state["guest_store"]) if state.get("with_search") else None
+        async with TestServer(create_app(config, guest_store=state.get("guest_store"),
+                web_search=search_service)) as server, ClientSession(cookie_jar=DummyCookieJar()) as client:
             yield server, client, state
 
 
@@ -133,7 +148,7 @@ def test_opaque_secure_cookie_and_no_authority_secrets(monkeypatch):
             cookie, result, wire = await login(server, client)
             assert all(value not in json.dumps(result) + wire for value in (TOKEN, REFRESH, "never-return-this", "authority_cookie"))
             assert all(flag in wire for flag in ("HttpOnly", "Secure", "SameSite=Lax", "Path=/"))
-            assert set(result) == {"ok", "account", "name", "models", "credits", "pro_locked_reason"}
+            assert set(result) == {"ok", "account", "name", "models", "credits", "pro_locked_reason", "web_search"}
             assert result["models"] == ["velia-pro", "velia-flash"]
             async with client.get(server.make_url("/web-api/v1/session"), headers=headers(cookie)) as response:
                 assert response.status == 200

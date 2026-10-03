@@ -8,6 +8,7 @@ import tempfile
 from aiohttp import web
 from desktop.gateway import GatewayConfig, create_app
 from desktop.guest_store import GuestStore
+from desktop.web_search import WebSearch
 
 
 async def main():
@@ -33,6 +34,11 @@ async def main():
         nonlocal credits
         credits = (await request.json())["credits"]
         return web.json_response({"ok": True})
+    async def fixture_search(request):
+        await request.json()
+        return web.json_response({"results":[
+            {"title":"Python official", "url":"https://www.python.org/downloads/", "content":"Python fixture release from the official website."},
+            {"title":"Python docs", "url":"https://docs.python.org/", "content":"Official documentation."}]})
     async def stored_conversations(request):
         if request.method == "GET":
             return web.json_response({"ok": True, "conversations": [c["conversation"] for c in conversations.values()]})
@@ -97,6 +103,7 @@ async def main():
     authority.router.add_get("/mobile-api/v1/me", me)
     authority.router.add_get("/mobile-api/v1/economy/me", economy)
     authority.router.add_post("/__fixture/credits", fixture_credits)
+    authority.router.add_post("/__fixture/search", fixture_search)
     authority.router.add_get("/mobile-api/v1/conversations", stored_conversations)
     authority.router.add_post("/mobile-api/v1/conversations", stored_conversations)
     authority.router.add_get("/mobile-api/v1/conversations/{conversation_id}/messages", stored_messages)
@@ -120,8 +127,11 @@ async def main():
         VELIA_DESKTOP_FLASH_BASE_URL="http://127.0.0.1:18181")
     os.environ["VELIA_WEB_GUEST_ENABLED"] = "true"
     temp = tempfile.TemporaryDirectory(prefix="velia-guest-fixture-")
+    store = GuestStore(sqlite_path=temp.name + "/guest.sqlite")
+    search = WebSearch(provider="tavily", api_key="fixture-search-key",
+        endpoint="http://127.0.0.1:18181/__fixture/search", store=store)
     app = create_app(GatewayConfig("http://127.0.0.1:18181", "https://deepalpha-ai.com"), web_origin="http://127.0.0.1:18180",
-        guest_store=GuestStore(sqlite_path=temp.name + "/guest.sqlite"))
+        guest_store=store, web_search=search)
     gateway = web.AppRunner(app, access_log=None, handler_cancellation=True)
     await gateway.setup()
     await web.TCPSite(gateway, "127.0.0.1", 18180).start()

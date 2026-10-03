@@ -62,10 +62,20 @@ def valid_session(data):
             and 1 <= data["access_expires_in"] <= 86400)
 
 
-def create_app(config=None, *, check_identity=True, web_origin=None, guest_store=None):
+def create_app(config=None, *, check_identity=True, web_origin=None, guest_store=None, web_search=None):
     config = config or GatewayConfig.from_env()
     app = web.Application(client_max_size=MAX_AUTH_BODY)
     exchanges = deque()
+    if web_search is not None or os.getenv("VELIA_WEB_SEARCH_ENABLED") == "true":
+        import asyncio
+        from desktop.guest_store import GuestStore
+        from desktop.web_search import WebSearch
+        store = guest_store or GuestStore(os.environ["VELIA_WEB_GUEST_DATABASE_URL"])
+        web_search = web_search or WebSearch(store=store)
+        async def search_lifecycle(application):
+            await asyncio.to_thread(web_search.store.initialize_search)
+            yield
+        app.cleanup_ctx.append(search_lifecycle)
 
     async def upstream(method, path, *, token=None, data=None):
         headers = {"User-Agent": "VELIA-Desktop-Gateway/0.2"}
@@ -194,16 +204,25 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
     app.router.add_get("/mobile-connect", pairing_page)
     app.router.add_post("/mobile-api/v1/auth/exchange", relay_session)
     app.router.add_post("/mobile-api/v1/auth/refresh", relay_session)
+    async def enrich_web(request, payload):
+        from desktop.web_search import SEARCH, SearchUnavailable
+        if request.get(SEARCH):
+            if web_search is None:
+                raise SearchUnavailable()
+            return await web_search.enrich(request, payload)
+        return payload
     handlers = setup_velia_desktop_routes(app, authenticate, prepare_payload=prepare_web_payload,
-                                         filter_stream=public_web_stream, authorize_model=authorize_model)
+        filter_stream=public_web_stream, authorize_model=authorize_model, enrich_payload=enrich_web)
     if os.getenv("VELIA_WEB_ENABLED", "").lower() in {"true", "1"}:
         origin = web_origin or https_origin(os.environ["VELIA_WEB_ORIGIN"])
         setup_web_routes(app, origin=origin, upstream=upstream, authenticate=authenticate,
             allowed=allowed, valid_session=valid_session, json_response=json_response, handlers=handlers,
-            account_balance=account_balance, authorize_model=authorize_model, upstream_stream=upstream_stream)
+            account_balance=account_balance, authorize_model=authorize_model, upstream_stream=upstream_stream,
+            web_search=web_search)
         if os.getenv("VELIA_WEB_GUEST_ENABLED") == "true":
             from desktop.guest_routes import setup_guest_routes
-            setup_guest_routes(app, origin=origin, handlers=handlers, json_response=json_response, store=guest_store)
+            setup_guest_routes(app, origin=origin, handlers=handlers, json_response=json_response,
+                store=guest_store, web_search=web_search)
     else:
         app.router.add_get("/", pairing_page)
     return app

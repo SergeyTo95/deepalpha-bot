@@ -47,6 +47,49 @@ admitted attempts, including stopped or failed provider calls, do. Database
 outages deny guest generation. The trial is a browser/network allowance, not a
 verified per-person identity limit.
 
+## Internet search
+
+Enable VELIA_WEB_SEARCH_ENABLED=true on the existing preview gateway.
+VELIA_WEB_SEARCH_PROVIDER and VELIA_WEB_SEARCH_API_KEY reference the existing
+deepalpha-bot WEB_SEARCH_PROVIDER and WEB_SEARCH_API_KEY variables. Credentials
+are never sent to the browser or model.
+
+The Internet button is off by default. Turning it on enriches that message in
+both Flash and PRO; changing the button itself makes no search/model request.
+Search sends only the latest question (up to 50 words / 400 characters), makes
+one bounded gateway provider request and returns up to three public snippets.
+Tavily basic, Serper, Brave and the legacy Bing protocol are supported. The
+selected provider must be configured and pass live qualification. No crawler,
+arbitrary-URL fetcher, paid model fallback or extra model generation is added.
+
+Search HTTP redirects are refused, responses are capped at 256 KiB, and the
+deadline is 15 seconds. Nonpublic links and unsupported browser payload fields
+are excluded. Sources are untrusted data and cannot grant tool access. Source
+cards use retrieved URLs and a separate sanitized SSE event; they survive history
+reload. Failed or empty search returns an explicit error before generation.
+Ordinary chat remains usable.
+
+Guests reserve one of their 30 requests before contacting the search provider;
+an admitted search attempt also counts if search fails or is stopped. The base
+Flash context is checked first, then the enriched context is checked again.
+Overflow rejects the request without truncating the question or switching models.
+Account PRO authorization still precedes search.
+
+Account Internet messages use the existing authenticated conversation sender.
+Their upstream message includes a bounded public evidence block for model
+context. Web history restores the original question and separate source cards
+using the existing preview PostgreSQL's velia_web_search_context table. Only
+HMAC identifiers, original-question lengths and public search facts are stored
+there; no account token, user ID or question plaintext is stored in this table.
+Other clients may display the native message's evidence block. Replaying the
+same account request uses its recorded evidence and retrieval time without
+another gateway search. The native backend retains its existing plugin behavior.
+
+Pre-deploy performs a real search that must return the official Python website,
+qualifies PostgreSQL evidence persistence using private probe keys, then runs the
+existing guest-quota, provider and shipped Harness gates. Failure blocks
+deployment; mock browser results do not establish live search acceptance.
+
 Account-backed VELIA FLASH and VELIA PRO stream through the existing mobile
 conversation API and share gateway admission counters with Desktop: one concurrent request per user, two per process and 30
 calls/hour. Flash retains the 8192-token context and 512-token answer limit;

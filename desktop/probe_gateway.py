@@ -91,6 +91,30 @@ async def run_flash_probe():
 
 async def run_probe():
     guest_receipt = {}
+    search_receipt = {}
+    if os.getenv("VELIA_WEB_SEARCH_ENABLED") == "true":
+        from desktop.guest_store import GuestStore
+        from desktop.web_search import WebSearch
+        store = GuestStore(os.environ["VELIA_WEB_GUEST_DATABASE_URL"])
+        search = WebSearch(store=store)
+        print("VELIA_WEB_SEARCH_CONFIGURATION " + json.dumps({
+            "provider": search.provider, "configured": search.available}), flush=True)
+        if not search.available:
+            raise RuntimeError("web_search_not_configured")
+        result = await search.search("Python downloads official python.org")
+        if not any((urlsplit(row["url"]).hostname or "").endswith("python.org") for row in result["results"]):
+            raise RuntimeError("web_search_source_qualification_failed")
+        await asyncio.to_thread(store.initialize_search)
+        nonce = "private-search-qualification:" + secrets.token_hex(24)
+        try:
+            await asyncio.to_thread(store.remember_search, nonce, nonce+":query", nonce+":context", 12, result)
+            if (await asyncio.to_thread(store.cached_search, nonce, nonce+":query") != result
+                    or len(await asyncio.to_thread(store.search_metadata, [nonce+":context"])) != 1):
+                raise RuntimeError("web_search_persistence_qualification_failed")
+        finally:
+            await asyncio.to_thread(store.delete_search_probe, nonce)
+        search_receipt = {"web_search": {"ok": True, "source_count": len(result["results"]),
+            "primary_source": True, "persistent_sources": True, "model_calls": 0}}
     if os.getenv("VELIA_WEB_GUEST_ENABLED") == "true":
         from concurrent.futures import ThreadPoolExecutor
         from desktop.guest_store import GuestStore, GuestLimitReached
@@ -177,6 +201,7 @@ async def run_probe():
     if os.getenv("VELIA_DESKTOP_FLASH_ENABLED", "").lower() in {"true", "1"}:
         receipt.update(await run_flash_probe())
     receipt.update(guest_receipt)
+    receipt.update(search_receipt)
     return receipt
 
 

@@ -1,6 +1,22 @@
 # VELIA Web verification — 2026-10-03
 
-## Account history and token gate — current deployment
+## Guest Flash — current deployment
+
+Implementation: 2ee1f044ad24e152aa1f7e09e9ca3f28c9bb1afe.
+Deployed commit: efd304f258adf0e8803452d17904dc9724859a04.
+Railway deployment: 299d1e3f-b944-4122-9816-985d3647816b — SUCCESS.
+
+- Flash works without registration through a separate guest route, with a 30-request browser trial and a separate 30-request-per-UTC-day network guard. The primary allowance does not automatically replenish. The composer displays the remaining count and offers sign-in after exhaustion.
+- Guest history stays local and separate from authenticated history. Guest cookies cannot authorize account conversation or raw Desktop endpoints. PRO still requires an authenticated allowlisted preview account with positive real Credits.
+- Existing preview PostgreSQL stores only hashed quota keys and integer counts. No database service, model copy or token grants were added; the stable existing Web session key was preserved.
+- 87 focused Python tests passed in the Railway Docker build, including 11 guest cases: exactly 30 allowed and the 31st rejected, replay/cookie clearing, server restart, concurrent reservations, origin/credential separation, context overflow, database failure and trusted network-header handling. The 26 Desktop/Web Node tests passed locally.
+- Real Chromium fixture passed guest generation without opening sign-in, a 30-to-29 counter that survives reload, disabled guest PRO, isolated account history after login and restored guest history after logout, code-entry flow, positive-balance PRO, stop, themes and mobile navigation. Four synthetic model requests; no real balance was modified.
+- The live PostgreSQL pre-deploy qualification accepted exactly 30 concurrent reservations, rejected eight excess reservations and verified exhaustion through a fresh store. It removed only its randomly named private probe rows.
+- Existing real-provider qualification passed: PRO tools/SSE and shipped Flash Harness two-round file-read loop with all 24 tools, no paid Flash fallback.
+- Public acceptance passed on the published URL: root/health and guest profile 200; HTML/app/core/CSS bytes match source; Secure HttpOnly guest cookie; account session/history still 401; guest PRO and cross-origin generation 403. One bounded live guest Flash request returned a complete SSE answer, reduced the allowance from 30 to 29 and retained 29 on the next guest-profile request.
+- Production backend, Android, Telegram bot and worker configuration remain unchanged. No PR was merged.
+
+## Account history and token gate — previous deployment
 
 Implementation: 96bf19255083daffc30680f4645d97aa1a253571.
 Deployed commit: 8f0d44a3d3f7a3c467ed2d1020ae4b945a14b93e.
