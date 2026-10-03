@@ -1,10 +1,12 @@
 import { spawnSync } from 'node:child_process';
 import { readFile, readdir, writeFile, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { resolve, join } from 'node:path';
 import { HARNESS_COMMIT } from '../src/config.mjs';
 
 const root = resolve(import.meta.dirname, '..');
+const require = createRequire(import.meta.url);
 function run(args, extraEnv = {}) {
   const result = spawnSync(process.execPath, args, { cwd: root, stdio: 'inherit',
     env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: 'false', ...extraEnv } });
@@ -14,6 +16,15 @@ run(['scripts/prepare-windows-runtime.mjs']);
 run(['scripts/smoke-windows-deps.mjs']);
 run(['scripts/smoke-harness.mjs']);
 run(['scripts/smoke-web.mjs']);
+const { getWineToolset } = require('app-builder-lib/out/toolsets/wine.js');
+process.env.USE_SYSTEM_WINE = 'false';
+const wineToolset = await getWineToolset('1.0.1');
+const nativeWine = join(wineToolset.execPath, '..', '..', 'lib', 'wine', 'x86_64-unix', 'ntdll.so');
+const libraries = spawnSync('ldd', [nativeWine], { encoding: 'utf8' });
+if (libraries.error || libraries.status !== 0 || /not found/.test(libraries.stdout + libraries.stderr)) {
+  throw libraries.error || new Error(`Missing Wine toolset dependencies: ${libraries.stdout}${libraries.stderr}`);
+}
+console.log('VELIA_NSIS_WINE_DEPENDENCIES_READY', libraries.stdout.trim());
 // Use the checksum-pinned Wine 11 toolset for the 32-bit NSIS helper. The system
 // Wine remains the independent executor for the Windows runtime qualifications.
 // BCJ is supported by the NSIS extraction plugin; modern 7-Zip's BCJ2 is not.
