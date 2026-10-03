@@ -1,6 +1,7 @@
-"""Isolated Desktop preview, with existing VELIA device authentication.
+"""Isolated Desktop and optional Web preview using VELIA device authentication.
 
-No database, Telegram bot, payment workers or browser cookies are used here.
+No database, Telegram bot or payment workers are used here. The opt-in Web
+adapter uses its own encrypted, HttpOnly cookie; authority cookies are ignored.
 Only a fixed identity authority receives account tokens; model keys stay here.
 """
 from collections import deque
@@ -13,6 +14,7 @@ from urllib.parse import urlsplit
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, DummyCookieJar, TCPConnector, web
 from velia_desktop_routes import AuthenticationUnavailable, setup_velia_desktop_routes
+from desktop.web_routes import prepare_web_payload, public_web_stream, setup_web_routes
 
 MAX_AUTH_BODY = 16 * 1024
 MAX_AUTH_RESPONSE = 64 * 1024
@@ -59,7 +61,7 @@ def valid_session(data):
             and 1 <= data["access_expires_in"] <= 86400)
 
 
-def create_app(config=None, *, check_identity=True):
+def create_app(config=None, *, check_identity=True, web_origin=None):
     config = config or GatewayConfig.from_env()
     app = web.Application(client_max_size=MAX_AUTH_BODY)
     exchanges = deque()
@@ -164,11 +166,17 @@ def create_app(config=None, *, check_identity=True):
             return json_response({"ok": False, "error": "authentication_unavailable"}, 503)
 
     app.router.add_get("/health", health)
-    app.router.add_get("/", pairing_page)
     app.router.add_get("/mobile-connect", pairing_page)
     app.router.add_post("/mobile-api/v1/auth/exchange", relay_session)
     app.router.add_post("/mobile-api/v1/auth/refresh", relay_session)
-    setup_velia_desktop_routes(app, authenticate)
+    handlers = setup_velia_desktop_routes(app, authenticate, prepare_payload=prepare_web_payload,
+                                         filter_stream=public_web_stream)
+    if os.getenv("VELIA_WEB_ENABLED", "").lower() in {"true", "1"}:
+        origin = web_origin or https_origin(os.environ["VELIA_WEB_ORIGIN"])
+        setup_web_routes(app, origin=origin, upstream=upstream, authenticate=authenticate,
+            allowed=allowed, valid_session=valid_session, json_response=json_response, handlers=handlers)
+    else:
+        app.router.add_get("/", pairing_page)
     return app
 
 

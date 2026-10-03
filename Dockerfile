@@ -26,6 +26,9 @@ assert count == 26437, count
 archive.unlink()
 PY
 RUN node /opt/velia-qualification/harness/lib/bin.js --version
+COPY desktop/web/core.mjs /opt/velia-web/core.mjs
+COPY desktop/web/tests /opt/velia-web/tests
+RUN node --test /opt/velia-web/tests/*.test.mjs
 
 FROM python:3.12-slim-bookworm AS checked
 WORKDIR /app
@@ -33,9 +36,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
 COPY desktop/requirements-gateway.txt /app/desktop/requirements-gateway.txt
 RUN pip install --no-cache-dir -r desktop/requirements-gateway.txt pytest==8.4.2
 COPY velia_desktop_routes.py /app/velia_desktop_routes.py
-COPY desktop/gateway.py desktop/probe_gateway.py /app/desktop/
-COPY tests/test_velia_desktop_gateway.py tests/test_velia_desktop_relay.py tests/test_velia_desktop_flash.py /app/tests/
-RUN python -m pytest -q -p no:cacheprovider tests/test_velia_desktop_gateway.py tests/test_velia_desktop_relay.py tests/test_velia_desktop_flash.py
+COPY desktop/gateway.py desktop/probe_gateway.py desktop/web_routes.py /app/desktop/
+COPY desktop/web /app/desktop/web
+COPY tests/test_velia_desktop_gateway.py tests/test_velia_desktop_relay.py tests/test_velia_desktop_flash.py tests/test_velia_web_chat.py /app/tests/
+RUN python -m pytest -q -p no:cacheprovider tests/test_velia_desktop_gateway.py tests/test_velia_desktop_relay.py tests/test_velia_desktop_flash.py tests/test_velia_web_chat.py
 
 FROM python:3.12-slim-bookworm
 WORKDIR /app

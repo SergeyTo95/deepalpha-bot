@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#101010" />
+    <meta
+      name="description"
+      content="VELIA — пространство для идей, текстов и решений. Два режима: Flash и PRO."
+    />
+    <title>VELIA — твой ИИ-ассистент</title>
+    <link rel="icon" href="/web/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/web/style.css" />
+    <script type="module" src="/web/app.mjs"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <button
+        class="scrim"
+        id="scrim"
+        aria-label="Закрыть меню"
+        hidden
+      ></button>
+      <aside class="sidebar" id="sidebar" aria-label="Диалоги">
+        <a class="brand" href="/" aria-label="VELIA — главная"
+          ><img src="/web/favicon.svg" alt="" width="36" height="36" /><span
+            >VELIA<small>Velyon Core</small></span
+          ></a
+        >
+        <button class="new-chat" id="new-chat">
+          <span data-icon="plus"></span>Новый диалог<span class="key-hint"
+            >↗</span
+          >
+        </button>
+        <label class="search-box"
+          ><span data-icon="search"></span
+          ><input
+            id="search"
+            type="search"
+            placeholder="Найти диалог"
+            aria-label="Найти диалог"
+            autocomplete="off"
+        /></label>
+        <div class="history-heading">ТВОИ ДИАЛОГИ</div>
+        <nav class="history" id="history" aria-label="История диалогов"></nav>
+        <div class="sidebar-bottom">
+          <div class="history-note">
+            <span data-icon="lock"></span>История в этом браузере
+          </div>
+          <button class="account" id="account">
+            <span class="account-avatar" data-icon="user"></span
+            ><span id="account-label"
+              >Войти в VELIA<small>Твоё личное пространство</small></span
+            ><span data-icon="chevron"></span>
+          </button>
+        </div>
+      </aside>
+      <main class="main">
+        <header class="topbar">
+          <div class="topbar-left">
+            <button
+              id="menu"
+              class="icon-button mobile-menu"
+              aria-label="Открыть меню"
+              aria-expanded="false"
+            >
+              <span data-icon="menu"></span></button
+            ><span class="space-label"
+              ><span class="status-dot"></span>Личное пространство</span
+            >
+          </div>
+          <div class="topbar-actions">
+            <span class="web-badge">WEB PREVIEW</span
+            ><button id="theme" class="icon-button" aria-label="Светлая тема">
+              <span data-icon="sun"></span>
+            </button>
+          </div>
+        </header>
+        <div class="conversation-scroll" id="conversation-scroll">
+          <section class="welcome" id="welcome">
+            <div class="welcome-symbol">
+              <img src="/web/favicon.svg" alt="" width="58" height="58" />
+            </div>
+            <div class="eyebrow">ТВОИ ИДЕИ. НОВЫЕ ВОЗМОЖНОСТИ.</div>
+            <h1>Место для<br /><span>твоих идей.</span></h1>
+            <p class="welcome-copy">
+              Думай шире. Создавай проще.<br class="mobile-break" />
+              Велия рядом.
+            </p>
+            <div class="suggestions">
+              <button
+                class="suggestion"
+                data-prompt="Помоги превратить мою идею в понятный план. Для начала задай несколько важных вопросов."
+              >
+                <span data-icon="spark"></span><strong>Из идеи — в план</strong
+                ><small>Найти первый шаг</small
+                ><span class="suggestion-arrow">↗</span>
+              </button>
+              <button
+                class="suggestion"
+                data-prompt="Помоги написать сильный текст. Уточни аудиторию, задачу и желаемый тон."
+              >
+                <span data-icon="pen"></span><strong>Найти нужные слова</strong
+                ><small>Текст с твоим характером</small
+                ><span class="suggestion-arrow">↗</span>
+              </button>
+              <button
+                class="suggestion"
+                data-prompt="Помоги разобраться в сложной теме: объясни простыми словами и на примерах. Спроси, что я хочу понять."
+              >
+                <span data-icon="layers"></span
+                ><strong>Разобраться в сложном</strong
+                ><small>Ясно и на примерах</small
+                ><span class="suggestion-arrow">↗</span>
+              </button>
+              <button
+                class="suggestion"
+                data-prompt="Помоги с кодом: разобраться в ошибке или продумать решение. Спроси, над чем я работаю."
+              >
+                <span data-icon="code"></span
+                ><strong>Создать что-то своё</strong
+                ><small>Код, решения и идеи</small
+                ><span class="suggestion-arrow">↗</span>
+              </button>
+            </div>
+          </section>
+          <section
+            class="messages"
+            id="messages"
+            aria-label="Сообщения"
+            hidden
+          ></section>
+        </div>
+        <div class="composer-area">
+          <div
+            class="generation-status"
+            id="generation-status"
+            role="status"
+            aria-live="polite"
+          ></div>
+          <form class="composer" id="composer">
+            <label class="sr-only" for="prompt">Сообщение Велии</label
+            ><textarea
+              id="prompt"
+              placeholder="Расскажи Велии, что задумал…"
+              rows="1"
+              maxlength="32000"
+            ></textarea>
+            <div class="composer-toolbar">
+              <div class="model-control">
+                <button
+                  type="button"
+                  class="model-button"
+                  id="model-button"
+                  aria-haspopup="listbox"
+                  aria-expanded="false"
+                >
+                  <span id="model-icon" data-icon="spark"></span
+                  ><span id="model-label">VELIA PRO</span
+                  ><span data-icon="chevron"></span>
+                </button>
+                <div
+                  class="model-menu"
+                  id="model-menu"
+                  role="listbox"
+                  aria-label="Режим Велии"
+                  hidden
+                >
+                  <button
+                    type="button"
+                    class="model-option"
+                    role="option"
+                    aria-selected="true"
+                    data-model="velia-pro"
+                  >
+                    <span data-icon="spark"></span
+                    ><span
+                      ><strong>VELIA PRO</strong
+                      ><small
+                        >Для сложных задач и подробных ответов</small
+                      ></span
+                    ><span class="model-check">✓</span></button
+                  ><button
+                    type="button"
+                    class="model-option"
+                    role="option"
+                    aria-selected="false"
+                    data-model="velia-flash"
+                  >
+                    <span data-icon="bolt"></span
+                    ><span
+                      ><strong>VELIA FLASH</strong
+                      ><small>Для повседневных вопросов</small></span
+                    ><span class="model-check">✓</span>
+                  </button>
+                </div>
+              </div>
+              <span class="input-hint">Shift + Enter — новая строка</span
+              ><button
+                type="submit"
+                class="send-button"
+                id="send"
+                aria-label="Отправить сообщение"
+                disabled
+              >
+                <span data-icon="arrow"></span></button
+              ><button
+                type="button"
+                class="send-button stop-button"
+                id="stop"
+                aria-label="Остановить ответ"
+                hidden
+              >
+                <span data-icon="stop"></span>
+              </button>
+            </div>
+          </form>
+          <div class="composer-caption">
+            <span>VELIA</span><span>·</span>Velyon Core
+          </div>
+        </div>
+      </main>
+    </div>
+    <dialog class="auth-dialog" id="auth-dialog" aria-labelledby="auth-title">
+      <button
+        class="dialog-close icon-button"
+        id="auth-close"
+        aria-label="Закрыть"
+      >
+        <span data-icon="close"></span></button
+      ><img src="/web/favicon.svg" alt="" width="48" height="48" />
+      <div class="eyebrow">ТВОЁ ПРОСТРАНСТВО VELIA</div>
+      <h2 id="auth-title">Давай начнём.</h2>
+      <p>
+        Открой свой аккаунт Велии, получи код подключения и вставь его сюда.
+      </p>
+      <a
+        class="pairing-link"
+        href="/mobile-connect"
+        target="_blank"
+        rel="noopener noreferrer"
+        >Получить код<span>↗</span></a
+      >
+      <form id="auth-form">
+        <label for="pairing-code">Код подключения</label
+        ><input
+          id="pairing-code"
+          placeholder="XXXX-XXXX-XXXX-XXXX"
+          autocomplete="off"
+          spellcheck="false"
+          maxlength="64"
+          required
+        />
+        <div class="auth-error" id="auth-error" role="alert"></div>
+        <button type="submit" class="auth-submit" id="auth-submit">
+          Войти в VELIA<span>→</span>
+        </button>
+      </form>
+      <p class="auth-caption">
+        На время Preview доступ открыт твоему аккаунту.
+      </p>
+    </dialog>
+    <dialog
+      class="confirm-dialog"
+      id="confirm-dialog"
+      aria-labelledby="confirm-title"
+    >
+      <h2 id="confirm-title">Удалить диалог?</h2>
+      <p>Диалог будет удалён из истории этого браузера.</p>
+      <div class="dialog-actions">
+        <button id="delete-cancel">Отмена</button
+        ><button id="delete-confirm" class="primary-button">Удалить</button>
+      </div>
+    </dialog>
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>
