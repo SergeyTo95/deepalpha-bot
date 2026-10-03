@@ -170,7 +170,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
         source = stream = None
         try:
             content, result = data["content"], None
-            if data.get("web_search"):
+            if (web_search and web_search.available) or data.get("web_search"):
                 if web_search is None:
                     raise SearchUnavailable()
                 content, result = await web_search.account_question(session.user_id,

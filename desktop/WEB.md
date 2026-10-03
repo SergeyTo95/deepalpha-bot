@@ -54,8 +54,11 @@ VELIA_WEB_SEARCH_PROVIDER and VELIA_WEB_SEARCH_API_KEY reference the existing
 deepalpha-bot WEB_SEARCH_PROVIDER and WEB_SEARCH_API_KEY variables. Credentials
 are never sent to the browser or model.
 
-The Internet button is off by default. Turning it on enriches that message in
-both Flash and PRO; changing the button itself makes no search/model request.
+Internet search is always enabled for Web Flash, including guests, and PRO
+when the gateway search provider is configured. There is no browser toggle.
+The Web routes apply search by default even when an older client omits the
+optional legacy boolean or sends false. Desktop routes retain their existing
+tool behavior. Loading the page or changing the model makes no search/model request.
 Search sends only the latest question (up to 50 words / 400 characters), makes
 one bounded gateway provider request and returns up to three public snippets.
 Tavily basic, Serper, Brave and the legacy Bing protocol are supported. The
@@ -67,7 +70,8 @@ deadline is 15 seconds. Nonpublic links and unsupported browser payload fields
 are excluded. Sources are untrusted data and cannot grant tool access. Source
 cards use retrieved URLs and a separate sanitized SSE event; they survive history
 reload. Failed or empty search returns an explicit error before generation.
-Ordinary chat remains usable.
+An unconfigured gateway retains ordinary chat; an enabled provider failure is
+reported explicitly instead of presenting the answer as verified online.
 
 Guests reserve one of their 30 requests before contacting the search provider;
 an admitted search attempt also counts if search fails or is stopped. The base
