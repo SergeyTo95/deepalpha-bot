@@ -76,10 +76,11 @@ def create_app(config=None, *, check_identity=True, web_origin=None):
                 body = bytearray()
                 async for chunk in response.content.iter_chunked(8192):
                     body.extend(chunk)
-                    if len(body) > MAX_AUTH_RESPONSE:
+                    limit = 2 * 1024 * 1024 if path.startswith("/mobile-api/v1/conversations") else MAX_AUTH_RESPONSE
+                    if len(body) > limit:
                         raise AuthenticationUnavailable()
                 result = json.loads(body)
-                if not isinstance(result, dict) or response.status not in {200, 400, 401, 403}:
+                if not isinstance(result, dict) or response.status not in {200, 201, 400, 401, 402, 403, 404, 409, 429, 502, 503}:
                     raise AuthenticationUnavailable()
                 return response.status, result
         except (ClientError, TimeoutError, ValueError, OSError) as exc:
@@ -95,7 +96,30 @@ def create_app(config=None, *, check_identity=True, web_origin=None):
         if (status != 200 or result.get("ok") is not True or not isinstance(user, dict)
                 or type(user.get("id")) is not int or user["id"] <= 0):
             raise AuthenticationUnavailable()
-        return {"user_id": user["id"]}
+        return {"user_id": user["id"], "name": str(user.get("first_name") or "Аккаунт VELIA")[:120]}
+
+    async def account_balance(token):
+        status, result = await upstream("GET", "/mobile-api/v1/economy/me", token=token)
+        credits = result.get("account", {}).get("credits") if isinstance(result.get("account"), dict) else None
+        if status != 200 or result.get("ok") is not True or type(credits) is not int:
+            raise AuthenticationUnavailable()
+        return max(0, credits)
+
+    async def authorize_model(token, model):
+        if model == "velia-pro":
+            if await account_balance(token) <= 0:
+                return "pro_tokens_required", 402
+        return None
+
+    async def upstream_stream(path, *, token, data):
+        timeout = ClientTimeout(total=360, sock_read=300)
+        async with app[CLIENT].post(config.auth_origin + path, json=data,
+                headers={"Authorization": "Bearer " + token, "User-Agent": "VELIA-Web/0.3"},
+                timeout=timeout, allow_redirects=False) as response:
+            if response.status != 200 or "text/event-stream" not in response.headers.get("Content-Type", ""):
+                raise AuthenticationUnavailable()
+            async for chunk in response.content.iter_chunked(65536):
+                yield chunk
 
     async def lifecycle(application):
         async with ClientSession(timeout=ClientTimeout(total=15, sock_read=10),
@@ -170,11 +194,12 @@ def create_app(config=None, *, check_identity=True, web_origin=None):
     app.router.add_post("/mobile-api/v1/auth/exchange", relay_session)
     app.router.add_post("/mobile-api/v1/auth/refresh", relay_session)
     handlers = setup_velia_desktop_routes(app, authenticate, prepare_payload=prepare_web_payload,
-                                         filter_stream=public_web_stream)
+                                         filter_stream=public_web_stream, authorize_model=authorize_model)
     if os.getenv("VELIA_WEB_ENABLED", "").lower() in {"true", "1"}:
         origin = web_origin or https_origin(os.environ["VELIA_WEB_ORIGIN"])
         setup_web_routes(app, origin=origin, upstream=upstream, authenticate=authenticate,
-            allowed=allowed, valid_session=valid_session, json_response=json_response, handlers=handlers)
+            allowed=allowed, valid_session=valid_session, json_response=json_response, handlers=handlers,
+            account_balance=account_balance, authorize_model=authorize_model, upstream_stream=upstream_stream)
     else:
         app.router.add_get("/", pairing_page)
     return app

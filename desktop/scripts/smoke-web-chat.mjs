@@ -58,7 +58,7 @@ try {
       errors.push(m.text());
   });
   page.on("request", (r) => {
-    if (r.url().includes("/chat/completions")) calls.push(r.postDataJSON());
+    if (r.url().includes("/messages/stream") || r.url().includes("/chat/completions")) calls.push(r.postDataJSON());
   });
   await page.goto("http://127.0.0.1:18180/");
   await page.locator("#welcome").waitFor();
@@ -74,6 +74,18 @@ try {
   await page.locator("#prompt").fill("Привет, Велия");
   await page.locator("#send").click();
   await page.locator("#auth-dialog").waitFor({ state: "visible" });
+  await context.route("https://t.me/**", (route) => route.fulfill({contentType: "text/html", body: "<p>Telegram fixture</p>"}));
+  const popupReady = page.waitForEvent("popup");
+  await page.locator("#pairing-link").click();
+  const popup = await popupReady;
+  await popup.waitForURL("https://t.me/**");
+  assert.ok(popup.url().includes("start=velia_connect"));
+  await popup.close();
+  await page.bringToFront();
+  await page.locator("#code-ready").click();
+  assert.equal(await page.locator("#auth-dialog").isVisible(), true);
+  assert.equal(await page.locator("#pairing-code").evaluate((el) => el === document.activeElement), true);
+  await page.screenshot({path: root + "/VELIA-Web-auth.png"});
   await page.locator("#pairing-code").fill("ABCD-EFGH-2345-6789");
   await page.locator("#auth-submit").click();
   await page
@@ -99,6 +111,12 @@ try {
       sessionCookie.sameSite === "Lax",
   );
   assert.equal(await page.locator("#prompt").inputValue(), "Привет, Велия");
+  await page.getByRole("button", { name: "Старый диалог из приложения", exact: true }).waitFor();
+  assert.equal(await page.locator('[data-model="velia-pro"]').isDisabled(), true);
+  await page.locator(".history-open").filter({hasText: "Старый диалог из приложения"}).click();
+  await page.getByText("Моя прежняя идея", {exact: true}).waitFor();
+  await page.locator("#new-chat").click();
+  await page.locator("#prompt").fill("Привет, Велия");
   await page.locator("#send").click();
   await page.locator(".message-actions").waitFor();
   assert.equal(calls.at(-1).model, "velia-flash");
@@ -111,13 +129,17 @@ try {
   assert.ok(
     (await page.locator("#messages").innerText()).includes("Привет, Велия"),
   );
+  await context.request.post("http://127.0.0.1:18181/__fixture/credits", {data: {credits: 5}});
+  await page.reload();
+  await page.locator('[data-model="velia-pro"]').waitFor({state: "attached"});
+  await page.waitForFunction(() => !document.querySelector('[data-model="velia-pro"]').disabled);
   await page.locator("#model-button").click();
   await page.getByRole("option", { name: /VELIA PRO/ }).click();
   await page.locator("#prompt").fill("Продолжи");
   await page.locator("#send").click();
   await page.locator(".message-actions").last().waitFor();
   assert.equal(calls.at(-1).model, "velia-pro");
-  assert.equal(calls.at(-1).messages.length, 3);
+  assert.equal(calls.at(-1).content, "Продолжи");
   await page.screenshot({ path: root + "/VELIA-Web-chat.png" });
   await page.locator("#prompt").fill("Покажи остановку");
   await page.locator("#send").click();
@@ -127,9 +149,9 @@ try {
   await page.locator("#new-chat").click();
   await page.locator("#search").fill("Привет");
   assert.equal(await page.locator(".history-row").count(), 1);
-  await page.locator(".history-delete").click();
+  await page.locator(".history-delete").first().click();
   await page.locator("#delete-confirm").click();
-  assert.equal(await page.locator(".history-row").count(), 0);
+  await page.waitForFunction(() => document.querySelectorAll(".history-row").length === 0);
   await page.locator("#search").fill("");
   await page.locator("#theme").click();
   assert.equal(await page.locator("html").getAttribute("data-theme"), "light");
@@ -173,6 +195,9 @@ try {
       flash: true,
       pro: true,
       history: true,
+      accountHistory: true,
+      proRequiresTokens: true,
+      returnToCode: true,
       login: true,
       logout: true,
       cookieHttpOnly: true,

@@ -48,7 +48,7 @@
         <nav class="history" id="history" aria-label="История диалогов"></nav>
         <div class="sidebar-bottom">
           <div class="history-note">
-            <span data-icon="lock"></span>История в этом браузере
+            <span data-icon="lock"></span><span id="history-state">История в твоём аккаунте</span>
           </div>
           <button class="account" id="account">
             <span class="account-avatar" data-icon="user"></span
@@ -158,8 +158,8 @@
                   aria-haspopup="listbox"
                   aria-expanded="false"
                 >
-                  <span id="model-icon" data-icon="spark"></span
-                  ><span id="model-label">VELIA PRO</span
+                  <span id="model-icon" data-icon="bolt"></span
+                  ><span id="model-label">VELIA FLASH</span
                   ><span data-icon="chevron"></span>
                 </button>
                 <div
@@ -173,21 +173,21 @@
                     type="button"
                     class="model-option"
                     role="option"
-                    aria-selected="true"
+                    aria-selected="false"
                     data-model="velia-pro"
                   >
                     <span data-icon="spark"></span
                     ><span
                       ><strong>VELIA PRO</strong
-                      ><small
-                        >Для сложных задач и подробных ответов</small
+                      ><small id="pro-description"
+                        >Доступен с токенами на балансе</small
                       ></span
                     ><span class="model-check">✓</span></button
                   ><button
                     type="button"
                     class="model-option"
                     role="option"
-                    aria-selected="false"
+                    aria-selected="true"
                     data-model="velia-flash"
                   >
                     <span data-icon="bolt"></span
@@ -234,16 +234,18 @@
       ><img src="/web/favicon.svg" alt="" width="48" height="48" />
       <div class="eyebrow">ТВОЁ ПРОСТРАНСТВО VELIA</div>
       <h2 id="auth-title">Давай начнём.</h2>
-      <p>
-        Открой свой аккаунт Велии, получи код подключения и вставь его сюда.
+      <p id="auth-help">
+        Получи одноразовый код в Telegram и вставь его сюда. История подтянется из твоего аккаунта.
       </p>
       <a
         class="pairing-link"
-        href="/mobile-connect"
+        id="pairing-link"
+        href="https://t.me/DeepAlphaAI_bot?start=velia_connect"
         target="_blank"
         rel="noopener noreferrer"
-        >Получить код<span>↗</span></a
+        >Получить код в Telegram<span>↗</span></a
       >
+      <button type="button" class="code-ready" id="code-ready">Код уже есть — ввести</button>
       <form id="auth-form">
         <label for="pairing-code">Код подключения</label
         ><input
@@ -269,7 +271,7 @@
       aria-labelledby="confirm-title"
     >
       <h2 id="confirm-title">Удалить диалог?</h2>
-      <p>Диалог будет удалён из истории этого браузера.</p>
+      <p>Диалог будет удалён из твоего аккаунта на всех устройствах. Локальные диалоги удаляются только в этом браузере.</p>
       <div class="dialog-actions">
         <button id="delete-cancel">Отмена</button
         ><button id="delete-confirm" class="primary-button">Удалить</button>

@@ -39,7 +39,7 @@ let profile = null,
   abort = null,
   busy = false,
   deleteId = null;
-let model = "velia-pro",
+let model = "velia-flash",
   theme = "dark",
   toastTimer,
   saveTimer,
@@ -105,7 +105,7 @@ function closeModels() {
   $("model-button").setAttribute("aria-expanded", "false");
 }
 function setModel(value) {
-  if (busy || !MODELS[value]) return;
+  if (busy || !MODELS[value] || (profile && !profile.models.includes(value))) return;
   model = value;
   $("model-label").textContent = MODELS[value];
   $("model-icon").innerHTML = icon(value === "velia-flash" ? "bolt" : "spark");
@@ -138,7 +138,7 @@ function renderHistory() {
     items = [...chats]
       .filter(
         (c) =>
-          c.messages.length && c.title.toLocaleLowerCase().includes(filter),
+          (c.remote || c.messages.length) && c.title.toLocaleLowerCase().includes(filter),
       )
       .sort((a, b) => b.updated - a.updated);
   if (!items.length) {
@@ -172,12 +172,7 @@ function renderHistory() {
     open.textContent = chat.title;
     open.title = chat.title;
     open.disabled = busy;
-    open.onclick = () => {
-      currentId = chat.id;
-      save();
-      render();
-      sidebar(false);
-    };
+    open.onclick = () => openChat(chat);
     const del = document.createElement("button");
     del.className = "history-delete";
     del.innerHTML = icon("trash");
@@ -288,6 +283,59 @@ function openAuth() {
   $("auth-dialog").showModal();
   setTimeout(() => $("pairing-code").focus(), 0);
 }
+async function jsonRequest(path, data) {
+  const response = await request(path, data, AbortSignal.timeout(25000));
+  const value = await response.json();
+  if (!response.ok) throw new Error(apiError(value.error?.message || value.error));
+  return value;
+}
+async function openChat(chat) {
+  if (busy || !profile) return;
+  const account = profile.account;
+  currentId = chat.id;
+  sidebar(false);
+  if (chat.remote) {
+    $("generation-status").textContent = "Загружаю диалог…";
+    try {
+      const data = await jsonRequest("conversations/" + chat.id + "/messages");
+      if (profile?.account !== account || currentId !== chat.id) return;
+      const previous = chat.messages;
+      chat.messages = data.messages.map((m, i) => ({
+        role: m.role, content: m.content || "",
+        requestId: previous[i]?.role === m.role && previous[i]?.content === m.content ? previous[i]?.requestId : undefined,
+        model: m.chat_mode === "flash" ? "velia-flash" : "velia-pro",
+        pending: m.status === "pending",
+        failed: m.status === "error" ? "Не удалось получить ответ. Можно повторить запрос." : undefined,
+      }));
+      chat.loaded = true;
+    } catch (error) { toast(error.message); }
+    finally { $("generation-status").textContent = ""; }
+  }
+  save();
+  render();
+}
+async function syncHistory() {
+  if (!profile || busy) return;
+  const account = profile.account;
+  try {
+    const data = await jsonRequest("conversations");
+    if (profile?.account !== account || busy) return;
+    const cached = new Map(chats.map((c) => [c.id, c]));
+    const remote = data.conversations.map((c) => ({
+      ...cached.get(c.id), id: c.id, title: c.title || "Новый диалог",
+      updated: Date.parse(c.updated_at || c.created_at) || Date.now(),
+      messages: cached.get(c.id)?.messages || [], remote: true,
+    }));
+    chats = [...remote, ...chats.filter((c) => !c.remote && !remote.some((r) => r.id === c.id))].slice(0, 100);
+    if (currentId && !current()) currentId = null;
+    $("history-state").textContent = "История в твоём аккаунте";
+    save(); render();
+    if (current()?.remote) await openChat(current());
+  } catch (error) {
+    $("history-state").textContent = "Не удалось обновить историю";
+    toast(error.message);
+  }
+}
 async function copyText(text) {
   try {
     await navigator.clipboard.writeText(text);
@@ -316,18 +364,25 @@ function applyProfile(value) {
         }
     save();
   }
-  $("account-label").replaceChildren(document.createTextNode("Аккаунт VELIA"));
+  $("account-label").replaceChildren(document.createTextNode(value.name || "Аккаунт VELIA"));
   const small = document.createElement("small");
-  small.textContent = "Выйти из аккаунта";
+  small.textContent = (Number.isInteger(value.credits) ? value.credits + " токенов · " : "") + "Выйти из аккаунта";
   $("account-label").append(small);
-  if (!value.models.includes(model)) model = "velia-pro";
+  if (!value.models.includes(model)) model = value.models[0] || "velia-flash";
+  $("pro-description").textContent = value.pro_locked_reason ?
+    apiError(value.pro_locked_reason) : "Доступен с токенами на балансе";
   setModel(model);
   render();
+  syncHistory();
 }
 async function generate(retry = false) {
   if (busy) return;
   if (!profile) {
     openAuth();
+    return;
+  }
+  if (!profile.models.includes(model)) {
+    toast(apiError(profile.pro_locked_reason || "pro_tokens_required"));
     return;
   }
   const text = $("prompt").value.trim();
@@ -338,22 +393,26 @@ async function generate(retry = false) {
     chat.messages.pop();
   } else {
     if (!chat) {
-      chat = {
-        id: crypto.randomUUID(),
-        title: text.replace(/\s+/g, " ").slice(0, 70),
-        updated: Date.now(),
-        messages: [],
-      };
+      setBusy(true);
+      try {
+        const result = await jsonRequest("conversations", {title: text.replace(/\s+/g, " ").slice(0, 70)});
+        chat = {id: result.conversation.id, title: result.conversation.title, updated: Date.now(), messages: [], remote: true, loaded: true};
+      } catch (error) {
+        toast(error.message);
+        return;
+      } finally { setBusy(false); }
       chats.unshift(chat);
       chats = chats.slice(0, 100);
       currentId = chat.id;
     }
-    chat.messages.push({ role: "user", content: text });
+    chat.messages.push({ role: "user", content: text, requestId: crypto.randomUUID() });
     $("prompt").value = "";
     resizePrompt();
   }
   const selected = model,
-    payload = chatPayload(chat, selected),
+    user = chat.messages.at(-1),
+    payload = chat.remote ? {content: user.content, model: selected,
+      idempotency_key: user.requestId || (user.requestId = crypto.randomUUID())} : chatPayload(chat, selected),
     answer = { role: "assistant", content: "", model: selected, pending: true };
   chat.messages.push(answer);
   chat.updated = Date.now();
@@ -370,7 +429,7 @@ async function generate(retry = false) {
         : "Велия работает над ответом…";
   }, 20000);
   try {
-    const response = await request("chat/completions", payload, abort.signal);
+    const response = await request(chat.remote ? "conversations/" + chat.id + "/messages/stream" : "chat/completions", payload, abort.signal);
     const result = await readCompletion(response, (content) => {
       const shouldScroll =
         $("conversation-scroll").scrollHeight -
@@ -395,6 +454,9 @@ async function generate(retry = false) {
         profile = null;
         toast("Сессия завершилась. Войди снова.");
         $("account-label").textContent = "Войти в VELIA";
+      }
+      if (error.status === 402 || error.status === 503) {
+        request("session").then(async (r) => { if (r.ok) applyProfile(await r.json()); }).catch(() => {});
       }
     }
   } finally {
@@ -472,6 +534,21 @@ for (const suggestion of document.querySelectorAll(".suggestion"))
     $("prompt").focus();
   };
 $("auth-close").onclick = () => $("auth-dialog").close();
+$("pairing-link").onclick = () => {
+  try { sessionStorage.setItem("velia-auth-pending", "1"); } catch {}
+  $("auth-title").textContent = "Введи код из Telegram";
+  $("auth-help").textContent = "Скопируй одноразовый код от бота и вернись сюда. Поле ввода уже открыто.";
+};
+$("code-ready").onclick = () => $("pairing-code").focus();
+function resumeAuth() {
+  if (profile || document.visibilityState === "hidden") return;
+  try { if (sessionStorage.getItem("velia-auth-pending") !== "1") return; } catch { return; }
+  if (!$("auth-dialog").open) openAuth();
+  $("pairing-code").focus();
+}
+window.addEventListener("focus", resumeAuth);
+window.addEventListener("pageshow", resumeAuth);
+document.addEventListener("visibilitychange", resumeAuth);
 $("auth-form").onsubmit = async (e) => {
   e.preventDefault();
   const button = $("auth-submit");
@@ -486,6 +563,7 @@ $("auth-form").onsubmit = async (e) => {
       data = await response.json();
     if (!response.ok) throw new Error(apiError(data.error));
     applyProfile(data);
+    try { sessionStorage.removeItem("velia-auth-pending"); } catch {}
     $("auth-dialog").close();
     $("pairing-code").value = "";
     toast("Ты в VELIA. Можно начинать.");
@@ -517,6 +595,8 @@ $("account").onclick = async () => {
     resizePrompt();
     $("account-label").innerHTML =
       "Войти в VELIA<small>Твоё личное пространство</small>";
+    $("pro-description").textContent = "Доступен с токенами на балансе";
+    $("history-state").textContent = "История в твоём аккаунте";
     render();
     toast("Ты вышел из аккаунта.");
   } catch {
@@ -524,12 +604,19 @@ $("account").onclick = async () => {
   }
 };
 $("delete-cancel").onclick = () => $("confirm-dialog").close();
-$("delete-confirm").onclick = () => {
+$("delete-confirm").onclick = async () => {
+  const chat = chats.find((c) => c.id === deleteId);
+  const button = $("delete-confirm");
+  button.disabled = true;
+  try {
+    if (chat?.remote) await jsonRequest("conversations/" + chat.id + "/delete", {});
   chats = chats.filter((c) => c.id !== deleteId);
   if (currentId === deleteId) currentId = null;
   $("confirm-dialog").close();
   save();
   render();
+  } catch (error) { toast(error.message); }
+  finally { button.disabled = false; }
 };
 window.addEventListener("pagehide", save);
 window.addEventListener("storage", (e) => {
@@ -543,6 +630,7 @@ setTheme(theme);
 setModel(model);
 renderHistory();
 resizePrompt();
+resumeAuth();
 try {
   const response = await request(
     "session",

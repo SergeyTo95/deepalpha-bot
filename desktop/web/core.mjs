@@ -139,6 +139,13 @@ export function apiError(code) {
       preview_access_required: "Preview пока доступен аккаунту владельца.",
       authentication_unavailable:
         "Сервис входа временно недоступен. Попробуй ещё раз.",
+      account_service_unavailable: "Не удалось связаться с аккаунтом. История сохранена; повтори позже.",
+      pro_tokens_required: "Для PRO нужны токены. Сейчас доступен Flash.",
+      token_balance_unavailable: "Не удалось проверить баланс. Пока используй Flash.",
+      conversation_not_found: "Этот диалог больше не доступен в аккаунте.",
+      generation_in_progress: "Ответ ещё формируется. Дождись его завершения.",
+      flash_busy: "Flash сейчас занят. Повтори чуть позже.",
+      flash_timeout: "Flash не успел ответить. Повтори чуть позже.",
       auth_rate_limit: "Слишком много попыток входа. Попробуй через минуту.",
       flash_context_too_long:
         "Для Flash этот диалог слишком длинный. Начни новый диалог или выбери PRO.",
@@ -198,7 +205,11 @@ export async function readCompletion(response, onText) {
     } catch {
       throw new Error(apiError("stream_incomplete"));
     }
-    if (event.error) throw new Error(apiError("model_request_failed"));
+    if (event.error) throw new Error(apiError(event.error.message || event.error));
+    if (event.reset === true) {
+      output = "";
+      onText(output);
+    }
     const choice = event.choices?.[0];
     if (choice?.finish_reason) finish = choice.finish_reason;
     const content = choice?.delta?.content;

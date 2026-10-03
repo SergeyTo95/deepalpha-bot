@@ -95,11 +95,12 @@ class Session:
     user_id: int
     access_until: float
     expires: float
+    name: str = "Аккаунт VELIA"
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_session,
-                     json_response, handlers):
+                     json_response, handlers, account_balance, authorize_model, upstream_stream):
     cipher = Fernet(os.environ["VELIA_WEB_SESSION_KEY"].encode())
     sessions, exchanges, revoked = {}, deque(), {}
     def decode(request):
@@ -176,16 +177,23 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             if not identity or identity["user_id"] != session.user_id or not allowed(session.user_id):
                 sessions.pop(key, None)
                 return None
+            session.name = identity.get("name", "Аккаунт VELIA")
         request[WEB_SESSION] = session
         return session
-    def profile(session):
+    async def profile(session):
         account = hashlib.sha256((origin + ":" + str(session.user_id)).encode()).hexdigest()[:24]
-        return {"ok": True, "account": account, "name": "Аккаунт VELIA",
-            "models": [MODEL_ID] + ([FLASH_ID] if flash_enabled() else [])}
+        try:
+            credits = await account_balance(session.access)
+        except AuthenticationUnavailable:
+            credits = None
+        return {"ok": True, "account": account, "name": session.name, "credits": credits,
+            "pro_locked_reason": None if credits and credits > 0 else
+                "pro_tokens_required" if credits is not None else "token_balance_unavailable",
+            "models": ([MODEL_ID] if credits and credits > 0 else []) + ([FLASH_ID] if flash_enabled() else [])}
     async def current(request):
         try:
             session = await session_for(request)
-            return json_response(profile(session)) if session else error("unauthorized", 401)
+            return json_response(await profile(session)) if session else error("unauthorized", 401)
         except AuthenticationUnavailable:
             return error("authentication_unavailable", 503)
     async def login(request):
@@ -228,12 +236,13 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
                 return error("preview_access_required", 403)
             session = Session(secrets.token_urlsafe(32), result["access_token"], result["refresh_token"], device,
                 identity["user_id"], time.time() + result["access_expires_in"], time.time() + LIFETIME)
+            session.name = identity.get("name", "Аккаунт VELIA")
             previous = decode(request)
             if previous:
                 sessions.pop(previous.id, None)
                 revoked[previous.id] = previous.expires
             sessions[session.id] = session
-            response = json_response(profile(session))
+            response = json_response(await profile(session))
             set_cookie(response, session)
             return response
         except AuthenticationUnavailable:
@@ -285,3 +294,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     app.router.add_post("/web-api/v1/auth/exchange", login)
     app.router.add_post("/web-api/v1/auth/logout", logout)
     app.router.add_post("/web-api/v1/chat/completions", chat)
+    from desktop.account_routes import setup_account_routes
+    setup_account_routes(app, session_for=session_for, same_origin=same_origin, upstream=upstream,
+        upstream_stream=upstream_stream, authorize_model=authorize_model, handlers=handlers,
+        json_response=json_response)

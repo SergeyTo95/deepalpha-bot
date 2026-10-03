@@ -12,13 +12,15 @@ VELIA_WEB_ORIGIN=https://velia-desktop-gateway-deepalpha-bot-pr-577.up.railway.a
 VELIA_WEB_SESSION_KEY=<Fernet.generate_key(), stable across deployments>
 ```
 
-The root serves the responsive monochrome chat. `/mobile-connect` continues to
-open the existing VELIA account page. The owner obtains a one-time pairing code
-there and enters it in the Web sign-in dialog. Access remains limited to the
+The root serves the responsive monochrome chat. The Web sign-in dialog opens
+the existing Telegram `velia_connect` pairing flow directly, keeps the input
+step open and focuses it when the browser regains focus. The explicit
+“Код уже есть — ввести” button also focuses the field. Pending sign-in resumes
+after a page reload. `/mobile-connect` remains the existing Desktop/WebApp path. Access remains limited to the
 explicit owner allowlist. Publicly accessible HTML does not grant model access.
 
-Both VELIA FLASH and VELIA PRO stream real answers through the same admission
-counters as Desktop: one concurrent request per user, two per process and 30
+Account-backed VELIA FLASH and VELIA PRO stream through the existing mobile
+conversation API and share gateway admission counters with Desktop: one concurrent request per user, two per process and 30
 calls/hour. Flash retains the 8192-token context and 512-token answer limit;
 PRO retains 4096 output tokens. Context overflow is an explicit error. The
 browser never automatically switches Flash to the paid mode. Mode changes make
@@ -35,11 +37,24 @@ cookie. POSTs require the exact configured Origin and a custom same-origin
 header. No CORS origin is opened. Raw provider metadata and reasoning are
 excluded from browser SSE events. Raw HTML in messages is rendered as text.
 
-The browser stores up to 100 conversations locally, names them from the first
-message, separates history by the signed-in account, supports search/deletion,
-and retains theme and selected mode. Partial interrupted answers are kept and
-marked. History is specific to that browser and origin; cross-device sync and
-history migration to a future custom domain are separate work.
+The browser fetches the signed-in account's existing conversations (up to 100)
+and messages (latest 200), creates new conversations upstream, streams through
+`messages/stream` and deletes through the same authenticated store. Android and
+Web therefore share history and server context. Existing browser-only chats
+are retained as local entries; their deletion only affects that browser. The
+local cache and active selection remain isolated by account. Usage, internal
+plans, provider metadata and credentials are stripped from upstream responses.
+SSE resets and idempotent duplicate completions use the canonical persisted
+answer; stopping the browser stream does not erase the backend conversation.
+
+Flash is the default. PRO checks `/mobile-api/v1/economy/me` on every request,
+including the raw Desktop endpoint; zero or negative Credits returns 402 before
+any paid provider call. Unknown/unavailable balance fails closed for PRO while
+Flash remains usable. The UI shows Credits and disables PRO at zero. There are
+no owner or tester exemptions. This change adds eligibility checking only; it
+does not mint tokens, enable purchases or invent a debit tariff. Existing
+backend accounting/budgets remain in force. Commercial usage charging before
+broad paid launch remains separate from this positive-balance access condition.
 
 Validation: the gateway Docker build runs the focused Python gateway/Web HTTP
 tests and Web stream/Markdown unit tests. `scripts/smoke-web-chat.mjs` starts its
