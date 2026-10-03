@@ -1,6 +1,23 @@
 # VELIA Web verification — 2026-10-03
 
-## Guest Flash — current deployment
+## Internet search — current deployment
+
+Implementation: c3847fb6d71964235903a0fc1f4dbd6bbcddfd1d.
+Deployed commit: 2282b4dc93689b4820f0056a1ac0afe3a5d2ca19.
+Railway deployment: 4a050f98-8719-4a35-9a35-a49b54877c89 — SUCCESS.
+
+- The Internet toggle enriches Web Flash, including guests, and authenticated PRO with bounded live search. Source cards are separate sanitized SSE metadata and remain visible after history reload. Changing the toggle makes no external request.
+- 111 focused Python cases are included in the successful Docker build; 109 passed locally together, followed by both added legacy Web route cases. All 27 Desktop/Web Node cases passed locally; the eight Web cases run in Docker.
+- Real Chromium fixture passed guest Internet generation and counter persistence, authenticated Flash and PRO Internet requests, native account history reload with original question and source cards, existing code-entry flow, stop, logout, themes and 390px mobile navigation. Four synthetic model requests.
+- Tests verify no search for ordinary chat, strict flags and provider/tool override rejection, no search after the 30-message quota or without PRO tokens, no model generation for search failure/empty/unsafe results, public-only source URLs, cached account evidence on retry, and clean Web history restoration.
+- The existing configured search provider is reused through Railway variable references. Pre-deploy found three sources including the official Python site and qualified real PostgreSQL evidence persistence with private probe records; it removed only those records. That qualification made zero model calls.
+- Guest quota concurrency/persistence and the existing PRO tools/SSE plus shipped Flash Harness two-round file-read gate passed again. No Flash paid fallback or extra model copy was added.
+- Public acceptance: root/health and guest profile 200; HTML/app/core/CSS match source bytes; Internet capability true; guest cookie Secure/HttpOnly; account session/history 401; guest PRO and cross-origin request 403.
+- One bounded live guest Internet request searched for the official Python download site, delivered a completed Flash SSE answer with three actual sources, and reduced the shared operator allowance from 29 to 28. The next profile read still showed 28. Sources: https://www.python.org/downloads, https://www.python.org, https://docs.python.org/3/tutorial/index.html.
+- Native account Internet requests retain the normal authenticated sender and PRO balance checks. Their upstream question carries the evidence block; Web restores the original question using HMAC-bound metadata. Other clients may show that public evidence block. No private owner history or balance was inspected.
+- Production backend, Android, Telegram bot and model workers were not redeployed. No PR was merged.
+
+## Guest Flash — previous deployment
 
 Implementation: 2ee1f044ad24e152aa1f7e09e9ca3f28c9bb1afe.
 Deployed commit: efd304f258adf0e8803452d17904dc9724859a04.
