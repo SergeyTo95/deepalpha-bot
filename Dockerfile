@@ -1,3 +1,4 @@
+# Isolated Desktop gateway preview; backend root Dockerfile stays in the feature PR.
 FROM python:3.12-slim-bookworm AS checked
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
