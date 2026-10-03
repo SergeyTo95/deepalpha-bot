@@ -1,6 +1,19 @@
 # VELIA Web verification — 2026-10-03
 
-## Internet search — current deployment
+## Automatic Internet search — current deployment
+
+Implementation: ec7d373f946067535c3a7a3398a823f576e616ee.
+Deployed commit: 4d190e7893a25873cae02c35ca3d1230d196692b.
+Railway deployment: 8469d2d6-bfb4-47ea-8170-9682aff163c7 — SUCCESS.
+
+- Web Flash, including guests, and authenticated PRO automatically search with the configured provider. The Internet toggle is removed. Web routes apply the default to omitted and legacy false flags; raw Desktop requests retain their existing tool behavior.
+- All 116 focused Python tests passed locally and in the Railway Docker build, including default search, legacy flags, clean history, cached retries, provider failures, the 30-message guest quota and the PRO balance gate. All 27 Desktop/Web Node tests passed locally.
+- Real Chromium fixture passed automatic Internet requests from guests, account Flash and PRO without a toggle. Sources and guest counters persist after reload. Existing account history, code-entry flow, stop, logout, themes and 390px mobile navigation passed; page reload and mode selection caused no model requests. Four synthetic model requests.
+- The live Railway pre-deploy gate passed real search with three public sources and original-source persistence in PostgreSQL, atomic guest quota qualification, PRO tools/SSE and the shipped Flash Harness two-round file-read loop with all 24 tools. Flash has no paid fallback.
+- Public acceptance passed: published HTML/app/core/CSS match source bytes and contain no Internet toggle; health and guest profile 200; guest cookie Secure/HttpOnly; account APIs 401; guest PRO and cross-origin generation 403. One normal guest request without the web_search field automatically retrieved three actual python.org sources and completed a live Flash SSE answer. The shared operator allowance changed from 28 to 27 and the next profile read retained 27.
+- Production backend, Android, Telegram bot and model workers were not redeployed. No PR was merged, no tokens were granted and no owner credentials or private history were inspected.
+
+## Internet search — previous deployment
 
 Implementation: c3847fb6d71964235903a0fc1f4dbd6bbcddfd1d.
 Deployed commit: 2282b4dc93689b4820f0056a1ac0afe3a5d2ca19.
