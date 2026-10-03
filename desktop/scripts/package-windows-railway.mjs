@@ -5,16 +5,21 @@ import { resolve, join } from 'node:path';
 import { HARNESS_COMMIT } from '../src/config.mjs';
 
 const root = resolve(import.meta.dirname, '..');
-function run(args) {
+function run(args, extraEnv = {}) {
   const result = spawnSync(process.execPath, args, { cwd: root, stdio: 'inherit',
-    env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: 'false' } });
+    env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: 'false', ...extraEnv } });
   if (result.error || result.status !== 0) throw result.error || new Error(`Windows builder failed: ${args[0]}`);
 }
 run(['scripts/prepare-windows-runtime.mjs']);
 run(['scripts/smoke-windows-deps.mjs']);
 run(['scripts/smoke-harness.mjs']);
 run(['scripts/smoke-web.mjs']);
-run(['node_modules/electron-builder/out/cli/cli.js', '--win', '--x64', '--publish', 'never']);
+// Use the checksum-pinned Wine 11 toolset for the 32-bit NSIS helper. The system
+// Wine remains the independent executor for the Windows runtime qualifications.
+// BCJ is supported by the NSIS extraction plugin; modern 7-Zip's BCJ2 is not.
+run(['node_modules/electron-builder/out/cli/cli.js', '--win', '--x64', '--publish', 'never',
+  '--config.toolsets.wine=1.0.1'], { USE_SYSTEM_WINE: 'false', ELECTRON_BUILDER_7Z_FILTER: 'BCJ' });
+run(['scripts/smoke-windows-installer.mjs'], { USE_SYSTEM_WINE: 'false' });
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 const files = [];
 for (const name of await readdir(join(root, 'dist'))) {
@@ -28,6 +33,7 @@ const manifest = { product: 'VELIA Desktop Preview', version: pkg.version, platf
   sourceCommit: process.env.RAILWAY_GIT_COMMIT_SHA || null, harnessCommit: HARNESS_COMMIT,
   builtAt: new Date().toISOString(), qualification: { windowsNodeUnderWine: true,
     windowsNativeModules: true, readToolRoundTrip: true, authenticatedWeb: true, packagedResources: true,
+    installerUnderWine: true, installedResources: true,
     physicalWindowsGUI: false, liveModel: false, signed: false }, files };
 await writeFile(join(root, 'dist', 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 console.log('VELIA_WINDOWS_INSTALLER_BUILT', JSON.stringify(manifest));
