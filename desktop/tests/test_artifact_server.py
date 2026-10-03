@@ -18,8 +18,8 @@ class ArtifactServerTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        self.name = "VELIA-Desktop-0.2.0-win-x64.exe"
-        self.content = b"MZ_verified_test_installer"
+        self.name = "VELIA-Desktop-0.2.0-win-x64.zip"
+        self.content = b"PK_verified_test_archive"
         (self.root / self.name).write_bytes(self.content)
         (self.root / "private.txt").write_text("must not be served")
         (self.root / "manifest.json").write_text(json.dumps({"files": [{"name": self.name,
@@ -39,6 +39,10 @@ class ArtifactServerTest(unittest.TestCase):
                 self.assertEqual(json.load(response)["status"], "ready")
             with urlopen(base + "/" + self.name, timeout=5) as response:
                 self.assertEqual(response.read(), self.content)
+                self.assertEqual(response.headers["Content-Type"], "application/zip")
+                self.assertIn(self.name, response.headers["Content-Disposition"])
+            with urlopen(base + "/", timeout=5) as response:
+                self.assertIn("переносимую версию", response.read().decode())
             request = Request(base + "/" + self.name, headers={"Range": "bytes=3-7"})
             with urlopen(request, timeout=5) as response:
                 self.assertEqual(response.status, 206)
@@ -52,7 +56,7 @@ class ArtifactServerTest(unittest.TestCase):
             server.server_close()
             thread.join(5)
 
-    def test_changed_installer_is_rejected_before_serving(self):
+    def test_changed_archive_is_rejected_before_serving(self):
         changed = bytearray(self.content)
         changed[-1] ^= 1
         (self.root / self.name).write_bytes(changed)

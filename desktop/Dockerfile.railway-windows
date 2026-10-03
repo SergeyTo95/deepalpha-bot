@@ -29,18 +29,13 @@ COPY desktop/ui/ ./ui/
 COPY desktop/tests/ ./tests/
 RUN npm test \
     && python3 -m unittest discover -s tests -p 'test_artifact_server.py'
-# The portable Wine 11 NSIS toolset dynamically loads libunwind from the host.
-# Keep this late layer independent of the cached upstream compilation.
-RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libunwind8 \
-    && rm -rf /var/lib/apt/lists/*
 ARG RAILWAY_GIT_COMMIT_SHA
 ENV RAILWAY_GIT_COMMIT_SHA=${RAILWAY_GIT_COMMIT_SHA}
 RUN xvfb-run -a sh -c 'wineboot --init && winecfg -v win10 && node scripts/package-windows-railway.mjs'
 
 FROM python:3.12-slim-bookworm
 WORKDIR /artifacts
-COPY --from=build /app/desktop/dist/VELIA-Desktop-*.exe ./
+COPY --from=build /app/desktop/dist/VELIA-Desktop-*.zip ./
 COPY --from=build /app/desktop/dist/manifest.json ./
 COPY desktop/scripts/serve-artifacts.py /usr/local/bin/serve-velia-artifacts.py
 ENV PORT=8080 PYTHONUNBUFFERED=1

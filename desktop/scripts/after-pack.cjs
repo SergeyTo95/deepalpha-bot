@@ -22,8 +22,13 @@ async function checkLinks(root, directory = root) {
 // Resource matching skips nested node_modules; copy the complete deployed tree.
 module.exports = async context => {
   const resources = context.packager.getResourcesDir(context.appOutDir);
-  await cp(join(context.packager.projectDir, '.runtime', 'package', 'harness'), join(resources, 'harness'),
-    { recursive: true, verbatimSymlinks: true });
+  const source = join(context.packager.projectDir, '.runtime', 'package', 'harness');
+  await checkLinks(source);
+  // Windows archives must contain real files, including deployed module links.
+  const copyOptions = context.packager.platform.nodeName === 'win32'
+    ? { recursive: true, dereference: true }
+    : { recursive: true, verbatimSymlinks: true };
+  await cp(source, join(resources, 'harness'), copyOptions);
   await checkLinks(join(resources, 'harness'));
   const build = JSON.parse(await readFile(join(resources, 'notices', 'BUILD.json'), 'utf8'));
   if (build.platform !== context.packager.platform.nodeName) throw new Error('Runtime and installer target differ');
