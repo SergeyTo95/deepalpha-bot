@@ -38,7 +38,8 @@ export function launchURL(line, port) {
   const match = line.match(/dsh web:\s*(http:\/\/[^\s]+)/);
   if (!match) return null;
   const url = new URL(match[1]);
-  if (url.hostname !== '127.0.0.1' || url.port !== String(port) || url.username || url.password) {
+  if (url.hostname !== '127.0.0.1' || !/^\d+$/.test(url.port) || Number(url.port) < 1
+      || (port !== undefined && url.port !== String(port)) || url.username || url.password) {
     throw new Error('Unexpected Harness launch URL');
   }
   return url.href;

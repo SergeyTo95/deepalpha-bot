@@ -13,6 +13,8 @@ test('launch accepts only the child loopback port', () => {
   assert.throws(() => launchURL('dsh web: http://attacker.example:9876/', 9876));
   assert.throws(() => launchURL('dsh web: http://127.0.0.1:9877/', 9876));
   assert.equal(launchURL('booting', 9876), null);
+  assert.equal(launchURL('dsh web: http://127.0.0.1:54321/?token=abc'), 'http://127.0.0.1:54321/?token=abc');
+  assert.throws(() => launchURL('dsh web: http://127.0.0.1/'));
 });
 test('profile uses a credential reference and turns analytics off', () => {
   const patch = profilePatch('https://api.example/v1');

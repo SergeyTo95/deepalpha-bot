@@ -3,7 +3,6 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { createServer } from 'node:net';
 import { defaultHome, launchURL, profilePatch } from './config.mjs';
 import { refreshSession } from './session.mjs';
 
@@ -13,14 +12,6 @@ let child;
 let window;
 let stopping = false;
 let refreshTimer;
-
-async function unusedPort() {
-  const server = createServer();
-  await new Promise((ok, fail) => { server.once('error', fail); server.listen(0, '127.0.0.1', ok); });
-  const port = server.address().port;
-  await new Promise((ok, fail) => server.close(error => error ? fail(error) : ok()));
-  return port;
-}
 
 async function start() {
   const checkout = resolve(import.meta.dirname, '..', '.runtime', 'harness');
@@ -45,8 +36,7 @@ async function start() {
   }); }, 45000);
   const patch = join(home, 'velia.patch.json');
   await writeFile(patch, JSON.stringify(profilePatch(gateway, credentialPath), null, 2), { mode: 0o600 });
-  const port = await unusedPort();
-  child = spawn(process.env.VELIA_NODE_PATH || 'node', [bin, '--profile', 'web', '--patch', patch, '--host', '127.0.0.1', '--port', String(port), '--no-open'], {
+  child = spawn(process.env.VELIA_NODE_PATH || 'node', [bin, '--profile', 'web', '--patch', patch, '--host', '127.0.0.1', '--port', '0', '--no-open'], {
     cwd: selection.filePaths[0], windowsHide: true,
     env: { ...process.env, DSH_HOME: home, DSH_PERMISSION_MODE: 'workspace-write' },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -62,13 +52,14 @@ async function start() {
       const lines = buffer.split('\n'); buffer = lines.pop();
       for (const line of lines) {
         let url;
-        try { url = launchURL(line, port); } catch (error) { clearTimeout(timer); fail(error); return; }
+        try { url = launchURL(line); } catch (error) { clearTimeout(timer); fail(error); return; }
         if (!url || window) continue;
         clearTimeout(timer);
         window = new BrowserWindow({ title: 'VELIA Desktop', width: 1320, height: 900,
           backgroundColor: '#0c1020', webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
         });
         const localOrigin = new URL(url).origin;
+        window.webContents.on('page-title-updated', event => { event.preventDefault(); window.setTitle('VELIA Desktop'); });
         window.webContents.on('will-navigate', (event, target) => { if (new URL(target).origin !== localOrigin) event.preventDefault(); });
         window.webContents.setWindowOpenHandler(({ url: target }) => {
           const external = new URL(target);
