@@ -169,7 +169,7 @@ def validate_payload(data):
     return result
 
 
-def setup_velia_desktop_routes(app, authenticate):
+def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filter_stream=None):
     """Mount a disabled-by-default, bounded preview using mobile access tokens."""
     calls = {}
     active = set()
@@ -230,6 +230,8 @@ def setup_velia_desktop_routes(app, authenticate):
                 return error("request_too_large", 413)
         try:
             data = json.loads(body)
+            if prepare_payload is not None:
+                data = prepare_payload(request, data)
             if isinstance(data, dict) and data.get("model") == FLASH_ID and not flash_enabled():
                 return error("flash_unavailable", 503)
             payload = validate_payload(data)
@@ -268,7 +270,8 @@ def setup_velia_desktop_routes(app, authenticate):
                         response = web.StreamResponse(headers={"Content-Type": "text/event-stream",
                             "Cache-Control": "no-store", "X-Accel-Buffering": "no"})
                         await response.prepare(request)
-                        async for chunk in upstream.content.iter_chunked(65536):
+                        stream = filter_stream(request, upstream.content) if filter_stream else upstream.content.iter_chunked(65536)
+                        async for chunk in stream:
                             await response.write(chunk)
                         await response.write_eof()
                         return response
@@ -289,3 +292,4 @@ def setup_velia_desktop_routes(app, authenticate):
 
     app.router.add_get("/desktop-api/v1/models", models)
     app.router.add_post("/desktop-api/v1/chat/completions", complete)
+    return {"models": models, "complete": complete}

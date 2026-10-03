@@ -1,0 +1,557 @@
+import {
+  MODELS,
+  renderMarkdown,
+  readCompletion,
+  loadChats,
+  chatPayload,
+  apiError,
+} from "./core.mjs";
+const $ = (id) => document.getElementById(id);
+const icons = {
+  plus: "M12 5v14M5 12h14",
+  search: "M21 21l-5-5M18 10a8 8 0 1 1-16 0a8 8 0 0 1 16 0",
+  lock: "M7 10V7a5 5 0 0 1 10 0v3M6 10h12v11H6zM12 14v3",
+  user: "M20 21v-2a8 8 0 0 0-16 0v2M16 6a4 4 0 1 1-8 0a4 4 0 0 1 8 0",
+  chevron: "M8 10l4 4 4-4",
+  menu: "M4 6h16M4 12h16M4 18h16",
+  sun: "M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4M16 12a4 4 0 1 1-8 0a4 4 0 0 1 8 0",
+  moon: "M21 13A9 9 0 0 1 11 3a9 9 0 1 0 10 10",
+  spark: "M12 3l2.8 6.2L21 12l-6.2 2.8L12 21l-2.8-6.2L3 12l6.2-2.8z",
+  bolt: "M13 2L4 14h7l-1 8 10-12h-7z",
+  pen: "M16 3l5 5L8 21H3v-5zM14 5l5 5",
+  layers: "M12 3L2 8l10 5 10-5zM2 12l10 5 10-5M2 16l10 5 10-5",
+  code: "M8 5l-7 7 7 7M16 5l7 7-7 7M14 3l-4 18",
+  arrow: "M12 19V5M5 12l7-7 7 7",
+  stop: "M5 5h14v14H5z",
+  close: "M6 6l12 12M6 18L18 6",
+  trash: "M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7",
+  copy: "M9 9h12v12H9zM15 9V3H3v12h6",
+  retry: "M20 8a8 8 0 1 0 0 8M20 3v5h-5",
+};
+const icon = (name) =>
+  `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${icons[name] || icons.spark}"/></svg>`;
+for (const el of document.querySelectorAll("[data-icon]"))
+  el.innerHTML = icon(el.dataset.icon);
+let profile = null,
+  chats = [],
+  currentId = null,
+  storageKey = null,
+  abort = null,
+  busy = false,
+  deleteId = null;
+let model = "velia-pro",
+  theme = "dark",
+  toastTimer,
+  saveTimer,
+  slowTimer;
+try {
+  model = MODELS[localStorage.getItem("velia-web-model")]
+    ? localStorage.getItem("velia-web-model")
+    : model;
+  theme =
+    localStorage.getItem("velia-web-theme") === "light" ? "light" : "dark";
+} catch {}
+const request = (path, data, signal) =>
+  fetch("/web-api/v1/" + path, {
+    method: data === undefined ? "GET" : "POST",
+    credentials: "same-origin",
+    headers:
+      data === undefined
+        ? {}
+        : { "Content-Type": "application/json", "X-Velia-Request": "1" },
+    body: data === undefined ? undefined : JSON.stringify(data),
+    signal,
+  });
+const current = () => chats.find((c) => c.id === currentId);
+const browserStorage = { getItem: key => localStorage.getItem(key) };
+function toast(text) {
+  clearTimeout(toastTimer);
+  $("toast").textContent = text;
+  $("toast").hidden = false;
+  toastTimer = setTimeout(() => ($("toast").hidden = true), 4500);
+}
+function save() {
+  if (!storageKey) return;
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(chats.slice(0, 100)));
+    localStorage.setItem(storageKey + ":active", currentId || "");
+  } catch {
+    toast(
+      "Не удалось сохранить историю в браузере. Освободи место в хранилище.",
+    );
+  }
+}
+function scheduleSave() {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    save();
+  }, 500);
+}
+function setTheme(value) {
+  theme = value;
+  document.documentElement.dataset.theme = value;
+  $("theme").setAttribute(
+    "aria-label",
+    value === "dark" ? "Светлая тема" : "Тёмная тема",
+  );
+  $("theme").innerHTML = icon(value === "dark" ? "sun" : "moon");
+  try {
+    localStorage.setItem("velia-web-theme", value);
+  } catch {}
+}
+function closeModels() {
+  $("model-menu").hidden = true;
+  $("model-button").setAttribute("aria-expanded", "false");
+}
+function setModel(value) {
+  if (busy || !MODELS[value]) return;
+  model = value;
+  $("model-label").textContent = MODELS[value];
+  $("model-icon").innerHTML = icon(value === "velia-flash" ? "bolt" : "spark");
+  for (const option of document.querySelectorAll("[data-model]")) {
+    option.setAttribute(
+      "aria-selected",
+      String(option.dataset.model === value),
+    );
+    option.disabled =
+      !!profile && !profile.models.includes(option.dataset.model);
+  }
+  try {
+    localStorage.setItem("velia-web-model", value);
+  } catch {}
+  closeModels();
+}
+function sidebar(open) {
+  $("sidebar").classList.toggle("open", open);
+  $("scrim").hidden = !open;
+  $("menu").setAttribute("aria-expanded", String(open));
+}
+function resizePrompt() {
+  $("prompt").style.height = "auto";
+  $("prompt").style.height = Math.min(180, $("prompt").scrollHeight) + "px";
+  $("send").disabled = busy || !$("prompt").value.trim();
+}
+function renderHistory() {
+  $("history").replaceChildren();
+  const filter = $("search").value.trim().toLocaleLowerCase(),
+    items = [...chats]
+      .filter(
+        (c) =>
+          c.messages.length && c.title.toLocaleLowerCase().includes(filter),
+      )
+      .sort((a, b) => b.updated - a.updated);
+  if (!items.length) {
+    const p = document.createElement("p");
+    p.className = "history-empty";
+    p.textContent = filter
+      ? "Диалоги не найдены."
+      : profile
+        ? "Здесь будут твои разговоры с Велией."
+        : "Войди, чтобы начать свой первый диалог.";
+    $("history").append(p);
+    return;
+  }
+  let group = "";
+  for (const chat of items) {
+    const label =
+      new Date(chat.updated).toDateString() === new Date().toDateString()
+        ? "Сегодня"
+        : "Ранее";
+    if (label !== group) {
+      group = label;
+      const h = document.createElement("div");
+      h.className = "history-group";
+      h.textContent = label;
+      $("history").append(h);
+    }
+    const row = document.createElement("div");
+    row.className = "history-row" + (chat.id === currentId ? " active" : "");
+    const open = document.createElement("button");
+    open.className = "history-open";
+    open.textContent = chat.title;
+    open.title = chat.title;
+    open.disabled = busy;
+    open.onclick = () => {
+      currentId = chat.id;
+      save();
+      render();
+      sidebar(false);
+    };
+    const del = document.createElement("button");
+    del.className = "history-delete";
+    del.innerHTML = icon("trash");
+    del.setAttribute("aria-label", "Удалить диалог «" + chat.title + "»");
+    del.disabled = busy;
+    del.onclick = () => {
+      deleteId = chat.id;
+      $("confirm-dialog").showModal();
+    };
+    row.append(open, del);
+    $("history").append(row);
+  }
+}
+function messageNode(message, index) {
+  const article = document.createElement("article");
+  article.className = "message " + message.role;
+  article.dataset.index = index;
+  if (message.role === "assistant") {
+    const heading = document.createElement("div");
+    heading.className = "message-heading";
+    heading.innerHTML = '<img src="/web/favicon.svg" alt="">VELIA';
+    const badge = document.createElement("span");
+    badge.className = "message-model";
+    badge.textContent = message.model === "velia-flash" ? "FLASH" : "PRO";
+    heading.append(badge);
+    article.append(heading);
+  }
+  const content = document.createElement("div");
+  content.className = "message-content";
+  if (message.role === "user") content.textContent = message.content;
+  else
+    content.innerHTML = message.content
+      ? renderMarkdown(message.content)
+      : busy && !message.failed
+        ? '<div class="thinking" aria-label="Велия готовит ответ"><span></span><span></span><span></span></div>'
+        : "";
+  article.append(content);
+  if (message.role === "assistant" && !busy) {
+    const actions = document.createElement("div");
+    actions.className = "message-actions";
+    if (message.content) {
+      const copy = document.createElement("button");
+      copy.innerHTML = icon("copy") + "Копировать";
+      copy.onclick = () => copyText(message.content);
+      actions.append(copy);
+    }
+    if (index === current().messages.length - 1) {
+      const retry = document.createElement("button");
+      retry.innerHTML = icon("retry") + "Повторить";
+      retry.onclick = () => generate(true);
+      actions.append(retry);
+    }
+    article.append(actions);
+  }
+  if (message.failed || message.stopped || message.finish === "length") {
+    const state = document.createElement("div");
+    state.className = "message-state";
+    state.textContent =
+      message.failed ||
+      (message.stopped
+        ? "Ответ остановлен."
+        : "Достигнута длина ответа. Можно попросить продолжить.");
+    article.append(state);
+  }
+  return article;
+}
+function render() {
+  const chat = current(),
+    nonempty = !!chat?.messages.length;
+  $("welcome").hidden = nonempty;
+  $("messages").hidden = !nonempty;
+  $("messages").replaceChildren();
+  if (chat)
+    chat.messages.forEach((m, i) => $("messages").append(messageNode(m, i)));
+  renderHistory();
+}
+function scrollDown(force = false) {
+  const el = $("conversation-scroll");
+  if (force || el.scrollHeight - el.scrollTop - el.clientHeight < 180)
+    el.scrollTop = el.scrollHeight;
+}
+function setBusy(value) {
+  busy = value;
+  $("send").hidden = value;
+  $("stop").hidden = !value;
+  $("prompt").disabled = value;
+  $("model-button").disabled = value;
+  $("new-chat").disabled = value;
+  $("account").disabled = value;
+  $("send").disabled = value || !$("prompt").value.trim();
+  for (const el of document.querySelectorAll(".suggestion"))
+    el.disabled = value;
+  renderHistory();
+}
+function newChat() {
+  if (busy) return;
+  currentId = null;
+  $("prompt").value = "";
+  $("generation-status").textContent = "";
+  resizePrompt();
+  render();
+  save();
+  sidebar(false);
+  $("prompt").focus();
+}
+function openAuth() {
+  $("auth-error").textContent = "";
+  $("auth-dialog").showModal();
+  setTimeout(() => $("pairing-code").focus(), 0);
+}
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Скопировано.");
+  } catch {
+    toast("Не удалось скопировать. Выдели текст и скопируй вручную.");
+  }
+}
+function applyProfile(value) {
+  const changed = profile?.account !== value.account;
+  profile = value;
+  storageKey = "velia-web-chats-v1:" + value.account;
+  if (changed) {
+    chats = loadChats(browserStorage, storageKey);
+    try {
+      currentId = localStorage.getItem(storageKey + ":active");
+    } catch {
+      currentId = null;
+    }
+    if (!current()) currentId = null;
+    for (const chat of chats)
+      for (const m of chat.messages)
+        if (m.pending) {
+          m.pending = false;
+          m.stopped = true;
+        }
+    save();
+  }
+  $("account-label").replaceChildren(document.createTextNode("Аккаунт VELIA"));
+  const small = document.createElement("small");
+  small.textContent = "Выйти из аккаунта";
+  $("account-label").append(small);
+  if (!value.models.includes(model)) model = "velia-pro";
+  setModel(model);
+  render();
+}
+async function generate(retry = false) {
+  if (busy) return;
+  if (!profile) {
+    openAuth();
+    return;
+  }
+  const text = $("prompt").value.trim();
+  if (!retry && !text) return;
+  let chat = current();
+  if (retry) {
+    if (!chat || chat.messages.at(-1)?.role !== "assistant") return;
+    chat.messages.pop();
+  } else {
+    if (!chat) {
+      chat = {
+        id: crypto.randomUUID(),
+        title: text.replace(/\s+/g, " ").slice(0, 70),
+        updated: Date.now(),
+        messages: [],
+      };
+      chats.unshift(chat);
+      chats = chats.slice(0, 100);
+      currentId = chat.id;
+    }
+    chat.messages.push({ role: "user", content: text });
+    $("prompt").value = "";
+    resizePrompt();
+  }
+  const selected = model,
+    payload = chatPayload(chat, selected),
+    answer = { role: "assistant", content: "", model: selected, pending: true };
+  chat.messages.push(answer);
+  chat.updated = Date.now();
+  abort = new AbortController();
+  setBusy(true);
+  render();
+  scrollDown(true);
+  save();
+  $("generation-status").textContent = "Велия готовит ответ…";
+  slowTimer = setTimeout(() => {
+    $("generation-status").textContent =
+      selected === "velia-flash"
+        ? "Flash готовит ответ. Первый запрос может занять несколько минут."
+        : "Велия работает над ответом…";
+  }, 20000);
+  try {
+    const response = await request("chat/completions", payload, abort.signal);
+    const result = await readCompletion(response, (content) => {
+      const shouldScroll =
+        $("conversation-scroll").scrollHeight -
+          $("conversation-scroll").scrollTop -
+          $("conversation-scroll").clientHeight <
+        180;
+      answer.content = content;
+      $("messages").lastElementChild.querySelector(
+        ".message-content",
+      ).innerHTML = renderMarkdown(content);
+      $("generation-status").textContent = "";
+      scheduleSave();
+      if (shouldScroll) scrollDown(true);
+    });
+    answer.finish = result.finish;
+  } catch (error) {
+    if (error.name === "AbortError") answer.stopped = true;
+    else {
+      answer.failed =
+        error.message || "Соединение прервалось. Попробуй ещё раз.";
+      if (error.status === 401) {
+        profile = null;
+        toast("Сессия завершилась. Войди снова.");
+        $("account-label").textContent = "Войти в VELIA";
+      }
+    }
+  } finally {
+    clearTimeout(slowTimer);
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    answer.pending = false;
+    abort = null;
+    setBusy(false);
+    $("generation-status").textContent = "";
+    save();
+    render();
+    scrollDown();
+    $("prompt").focus();
+  }
+}
+$("composer").onsubmit = (e) => {
+  e.preventDefault();
+  generate();
+};
+$("prompt").oninput = resizePrompt;
+$("prompt").onkeydown = (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    generate();
+  }
+};
+$("stop").onclick = () => abort?.abort();
+$("new-chat").onclick = newChat;
+$("search").oninput = renderHistory;
+$("menu").onclick = () => sidebar(!$("sidebar").classList.contains("open"));
+$("scrim").onclick = () => sidebar(false);
+$("theme").onclick = () => setTheme(theme === "dark" ? "light" : "dark");
+$("model-button").onclick = () => {
+  const open = $("model-menu").hidden;
+  $("model-menu").hidden = !open;
+  $("model-button").setAttribute("aria-expanded", String(open));
+  if (open) $("model-menu").querySelector("[aria-selected=true]").focus();
+};
+for (const option of document.querySelectorAll("[data-model]"))
+  option.onclick = () => {
+    setModel(option.dataset.model);
+    $("model-button").focus();
+  };
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".model-control")) closeModels();
+  const copy = e.target.closest(".copy-code");
+  if (copy)
+    copyText(copy.closest(".code-block").querySelector("code").textContent);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    closeModels();
+    sidebar(false);
+  }
+  if (
+    e.target.closest(".model-menu") &&
+    ["ArrowDown", "ArrowUp"].includes(e.key)
+  ) {
+    e.preventDefault();
+    const options = [
+        ...$("model-menu").querySelectorAll("button:not(:disabled)"),
+      ],
+      index = options.indexOf(document.activeElement);
+    options[
+      (index + (e.key === "ArrowDown" ? 1 : -1) + options.length) %
+        options.length
+    ].focus();
+  }
+});
+for (const suggestion of document.querySelectorAll(".suggestion"))
+  suggestion.onclick = () => {
+    $("prompt").value = suggestion.dataset.prompt;
+    resizePrompt();
+    $("prompt").focus();
+  };
+$("auth-close").onclick = () => $("auth-dialog").close();
+$("auth-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const button = $("auth-submit");
+  button.disabled = true;
+  $("auth-error").textContent = "";
+  try {
+    const response = await request(
+        "auth/exchange",
+        { pairing_code: $("pairing-code").value },
+        AbortSignal.timeout(25000),
+      ),
+      data = await response.json();
+    if (!response.ok) throw new Error(apiError(data.error));
+    applyProfile(data);
+    $("auth-dialog").close();
+    $("pairing-code").value = "";
+    toast("Ты в VELIA. Можно начинать.");
+    $("prompt").focus();
+  } catch (error) {
+    $("auth-error").textContent =
+      error.message || "Не удалось войти. Попробуй ещё раз.";
+  } finally {
+    button.disabled = false;
+  }
+};
+$("account").onclick = async () => {
+  if (!profile) {
+    openAuth();
+    return;
+  }
+  try {
+    const response = await request(
+      "auth/logout",
+      {},
+      AbortSignal.timeout(20000),
+    );
+    if (!response.ok) throw new Error();
+    profile = null;
+    storageKey = null;
+    chats = [];
+    currentId = null;
+    $("prompt").value = "";
+    resizePrompt();
+    $("account-label").innerHTML =
+      "Войти в VELIA<small>Твоё личное пространство</small>";
+    render();
+    toast("Ты вышел из аккаунта.");
+  } catch {
+    toast("Не удалось выйти. Попробуй ещё раз.");
+  }
+};
+$("delete-cancel").onclick = () => $("confirm-dialog").close();
+$("delete-confirm").onclick = () => {
+  chats = chats.filter((c) => c.id !== deleteId);
+  if (currentId === deleteId) currentId = null;
+  $("confirm-dialog").close();
+  save();
+  render();
+};
+window.addEventListener("pagehide", save);
+window.addEventListener("storage", (e) => {
+  if (e.key === storageKey && !busy) {
+    chats = loadChats(browserStorage, storageKey);
+    if (!current()) currentId = null;
+    render();
+  }
+});
+setTheme(theme);
+setModel(model);
+renderHistory();
+resizePrompt();
+try {
+  const response = await request(
+    "session",
+    undefined,
+    AbortSignal.timeout(20000),
+  );
+  if (response.ok) applyProfile(await response.json());
+  else if (response.status !== 401)
+    toast("Сервис входа временно недоступен. Попробуй позже.");
+} catch {
+  toast("Не удалось проверить вход. Можно попробовать войти вручную.");
+}
