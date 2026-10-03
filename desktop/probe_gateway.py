@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 
 from aiohttp import ClientSession, ClientTimeout, DummyCookieJar, web
 from desktop.gateway import GatewayConfig
-from velia_desktop_routes import flash_enabled, setup_velia_desktop_routes, validate_payload
+from velia_desktop_routes import check_flash_context, flash_enabled, flash_endpoint, setup_velia_desktop_routes, validate_payload
 
 
 async def run_flash_probe():
@@ -25,6 +25,27 @@ async def run_flash_probe():
     """
     if not flash_enabled():
         raise RuntimeError("flash_configuration_unavailable")
+    # A small request separates a template/runtime problem from Harness input.
+    payload = validate_payload({"model": "velia-flash", "max_tokens": 128, "messages": [
+        {"role": "system", "content": "You are VELIA. Call read_probe to read a verification value."},
+        {"role": "user", "content": "Read the verification value using read_probe."}],
+        "tools": [{"type": "function", "function": {"name": "read_probe", "description": "Read a fixed verification value.",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}}], "tool_choice": "required"})
+    headers = {"Authorization": "Bearer " + os.environ["VELIA_DESKTOP_FLASH_API_KEY"].strip()}
+    endpoint = flash_endpoint()
+    async with ClientSession(timeout=ClientTimeout(total=180, sock_read=150), cookie_jar=DummyCookieJar()) as client:
+        await check_flash_context(client, endpoint, headers, payload)
+        async with client.post(endpoint + "/v1/chat/completions", json=payload, headers=headers, allow_redirects=False) as response:
+            if response.status != 200:
+                raise RuntimeError("flash_tool_status_" + str(response.status))
+            result = await response.json()
+        message = result["choices"][0]["message"]
+        calls = message.get("tool_calls", [])
+        print("VELIA_FLASH_OPERATOR_TOOL " + json.dumps({"ok": len(calls) == 1,
+            "tool_names": [c.get("function", {}).get("name") for c in calls], "content_characters": len(message.get("content") or ""),
+            "finish_reason": result["choices"][0].get("finish_reason")}), flush=True)
+        if len(calls) != 1 or calls[0]["function"]["name"] != "read_probe":
+            raise RuntimeError("flash_tool_call_missing")
     fixture_id = "desktop-operator-probe"
     fixture_token = secrets.token_hex(32)
     async def authenticate(token):
@@ -48,7 +69,7 @@ async def run_flash_probe():
         stdout, stderr = await asyncio.wait_for(child.communicate(), timeout=570)
         if child.returncode:
             # Child has no provider or account credentials. Keep failures bounded.
-            print("VELIA_FLASH_HARNESS_FAILURE " + stderr.decode(errors="replace")[-8000:], flush=True)
+            print("VELIA_FLASH_HARNESS_FAILURE " + (stdout + stderr).decode(errors="replace")[-8000:], flush=True)
             raise RuntimeError("flash_harness_qualification_failed")
         receipt = next((line for line in stdout.decode().splitlines()
                         if line.startswith("VELIA_FLASH_HARNESS_PROBE ")), None)
