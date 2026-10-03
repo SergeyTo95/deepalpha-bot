@@ -63,7 +63,7 @@ const request = (path, data, signal) =>
     signal,
   });
 const current = () => chats.find((c) => c.id === currentId);
-const browserStorage = { getItem: key => localStorage.getItem(key) };
+const browserStorage = { getItem: (key) => localStorage.getItem(key) };
 function toast(text) {
   clearTimeout(toastTimer);
   $("toast").textContent = text;

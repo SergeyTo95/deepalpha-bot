@@ -1,7 +1,9 @@
-export const MODELS = Object.freeze(Object.assign(Object.create(null), {
-  "velia-pro": "VELIA PRO",
-  "velia-flash": "VELIA FLASH",
-}));
+export const MODELS = Object.freeze(
+  Object.assign(Object.create(null), {
+    "velia-pro": "VELIA PRO",
+    "velia-flash": "VELIA FLASH",
+  }),
+);
 export const escapeHTML = (value) =>
   String(value).replace(
     /[&<>"']/g,
