@@ -211,7 +211,9 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
                 raise SearchUnavailable()
             return await web_search.enrich(request, payload)
         return payload
-    handlers = setup_velia_desktop_routes(app, authenticate, prepare_payload=prepare_web_payload,
+    def prepare_browser_payload(request, data):
+        return prepare_web_payload(request, data, search_enabled=bool(web_search and web_search.available))
+    handlers = setup_velia_desktop_routes(app, authenticate, prepare_payload=prepare_browser_payload,
         filter_stream=public_web_stream, authorize_model=authorize_model, enrich_payload=enrich_web)
     if os.getenv("VELIA_WEB_ENABLED", "").lower() in {"true", "1"}:
         origin = web_origin or https_origin(os.environ["VELIA_WEB_ORIGIN"])

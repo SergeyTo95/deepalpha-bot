@@ -16,7 +16,7 @@ def test_guest_internet_enriches_only_latest_turn_and_exposes_real_sources(monke
             assert profile["web_search"] is True
             messages = [{"role":"user","content":"Раньше"}, {"role":"assistant","content":"Прежний ответ"}, {"role":"user","content":"Какая версия Python?"}]
             async with client.post(server.make_url("/web-api/v1/guest/chat/completions"), headers=guest_headers(cookie),
-                    json={**BODY, "messages":messages, "web_search":True}) as response:
+                    json={**BODY, "messages":messages}) as response:
                 assert response.status == 200 and response.headers["X-Velia-Guest-Remaining"] == "29"
                 wire = await response.text()
                 assert "web_search" in wire and "https://www.python.org/downloads/" in wire
@@ -33,15 +33,17 @@ def test_guest_internet_enriches_only_latest_turn_and_exposes_real_sources(monke
     asyncio.run(run())
 
 
-def test_ordinary_chat_performs_no_search(monkeypatch, tmp_path):
+@pytest.mark.parametrize("extra", [{}, {"web_search":False}])
+def test_guest_search_is_default_and_legacy_false_cannot_disable_it(monkeypatch, tmp_path, extra):
     async def run():
         monkeypatch.setenv("VELIA_WEB_GUEST_ENABLED", "true")
         async with fixture(monkeypatch, guest_store=GuestStore(sqlite_path=tmp_path/"quota.db"), with_search=True) as (server, client, state):
             cookie, _, _ = await guest(server, client)
-            async with client.post(server.make_url("/web-api/v1/guest/chat/completions"), headers=guest_headers(cookie), json=BODY) as response:
+            async with client.post(server.make_url("/web-api/v1/guest/chat/completions"), headers=guest_headers(cookie), json={**BODY, **extra}) as response:
                 assert response.status == 200
-                assert '"web_search"' not in await response.text()
-            assert state["search_queries"] == [] and state["payloads"][0]["messages"][-1]["content"] == "Привет"
+                assert '"web_search"' in await response.text()
+            assert state["search_queries"] == ["Привет"]
+            assert MARKER in state["payloads"][0]["messages"][-1]["content"]
     asyncio.run(run())
 
 
@@ -64,7 +66,7 @@ def test_search_failure_never_generates_an_unverified_answer(monkeypatch, tmp_pa
         monkeypatch.setenv("VELIA_WEB_GUEST_ENABLED", "true")
         async with fixture(monkeypatch, guest_store=GuestStore(sqlite_path=tmp_path/"quota.db"), with_search=True, **configuration) as (server, client, state):
             cookie, _, _ = await guest(server, client)
-            async with client.post(server.make_url("/web-api/v1/guest/chat/completions"), headers=guest_headers(cookie), json={**BODY,"web_search":True}) as response:
+            async with client.post(server.make_url("/web-api/v1/guest/chat/completions"), headers=guest_headers(cookie), json=BODY) as response:
                 assert response.status == 503 and (await response.json())["error"] == "web_search_unavailable"
             assert state["payloads"] == [] and len(state["search_queries"]) == 1
             async with client.get(server.make_url("/web-api/v1/guest"), headers=guest_headers(cookie)) as response:
@@ -73,7 +75,8 @@ def test_search_failure_never_generates_an_unverified_answer(monkeypatch, tmp_pa
 
 
 @pytest.mark.parametrize("model", ["velia-flash", "velia-pro"])
-def test_account_search_persists_clean_history_and_sources_without_repeating_search(monkeypatch, tmp_path, model):
+@pytest.mark.parametrize("legacy_flag", [None, False, True])
+def test_account_search_persists_clean_history_and_sources_without_repeating_search(monkeypatch, tmp_path, model, legacy_flag):
     async def run():
         store = GuestStore(sqlite_path=tmp_path/"metadata.db")
         async with fixture(monkeypatch, guest_store=store, with_search=True) as (server, client, state):
@@ -81,7 +84,9 @@ def test_account_search_persists_clean_history_and_sources_without_repeating_sea
             assert profile["web_search"] is True
             async with client.post(server.make_url("/web-api/v1/conversations"), headers=headers(cookie), json={"title":"Поиск"}) as response:
                 cid = (await response.json())["conversation"]["id"]
-            body = {"content":"Какая стабильная версия Python?", "model":model, "idempotency_key":"web-search-test-01", "web_search":True}
+            body = {"content":"Какая стабильная версия Python?", "model":model, "idempotency_key":"web-search-test-01"}
+            if legacy_flag is not None:
+                body["web_search"] = legacy_flag
             for _ in range(2):
                 async with client.post(server.make_url(f"/web-api/v1/conversations/{cid}/messages/stream"), headers=headers(cookie), json=body) as response:
                     assert response.status == 200
@@ -109,7 +114,7 @@ def test_pro_without_tokens_rejects_before_search(monkeypatch, tmp_path):
             async with client.post(server.make_url("/web-api/v1/conversations"), headers=headers(cookie), json={"title":"Поиск"}) as response:
                 cid = (await response.json())["conversation"]["id"]
             async with client.post(server.make_url(f"/web-api/v1/conversations/{cid}/messages/stream"), headers=headers(cookie),
-                    json={"content":"Поиск", "model":"velia-pro", "idempotency_key":"no-token-test", "web_search":True}) as response:
+                    json={"content":"Поиск", "model":"velia-pro", "idempotency_key":"no-token-test"}) as response:
                 assert response.status == 402
             assert state["search_queries"] == state["account_calls"] == []
     asyncio.run(run())
@@ -126,7 +131,7 @@ def test_exhausted_guest_cannot_call_search(monkeypatch, tmp_path):
                     await response.read()
             async with client.post(server.make_url("/web-api/v1/guest/chat/completions"), headers=guest_headers(cookie), json={**BODY, "web_search":True}) as response:
                 assert response.status == 429
-            assert state["search_queries"] == []
+            assert len(state["search_queries"]) == 30
     asyncio.run(run())
 
 
@@ -141,7 +146,7 @@ def test_legacy_account_web_chat_also_receives_search_context(monkeypatch, tmp_p
         async with fixture(monkeypatch, guest_store=GuestStore(sqlite_path=tmp_path/"metadata.db"), with_search=True) as (server, client, state):
             cookie, _, _ = await login(server, client)
             async with client.post(server.make_url("/web-api/v1/chat/completions"), headers=headers(cookie),
-                    json={**BODY, "model":model, "web_search":True}) as response:
+                    json={**BODY, "model":model}) as response:
                 assert response.status == 200
                 assert "https://www.python.org/downloads/" in await response.text()
             assert len(state["search_queries"]) == len(state["payloads"]) == 1

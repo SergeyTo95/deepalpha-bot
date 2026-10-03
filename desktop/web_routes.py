@@ -29,7 +29,7 @@ PERSONA = ("Ты Велия (VELIA), персональная ИИ-помощн�
     "отмечай неполноту и ссылайся на полученные источники как [1], [2], [3].")
 
 
-def prepare_web_payload(request, data):
+def prepare_web_payload(request, data, *, search_enabled=False):
     if not request.get(WEB_CHAT):
         return data
     if (not isinstance(data, dict) or set(data) - {"model", "messages", "stream", "web_search"}
@@ -45,7 +45,7 @@ def prepare_web_payload(request, data):
             or messages[-1]["role"] != "user"):
         raise ValueError("invalid_messages")
     request[WEB_MODEL] = data["model"]
-    request[SEARCH] = bool(data.get("web_search"))
+    request[SEARCH] = search_enabled or bool(data.get("web_search"))
     return {**{key: value for key, value in data.items() if key != "web_search"},
             "messages": [{"role": "system", "content": PERSONA}] + messages,
             "max_tokens": 512 if data["model"] == FLASH_ID else 4096}

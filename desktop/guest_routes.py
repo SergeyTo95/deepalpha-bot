@@ -87,7 +87,8 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_
             if isinstance(data, dict) and data.get("model") != FLASH_ID:
                 return error("guest_flash_only", 403)
             request[WEB_CHAT] = True
-            payload = validate_payload(prepare_web_payload(request, data))
+            payload = validate_payload(prepare_web_payload(request, data,
+                search_enabled=bool(web_search and web_search.available)))
             if not flash_enabled():
                 return error("flash_unavailable", 503)
             quota_keys = keys(request, sid)
