@@ -32,7 +32,24 @@ const proxy = await startProxy(origin + '/desktop-api/v1', async () => ({ origin
     readResult ||= payload.messages.some(m => m.role === 'tool' && JSON.stringify(m.content).includes(marker));
     if (++rounds > 3) throw Error('Operator model-call budget exceeded');
   }
-  return fetch(new URL(new URL(url).pathname, gateway), options);
+  const response = await fetch(new URL(new URL(url).pathname, gateway), options);
+  if (!options.body || !response.body) return response;
+  const round = rounds;
+  let captured = '';
+  return new Response(response.body.pipeThrough(new TransformStream({
+    transform(chunk, controller) {
+      captured = (captured + new TextDecoder().decode(chunk)).slice(-32768);
+      controller.enqueue(chunk);
+    },
+    flush() {
+      const events = captured.split('\n').filter(line => line.startsWith('data: ') && line !== 'data: [DONE]')
+        .map(line => { try { return JSON.parse(line.slice(6)); } catch { return {}; } });
+      console.log('VELIA_FLASH_OPERATOR_RESPONSE ' + JSON.stringify({ round, status: response.status,
+        finishReasons: events.flatMap(e => (e.choices || []).map(c => c.finish_reason).filter(Boolean)),
+        toolNames: events.flatMap(e => (e.choices || []).flatMap(c => (c.delta?.tool_calls || []).map(t => t.function?.name).filter(Boolean))),
+        contentCharacters: events.reduce((n, e) => n + (e.choices || []).reduce((m, c) => m + (c.delta?.content?.length || 0), 0), 0) }));
+    },
+  })), { status: response.status, headers: response.headers });
 });
 try {
   const credentials = join(temporary, 'credentials.json'), patch = join(temporary, 'patch.json');
@@ -40,7 +57,7 @@ try {
   const settings = profilePatch(origin + '/desktop-api/v1', credentials, proxy.url);
   settings.find(p => p.id === 'agent-default-model').config.model = 'velia-flash';
   await writeFile(patch, JSON.stringify(settings), { mode: 0o600 });
-  child = spawn(process.execPath, [join(runtime, 'lib', 'bin.js'), '--profile', 'headless', '--patch', patch,
+  child = spawn(process.execPath, [join(runtime, 'lib', 'bin.js'), '--profile', 'headless', '--patch', patch, '--json',
     'Прочитай файл probe.txt инструментом read. Ответь только текстом из этого файла.'], {
     cwd: workspace, stdio: ['ignore', 'pipe', 'pipe'],
     env: { PATH: process.env.PATH, LANG: 'C.UTF-8', DSH_HOME: join(temporary, 'home'), DSH_PERMISSION_MODE: 'workspace-write' },
@@ -53,7 +70,7 @@ try {
     child.once('error', e => { clearTimeout(timer); fail(e); });
     child.once('exit', c => { clearTimeout(timer); ok(c); });
   });
-  assert.equal(code, 0, errors || output);
+  assert.equal(code, 0, errors || output || `Harness exited without output; operator rounds=${rounds}`);
   assert.ok(readResult && declaredRead && persona, 'Actual local read-tool loop must succeed');
   assert.ok(output.includes(marker), 'Final answer must contain the value read from the real file');
   console.log('VELIA_FLASH_HARNESS_PROBE ' + JSON.stringify({ ok: true, rounds, readTool: true, persona,

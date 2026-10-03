@@ -49,6 +49,8 @@ export function profilePatch(baseURL, credentialPath, localGateway) {
     } },
     { id: 'desktop-product-telemetry', disabled: true },
     { id: 'product-analytics', disabled: true },
+    // Use the local first-message title instead of a competing auxiliary call.
+    { id: 'session-title-llm', disabled: true },
   ];
 }
 

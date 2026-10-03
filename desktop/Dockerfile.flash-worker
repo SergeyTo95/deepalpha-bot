@@ -31,7 +31,7 @@ RUN curl -fL --retry 3 --max-time 1800 \
     -o model.gguf \
     && echo '3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1  model.gguf' | sha256sum -c -
 
-COPY bonsai_worker/start.py /opt/bonsai/start.py
+COPY desktop/flash_worker_start.py /opt/bonsai/start.py
 COPY bonsai_worker/probe.py /opt/bonsai/probe.py
 
 ENV PORT=8080 \
