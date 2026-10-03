@@ -212,6 +212,11 @@ def main() -> None:
         deepalpha_web.app,
         velia_mobile_routes_module,
     )
+    from velia_desktop_routes import setup_velia_desktop_routes
+    setup_velia_desktop_routes(
+        deepalpha_web.app,
+        velia_mobile_routes_module.authenticate_access_token,
+    )
     setup_velia_usdt_checkout_routes(
         deepalpha_web.app,
         velia_mobile_routes_module,
