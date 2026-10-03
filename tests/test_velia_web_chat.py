@@ -3,6 +3,7 @@ import asyncio
 import base64
 from contextlib import asynccontextmanager
 import json
+import uuid
 from aiohttp import ClientSession, DummyCookieJar, web
 from aiohttp.test_utils import TestServer
 import pytest
@@ -20,6 +21,9 @@ ORIGIN = "https://velia.example.com"
 async def fixture(monkeypatch, **state):
     state.setdefault("user_id", 7)
     state.update(seen=[], payloads=[], refreshes=0, revoked=[], tokens=100, validity=True)
+    state.setdefault("credits", 100)
+    state.setdefault("conversations", {})
+    state["account_calls"] = []
     async def health(request):
         return web.json_response({"ok": True, "enabled": True})
     async def me(request):
@@ -43,6 +47,39 @@ async def fixture(monkeypatch, **state):
     async def logout(request):
         state["revoked"].append(request.headers.get("Authorization"))
         return web.json_response({"ok": True})
+    async def economy(request):
+        if state.get("economy_unavailable"):
+            return web.json_response({"ok": False, "secret": "private"}, status=503)
+        return web.json_response({"ok": True, "account": {"credits": state["credits"]}})
+    async def conversations(request):
+        assert request.headers.get("Authorization") in {"Bearer " + TOKEN, "Bearer " + ROTATED}
+        assert request.headers.get("Cookie") is None
+        if request.method == "GET":
+            return web.json_response({"ok": True, "conversations": [c["conversation"] for c in state["conversations"].values()]})
+        data = await request.json()
+        value = {"id": str(uuid.uuid4()), "title": data["title"], "user_id": state["user_id"], "updated_at": "2026-10-03T20:00:00"}
+        state["conversations"][value["id"]] = {"conversation": value, "messages": []}
+        return web.json_response({"ok": True, "conversation": value}, status=201)
+    async def stored_messages(request):
+        value = state["conversations"].get(request.match_info["conversation_id"])
+        if not value:
+            return web.json_response({"ok": False, "error": "conversation_not_found"}, status=404)
+        return web.json_response({"ok": True, "messages": value["messages"]})
+    async def delete(request):
+        if state["conversations"].pop(request.match_info["conversation_id"], None) is None:
+            return web.json_response({"ok": False, "error": "conversation_not_found"}, status=404)
+        return web.json_response({"ok": True, "private": "never"})
+    async def stored_send(request):
+        data = await request.json()
+        state["account_calls"].append(data)
+        value = state["conversations"].get(request.match_info["conversation_id"])
+        if not value:
+            return web.Response(text='data: {"type":"error","error":"conversation_not_found"}\n\n', content_type="text/event-stream")
+        answer = {"id": str(uuid.uuid4()), "role": "assistant", "content": "Ответ из аккаунта", "status": "completed", "chat_mode": data["chat_mode"], "provider": "private-provider", "usage": {"private": True}}
+        value["messages"].extend([{"role": "user", "content": data["content"], "status": "completed"}, answer])
+        events = [{"type": "ready"}, {"type": "delta", "text": "Ответ из аккаунта"},
+            {"type": "complete", "result": {"ok": True, "assistant_message": answer, "generation": {"private": "never"}}}]
+        return web.Response(text="".join("data: " + json.dumps(e) + "\n\n" for e in events), content_type="text/event-stream")
     async def template(request):
         return web.json_response({"prompt": "fixture prompt"})
     async def tokenize(request):
@@ -55,6 +92,12 @@ async def fixture(monkeypatch, **state):
     authority = web.Application()
     authority.router.add_get("/mobile-api/v1/health", health)
     authority.router.add_get("/mobile-api/v1/me", me)
+    authority.router.add_get("/mobile-api/v1/economy/me", economy)
+    authority.router.add_get("/mobile-api/v1/conversations", conversations)
+    authority.router.add_post("/mobile-api/v1/conversations", conversations)
+    authority.router.add_get("/mobile-api/v1/conversations/{conversation_id}/messages", stored_messages)
+    authority.router.add_delete("/mobile-api/v1/conversations/{conversation_id}", delete)
+    authority.router.add_post("/mobile-api/v1/conversations/{conversation_id}/messages/stream", stored_send)
     authority.router.add_post("/mobile-api/v1/auth/exchange", auth)
     authority.router.add_post("/mobile-api/v1/auth/refresh", auth)
     authority.router.add_post("/mobile-api/v1/auth/logout", logout)
@@ -90,7 +133,7 @@ def test_opaque_secure_cookie_and_no_authority_secrets(monkeypatch):
             cookie, result, wire = await login(server, client)
             assert all(value not in json.dumps(result) + wire for value in (TOKEN, REFRESH, "never-return-this", "authority_cookie"))
             assert all(flag in wire for flag in ("HttpOnly", "Secure", "SameSite=Lax", "Path=/"))
-            assert set(result) == {"ok", "account", "name", "models"}
+            assert set(result) == {"ok", "account", "name", "models", "credits", "pro_locked_reason"}
             assert result["models"] == ["velia-pro", "velia-flash"]
             async with client.get(server.make_url("/web-api/v1/session"), headers=headers(cookie)) as response:
                 assert response.status == 200
@@ -231,4 +274,100 @@ def test_tampered_cookie_does_not_reach_the_authority(monkeypatch):
             async with client.get(server.make_url("/web-api/v1/session"), headers=headers(bad)) as response:
                 assert response.status == 401
             assert len(state["seen"]) == before
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("credits,unavailable,status", [(0, False, 402), (-3, False, 402), (0, True, 503)])
+def test_pro_balance_gate_cannot_be_bypassed_by_browser_or_desktop(monkeypatch, credits, unavailable, status):
+    async def run():
+        async with fixture(monkeypatch, credits=credits, economy_unavailable=unavailable) as (server, client, state):
+            cookie, profile, _ = await login(server, client)
+            assert profile["models"] == ["velia-flash"]
+            assert profile["pro_locked_reason"]
+            for path, extra, body in [
+                ("/web-api/v1/chat/completions", headers(cookie), {"model": "velia-pro", "stream": True, "messages": [{"role": "user", "content": "hi"}]}),
+                ("/desktop-api/v1/chat/completions", {"Authorization": "Bearer " + TOKEN}, {"model": "velia-pro", "stream": True, "messages": [{"role": "user", "content": "hi"}]}),
+                ("/web-api/v1/conversations/" + str(uuid.uuid4()) + "/messages/stream", headers(cookie), {"model": "velia-pro", "content": "hi", "idempotency_key": str(uuid.uuid4())}),
+            ]:
+                async with client.post(server.make_url(path), headers=extra, json=body) as response:
+                    assert response.status == status
+                    wire = await response.text()
+                    assert "private" not in wire
+            assert state["payloads"] == [] and state["account_calls"] == []
+    asyncio.run(run())
+
+
+def test_flash_remains_available_without_tokens_and_balance_refreshes(monkeypatch):
+    async def run():
+        async with fixture(monkeypatch, credits=0) as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            async with client.post(server.make_url("/web-api/v1/chat/completions"), headers=headers(cookie), json={
+                    "model": "velia-flash", "stream": True, "messages": [{"role": "user", "content": "hi"}]}) as response:
+                assert response.status == 200
+            state["credits"] = 2
+            async with client.get(server.make_url("/web-api/v1/session"), headers=headers(cookie)) as response:
+                assert (await response.json())["models"] == ["velia-pro", "velia-flash"]
+            state["credits"] = 0
+            async with client.post(server.make_url("/web-api/v1/chat/completions"), headers=headers(cookie), json={
+                    "model": "velia-pro", "stream": True, "messages": [{"role": "user", "content": "hi"}]}) as response:
+                assert response.status == 402
+            assert len(state["payloads"]) == 1 and state["payloads"][0]["model"] == "velia-flash"
+    asyncio.run(run())
+
+
+def test_old_account_history_new_messages_and_deletion_use_the_same_store(monkeypatch):
+    async def run():
+        old = str(uuid.uuid4())
+        conversations = {old: {"conversation": {"id": old, "title": "Старый диалог", "user_id": 7}, "messages": [
+            {"id": "old-user", "role": "user", "content": "Моя старая идея", "status": "completed"},
+            {"id": "old-assistant", "role": "assistant", "content": "Помню идею", "status": "completed", "usage": {"provider": "secret"}},
+        ]}}
+        async with fixture(monkeypatch, credits=0, conversations=conversations) as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            async with client.get(server.make_url("/web-api/v1/conversations"), headers=headers(cookie)) as response:
+                result = await response.json()
+                assert result["conversations"][0]["id"] == old and "user_id" not in await response.text()
+            async with client.get(server.make_url("/web-api/v1/conversations/" + old + "/messages"), headers=headers(cookie)) as response:
+                result = await response.json()
+                assert [m["content"] for m in result["messages"]] == ["Моя старая идея", "Помню идею"]
+                assert "usage" not in await response.text()
+            async with client.post(server.make_url("/web-api/v1/conversations/" + old + "/messages/stream"), headers=headers(cookie), json={
+                    "model": "velia-flash", "content": "Продолжи мою идею", "idempotency_key": str(uuid.uuid4())}) as response:
+                assert response.status == 200
+                wire = await response.text()
+                assert "Ответ из аккаунта" in wire and "[DONE]" in wire and "private" not in wire
+            assert state["account_calls"][0]["chat_mode"] == "flash" and len(conversations[old]["messages"]) == 4
+            async with client.post(server.make_url("/web-api/v1/conversations"), headers=headers(cookie), json={"title": "Новый диалог"}) as response:
+                assert response.status == 201
+                new = (await response.json())["conversation"]["id"]
+            assert new in state["conversations"]
+            async with client.post(server.make_url("/web-api/v1/conversations/" + old + "/delete"), headers=headers(cookie), json={}) as response:
+                assert response.status == 200
+            assert old not in state["conversations"]
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("path,body", [("conversations", {"title": "hi"}),
+    ("conversations/11111111-1111-1111-1111-111111111111/delete", {}),
+    ("conversations/11111111-1111-1111-1111-111111111111/messages/stream", {"model": "velia-flash", "content": "hi", "idempotency_key": "request-test"})])
+def test_account_mutations_require_same_origin_and_a_signed_in_user(monkeypatch, path, body):
+    async def run():
+        async with fixture(monkeypatch) as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            for incoming, status in [(headers(), 401), (headers(cookie, Origin="https://evil.example"), 403)]:
+                async with client.post(server.make_url("/web-api/v1/" + path), headers=incoming, json=body) as response:
+                    assert response.status == status
+            assert state["account_calls"] == [] and state["conversations"] == {}
+    asyncio.run(run())
+
+
+def test_account_history_rejects_other_accounts_and_path_injection(monkeypatch):
+    async def run():
+        async with fixture(monkeypatch) as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            for path in [str(uuid.uuid4()), "not-a-uuid", "..%2Fauth%2Flogout"]:
+                async with client.get(server.make_url("/web-api/v1/conversations/" + path + "/messages"), headers=headers(cookie)) as response:
+                    assert response.status == 404
+            async with client.get(server.make_url("/web-api/v1/conversations"), headers=headers()) as response:
+                assert response.status == 401
     asyncio.run(run())

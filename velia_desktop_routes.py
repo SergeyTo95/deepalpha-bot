@@ -169,7 +169,7 @@ def validate_payload(data):
     return result
 
 
-def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filter_stream=None):
+def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filter_stream=None, authorize_model=None):
     """Mount a disabled-by-default, bounded preview using mobile access tokens."""
     calls = {}
     active = set()
@@ -177,6 +177,30 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
     def error(code, status):
         return web.json_response({"error": {"message": code, "type": "velia_desktop_error"}},
                                  status=status, headers={"Cache-Control": "no-store"})
+
+    def reserve(user_id):
+        user_id = str(user_id)
+        queue = calls.setdefault(user_id, deque())
+        now = time.monotonic()
+        while queue and queue[0] < now - 3600:
+            queue.popleft()
+        if user_id in active or len(active) >= 2:
+            return error("preview_capacity_exceeded", 429)
+        if len(queue) >= 30:
+            return error("preview_hourly_request_limit", 429)
+        active.add(user_id)
+        queue.append(now)
+        return None
+
+    async def model_permission(request, model):
+        if authorize_model is None:
+            return None
+        token = request.headers.get("Authorization", "")[7:]
+        try:
+            failure = await authorize_model(token, model)
+            return error(*failure) if failure else None
+        except AuthenticationUnavailable:
+            return error("token_balance_unavailable", 503)
 
     async def authorize(request):
         if os.getenv("VELIA_DESKTOP_API_ENABLED", "").lower() not in {"true", "1"}:
@@ -204,7 +228,7 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
         _, failure = await authorize(request)
         if failure is not None:
             return failure
-        catalog = [
+        catalog = [] if await model_permission(request, MODEL_ID) is not None else [
             {"id": MODEL_ID, "object": "model", "owned_by": "velia"}
         ]
         if flash_enabled():
@@ -241,6 +265,9 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                          "invalid_tool_calls", "invalid_tool_arguments"}
                          else "invalid_json", 400)
         is_flash = data["model"] == FLASH_ID
+        failure = await model_permission(request, data["model"])
+        if failure is not None:
+            return failure
         key = os.getenv("VELIA_DESKTOP_FLASH_API_KEY" if is_flash else "KIMI_API_KEY", "").strip()
         if not key:
             return error("model_unavailable", 503)
@@ -249,8 +276,9 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
             return error("preview_capacity_exceeded", 429)
         # The desktop route has its own bounded preview budget (30 calls/hour,
         # 4096 output tokens/call). It must gain commercial accounting before GA.
-        active.add(user_id)
-        queue.append(now)
+        failure = reserve(user_id)
+        if failure is not None:
+            return failure
         response = None
         try:
             timeout = ClientTimeout(total=360, sock_read=300) if is_flash else ClientTimeout(total=180, sock_read=90)
@@ -292,4 +320,5 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
 
     app.router.add_get("/desktop-api/v1/models", models)
     app.router.add_post("/desktop-api/v1/chat/completions", complete)
-    return {"models": models, "complete": complete}
+    return {"models": models, "complete": complete, "reserve": reserve,
+            "release": lambda user_id: active.discard(str(user_id))}

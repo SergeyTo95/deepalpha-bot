@@ -40,6 +40,9 @@ async def fixture(monkeypatch, **state):
         return web.json_response({"ok": True})
     async def health(request):
         return web.json_response({"ok": True, "enabled": True})
+    async def economy(request):
+        assert request.headers["Authorization"] == "Bearer " + TOKEN
+        return web.json_response({"ok": True, "account": {"credits": state.get("credits", 10)}})
     async def model(request):
         state["model_calls"] += 1
         assert request.headers["Authorization"] == "Bearer provider-key"
@@ -51,6 +54,7 @@ async def fixture(monkeypatch, **state):
     authority = web.Application()
     authority.router.add_get("/mobile-api/v1/me", me)
     authority.router.add_get("/mobile-api/v1/health", health)
+    authority.router.add_get("/mobile-api/v1/economy/me", economy)
     authority.router.add_post("/mobile-api/v1/auth/exchange", session)
     authority.router.add_post("/mobile-api/v1/auth/refresh", session)
     authority.router.add_post("/mobile-api/v1/auth/logout", logout)

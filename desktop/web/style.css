@@ -1128,3 +1128,12 @@ dialog::backdrop {
     scroll-behavior: auto !important;
   }
 }
+ .code-ready {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 8px 0 20px;
+ }
