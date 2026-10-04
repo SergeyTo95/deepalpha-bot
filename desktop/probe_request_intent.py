@@ -74,6 +74,10 @@ def finance_answer(reply):
 
 async def run_browser_probes():
     class RecordedSearch(WebSearch):
+        async def _understand(self, messages):
+            return await understand(messages, on_invalid=lambda value: print("VELIA_REQUEST_INTENT_DIAGNOSTIC "
+                + json.dumps({"case":"browser_" + self.case, **value}, ensure_ascii=False), flush=True))
+
         async def search(self, query, *, scope="general"):
             self.query = query
             return await super().search(query, scope=scope)
@@ -118,6 +122,7 @@ async def run_browser_probes():
                 if profile.get("remaining") != 30:
                     raise RuntimeError("understanding_probe_not_isolated")
                 for index, (name, messages, action, acceptable) in enumerate(cases):
+                    search.case = name
                     started = time.monotonic()
                     text, done, sources, stop = "", False, [], None
                     async with client.post(base + "/web-api/v1/guest/chat/completions",
@@ -174,8 +179,9 @@ async def run_browser_probes():
 
 
 async def run():
-    # Qualify negated evidence first so schema failures are inexpensive to find.
+    # Qualify ambiguous properties and negated evidence before complete answers.
     cases = [
+        ("unspecified_device_model", [{"role":"user", "content":"У меня телефон Самсунг, модель не знаю. Как сделать скриншот кнопками? Ответь коротко."}], "direct"),
         ("stated_allergy", [{"role": "user", "content": "У меня аллергия на арахис, но нет астмы. Дай общие советы по питанию."}], "search"),
         ("medical_plain", [{"role": "user", "content": "У меня гестамин эпное и астма. Как похудеть к 31 октября?"}], "search"),
         ("english_spelling", [{"role": "user", "content": "Explain revnue versus profit briefly."}], "direct"),
@@ -190,6 +196,9 @@ async def run():
             question = messages[-1]["content"]
             quotes = [question[row["span"][0]:row["span"][1]] for row in result.get("context", []) if row["status"] == "stated"]
             ok = ok and any("аллергия на арахис" in quote for quote in quotes) and any("нет астмы" in quote for quote in quotes)
+        if name == "unspecified_device_model":
+            question = messages[-1]["content"]
+            ok = ok and any(row["status"] == "unspecified" and "не знаю" in question[row["span"][0]:row["span"][1]] for row in result.get("context", []))
         if result["action"] == "clarify":
             reply = clarification_reply(clarification_content(messages[-1]["content"], result["span"], result.get("candidate", "")))
             ok = False

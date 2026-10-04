@@ -191,9 +191,12 @@ class WebSearch:
         return hmac.new(self.secret, json.dumps(["velia-search", *parts], ensure_ascii=False).encode(),
             hashlib.sha256).hexdigest()
 
+    async def _understand(self, messages):
+        return await understand(messages)
+
     async def plan(self, messages):
         try:
-            decision = await understand(messages)
+            decision = await self._understand(messages)
         except (ClientError, TimeoutError, OSError, ValueError, KeyError):
             raise UnderstandingUnavailable() from None
         result = {"results": [], "retrieved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
