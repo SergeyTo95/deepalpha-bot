@@ -1,0 +1,294 @@
+{
+  "recorded_at": "2026-10-04T15:06:09.275Z",
+  "scope": "PR 577 screenshot follow-up: task retrieval, unsupported certainty and Russian answer wording",
+  "local_checks": {
+    "passed": 241,
+    "skipped": 1,
+    "skip_reason": "Local PostgreSQL integration has no configured test DB; deployment gate checks persistent quotas"
+  },
+  "native": {
+    "id": "c27ef7b0-9c2c-441c-8301-335f9857b584",
+    "status": "SUCCESS",
+    "commit": "73aa4270166396731711935c5a6dcf43316d87e6"
+  },
+  "native_adapter_cases": [
+    {
+      "timestamp": "2026-10-04T14:43:23.872859200Z",
+      "case": "coding",
+      "ok": true,
+      "elapsed_seconds": 24.411991784349084,
+      "first_token_seconds": 23.039501570165157,
+      "text": "def add(a, b):\n    return a + b",
+      "usage": {
+        "completion_tokens": 13,
+        "prompt_tokens": 640,
+        "total_tokens": 653,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "reason": null,
+      "provider": "bonsai",
+      "estimated_cost_usd": 0
+    },
+    {
+      "timestamp": "2026-10-04T14:43:23.872866770Z",
+      "case": "russian",
+      "ok": true,
+      "elapsed_seconds": 4.009677724912763,
+      "first_token_seconds": 1.4233238510787487,
+      "text": "Переменная в Python — это имя, которому можно присвоить значение, чтобы его использовать в коде.",
+      "usage": {
+        "completion_tokens": 23,
+        "prompt_tokens": 644,
+        "total_tokens": 667,
+        "prompt_tokens_details": {
+          "cached_tokens": 613
+        }
+      },
+      "reason": null,
+      "provider": "bonsai",
+      "estimated_cost_usd": 0
+    }
+  ],
+  "gateway": {
+    "commit": "c0df9f555cf0b36231a6b60639f2ba85d4e7b00d",
+    "deployment_id": "c3b18ac7-a717-45e4-8ccc-0a9475b1c7da",
+    "url": "https://velia-desktop-gateway-deepalpha-bot-pr-577.up.railway.app",
+    "live_cases": [
+      {
+        "timestamp": "2026-10-04T14:49:08.043582454Z",
+        "case": "medical_spacing",
+        "ok": true,
+        "decision": "search",
+        "candidate": "гистамин, апноэ",
+        "query": "healthy weight loss advice",
+        "source_scope": "official_health",
+        "reply": "Привет! С учётом гистамина, апноэ и астмы «быстрое» похудение без контроля врача небезопасно: резкие ограничения могут усилить симптомы. Общее правило — дефицит 500–1000 ккал/день при активности 60–90 минут в день [2][3].\n\n- Ешьте меньше, но не пропускайте завтрак; ограничьте сладкие напитки и соки до 150 мл/день [1].\n- Делайте умеренную активность (например, ходьба) по переносимости: 60–90 минут в день можно разделить на 3 раза по 20–30 минут [2][3].\n- Ведите дневник питания и активности, взвешивайтесь раз в неделю [3].\n- Обсудите с врачом/диетологом план под вашу аллергию и хронические состояния; не назначайте себе исключения без подтверждения.",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [
+          {
+            "title": "8 tips for healthy eating - NHS",
+            "url": "https://www.nhs.uk/live-well/eat-well/how-to-eat-a-balanced-diet/eight-tips-for-healthy-eating"
+          },
+          {
+            "title": "[PDF] Facts About Healthy Weight - nhlbi",
+            "url": "https://www.nhlbi.nih.gov/sites/default/files/publications/06-5830.pdf"
+          },
+          {
+            "title": "Tips for Keeping Weight Off | Healthy Weight and Growth | CDC",
+            "url": "https://www.cdc.gov/healthy-weight-growth/losing-weight/keeping-it-off.html"
+          }
+        ],
+        "seconds": 159.02
+      },
+      {
+        "timestamp": "2026-10-04T14:49:58.225829415Z",
+        "case": "device_ambiguity",
+        "ok": true,
+        "decision": "clarify",
+        "candidate": null,
+        "query": null,
+        "source_scope": null,
+        "reply": "Уточните, пожалуйста, что вы имеете в виду под «квампер»?",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 51.14
+      },
+      {
+        "timestamp": "2026-10-04T14:50:38.234048472Z",
+        "case": "arithmetic_typo",
+        "ok": true,
+        "decision": "direct",
+        "candidate": "умножить",
+        "query": null,
+        "source_scope": null,
+        "reply": "391",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 40.14
+      },
+      {
+        "timestamp": "2026-10-04T14:51:58.520273236Z",
+        "case": "confirmed_context",
+        "ok": true,
+        "decision": "direct",
+        "candidate": "терминал",
+        "query": null,
+        "source_scope": null,
+        "reply": "Нажми Ctrl+Alt+T.",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 78.38
+      },
+      {
+        "timestamp": "2026-10-04T14:53:28.576761630Z",
+        "case": "finance_typo",
+        "ok": true,
+        "decision": "direct",
+        "candidate": "между выручкой и прибылью",
+        "query": null,
+        "source_scope": null,
+        "reply": "**Выручка** — это все деньги, которые пришли от продажи товаров или услуг.  \n**Прибыль** — то, что осталось после вычета всех расходов.\n\nПростой пример:\n1. Вы продали 10 кружек по 500 рублей. **Выручка = 5000 ₽**.\n2. Производство и доставка обошлись вам в 3000 ₽ (расходы).\n3. 5000 − 3000 = **Прибыль 2000 ₽**.\n\nКоротко: выручка — это «вход», прибыль — «остаток».",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 90.06
+      },
+      {
+        "timestamp": "2026-10-04T14:54:49.118481219Z",
+        "case": "router_typo",
+        "ok": true,
+        "decision": "direct",
+        "candidate": "перезагрузить роутер",
+        "query": null,
+        "source_scope": null,
+        "reply": "Отключите питание роутера, подождите 30 секунд и включите обратно. Настройки при этом сохранятся.",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 77.07
+      },
+      {
+        "timestamp": "2026-10-04T14:55:59.195501819Z",
+        "case": "literal_constraints",
+        "ok": true,
+        "decision": "direct",
+        "candidate": null,
+        "query": null,
+        "source_scope": null,
+        "reply": "print(\"app.py\")",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 71.39
+      },
+      {
+        "timestamp": "2026-10-04T14:56:49.176311750Z",
+        "case": "medical_plain",
+        "ok": true,
+        "decision": {
+          "action": "search",
+          "query": "healthy weight loss advice",
+          "source_scope": "official_health",
+          "span": [
+            7,
+            21
+          ],
+          "candidate": "гистамин, апноэ"
+        },
+        "reply": null
+      },
+      {
+        "timestamp": "2026-10-04T14:57:09.164072533Z",
+        "case": "english_spelling",
+        "ok": true,
+        "decision": {
+          "action": "direct",
+          "query": "",
+          "span": [
+            8,
+            14
+          ],
+          "candidate": "revenue"
+        },
+        "reply": null
+      },
+      {
+        "timestamp": "2026-10-04T14:57:17.882351289Z",
+        "case": "current_search",
+        "ok": true,
+        "decision": {
+          "action": "search",
+          "query": "latest stable Python version official site"
+        },
+        "reply": null
+      }
+    ],
+    "image_checks": {
+      "passed": 208,
+      "logs": [
+        {
+          "time": "2026-10-04T14:45:55.393949538Z",
+          "message": "208 passed in 5.80s\n"
+        }
+      ]
+    },
+    "status": "SUCCESS",
+    "live_gate": {
+      "timestamp": "2026-10-04T15:02:09.183545661Z",
+      "commit": "c0df9f555cf0b36231a6b60639f2ba85d4e7b00d",
+      "correlated_tool_result": true,
+      "flash_live_harness": true,
+      "flash_paid_fallback": false,
+      "guest_quota": {
+        "accepted": 30,
+        "atomic_limit": 30,
+        "ok": true,
+        "persistent": true,
+        "rejected": 8
+      },
+      "identity_health": true,
+      "identity_rejects_no_token": true,
+      "live_sse": true,
+      "live_tool_call": true,
+      "model_calls": 2,
+      "ok": true,
+      "owner_pairing_verified": false,
+      "request_intent": {
+        "cases": 10,
+        "interpretation_before_search": true,
+        "live_browser_sse_cases": 7,
+        "ok": true,
+        "paid_fallback": false,
+        "resolved_spelling_answers": true,
+        "substantive_medical_answer": true
+      },
+      "web_search": {
+        "model_calls": 0,
+        "ok": true,
+        "persistent_sources": true,
+        "primary_source": true,
+        "source_count": 3
+      }
+    },
+    "harness": [
+      {
+        "timestamp": "2026-10-04T15:02:09.183542931Z",
+        "ok": true,
+        "rounds": 2,
+        "readTool": true,
+        "persona": true,
+        "declaredTools": 24,
+        "requestCharacters": 23372,
+        "liveModel": true,
+        "ownerPairingVerified": false
+      }
+    ],
+    "public_readiness": {
+      "health": {
+        "status": 200,
+        "ok": true
+      },
+      "page": {
+        "status": 200,
+        "content_type": "text/html"
+      }
+    }
+  },
+  "constraints": {
+    "public_guest_quota_reset": false,
+    "account_messages_spent": false,
+    "owner_pairing_verified": false,
+    "production_merge": false
+  },
+  "remaining_limitations": [
+    "The medical sample still assumes an allergy in its final sentence even though the user did not confirm an allergy; the generated medical claims are not clinically validated.",
+    "Language and source regressions qualify the observed examples, not perfect accuracy for every future question."
+  ],
+  "medical_claims_clinically_validated": false
+}

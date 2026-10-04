@@ -125,7 +125,8 @@ conditions remain in the unchanged inference question. One provider request asks
 for six candidates, keeps up to three distinct pages, and deduplicates anchors
 and repeated titles from the same host. Health excerpts retain up to 900 characters.
 Citation rules require support for the adjacent claim and preserve numerical units
-and periods. Unsupported numerical recommendations are omitted.
+and periods. The instruction requires omitting unsupported numerical recommendations;
+this is not a guarantee that the model follows it in every future answer.
 
 Plain-text Flash generation uses the model publisher's documented non-thinking
 sampling profile (`temperature=0.7`, `top_p=0.8`, `top_k=20`, `min_p=0.0`,
@@ -141,3 +142,16 @@ The gateway image passed 201 checks; all ten live understanding cases and the
 24-tool, two-round Harness gate passed. Public `/health` and `/` returned HTTP 200.
 The full receipt and actual generated replies are retained in
 [the deployment evidence](verification/request-direct-understanding-deployments-2026-10-04.json).
+
+The screenshot follow-up succeeded with gateway commit
+`c0df9f555cf0b36231a6b60639f2ba85d4e7b00d` (deployment
+`c3b18ac7-a717-45e4-8ccc-0a9475b1c7da`) and native commit
+`73aa4270166396731711935c5a6dcf43316d87e6` (deployment
+`c27ef7b0-9c2c-441c-8301-335f9857b584`). The gateway image passed 208 checks,
+all ten live cases and the 24-tool, two-round Harness gate passed, and public
+`/health` and `/` returned HTTP 200. The medical example now uses the primary
+task query `healthy weight loss advice`, three distinct weight/nutrition sources,
+and the correct action word `взвешивайтесь`. Its final sentence still assumes an
+unconfirmed allergy. Medical accuracy is not fully solved or clinically certified.
+[The follow-up evidence](verification/request-answer-quality-2026-10-04.json)
+retains the actual replies and this limitation.
