@@ -125,6 +125,8 @@ class WebSearch:
             "decision": decision["action"]}
         if decision["action"] == "clarify":
             result["clarification_span"] = decision["span"]
+            if decision.get("candidate"):
+                result["clarification_candidate"] = decision["candidate"]
         elif decision["action"] == "search":
             result = {**await self.search(decision["query"]), "decision": "search"}
         return result
@@ -197,7 +199,8 @@ class WebSearch:
         if result["decision"] == "direct":
             return payload
         if result["decision"] == "clarify":
-            content = clarification_content(payload["messages"][-1]["content"], result["clarification_span"])
+            content = clarification_content(payload["messages"][-1]["content"], result["clarification_span"],
+                result.get("clarification_candidate", ""))
             request[PREPARED_REPLY] = clarification_reply(content)
             return payload
         request[SOURCES] = result
@@ -214,7 +217,8 @@ class WebSearch:
             if result is None:
                 result = await self.plan([*(messages or []), {"role": "user", "content": question}])
             if result.get("decision") == "clarify":
-                augmented = clarification_content(question, result["clarification_span"])
+                augmented = clarification_content(question, result["clarification_span"],
+                    result.get("clarification_candidate", ""))
             elif result.get("decision") == "direct":
                 augmented = question
             else:

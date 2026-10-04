@@ -1,34 +1,129 @@
-"""Private synthetic checks on the live free worker; no account or trial quota."""
+"""Private live understanding checks, including the actual browser SSE route.
+
+The synthetic guest server binds only to loopback and uses a temporary SQLite
+quota store. Production accounts, network quotas and credentials are untouched.
+"""
 import asyncio
 import json
+from pathlib import Path
+import re
+import tempfile
+import time
+
+from aiohttp import ClientSession, ClientTimeout, DummyCookieJar, web
+from desktop.guest_routes import COOKIE, setup_guest_routes
+from desktop.guest_store import GuestStore
 from desktop.request_intent import understand
+from desktop.web_search import WebSearch
 from velia_request_understanding import clarification_content, clarification_reply
 
 
-async def run():
+def medical_confirmation(reply):
+    lowered = reply.casefold()
+    return (reply.startswith("Правильно ли я поняла:") and reply.endswith("?")
+        and "гистамин" in lowered and "апноэ" in lowered
+        and not any(term in lowered for term in ("гестацион", "диабет", "беремен")))
+
+
+async def run_browser_probes():
+    class RecordedSearch(WebSearch):
+        async def plan(self, messages):
+            self.decision = await super().plan(messages)
+            return self.decision
+
+    origin = "https://private-understanding.invalid"
     cases = [
-        ("medical_spacing", [{"role": "user", "content": "Привет . Рада познакомиться . Идеи для похудения к 31 ок ября у меня гестамин эпное и астма . Как мне похудеть быстро"}], "clarify", "гестамин"),
-        ("medical_plain", [{"role": "user", "content": "У меня гестамин эпное и астма. Как похудеть к 31 октября?"}], "clarify", "гестамин"),
-        ("device_ambiguity", [{"role": "user", "content": "У меня сломался квампер. Как его починить?"}], "clarify", "квампер"),
-        ("arithmetic_typo", [{"role": "user", "content": "Сколько 17 умножть на 23? Только число."}], "direct", None),
-        ("confirmed_context", [{"role": "user", "content": "Как открыть терминал?"}, {"role": "assistant", "content": "На Windows открой PowerShell."}, {"role": "user", "content": "Нет, у меня Ubuntu. Как открыть терменал? Одной фразой."}], "direct", None),
-        ("current_search", [{"role": "user", "content": "Найди актуальную стабильную версию Python на официальном сайте."}], "search", None),
+        ("medical_spacing", [{"role": "user", "content": "Привет . Рада познакомиться . Идеи для похудения к 31 ок ября у меня гестамин эпное и астма . Как мне похудеть быстро"}], "clarify", medical_confirmation),
+        ("device_ambiguity", [{"role": "user", "content": "У меня сломался квампер. Как его починить?"}], "clarify", lambda text: "квампер" in text and text.endswith("?")),
+        ("arithmetic_typo", [{"role": "user", "content": "Сколько 17 умножть на 23? Только число."}], "direct", lambda text: text.strip() == "391"),
+        ("confirmed_context", [{"role": "user", "content": "Как открыть терминал?"}, {"role": "assistant", "content": "На Windows открой PowerShell."}, {"role": "user", "content": "Нет, у меня Ubuntu. Как открыть терменал? Одной фразой."}], "direct", lambda text: "ctrlaltt" in re.sub(r"[^a-z]", "", text.casefold()) and "powershell" not in text.casefold()),
+        ("literal_constraints", [{"role": "user", "content": "В Python исправь синтаксис в строке print(\"app.py\". Не меняй текст app.py и ничего не удаляй. Только исправленная строка."}], "direct", lambda text: text.strip().strip(chr(96)).removeprefix("python\n").strip() == 'print("app.py")'),
     ]
     rows = []
-    for name, messages, action, fragment in cases:
+    with tempfile.TemporaryDirectory(prefix="velia-private-understanding-") as directory:
+        store = GuestStore(sqlite_path=Path(directory) / "quota.db")
+        search = RecordedSearch(store=store)
+        if not search.available:
+            raise RuntimeError("understanding_probe_search_unavailable")
+        app = web.Application()
+        setup_guest_routes(app, origin=origin, handlers={"reserve": lambda _: None, "release": lambda _: None},
+            json_response=lambda data, status=200: web.json_response(data, status=status), store=store, web_search=search)
+        runner = web.AppRunner(app, access_log=None, handler_cancellation=True)
+        await runner.setup()
+        try:
+            site = web.TCPSite(runner, "127.0.0.1", 0)
+            await site.start()
+            base = "http://127.0.0.1:" + str(site._server.sockets[0].getsockname()[1])
+            headers = {"Origin": origin, "X-Velia-Request": "1", "Sec-Fetch-Site": "same-origin", "X-Real-IP": "127.0.0.1"}
+            async with ClientSession(timeout=ClientTimeout(total=360, sock_read=300), cookie_jar=DummyCookieJar()) as client:
+                async with client.get(base + "/web-api/v1/guest", headers=headers) as response:
+                    if response.status != 200:
+                        raise RuntimeError("understanding_probe_guest_unavailable")
+                    profile = await response.json()
+                    cookie = response.cookies[COOKIE].value
+                if profile.get("remaining") != 30:
+                    raise RuntimeError("understanding_probe_not_isolated")
+                for index, (name, messages, action, acceptable) in enumerate(cases):
+                    started = time.monotonic()
+                    text, done, sources, stop = "", False, False, None
+                    async with client.post(base + "/web-api/v1/guest/chat/completions",
+                            headers={**headers, "Cookie": COOKIE + "=" + cookie},
+                            json={"model": "velia-flash", "stream": True, "messages": messages}) as response:
+                        status = response.status
+                        remaining = response.headers.get("X-Velia-Guest-Remaining")
+                        if status != 200:
+                            raise RuntimeError("understanding_probe_http:" + name + ":" + str(status))
+                        async for line in response.content:
+                            if not line.startswith(b"data:"):
+                                continue
+                            data = line[5:].strip()
+                            if data == b"[DONE]":
+                                done = True
+                                continue
+                            event = json.loads(data)
+                            sources = sources or "web_search" in event
+                            for choice in event.get("choices", []):
+                                text += choice.get("delta", {}).get("content") or ""
+                                stop = choice.get("finish_reason") or stop
+                            if len(text) > 4096:
+                                raise RuntimeError("understanding_probe_output_too_large:" + name)
+                    ok = (search.decision["decision"] == action and done and stop == "stop" and not sources
+                        and remaining == str(29 - index) and acceptable(text))
+                    row = {"case": name, "ok": bool(ok), "decision": search.decision["decision"],
+                        "reply": text, "done": done, "sources": sources, "seconds": round(time.monotonic() - started, 2)}
+                    rows.append(row)
+                    print("VELIA_REQUEST_UNDERSTANDING_BROWSER " + json.dumps(row, ensure_ascii=False), flush=True)
+                    if not ok:
+                        raise RuntimeError("browser_understanding_qualification_failed:" + name)
+        finally:
+            await runner.cleanup()
+    return rows
+
+
+async def run():
+    # Start with the user's exact failing wording. A generic question is no
+    # longer sufficient to qualify this fix.
+    browser_rows = await run_browser_probes()
+    cases = [
+        ("medical_plain", [{"role": "user", "content": "У меня гестамин эпное и астма. Как похудеть к 31 октября?"}], "clarify"),
+        ("finance_typo", [{"role": "user", "content": "Объясни разницу межу выручкой и прибылю на простом примере. Кратко."}], "direct"),
+        ("current_search", [{"role": "user", "content": "Найди актуальную стабильную версию Python на официальном сайте."}], "search"),
+    ]
+    rows = []
+    for name, messages, action in cases:
         result = await understand(messages)
-        ok = result["action"] == action
-        reply = None
+        ok, reply = result["action"] == action, None
         if result["action"] == "clarify":
-            reply = clarification_reply(clarification_content(messages[-1]["content"], result["span"]))
-            ok = ok and fragment in reply and reply.endswith("?")
+            reply = clarification_reply(clarification_content(messages[-1]["content"], result["span"], result.get("candidate", "")))
+            ok = ok and medical_confirmation(reply)
         row = {"case": name, "ok": bool(ok), "decision": result, "reply": reply}
         rows.append(row)
         print("VELIA_REQUEST_INTENT_CASE " + json.dumps(row, ensure_ascii=False), flush=True)
         if not ok:
             raise RuntimeError("request_intent_qualification_failed:" + name)
-    return {"request_intent": {"ok": True, "cases": len(rows), "interpretation_before_search": True,
-        "complete_clarification": True, "paid_fallback": False}}
+    return {"request_intent": {"ok": True, "cases": len(browser_rows) + len(rows),
+        "live_browser_sse_cases": len(browser_rows), "interpretation_before_search": True,
+        "specific_meaning_confirmation": True, "paid_fallback": False}}
 
 
 if __name__ == "__main__":

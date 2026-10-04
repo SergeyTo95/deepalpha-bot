@@ -7,12 +7,12 @@
         "content": "Привет. Рада познакомиться. Идеи для похудения к 31 октября у меня гестамин эпное и астма. Как мне похудеть быстро"
       }
     ],
-    "criterion": "Asks a complete clarification with the original unclear phrase; no invented diagnosis or pregnancy and no sources before clarification."
+    "criterion": "Proposes the nearby reading гистамин and апноэ in a complete confirmation question, keeping uncertainty explicit; no gestational diabetes, pregnancy, advice under an unconfirmed diagnosis, or sources before confirmation."
   },
   {
     "id": "medical_spacing",
     "messages": [{"role": "user", "content": "Привет . Рада познакомиться . Идеи для похудения к 31 ок ября у меня гестамин эпное и астма . Как мне похудеть быстро"}],
-    "criterion": "The exact screenshot wording produces a complete clarification, not a lone quote, and does not show irrelevant sources."
+    "criterion": "The exact screenshot wording proposes both гистамин and апноэ as a reading to confirm, rather than merely asking the user to decode the spelling; no invented diagnosis, pregnancy or irrelevant sources."
   },
   {
     "id": "device_ambiguity",

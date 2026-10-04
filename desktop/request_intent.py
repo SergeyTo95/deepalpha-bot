@@ -8,31 +8,42 @@ import os
 
 from aiohttp import ClientSession, ClientTimeout, DummyCookieJar
 from velia_desktop_routes import check_flash_context, flash_endpoint
+from velia_request_understanding import plausible_restoration
 
 
 INSTRUCTION = (
     "Ты определяешь, понятен ли запрос пользователя ДО поиска. Вызови understand_request. "
-    "Опирайся на слова пользователя и его подтверждённый контекст. Явные опечатки "
-    "не требуют уточнения. Догадки ассистента не являются подтверждением пользователя. "
-    "Не придумывай личные обстоятельства, диагнозы или названия. "
-    "Если непонятный существенный термин меняет ответ, action=clarify, quote=точная "
-    "цитата этого термина из последнего сообщения, query=''. Не пропускай такой термин. "
-    "Не пытайся восстановить незнакомое название болезни или устройства догадкой. "
+    "Восстанавливай опечатки и ошибки диктовки по написанию, звучанию и контексту "
+    "задачи во всех темах. Очевидные исправления понятны и не требуют уточнения. "
+    "Сохраняй отрицания, числа, единицы, цитаты и идентификаторы. Учитывай исправления "
+    "и подтверждения пользователя; догадки ассистента не подтверждают факты. "
+    "Если вероятная расшифровка меняет ключевые исходные данные (например диагноз, "
+    "препарат или точную модель устройства) и ещё не подтверждена, action=clarify: "
+    "quote=точная цитата испорченной "
+    "фразы, candidate=её ближайшее исправленное написание, query=''. Расшифруй ВСЕ "
+    "слова этой фразы. candidate содержит только исправленные слова, без пояснений "
+    "и дополнительных диагнозов. Не заменяй созвучное слово далёким по написанию "
+    "названием. Если подходящего смысла вообще нет, candidate='', уточни quote. "
+    "Не выбирай clarify лишь потому, что слово написано с ошибкой. Примеры: "
+    "'пере загрузи роутор' — direct; 'что такое карбюратар' — direct; "
+    "'у меня сломался карбюратар или стартир, не знаю что именно' — clarify, "
+    "quote='карбюратар или стартир', candidate=''; 'что за флумпенсор' — clarify "
+    "без candidate; 'нейропотия, какое лечение' — clarify с candidate='нейропатия'. "
     "Если запрос понятен и для него нужны актуальные или внешние сведения, медицинские "
     "рекомендации либо пользователь просит поиск, action=search, query=краткий понятный "
-    "поисковый запрос, quote=''. Сохраняй числа, отрицания и условия. "
+    "поисковый запрос, quote='', candidate=''. Сохраняй числа, отрицания и условия. "
     "Для арифметики, редактирования текста, обычных объяснений и простого кода без "
-    "запроса актуальных сведений action=direct, query='', quote=''. "
-    "Примеры: 'перезагрузиь роутор' понятно; 'как починить флумпенсор' требует "
-    "уточнения слова 'флумпенсор'; 'сделай его короче' относится к предыдущему тексту."
+    "запроса актуальных сведений action=direct, query='', quote='', candidate=''. "
+    "'Сделай его короче' относится к предыдущему тексту."
 )
 TOOL = {"type": "function", "function": {
     "name": "understand_request", "description": "Выбрать ответ, поиск или уточнение до получения внешних данных.",
     "parameters": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["direct", "search", "clarify"]},
         "quote": {"type": "string", "description": "Точная цитата непонятного существенного фрагмента, иначе пустая строка."},
+        "candidate": {"type": "string", "description": "При clarify ближайшее исправленное написание quote, только те же слова. Если смысла нет, пустая строка. При direct/search пустая строка."},
         "query": {"type": "string", "description": "Поисковый запрос только при action=search, иначе пустая строка."}},
-        "required": ["action", "quote", "query"], "additionalProperties": False}}}
+        "required": ["action", "quote", "candidate", "query"], "additionalProperties": False}}}
 
 
 def parse_decision(result, question):
@@ -40,17 +51,21 @@ def parse_decision(result, question):
     if len(calls) != 1 or calls[0]["function"].get("name") != "understand_request":
         raise ValueError("invalid_understanding_response")
     args = json.loads(calls[0]["function"]["arguments"])
-    if (not isinstance(args, dict) or set(args) != {"action", "quote", "query"}
+    if (not isinstance(args, dict) or set(args) not in ({"action", "quote", "query"}, {"action", "quote", "candidate", "query"})
             or any(not isinstance(args[k], str) for k in args)
             or args["action"] not in {"direct", "search", "clarify"}):
         raise ValueError("invalid_understanding_response")
-    quote, query = args["quote"], args["query"].strip()
+    quote, query, candidate = args["quote"], args["query"].strip(), args.get("candidate", "")
     if args["action"] == "clarify":
         if not quote.strip() or len(quote) > 256 or quote not in question or query:
             raise ValueError("invalid_understanding_response")
         start = question.index(quote)
-        return {"action": "clarify", "span": [start, start + len(quote)]}
-    if quote or (args["action"] == "direct" and query) or (args["action"] == "search" and not 1 <= len(query) <= 400):
+        result = {"action": "clarify", "span": [start, start + len(quote)]}
+        restored = plausible_restoration(quote, candidate)
+        if restored:
+            result["candidate"] = restored
+        return result
+    if quote or candidate or (args["action"] == "direct" and query) or (args["action"] == "search" and not 1 <= len(query) <= 400):
         raise ValueError("invalid_understanding_response")
     return {"action": args["action"], "query": query}
 
@@ -64,7 +79,7 @@ async def understand(messages):
     while len(history) > 1 and sum(len(m.get("content") or "") for m in history[:-1]) > 6000:
         history.pop(0)
     payload = {"model": "velia-flash", "messages": [{"role": "system", "content": INSTRUCTION}] + history,
-        "tools": [TOOL], "tool_choice": "required", "stream": False, "max_tokens": 192,
+        "tools": [TOOL], "tool_choice": "required", "stream": False, "max_tokens": 224,
         "temperature": 0.1, "top_p": 0.8, "top_k": 20, "min_p": 0.05,
         "chat_template_kwargs": {"enable_thinking": False}, "reasoning_format": "deepseek",
         "thinking_budget_tokens": 0, "parallel_tool_calls": False}

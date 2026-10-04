@@ -199,9 +199,9 @@ async def run_probe():
             "live_tool_call": True, "correlated_tool_result": True,
             "live_sse": True, "model_calls": 2, "owner_pairing_verified": False}
     if os.getenv("VELIA_DESKTOP_FLASH_ENABLED", "").lower() in {"true", "1"}:
-        receipt.update(await run_flash_probe())
         from desktop.probe_request_intent import run as run_intent_probe
         receipt.update(await run_intent_probe())
+        receipt.update(await run_flash_probe())
     receipt.update(guest_receipt)
     receipt.update(search_receipt)
     return receipt
