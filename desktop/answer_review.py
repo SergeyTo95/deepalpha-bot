@@ -2,7 +2,7 @@
 import json
 import re
 
-from aiohttp import ClientError, web
+from aiohttp import ClientError, ClientSession, ClientTimeout, DummyCookieJar, TCPConnector, web
 from velia_desktop_routes import check_flash_context, FlashContextTooLong
 from velia_request_understanding import interpreted_content
 
@@ -47,7 +47,7 @@ def context_quotes(context):
     return rows
 
 
-async def review_answer(client, endpoint, headers, context, draft):
+async def review_answer(endpoint, headers, context, draft):
     result, question = context["result"], context["question"]
     if result.get("restoration_candidate"):
         from desktop.web_search import restored_question
@@ -60,16 +60,20 @@ async def review_answer(client, endpoint, headers, context, draft):
         "min_p": 0.0, "presence_penalty": 0.0, "chat_template_kwargs": {"enable_thinking": False},
         "reasoning_effort": "none", "reasoning_format": "deepseek", "thinking_budget_tokens": 0,
         "parallel_tool_calls": False}
-    await check_flash_context(client, endpoint, headers, payload)
-    async with client.post(endpoint + "/v1/chat/completions", json=payload, headers=headers, allow_redirects=False) as response:
-        if response.status != 200:
-            raise ValueError("answer_review_unavailable")
-        body = bytearray()
-        async for chunk in response.content.iter_chunked(8192):
-            body.extend(chunk)
-            if len(body) > 65536:
-                raise ValueError("invalid_answer_review")
-        value = json.loads(body)
+    # The worker closes the completed SSE connection. Do not reuse that pooled
+    # socket for the subsequent validation/editor requests.
+    async with ClientSession(timeout=ClientTimeout(total=300, sock_read=270),
+            cookie_jar=DummyCookieJar(), connector=TCPConnector(force_close=True)) as client:
+        await check_flash_context(client, endpoint, headers, payload)
+        async with client.post(endpoint + "/v1/chat/completions", json=payload, headers=headers, allow_redirects=False) as response:
+            if response.status != 200:
+                raise ValueError("answer_review_unavailable")
+            body = bytearray()
+            async for chunk in response.content.iter_chunked(8192):
+                body.extend(chunk)
+                if len(body) > 65536:
+                    raise ValueError("invalid_answer_review")
+            value = json.loads(body)
     try:
         choice = value["choices"][0]
         text = choice["message"]["content"]
@@ -81,7 +85,7 @@ async def review_answer(client, endpoint, headers, context, draft):
         raise ValueError("invalid_answer_review") from None
 
 
-async def reviewed_web_stream(request, source, client, endpoint, headers):
+async def reviewed_web_stream(request, source, endpoint, headers):
     """Never expose draft claims; quota and public provenance are unchanged."""
     from desktop.web_routes import public_web_stream, WEB_MODEL
     text, done, finish = "", False, None
@@ -111,7 +115,7 @@ async def reviewed_web_stream(request, source, client, endpoint, headers):
         return
     yield b": reviewing\n\n"
     try:
-        final = await review_answer(client, endpoint, headers, request[REVIEW_CONTEXT], text)
+        final = await review_answer(endpoint, headers, request[REVIEW_CONTEXT], text)
     except (ClientError, TimeoutError, OSError, ValueError, FlashContextTooLong) as exc:
         print("VELIA_ANSWER_REVIEW " + json.dumps({"phase": "review", "ok": False,
             "error_type": type(exc).__name__}), flush=True)

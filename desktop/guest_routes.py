@@ -131,7 +131,7 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_
                         "X-Accel-Buffering": "no", "X-Velia-Guest-Remaining": str(remaining)})
                     await response.prepare(request)
                     from desktop.answer_review import REVIEW_CONTEXT, reviewed_web_stream
-                    stream = (reviewed_web_stream(request, upstream.content, client, endpoint, headers)
+                    stream = (reviewed_web_stream(request, upstream.content, endpoint, headers)
                         if request.get(REVIEW_CONTEXT) else public_web_stream(request, upstream.content))
                     async for chunk in stream:
                         await response.write(chunk)
