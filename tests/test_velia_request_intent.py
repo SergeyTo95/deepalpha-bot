@@ -52,6 +52,37 @@ def test_context_preserves_negations_and_explicitly_stated_allergy():
     assert [question[row["span"][0]:row["span"][1]] for row in result["context"]] == ["аллергия на арахис", "нет астмы"]
 
 
+def test_a_noun_quote_carries_its_immediate_original_negation():
+    question = "У меня аллергия, но нет астмы."
+    result = parse_decision(decision({"action":"direct", "quote":"", "query":"",
+        "context":[{"quote":"астмы", "kind":"condition", "status":"stated"}]}), question)
+    start, end = result["context"][0]["span"]
+    assert question[start:end] == "нет астмы"
+
+
+@pytest.mark.parametrize("recover", [True, False])
+def test_schema_repair_keeps_the_original_question_and_never_searches_an_invalid_plan(monkeypatch, tmp_path, recover):
+    async def run():
+        monkeypatch.setenv("VELIA_WEB_GUEST_ENABLED", "true")
+        question = "У меня аллергия на арахис, но нет астмы. Дай общие советы по питанию."
+        bad = {"action":"search", "quote":"", "query":"diet", "context":[{"quote":"астма", "status":"stated"}]}
+        good = {"action":"search", "quote":"", "query":"diet", "context":[{"quote":"аллергия на арахис", "status":"stated"}, {"quote":"нет астмы", "status":"stated"}]}
+        async with fixture(monkeypatch, with_search=True, guest_store=GuestStore(sqlite_path=tmp_path/"quota.db"),
+                intent_results=[bad, good if recover else bad]) as (server, client, state):
+            cookie, _, _ = await guest(server, client)
+            async with client.post(server.make_url("/web-api/v1/guest/chat/completions"), headers=guest_headers(cookie),
+                    json={"model":"velia-flash", "stream":True, "messages":[{"role":"user", "content":question}]}) as response:
+                assert response.status == (200 if recover else 503)
+                await response.read()
+            assert len(state["intent_payloads"]) == 2
+            assert all(data["messages"][-1]["content"] == question for data in state["intent_payloads"])
+            assert len(state["search_queries"]) == (1 if recover else 0)
+            assert len(state["payloads"]) == (1 if recover else 0)
+            async with client.get(server.make_url("/web-api/v1/guest"), headers=guest_headers(cookie)) as response:
+                assert (await response.json())["remaining"] == 29
+    asyncio.run(run())
+
+
 def test_a_substance_mention_cannot_be_promoted_to_a_personal_condition():
     question = "У меня гестамин эпное и астма."
     result = parse_decision(decision({"action": "direct", "quote": "гестамин эпное", "candidate": "гистамин, апноэ", "query": "",

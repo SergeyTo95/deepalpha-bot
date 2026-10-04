@@ -6,6 +6,7 @@ of the submitted question; no external result can supply that interpretation.
 import json
 import os
 import asyncio
+import re
 
 from aiohttp import ClientSession, ClientTimeout, DummyCookieJar
 from velia_desktop_routes import check_flash_context, flash_endpoint
@@ -112,6 +113,13 @@ def context_spans(values, question):
         if ((start and question[start - 1].isalnum() and value["quote"][0].isalnum())
                 or (end < len(question) and question[end].isalnum() and value["quote"][-1].isalnum())):
             raise ValueError("invalid_understanding_response")
+        # A quoted noun immediately following a negation is not a positive
+        # fact. Carry the original negation in its exact evidence span.
+        negation = re.search(r"\b(?:нет|не|без|no|not|without)\s+$", question[:start], re.I)
+        if negation:
+            start = negation.start()
+        if end - start > 128:
+            raise ValueError("invalid_understanding_response")
         item = {"span": [start, end], "status": "unspecified" if kind == "substance" else value["status"]}
         if kind is not None:
             item["kind"] = kind
@@ -176,7 +184,7 @@ def parse_decision(result, question):
     return result
 
 
-async def understand(messages):
+async def understand(messages, *, on_invalid=None):
     history = [dict(m) for m in messages if m.get("role") in {"user", "assistant"}][-6:]
     if not history or history[-1]["role"] != "user":
         raise ValueError("invalid_understanding_request")
@@ -193,19 +201,37 @@ async def understand(messages):
         "thinking_budget_tokens": 0, "parallel_tool_calls": False}
     endpoint = flash_endpoint()
     headers = {"Authorization": "Bearer " + os.environ["VELIA_DESKTOP_FLASH_API_KEY"]}
-    async with ClientSession(timeout=ClientTimeout(total=180, sock_read=150), cookie_jar=DummyCookieJar()) as client:
-        await check_flash_context(client, endpoint, headers, payload)
-        async with client.post(endpoint + "/v1/chat/completions", json=payload, headers=headers,
-                allow_redirects=False) as response:
-            if response.status != 200:
-                raise ValueError("understanding_unavailable")
-            body = bytearray()
-            async for chunk in response.content.iter_chunked(8192):
-                body.extend(chunk)
-                if len(body) > 65536:
-                    raise ValueError("invalid_understanding_response")
-            result = json.loads(body)
-    try:
-        return parse_decision(result, question)
-    except (KeyError, IndexError, TypeError, ValueError):
-        raise ValueError("invalid_understanding_response") from None
+    for attempt in range(2):
+        async with ClientSession(timeout=ClientTimeout(total=180, sock_read=150), cookie_jar=DummyCookieJar()) as client:
+            await check_flash_context(client, endpoint, headers, payload)
+            async with client.post(endpoint + "/v1/chat/completions", json=payload, headers=headers,
+                    allow_redirects=False) as response:
+                if response.status != 200:
+                    raise ValueError("understanding_unavailable")
+                body = bytearray()
+                async for chunk in response.content.iter_chunked(8192):
+                    body.extend(chunk)
+                    if len(body) > 65536:
+                        raise ValueError("invalid_understanding_response")
+                result = json.loads(body)
+        try:
+            return parse_decision(result, question)
+        except (KeyError, IndexError, TypeError, ValueError):
+            if on_invalid is not None:
+                choices = result.get("choices", []) if isinstance(result, dict) else []
+                choice = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
+                message = choice.get("message") or {}
+                calls = message.get("tool_calls", []) if isinstance(message, dict) else []
+                functions = [call["function"] for call in calls if isinstance(call, dict)
+                    and isinstance(call.get("function"), dict)] if isinstance(calls, list) else []
+                on_invalid({"attempt": attempt + 1, "calls": [{"name": function.get("name"),
+                    "arguments": str(function.get("arguments", ""))[:4096]} for function in functions]})
+            if attempt:
+                raise ValueError("invalid_understanding_response") from None
+            payload["messages"][0] = {"role": "system", "content": instruction +
+                "\nПредыдущий план не прошёл строгую проверку формата или цитат. Повтори "
+                "understand_request для того же исходного сообщения, сохрани все его "
+                "условия. Все context.quote и quote должны буквально присутствовать "
+                "в исходном тексте: не исправляй и не склоняй слова внутри цитат, "
+                "сохрани отрицания и существенные свойства целиком. Если опечаток нет, "
+                "quote='', candidate=''. Используй только поля и типы указанной схемы."}

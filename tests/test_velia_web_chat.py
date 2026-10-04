@@ -105,7 +105,9 @@ async def fixture(monkeypatch, **state):
         data = await request.json()
         if data.get("tools", [{}])[0].get("function", {}).get("name") == "understand_request":
             state["intent_payloads"].append(data)
-            args = state.get("intent", {"action": "search", "quote": "", "query": data["messages"][-1]["content"][:400]})
+            defaults = state.get("intent", {"action": "search", "quote": "", "query": data["messages"][-1]["content"][:400]})
+            sequence = state.get("intent_results")
+            args = sequence[min(len(state["intent_payloads"]) - 1, len(sequence) - 1)] if sequence else defaults
             if state.get("intent_status"):
                 return web.json_response({"error": "fixture failure"}, status=state["intent_status"])
             return web.json_response({"choices": [{"message": {"tool_calls": [{"type": "function", "id": "intent-1",

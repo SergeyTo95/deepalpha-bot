@@ -173,18 +173,17 @@ async def run_browser_probes():
 
 
 async def run():
-    # The user's exact wording must produce useful advice, not a spelling question.
-    # Check complete real replies before the more expensive Harness qualification.
-    browser_rows = await run_browser_probes()
+    # Qualify negated evidence first so schema failures are inexpensive to find.
     cases = [
+        ("stated_allergy", [{"role": "user", "content": "У меня аллергия на арахис, но нет астмы. Дай общие советы по питанию."}], "search"),
         ("medical_plain", [{"role": "user", "content": "У меня гестамин эпное и астма. Как похудеть к 31 октября?"}], "search"),
         ("english_spelling", [{"role": "user", "content": "Explain revnue versus profit briefly."}], "direct"),
         ("current_search", [{"role": "user", "content": "Найди актуальную стабильную версию Python на официальном сайте."}], "search"),
-        ("stated_allergy", [{"role": "user", "content": "У меня аллергия на арахис, но нет астмы. Дай общие советы по питанию."}], "search"),
     ]
     rows = []
     for name, messages, action in cases:
-        result = await understand(messages)
+        result = await understand(messages, on_invalid=lambda value: print("VELIA_REQUEST_INTENT_DIAGNOSTIC "
+            + json.dumps({"case": name, **value}, ensure_ascii=False), flush=True))
         ok, reply = result["action"] == action, None
         if name == "stated_allergy":
             question = messages[-1]["content"]
@@ -198,6 +197,7 @@ async def run():
         print("VELIA_REQUEST_INTENT_CASE " + json.dumps(row, ensure_ascii=False), flush=True)
         if not ok:
             raise RuntimeError("request_intent_qualification_failed:" + name)
+    browser_rows = await run_browser_probes()
     return {"request_intent": {"ok": True, "cases": len(browser_rows) + len(rows),
         "live_browser_sse_cases": len(browser_rows), "interpretation_before_search": True,
         "resolved_spelling_answers": True, "substantive_medical_answer": True,
