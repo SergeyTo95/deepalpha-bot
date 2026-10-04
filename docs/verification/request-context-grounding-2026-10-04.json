@@ -1,0 +1,572 @@
+{
+  "date": "2026-10-04",
+  "scope": "PR577 browser preview",
+  "status": "qualified_and_deployed",
+  "local_regression": {
+    "passed": 305,
+    "skipped": 1,
+    "skip_reason": "No local PostgreSQL test database; deployment gate exercises persistent quotas and source cache"
+  },
+  "candidate": {
+    "gateway_code_sha": "4668a9ed7d5a2c7844715b8aecf4d631c754befd",
+    "gateway_deployment_id": "b9efb92a-c191-4938-8f35-351d8c9d5af2"
+  },
+  "cost": {
+    "same_free_flash_worker": true,
+    "paid_fallback": false,
+    "additional_review_model_call": true,
+    "review_scope": "Guest official-health advice and unspecified personal context; same free worker; no extra guest message"
+  },
+  "clinical_certification": false,
+  "gateway_image_checks": {
+    "passed": 272,
+    "logs": [
+      {
+        "time": "2026-10-04T19:25:59.419365379Z",
+        "message": "272 passed in 8.49s\n"
+      }
+    ]
+  },
+  "previous_attempts": [
+    {
+      "code": "910989e8022893d8db9fcbda867c5464e4197322",
+      "deployment": "dc27ec38-2e59-4f2f-84b5-146ef545ee94",
+      "status": "FAILED",
+      "reason": "Restored apnea incorrectly marked unspecified; answer still treated histamine as a condition"
+    },
+    {
+      "code": "494e4463a566817a750e72e1cd72c044c87d6107",
+      "deployment": "794aee09-4cca-4f52-9ca5-da902a3e4c7c",
+      "status": "FAILED",
+      "reason": "Planner conflated substance presence with a personal condition; reply prescribed unsupported food exclusions"
+    },
+    {
+      "code": "472d9de2de85e5947b23a04e3f1022cb398dd03a",
+      "deployment": "c64c3d8b-5f14-4f8c-af82-37e401ec3b5e",
+      "status": "FAILED",
+      "reason": "Medical assumption criterion passed, but sample contained malformed Russian terms; a legitimate explanatory Reset warning was rejected by the old predicate"
+    },
+    {
+      "code": "63a5a78fd1379056e74f87f3168fd423d969ff7d",
+      "deployment": "6e149374-c7ed-4c4d-858d-5051421f1b84",
+      "status": "FAILED",
+      "reason": "Steadier text still inferred histamine reactions and omitted apnea; prompt guidance alone did not qualify the final answer"
+    },
+    {
+      "code": "de63542f972b3d7d8a87b42b3815ff77caa8d88b",
+      "deployment": "f7fe97a6-139f-4d06-b260-7c0fd4dc7ac7",
+      "status": "FAILED",
+      "reason": "Buffered path did not emit a complete answer; draft-stage diagnostics added and completed transports can be finished through the editor"
+    },
+    {
+      "code": "af5c6a4d1dc63010bacd4a01f1ba28ef242bb490",
+      "deployment": "43fe815d-bb09-4458-96cd-a53f16bfd6a1",
+      "status": "FAILED",
+      "reason": "Completed draft was followed by ServerDisconnectedError at the editor transition; review now uses independent fresh connections"
+    },
+    {
+      "code": "e1eedcf58b4ad68010f947120e4059d7afe34ad1",
+      "deployment": "f4f8d79f-3829-4067-90ce-b1811a427b4d",
+      "status": "FAILED",
+      "reason": "All eight browser answers passed; final stated-allergy intent contained an unchanged correction and was rejected."
+    },
+    {
+      "code": "8366ccf5e45646a8defc6e7cfcfcb50d4ee5fc90",
+      "deployment": "81990ed3-b29c-48dd-8974-b3519a3aef06",
+      "reason": "Identical correction quote/candidate rejected; allergy and negation were correct.",
+      "status": "FAILED"
+    },
+    {
+      "code": "7883f84d66efbb6ff2e62c2d84468af9bf28101b",
+      "deployment": "dfed8d9b-e23b-4323-9739-ae74fb8bfdd9",
+      "reason": "Review removed named stated conditions and citations, omitted asthma/apnea in final; intent and unsupported personal-diagnosis checks passed.",
+      "status": "FAILED"
+    },
+    {
+      "code": "7666b7007b4c636474018879ac7bfcfaf77af900",
+      "deployment": "e3a177ab-0f50-433a-b1d6-49934f322248",
+      "status": "FAILED",
+      "reason": "Editor carried stated conditions and citations but copied generic numeric weight/activity advice into personal instructions; acceptance also needed the legitimate synonym activity."
+    },
+    {
+      "code": "1347f7a1502975c1e908784783fdd8934d73082d",
+      "deployment": "4e05dff0-6e86-4d6a-b5d1-9cabf7e643f0",
+      "status": "FAILED",
+      "reason": "Pre-model source qualification returned no authoritative source; all 254 image tests passed."
+    },
+    {
+      "code": "2e1cdc05bb0de50cbf6cd615b2a2c9f5817283c7",
+      "deployment": "1503a683-37d8-4a71-b022-0dc248974151",
+      "status": "FAILED",
+      "reason": "Two private editor passes preserved conditions and avoided new numeric regimens but omitted inline citations; replaced citation formatting with structured paragraph/source fields."
+    },
+    {
+      "code": "ea58f445d1ea91cb89523f96727275641b81b6f9",
+      "deployment": "b950d2df-9af2-457f-abbc-dcf71b11c1fa",
+      "status": "FAILED",
+      "reason": "Seven full browser answers passed; unspecified phone-model interpretation returned HTTP 503 before generation; add fixed-fixture-only diagnostics and qualify it first."
+    },
+    {
+      "code": "cf0a39b6af376dda41afdda3deeb3613c676fdd3",
+      "deployment": "c62b5e46-cca0-40b8-8290-461fe5ee768c",
+      "status": "FAILED",
+      "reason": "Fixed-fixture diagnostics confirmed a nonessential Samsung Cyrillic-to-Latin name recoding rejected by the lexical restoration guard."
+    },
+    {
+      "code": "6582e9d1e5de7e59afbb8d14d38d7816fb381e4c",
+      "deployment": "d1c4a6ca-d548-43c5-89d7-37e56eb10ddc",
+      "status": "FAILED",
+      "reason": "Conditional dietary exclusion advice from an unspecified substance reached the editor output; lexical entity/directive validation and private repair added."
+    }
+  ],
+  "native": {
+    "code": "7f6f0cf4ae67896cab54322126a3cba012b9d971",
+    "deployment": "50017fe8-605c-430a-986a-cfbc421dd737",
+    "status": "SUCCESS",
+    "logs": [
+      {
+        "time": "2026-10-04T16:04:15.188207531Z",
+        "message": "VELIA_FLASH_ADAPTER_PROBE {\"case\": \"coding\", \"ok\": true, \"elapsed_seconds\": 23.942791282199323, \"first_token_seconds\": 21.95761117618531, \"text\": \"```python\\ndef add(a, b):\\n    return a + b\\n```\", \"usage\": {\"completion_tokens\": 18, \"prompt_tokens\": 640, \"total_tokens\": 658, \"prompt_tokens_details\": {\"cached_tokens\": 0}}, \"reason\": null, \"provider\": \"bonsai\", \"estimated_cost_usd\": 0.0}"
+      },
+      {
+        "time": "2026-10-04T16:04:15.188212201Z",
+        "message": "VELIA_FLASH_ADAPTER_PROBE {\"case\": \"russian\", \"ok\": true, \"elapsed_seconds\": 4.362737100571394, \"first_token_seconds\": 1.3587019769474864, \"text\": \"Переменная в Python — это имя, привязанное к значению, которое можно использовать и изменять в программе.\", \"usage\": {\"completion_tokens\": 26, \"prompt_tokens\": 644, \"total_tokens\": 670, \"prompt_tokens_details\": {\"cached_tokens\": 613}}, \"reason\": null, \"provider\": \"bonsai\", \"estimated_cost_usd\": 0.0}"
+      }
+    ]
+  },
+  "text_profile": {
+    "temperature": 0.3,
+    "top_p": 0.8,
+    "top_k": 20,
+    "min_p": 0,
+    "presence_penalty": 0,
+    "tool_profile_unchanged": true
+  },
+  "live_browser_cases": [
+    {
+      "case": "medical_spacing",
+      "ok": true,
+      "decision": "search",
+      "candidate": "гистамин, апноэ",
+      "query": "healthy weight loss advice",
+      "source_scope": "official_health",
+      "context": [
+        {
+          "span": [
+            69,
+            77
+          ],
+          "status": "unspecified",
+          "kind": "substance"
+        },
+        {
+          "span": [
+            78,
+            83
+          ],
+          "status": "stated",
+          "kind": "condition"
+        },
+        {
+          "span": [
+            86,
+            91
+          ],
+          "status": "stated",
+          "kind": "condition"
+        }
+      ],
+      "reply": "Привет! С учётом астмы и апноэ «быстрое» похудение без контроля врача опасно: резкие дефициты и нагрузки могут ухудшить дыхание.\n\nОбщие шаги: ешьте меньше, будьте активнее, выбирайте продукты с меньшим содержанием жиров и добавленных сахаров, следите за порциями. [1] [2]\n\nДвижение: начните с лёгких прогулок, которые не провоцируют одышку; при апноэ важна работа над массой тела, но без резких нагрузок. [2] [3]\n\nКонтроль: ведите дневник питания и самочувствия, чтобы врач мог скорректировать план. [3]\n\nДля точного плана нужны данные о вашем лечении и переносимости продуктов.",
+      "finish_reason": "stop",
+      "done": true,
+      "sources": [
+        {
+          "title": "8 tips for healthy eating - NHS",
+          "url": "https://www.nhs.uk/live-well/eat-well/how-to-eat-a-balanced-diet/eight-tips-for-healthy-eating"
+        },
+        {
+          "title": "[PDF] Facts About Healthy Weight - nhlbi",
+          "url": "https://www.nhlbi.nih.gov/sites/default/files/publications/06-5830.pdf"
+        },
+        {
+          "title": "Tips for Keeping Weight Off | Healthy Weight and Growth | CDC",
+          "url": "https://www.cdc.gov/healthy-weight-growth/losing-weight/keeping-it-off.html"
+        }
+      ],
+      "seconds": 229.09,
+      "timestamp": "2026-10-04T19:33:07.416581960Z"
+    },
+    {
+      "case": "device_ambiguity",
+      "ok": true,
+      "decision": "clarify",
+      "candidate": null,
+      "query": null,
+      "source_scope": null,
+      "context": [],
+      "reply": "Уточните, пожалуйста, что вы имеете в виду под «квампер»?",
+      "finish_reason": "stop",
+      "done": true,
+      "sources": [],
+      "seconds": 71.9,
+      "timestamp": "2026-10-04T19:34:27.618100336Z"
+    },
+    {
+      "case": "arithmetic_typo",
+      "ok": true,
+      "decision": "direct",
+      "candidate": "умножить",
+      "query": null,
+      "source_scope": null,
+      "context": [],
+      "reply": "391",
+      "finish_reason": "stop",
+      "done": true,
+      "sources": [],
+      "seconds": 40.09,
+      "timestamp": "2026-10-04T19:35:07.699999509Z"
+    },
+    {
+      "case": "confirmed_context",
+      "ok": true,
+      "decision": "direct",
+      "candidate": "терминал",
+      "query": null,
+      "source_scope": null,
+      "context": [],
+      "reply": "Нажми Ctrl+Alt+T.",
+      "finish_reason": "stop",
+      "done": true,
+      "sources": [],
+      "seconds": 98.76,
+      "timestamp": "2026-10-04T19:36:38.065220242Z"
+    },
+    {
+      "case": "finance_typo",
+      "ok": true,
+      "decision": "direct",
+      "candidate": "между выручкой и прибылью",
+      "query": null,
+      "source_scope": null,
+      "context": [],
+      "reply": "Выручка — это все деньги, которые ты получил за продажу товаров или услуг. Прибыль — это то, что осталось после вычета всех расходов.\n\nПростой пример: ты продал 10 торт по 1000 рублей. Твоя выручка — 10 000 рублей. Если на ингредиенты и упаковку ты потратил 4 000 рублей, то твоя прибыль — 6 000 рублей.",
+      "finish_reason": "stop",
+      "done": true,
+      "sources": [],
+      "seconds": 109.66,
+      "timestamp": "2026-10-04T19:38:28.350830404Z"
+    },
+    {
+      "case": "router_typo",
+      "ok": true,
+      "decision": "direct",
+      "candidate": "перезагрузить роутер",
+      "query": null,
+      "source_scope": null,
+      "context": [],
+      "reply": "Отключите питание роутера, подождите 10–15 секунд и включите его обратно. Это перезагрузит устройство без сброса настроек.",
+      "finish_reason": "stop",
+      "done": true,
+      "sources": [],
+      "seconds": 102.05,
+      "timestamp": "2026-10-04T19:40:18.262901263Z"
+    },
+    {
+      "case": "literal_constraints",
+      "ok": true,
+      "decision": "direct",
+      "candidate": null,
+      "query": null,
+      "source_scope": null,
+      "context": [],
+      "reply": "print(\"app.py\")",
+      "finish_reason": "stop",
+      "done": true,
+      "sources": [],
+      "seconds": 98.13,
+      "timestamp": "2026-10-04T19:41:48.298494876Z"
+    },
+    {
+      "case": "unspecified_device_model",
+      "ok": true,
+      "decision": "direct",
+      "candidate": null,
+      "query": null,
+      "source_scope": null,
+      "context": [
+        {
+          "span": [
+            7,
+            22
+          ],
+          "status": "stated",
+          "kind": "device"
+        },
+        {
+          "span": [
+            24,
+            38
+          ],
+          "status": "unspecified",
+          "kind": "other"
+        }
+      ],
+      "reply": "Нажмите и удерживайте одновременно кнопки Громкость вниз и Стороннюю (Power) на 1–2 секунды. Экран мигнёт, и скриншот сохранится в Галерее.",
+      "finish_reason": "stop",
+      "done": true,
+      "sources": [],
+      "seconds": 157.12,
+      "timestamp": "2026-10-04T19:44:28.417172545Z"
+    }
+  ],
+  "live_intent_cases": [
+    {
+      "case": "unspecified_device_model",
+      "ok": true,
+      "decision": {
+        "action": "direct",
+        "query": "",
+        "context": [
+          {
+            "span": [
+              7,
+              22
+            ],
+            "status": "stated",
+            "kind": "device"
+          },
+          {
+            "span": [
+              24,
+              38
+            ],
+            "status": "unspecified",
+            "kind": "other"
+          }
+        ]
+      },
+      "reply": null,
+      "timestamp": "2026-10-04T19:27:58.127855516Z"
+    },
+    {
+      "case": "stated_allergy",
+      "ok": true,
+      "decision": {
+        "action": "search",
+        "query": "general nutrition advice",
+        "context": [
+          {
+            "span": [
+              7,
+              25
+            ],
+            "status": "stated",
+            "kind": "condition"
+          },
+          {
+            "span": [
+              30,
+              39
+            ],
+            "status": "stated",
+            "kind": "condition"
+          }
+        ],
+        "source_scope": "official_health"
+      },
+      "reply": null,
+      "timestamp": "2026-10-04T19:28:17.957352939Z"
+    },
+    {
+      "case": "medical_plain",
+      "ok": true,
+      "decision": {
+        "action": "search",
+        "query": "healthy weight loss advice",
+        "context": [
+          {
+            "span": [
+              7,
+              15
+            ],
+            "status": "unspecified",
+            "kind": "substance"
+          },
+          {
+            "span": [
+              16,
+              21
+            ],
+            "status": "stated",
+            "kind": "condition"
+          },
+          {
+            "span": [
+              24,
+              29
+            ],
+            "status": "stated",
+            "kind": "condition"
+          }
+        ],
+        "source_scope": "official_health",
+        "span": [
+          7,
+          21
+        ],
+        "candidate": "гистамин, апноэ"
+      },
+      "reply": null,
+      "timestamp": "2026-10-04T19:28:47.964136539Z"
+    },
+    {
+      "case": "english_spelling",
+      "ok": true,
+      "decision": {
+        "action": "direct",
+        "query": "",
+        "context": [],
+        "span": [
+          8,
+          14
+        ],
+        "candidate": "revenue"
+      },
+      "reply": null,
+      "timestamp": "2026-10-04T19:29:07.965563373Z"
+    },
+    {
+      "case": "current_search",
+      "ok": true,
+      "decision": {
+        "action": "search",
+        "query": "latest stable Python version official site",
+        "context": []
+      },
+      "reply": null,
+      "timestamp": "2026-10-04T19:29:17.421390500Z"
+    }
+  ],
+  "live_understanding": {
+    "cases": 13,
+    "passed": 13,
+    "public_guest_quota_used": false,
+    "isolated_loopback_guest_route": true
+  },
+  "limitations": [
+    "Guest editor is model based and not clinical certification; source ID validation does not prove claim entailment.",
+    "Free CPU model remains slow: the actual medical example took 229.09 seconds; editor adds latency.",
+    "Some Russian wording remains imperfect (observed finance noun ending and phone button naming).",
+    "Account/native answers share understanding and sampling changes but do not use the guest editor."
+  ],
+  "gateway": {
+    "code": "4668a9ed7d5a2c7844715b8aecf4d631c754befd",
+    "deployment": "b9efb92a-c191-4938-8f35-351d8c9d5af2",
+    "status": "SUCCESS"
+  },
+  "live_gateway_gate": {
+    "commit": "4668a9ed7d5a2c7844715b8aecf4d631c754befd",
+    "correlated_tool_result": true,
+    "flash_live_harness": true,
+    "flash_paid_fallback": false,
+    "guest_quota": {
+      "accepted": 30,
+      "atomic_limit": 30,
+      "ok": true,
+      "persistent": true,
+      "rejected": 8
+    },
+    "identity_health": true,
+    "identity_rejects_no_token": true,
+    "live_sse": true,
+    "live_tool_call": true,
+    "model_calls": 2,
+    "ok": true,
+    "owner_pairing_verified": false,
+    "request_intent": {
+      "cases": 13,
+      "interpretation_before_search": true,
+      "live_browser_sse_cases": 8,
+      "ok": true,
+      "paid_fallback": false,
+      "personal_context_grounded": true,
+      "resolved_spelling_answers": true,
+      "substantive_medical_answer": true
+    },
+    "web_search": {
+      "model_calls": 0,
+      "ok": true,
+      "persistent_sources": true,
+      "primary_source": true,
+      "source_count": 3
+    }
+  },
+  "live_harness_gate": {
+    "ok": true,
+    "rounds": 2,
+    "readTool": true,
+    "persona": true,
+    "declaredTools": 24,
+    "requestCharacters": 23372,
+    "liveModel": true,
+    "ownerPairingVerified": false
+  },
+  "public_endpoints": [
+    {
+      "path": "/health",
+      "status": 200,
+      "seconds": 8.28,
+      "content_type": "application/json; charset=utf-8",
+      "health": {
+        "ok": true,
+        "service": "velia-desktop-gateway"
+      }
+    },
+    {
+      "path": "/",
+      "status": 200,
+      "seconds": 6.95,
+      "content_type": "text/html",
+      "health": null
+    }
+  ],
+  "qualified_at": "2026-10-04T19:48:38.806862887Z",
+  "technical_source_configuration": [
+    {
+      "time": "2026-10-04T19:26:27.900600512Z",
+      "message": "VELIA_WEB_SEARCH_CONFIGURATION {\"provider\": \"tavily\", \"configured\": true}"
+    },
+    {
+      "time": "2026-10-04T19:26:27.900610492Z",
+      "message": "VELIA_WEB_SEARCH_OPERATOR_SOURCE {\"hosts\": [\"www.python.org\", \"downloads.python.org\", \"www.python.org\"], \"primary_source\": true}"
+    }
+  ],
+  "review_diagnostics": [
+    {
+      "time": "2026-10-04T19:31:27.388114596Z",
+      "phase": "draft",
+      "done": true,
+      "finish_reason": "stop",
+      "characters": 716
+    },
+    {
+      "time": "2026-10-04T19:33:07.416565680Z",
+      "phase": "review",
+      "ok": true,
+      "characters": 578
+    },
+    {
+      "time": "2026-10-04T19:43:38.533718037Z",
+      "phase": "draft",
+      "done": true,
+      "finish_reason": "stop",
+      "characters": 147
+    },
+    {
+      "time": "2026-10-04T19:44:28.417158065Z",
+      "phase": "review",
+      "ok": true,
+      "characters": 139
+    }
+  ]
+}
