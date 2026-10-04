@@ -5,23 +5,29 @@ of the submitted question; no external result can supply that interpretation.
 """
 import json
 import os
+import asyncio
 
 from aiohttp import ClientSession, ClientTimeout, DummyCookieJar
 from velia_desktop_routes import check_flash_context, flash_endpoint
 from velia_request_understanding import plausible_restoration
+from desktop.spelling_hints import spelling_hints, phonetic_restoration
 
 
 INSTRUCTION = (
     "Ты определяешь, понятен ли запрос пользователя ДО поиска. Вызови understand_request. "
     "Восстанавливай опечатки и ошибки диктовки по написанию, звучанию и контексту "
     "задачи во всех темах. Очевидные исправления понятны и не требуют уточнения. "
+    "Словарные подсказки в конце инструкции — только близкие написания. Выбери "
+    "осмысленные варианты по контексту, не считай их фактами. Если близкий вариант "
+    "подходит, ОБЯЗАТЕЛЬНО укажи его в candidate при clarify, не оставляй пустым. "
     "Сохраняй отрицания, числа, единицы, цитаты и идентификаторы. Учитывай исправления "
     "и подтверждения пользователя; догадки ассистента не подтверждают факты. "
     "Если вероятная расшифровка меняет ключевые исходные данные (например диагноз, "
     "препарат или точную модель устройства) и ещё не подтверждена, action=clarify: "
     "quote=точная цитата испорченной "
     "фразы, candidate=её ближайшее исправленное написание, query=''. Расшифруй ВСЕ "
-    "слова этой фразы. candidate содержит только исправленные слова, без пояснений "
+    "слова этой фразы. Несколько соседних испорченных слов рассматривай вместе. "
+    "candidate содержит только исправленные слова, без пояснений "
     "и дополнительных диагнозов. Не заменяй созвучное слово далёким по написанию "
     "названием. Если подходящего смысла вообще нет, candidate='', уточни quote. "
     "Не выбирай clarify лишь потому, что слово написано с ошибкой. Примеры: "
@@ -62,6 +68,8 @@ def parse_decision(result, question):
         start = question.index(quote)
         result = {"action": "clarify", "span": [start, start + len(quote)]}
         restored = plausible_restoration(quote, candidate)
+        if not restored:
+            restored = plausible_restoration(quote, phonetic_restoration(quote))
         if restored:
             result["candidate"] = restored
         return result
@@ -78,7 +86,9 @@ async def understand(messages):
     # Retain the latest question verbatim; omit whole old turns rather than cut words.
     while len(history) > 1 and sum(len(m.get("content") or "") for m in history[:-1]) > 6000:
         history.pop(0)
-    payload = {"model": "velia-flash", "messages": [{"role": "system", "content": INSTRUCTION}] + history,
+    hints = await asyncio.to_thread(spelling_hints, question)
+    instruction = INSTRUCTION + ("\nСловарные подсказки (не подтверждённые факты):\n" + json.dumps(hints, ensure_ascii=False) if hints else "")
+    payload = {"model": "velia-flash", "messages": [{"role": "system", "content": instruction}] + history,
         "tools": [TOOL], "tool_choice": "required", "stream": False, "max_tokens": 224,
         "temperature": 0.1, "top_p": 0.8, "top_k": 20, "min_p": 0.05,
         "chat_template_kwargs": {"enable_thinking": False}, "reasoning_format": "deepseek",

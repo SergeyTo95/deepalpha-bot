@@ -90,6 +90,7 @@ async def run_browser_probes():
                     ok = (search.decision["decision"] == action and done and stop == "stop" and not sources
                         and remaining == str(29 - index) and acceptable(text))
                     row = {"case": name, "ok": bool(ok), "decision": search.decision["decision"],
+                        "candidate": search.decision.get("clarification_candidate"),
                         "reply": text, "done": done, "sources": sources, "seconds": round(time.monotonic() - started, 2)}
                     rows.append(row)
                     print("VELIA_REQUEST_UNDERSTANDING_BROWSER " + json.dumps(row, ensure_ascii=False), flush=True)

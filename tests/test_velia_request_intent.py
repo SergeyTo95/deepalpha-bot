@@ -6,6 +6,7 @@ import pytest
 
 from desktop.guest_store import GuestStore
 from desktop.request_intent import parse_decision
+from desktop.spelling_hints import spelling_hints, phonetic_restoration
 from tests.test_velia_web_chat import fixture, headers, login
 from tests.test_velia_web_guest import guest, guest_headers
 from velia_request_understanding import CLARIFICATION_MARKER, clarification_content, clarification_reply, plausible_restoration
@@ -16,13 +17,41 @@ def decision(args):
         "name": "understand_request", "arguments": json.dumps(args)}}]}}]}
 
 
-@pytest.mark.parametrize("quote", ["гестамин эпное", "флумпенсор", "error_100"])
+def test_packaged_vocabulary_restores_the_screenshot_terms_and_ordinary_technical_words():
+    hints = {value["word"]: value["candidates"] for value in spelling_hints(
+        "У меня гестамин эпное и астма. Как перезагрузить роутор и открыть терменал?")}
+    assert hints["гестамин"][0] == "гистамин"
+    assert hints["эпное"][0] == "апноэ"
+    assert "роутер" in hints["роутор"] and "терминал" in hints["терменал"]
+
+
+def test_lexical_hints_cover_english_without_changing_literals_or_original_text():
+    question = 'Explain revnue, but leave «гестамин эпное», "терменал", app.py, error_100, myFile and 0,5 TON unchanged.'
+    hints = spelling_hints(question)
+    assert any(value["word"] == "revnue" and "revenue" in value["candidates"] for value in hints)
+    assert not any(value["word"] in {"гестамин", "эпное", "терменал", "app", "error", "myFile", "TON"} for value in hints)
+    assert question == 'Explain revnue, but leave «гестамин эпное», "терменал", app.py, error_100, myFile and 0,5 TON unchanged.'
+
+
+@pytest.mark.parametrize("quote", ["флумпенсор", "error_100"])
 def test_clarification_is_an_exact_user_span_and_a_complete_question(quote):
     question = "Уточни " + quote + ", не меняй 8080 и app.py."
     result = parse_decision(decision({"action": "clarify", "quote": quote, "query": ""}), question)
     content = clarification_content(question, result["span"])
     assert content.startswith(question)
     assert clarification_reply(content) == "Уточните, пожалуйста, что вы имеете в виду под «" + quote + "»?"
+
+
+def test_empty_model_candidate_can_use_unique_phonetic_readings_without_asserting_a_diagnosis():
+    question = "У меня гестамин эпное и астма"
+    result = parse_decision(decision({"action": "clarify", "quote": "гестамин эпное",
+        "candidate": "", "query": ""}), question)
+    assert result["candidate"] == "гистамин апноэ"
+    reply = clarification_reply(clarification_content(question, result["span"], result["candidate"]))
+    assert reply.startswith("Правильно ли я поняла:") and reply.endswith("?")
+    assert phonetic_restoration("квампер") is None
+    assert phonetic_restoration("app.py") is None
+    assert phonetic_restoration("0,5 TON") is None
 
 
 @pytest.mark.parametrize("args", [
@@ -82,7 +111,9 @@ def test_extra_facts_unrelated_meanings_and_literal_changes_are_not_proposed(sou
     assert plausible_restoration(source, candidate) is None
     result = parse_decision(decision({"action": "clarify", "quote": source,
         "candidate": candidate, "query": ""}), "Что означает " + source + "?")
-    assert "candidate" not in result
+    assert result.get("candidate") != candidate
+    if result.get("candidate"):
+        assert plausible_restoration(source, result["candidate"]) == result["candidate"]
 
 
 @pytest.mark.parametrize("candidate", ["гестационный диабет", "гистамин, апноэ. Вы беременны"])
