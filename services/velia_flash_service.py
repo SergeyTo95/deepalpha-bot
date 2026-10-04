@@ -10,7 +10,7 @@ import threading
 from urllib.parse import urlsplit
 
 import requests
-from velia_request_understanding import understanding_instruction, clarification_result, clarification_reply
+from velia_request_understanding import understanding_instruction, clarification_result, clarification_reply, interpreted_content
 
 MODEL = "velia-flash"
 PROVIDER = "bonsai"
@@ -325,7 +325,8 @@ def _generate_once(messages, *, request_id="", on_delta=None):
             if voice_fast else ""
         )
     )}
-    history = [dict(m) for m in messages if m.get("role") in {"user", "assistant"}]
+    history = [{**m, "content": interpreted_content(m.get("content"))} if m.get("role") == "user" else dict(m)
+        for m in messages if m.get("role") in {"user", "assistant"}]
     if not history:
         return error("empty_message", request_id)
     started = time.monotonic()
