@@ -13,7 +13,7 @@ from services import velia_chat_streaming_runtime_patch as streaming
 from services import velia_plugin_router
 from services import velia_plugin_service
 from services.velia_mobile_streaming_service import _stream_send_kwargs
-from velia_request_understanding import REQUEST_UNDERSTANDING, clarification_content, restoration_content
+from velia_request_understanding import REQUEST_UNDERSTANDING, clarification_content, restoration_content, interpreted_content
 
 
 @pytest.fixture
@@ -113,7 +113,27 @@ def test_native_resolved_spelling_generates_instead_of_returning_a_prepared_ques
     result = flash.generate([{"role": "user", "content": content}])
     assert result["ok"] and not result.get("prepared_clarification")
     assert session.calls[-1][0].endswith("/v1/chat/completions")
-    assert session.calls[-1][1]["json"]["messages"][-1]["content"] == content
+    assert session.calls[-1][1]["json"]["messages"][-1]["content"] == question.replace("revnue", "revenue")
+    assert content.startswith(question)
+
+
+@pytest.mark.parametrize("with_attachments", [False, True])
+def test_pro_prompt_renders_repairs_without_rewriting_storage(monkeypatch, with_attachments):
+    question = "Объясни revnue и оставь 0.5 TON"
+    start = question.index("revnue")
+    raw = restoration_content(question, [start, start + len("revnue")], "revenue")
+    rows = [{"role": "user", "content": raw, "attachment_context": "attachment literal revnue"}]
+    cursor = SimpleNamespace(execute=lambda *a, **k: None, fetchall=lambda: rows, close=lambda: None)
+    conn = SimpleNamespace(cursor=lambda *a, **k: cursor, close=lambda: None)
+    monkeypatch.setattr(chat, "get_connection", lambda: conn)
+    monkeypatch.setattr(attachment, "get_connection", lambda: conn)
+    prompt = (attachment._build_prompt_with_attachments(chat, 7, "c") if with_attachments
+        else chat._build_prompt(7, "c"))
+    assert question.replace("revnue", "revenue") in prompt
+    assert REQUEST_UNDERSTANDING in prompt
+    assert raw not in prompt and rows[0]["content"] == raw
+    if with_attachments:
+        assert "attachment literal revnue" in prompt
 
 
 def test_browser_provided_native_sources_do_not_trigger_another_search(enabled, monkeypatch):

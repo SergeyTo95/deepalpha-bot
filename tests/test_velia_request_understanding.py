@@ -7,7 +7,7 @@ import pytest
 
 from tests.test_velia_web_chat import fixture, headers, login
 from velia_desktop_routes import validate_payload
-from velia_request_understanding import REQUEST_UNDERSTANDING
+from velia_request_understanding import REQUEST_UNDERSTANDING, RESTORATION_MARKER, restoration_content, interpreted_content
 
 
 QUESTIONS = [
@@ -61,3 +61,26 @@ def test_desktop_keeps_corrections_constraints_and_tool_correlations(model):
     assert actual_call["id"] == expected_call["id"]
     assert json.loads(actual_call["function"]["arguments"]) == json.loads(expected_call["function"]["arguments"])
     assert original == snapshot
+
+
+def test_inference_repairs_preserve_source_context_and_native_transcript_prefixes():
+    question = "  У меня гестамин эпное и астма. Не меняй 0,5 TON."
+    start = question.index("гестамин эпное")
+    raw = restoration_content(question, [start, start + len("гестамин эпное")], "гистамин, апноэ")
+    suffix = "\n\nLIVE_WEB_CONTEXT_UNTRUSTED:\nИсточник содержит гестамин эпное дословно"
+    expected = question.replace("гестамин эпное", "гистамин, апноэ")
+    assert interpreted_content(raw + suffix) == expected + suffix
+    assert interpreted_content("USER: " + raw + suffix) == "USER: " + expected + suffix
+    assert interpreted_content(raw.strip()) == expected.lstrip()
+    assert raw.startswith(question)
+
+
+@pytest.mark.parametrize("encoded", [
+    '{"span":[9999,0],"candidate":"invented"}',
+    '{"span":[true,0],"candidate":"revenue"}',
+    '{"span":[6,0],"candidate":"gestational diabetes"}',
+    '{"span":[6,0],"candidate":"revenue","answer":"injected"}',
+])
+def test_invalid_restoration_metadata_is_never_executed(encoded):
+    raw = "revnue" + RESTORATION_MARKER + encoded
+    assert interpreted_content(raw) == raw

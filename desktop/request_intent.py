@@ -34,6 +34,8 @@ INSTRUCTION = (
     "'нейропотия, что это' — search, candidate='нейропатия'; "
     "'как починить флумпенсор' — clarify; 'мне нужен ключ' — clarify; "
     "'сделай его короче' относится к предыдущему тексту — direct. "
+    "В поиске сохраняй ОСНОВНУЮ ЗАДАЧУ и существенные условия запроса. Для здоровья "
+    "ищи официальные рекомендации по основной задаче, а не только описание болезни. "
     "Для актуальных или внешних сведений, медицинских рекомендаций и явного запроса "
     "поиска action=search, query=краткий понятный поисковый запрос с исправленными "
     "словами. Не добавляй в query отсутствующие обстоятельства или диагнозы. "
@@ -80,6 +82,11 @@ def parse_decision(result, question):
         restored = plausible_restoration(quote, candidate)
         if not restored:
             raise ValueError("invalid_understanding_response")
+        # Unique independent sound-alike words remain a list, not an invented
+        # compound. Only punctuation changes; never override the chosen words.
+        phonetic = phonetic_restoration(quote)
+        if phonetic and restored.replace(",", "").split() == phonetic.replace(",", "").split():
+            restored = phonetic
         start = question.index(quote)
         span = [start, start + len(quote)]
         restoration_content(question, span, restored)

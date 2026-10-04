@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from aiohttp import ClientError, ClientSession, ClientTimeout, DummyCookieJar, web
 from desktop.request_intent import understand
 from velia_request_understanding import (CLARIFICATION_MARKER, RESTORATION_MARKER,
-    clarification_content, clarification_reply, restoration_content)
+    clarification_content, clarification_reply, restoration_content, interpreted_content)
 
 SEARCH = web.RequestKey("velia_web_search_requested", bool)
 SOURCES = web.RequestKey("velia_web_search_sources", dict)
@@ -101,7 +101,9 @@ def augmented_question(question, result, *, marker=MARKER):
         "в виду именно их или что описанные на странице обстоятельства относятся к нему.")
     lines.append("Ответь на основную задачу пользователя. Понятные опечатки исправляй "
         "по контексту молча; не заменяй полезный ответ подтверждением написания. "
-        "Не добавляй сведения о пользователе из источников.")
+        "Не добавляй сведения о пользователе из источников. Дай законченный ответ: "
+        "краткий вывод и до четырёх коротких пунктов, обычно до 120 слов. "
+        "Числовые рекомендации должны опираться на подходящие источники.")
     return "\n".join(lines)
 
 
@@ -214,7 +216,7 @@ class WebSearch:
         content = (augmented_question(question, result) if result["decision"] == "search"
             else restored_question(question, result))
         return {**payload, "messages": [*payload["messages"][:-1],
-            {**payload["messages"][-1], "content": content}]}
+            {**payload["messages"][-1], "content": interpreted_content(content)}]}
 
     async def account_question(self, user, conversation, request_id, question, model, *, messages=None):
         if not self.store:

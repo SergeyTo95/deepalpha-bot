@@ -23,14 +23,16 @@ additional spelling-model call is used.
 
 Both direct and search decisions can carry a resolved spelling as an exact
 original span and a nearby candidate. A dependency-free guard rejects unrelated
-meanings, extra facts, changed literals and partial-word edits. The context model
+meanings, extra facts, changed literals, short units, negations and partial-word edits. The context model
 chooses the reading; edit distance alone never promotes an ambiguous turn into
 an answer. Malformed decisions fail before guessed retrieval.
 
 Resolved spellings reach the normal answer generator rather than the prepared
-clarification path. An internal note pairs individual source words with their
-corrected spellings, avoiding an invented compound made from adjacent terms.
-The raw question remains the prefix of the handoff. Search uses the recognized
+clarification path. A canonical handoff carries exact end-relative positions and a bounded reading.
+The inference renderer applies that repair to a copy of the question before
+the model sees it. The raw question remains the stored prefix of the handoff.
+Unique independent sound-alike words retain a separating comma instead of
+becoming an invented compound. The model-selected words are never overridden. Search uses the recognized
 wording and retains bounded source provenance; its wrapper asks for a useful
 answer rather than waiting for spelling confirmation.
 
@@ -51,7 +53,7 @@ retain their existing limits.
 
 ## Verification
 
-Local regression checks: **216 passed**, one PostgreSQL integration check skipped
+Local regression checks: **226 passed**, one PostgreSQL integration check skipped
 because no local test database was supplied. The deployed gate separately checks
 real PostgreSQL quota enforcement and source caching.
 
@@ -67,7 +69,8 @@ answers on an isolated loopback guest server with a temporary quota database:
 
 - The exact screenshot query receives substantive weight-loss guidance, with the
   nearby readings `гистамин` and `апноэ`, rather than a spelling-confirmation
-  question. No gestational diabetes, pregnancy or unrelated source cards.
+  question. No invented gestational diabetes, pregnancy, confusion of apnea with fainting,
+  or unrelated source cards. The complete answer must finish with `stop`.
 - An unknown device name remains a complete clarification.
 - Arithmetic returns 391.
 - A corrected Ubuntu context returns Ctrl+Alt+T.

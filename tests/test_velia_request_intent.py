@@ -9,7 +9,7 @@ from desktop.request_intent import parse_decision
 from desktop.spelling_hints import spelling_hints, phonetic_restoration
 from tests.test_velia_web_chat import fixture, headers, login
 from tests.test_velia_web_guest import guest, guest_headers
-from velia_request_understanding import CLARIFICATION_MARKER, RESTORATION_MARKER, clarification_content, clarification_reply, plausible_restoration, restoration_content
+from velia_request_understanding import CLARIFICATION_MARKER, RESTORATION_MARKER, clarification_content, clarification_reply, plausible_restoration, restoration_content, interpreted_content
 
 
 def decision(args):
@@ -161,9 +161,9 @@ def test_resolved_spelling_reaches_the_answer_generator_without_confirmation(mon
             assert len(state["payloads"]) == len(state["intent_payloads"]) == 1
             assert state["intent_payloads"][0]["messages"][-1]["content"] == question
             content = state["payloads"][0]["messages"][-1]["content"]
-            assert content.startswith(question + RESTORATION_MARKER)
+            assert content.startswith(question.replace(quote, "гистамин, апноэ"))
             assert "гистамин" in content and "апноэ" in content
-            assert CLARIFICATION_MARKER not in content
+            assert CLARIFICATION_MARKER not in content and RESTORATION_MARKER not in content
     asyncio.run(run())
 
 
@@ -246,6 +246,7 @@ def test_resolved_pair_is_validated_and_keeps_the_raw_question(action):
     content = restoration_content(question, result["span"], result["candidate"])
     assert content.startswith(question + RESTORATION_MARKER)
     assert clarification_reply(content) is None
+    assert interpreted_content(content) == question.replace("revnue", "revenue")
 
 
 @pytest.mark.parametrize("question,quote,candidate", [
@@ -257,6 +258,9 @@ def test_resolved_pair_is_validated_and_keeps_the_raw_question(action):
     ('Объясни супергестамин', 'гестамин', 'гистамин'),
     ('У меня гестамин эпное', 'гестамин эпное', 'гестационный диабет'),
     ('У меня гестамин эпное', 'гестамин эпное', 'гистаминовая непереносимость и апноэ'),
+    ('Не гестамин', 'Не гестамин', 'На гистамин'),
+    ('not revnue', 'not revnue', 'now revenue'),
+    ('Доза 5 мг', 'мг', 'г'),
 ])
 def test_resolved_interpretation_cannot_change_literals_or_add_diagnoses(question, quote, candidate):
     with pytest.raises(ValueError):

@@ -78,11 +78,46 @@ def restoration_content(question, span, candidate):
             or any(start < match.end() and end > match.start()
                 for match in LITERAL_PATTERN.finditer(question))):
         raise ValueError("invalid_restoration")
-    words = lambda value: [word for word in re.findall(r"[^\W\d_]+", value)
+    words = lambda value: [word.casefold() for word in re.findall(r"[^\W\d_]+", value)
         if word.casefold() != "и"]
-    corrections = [[left, right] for left, right in zip(words(question[start:end]), words(candidate))
-        if left.casefold().replace("ё", "е") != right.casefold().replace("ё", "е")]
-    return question + RESTORATION_MARKER + json.dumps({"слова": corrections}, ensure_ascii=False)
+    negations = {"не", "нет", "ни", "no", "not", "never", "without"}
+    for left, right in zip(words(question[start:end]), words(candidate)):
+        if left != right and (min(len(left), len(right)) < 3 or left in negations or right in negations):
+            raise ValueError("invalid_restoration")
+    relative = [len(question) - start, len(question) - end]
+    return question + RESTORATION_MARKER + json.dumps({"span": relative, "candidate": candidate}, ensure_ascii=False)
+
+
+def interpreted_content(content):
+    """Render validated repairs in an inference copy; saved content stays raw.
+
+    End-relative positions also work inside native transcript prefixes. Any
+    appended source/attachment context is retained and is never interpreted as
+    part of the correction. Unrecognized or noncanonical handoffs stay intact.
+    """
+    if not isinstance(content, str):
+        return content
+    for _ in range(128):
+        if RESTORATION_MARKER not in content:
+            break
+        question, _, tail = content.rpartition(RESTORATION_MARKER)
+        encoded, separator, suffix = tail.partition("\n")
+        try:
+            value = json.loads(encoded)
+            if not isinstance(value, dict) or set(value) != {"span", "candidate"}:
+                break
+            relative = value["span"]
+            if (not isinstance(relative, list) or len(relative) != 2
+                    or any(type(x) is not int for x in relative)
+                    or not 0 <= relative[1] < relative[0] <= len(question)):
+                break
+            start, end = len(question) - relative[0], len(question) - relative[1]
+            if restoration_content(question, [start, end], value["candidate"]) != question + RESTORATION_MARKER + encoded:
+                break
+            content = question[:start] + value["candidate"] + question[end:] + separator + suffix
+        except (ValueError, TypeError):
+            break
+    return content
 
 
 def clarification_content(question, span, candidate=""):
@@ -168,7 +203,8 @@ def understanding_instruction(instruction):
 
 def understanding_messages(messages):
     """Add server instructions without changing user text, history or tool payloads."""
-    copied = [dict(message) for message in messages]
+    copied = [{**message, "content": interpreted_content(message.get("content"))}
+        if message.get("role") == "user" else dict(message) for message in messages]
     for message in copied:
         if message.get("role") == "system":
             message["content"] = understanding_instruction(message.get("content"))

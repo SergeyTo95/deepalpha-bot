@@ -24,11 +24,15 @@ def medical_answer(reply):
         and all(term in lowered for term in ("гистамин", "апноэ", "астм"))
         and any(term in lowered for term in ("питан", "калори", "рацион"))
         and any(term in lowered for term in ("ходьб", "активн", "нагруз", "движен"))
-        and not any(term in lowered for term in ("правильно ли я поняла", "что вы имеете в виду", "гестацион", "диабет", "беремен")))
+        and not any(term in lowered for term in ("правильно ли я поняла", "что вы имеете в виду", "гестацион", "диабет", "беремен", "обмор")))
 
 
 async def run_browser_probes():
     class RecordedSearch(WebSearch):
+        async def search(self, query):
+            self.query = query
+            return await super().search(query)
+
         async def plan(self, messages):
             self.decision = await super().plan(messages)
             return self.decision
@@ -98,7 +102,8 @@ async def run_browser_probes():
                         and remaining == str(29 - index) and acceptable(text))
                     row = {"case": name, "ok": bool(ok), "decision": search.decision["decision"],
                         "candidate": search.decision.get("restoration_candidate") or search.decision.get("clarification_candidate"),
-                        "reply": text, "done": done, "sources": sources, "seconds": round(time.monotonic() - started, 2)}
+                        "query": getattr(search, "query", None) if action == "search" else None,
+                        "reply": text, "finish_reason": stop, "done": done, "sources": sources, "seconds": round(time.monotonic() - started, 2)}
                     rows.append(row)
                     print("VELIA_REQUEST_UNDERSTANDING_BROWSER " + json.dumps(row, ensure_ascii=False), flush=True)
                     if not ok:
