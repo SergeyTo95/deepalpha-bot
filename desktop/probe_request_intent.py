@@ -18,6 +18,22 @@ from desktop.web_search import WebSearch, official_health_url
 from velia_request_understanding import clarification_content, clarification_reply
 
 
+def unconfirmed_personal_condition(reply):
+    """Reject the observed extra diagnosis, while allowing conditional discussion.
+
+    This acceptance check is specific to the original fixture, which does not
+    state an allergy/intolerance. It is not a production word filter.
+    """
+    for sentence in re.split(r"[.!?\n;]", reply.casefold()):
+        if not re.search(r"аллерг\w*|непереносим\w*", sentence):
+            continue
+        if re.search(r"\bесли\b|\bпри\s+(?:наличии|подтвержд\w*|выявл\w*)|\bне\s+(?:означает|подтверждает|устанавливает)\b", sentence):
+            continue
+        if re.search(r"\bваш\w*\b|\bу\s+(?:вас|тебя)\b|\bс\s+уч[её]том\b|\bучитыва\w*\b|\bпод\s+\w*\s*(?:аллерг|непереносим)", sentence):
+            return True
+    return False
+
+
 def medical_answer(reply):
     lowered = reply.casefold()
     return (len(reply.strip()) >= 180
@@ -27,6 +43,7 @@ def medical_answer(reply):
         and not re.search(r"исключ\w*[^.!?\n]*(?:цитрусов|банан|арахис|ферментирован)", lowered)
         and not re.search(r"\b(?:это|точно|гарантированно)\s+безопасно\b|\bне\s+(?:усилит|ухудшит)\s+симптом|\bвешай\w*\b", lowered)
         and not re.search(r"\b1\s*[–—-]\s*2\s*кг.{0,20}(?:в\s+недел|за\s+недел|еженедел)", lowered)
+        and not unconfirmed_personal_condition(reply)
         and not any(term in lowered for term in ("правильно ли я поняла", "что вы имеете в виду", "гестацион", "диабет", "беремен", "обмор")))
 
 
@@ -65,6 +82,7 @@ async def run_browser_probes():
         ("finance_typo", [{"role": "user", "content": "Объясни разницу межу выручкой и прибылю на простом примере. Кратко."}], "direct", finance_answer),
         ("router_typo", [{"role": "user", "content": "Как перезагрузиь роутор, не сбрасывая настройки? Ответь кратко."}], "direct", router_answer),
         ("literal_constraints", [{"role": "user", "content": "В Python исправь синтаксис в строке print(\"app.py\". Не меняй текст app.py и ничего не удаляй. Только исправленная строка."}], "direct", lambda text: text.strip().strip(chr(96)).removeprefix("python\n").strip() == 'print("app.py")'),
+        ("unspecified_device_model", [{"role": "user", "content": "У меня телефон Самсунг, модель не знаю. Как сделать скриншот кнопками? Ответь коротко."}], "direct", lambda text: (any(term in text.casefold() for term in ("громк", "volume")) and any(term in text.casefold() for term in ("питан", "power", "блокиров")) and not re.search(r"\b(?:galaxy\s+)?[sa]\s?\d{1,3}\b|iphone|айфон|правильно ли", text, re.I))),
     ]
     rows = []
     with tempfile.TemporaryDirectory(prefix="velia-private-understanding-") as directory:
@@ -119,8 +137,14 @@ async def run_browser_probes():
                         and not any(term in source_text for term in ("гестацион", "диабет", "беремен", "gestational", "pregnan")))
                     if name == "medical_spacing":
                         reading = search.decision.get("restoration_candidate", "").casefold()
+                        question = messages[-1]["content"]
+                        context = [(question[row["span"][0]:row["span"][1]].casefold(), row["status"])
+                            for row in search.decision.get("context", [])]
                         relevant_sources = (relevant_sources and all(official_health_url(row["url"]) for row in sources)
                             and all(term in reading for term in ("гистамин", "апноэ"))
+                            and any("гестамин" in quote and status == "unspecified" for quote, status in context)
+                            and all(any(term in quote and status == "stated" for quote, status in context)
+                                for term in ("эпное", "астма"))
                             and any(re.search(r"weight|obes|похуд|веса", row["title"] + " " + row["url"], re.I) for row in sources)
                             and len({(row["url"].split('/')[2].casefold(), row["title"].casefold()) for row in sources}) == len(sources))
                     ok = (search.decision["decision"] == action and done and stop == "stop" and relevant_sources
@@ -129,6 +153,7 @@ async def run_browser_probes():
                         "candidate": search.decision.get("restoration_candidate") or search.decision.get("clarification_candidate"),
                         "query": getattr(search, "query", None) if action == "search" else None,
                         "source_scope": search.decision.get("source_scope"),
+                        "context": search.decision.get("context", []),
                         "reply": text, "finish_reason": stop, "done": done, "sources": sources, "seconds": round(time.monotonic() - started, 2)}
                     rows.append(row)
                     print("VELIA_REQUEST_UNDERSTANDING_BROWSER " + json.dumps(row, ensure_ascii=False), flush=True)
@@ -147,11 +172,16 @@ async def run():
         ("medical_plain", [{"role": "user", "content": "У меня гестамин эпное и астма. Как похудеть к 31 октября?"}], "search"),
         ("english_spelling", [{"role": "user", "content": "Explain revnue versus profit briefly."}], "direct"),
         ("current_search", [{"role": "user", "content": "Найди актуальную стабильную версию Python на официальном сайте."}], "search"),
+        ("stated_allergy", [{"role": "user", "content": "У меня аллергия на арахис, но нет астмы. Дай общие советы по питанию."}], "search"),
     ]
     rows = []
     for name, messages, action in cases:
         result = await understand(messages)
         ok, reply = result["action"] == action, None
+        if name == "stated_allergy":
+            question = messages[-1]["content"]
+            quotes = [question[row["span"][0]:row["span"][1]] for row in result.get("context", []) if row["status"] == "stated"]
+            ok = ok and any("аллергия на арахис" in quote for quote in quotes) and any("нет астмы" in quote for quote in quotes)
         if result["action"] == "clarify":
             reply = clarification_reply(clarification_content(messages[-1]["content"], result["span"], result.get("candidate", "")))
             ok = False
@@ -162,7 +192,8 @@ async def run():
             raise RuntimeError("request_intent_qualification_failed:" + name)
     return {"request_intent": {"ok": True, "cases": len(browser_rows) + len(rows),
         "live_browser_sse_cases": len(browser_rows), "interpretation_before_search": True,
-        "resolved_spelling_answers": True, "substantive_medical_answer": True, "paid_fallback": False}}
+        "resolved_spelling_answers": True, "substantive_medical_answer": True,
+        "personal_context_grounded": True, "paid_fallback": False}}
 
 
 if __name__ == "__main__":

@@ -17,6 +17,41 @@ def decision(args):
         "name": "understand_request", "arguments": json.dumps(args)}}]}}]}
 
 
+def test_personal_context_carries_exact_spans_without_invented_diagnoses():
+    question = "У меня гестамин эпное и астма. Как похудеть?"
+    args = {"action": "search", "quote": "гестамин эпное", "candidate": "гистамин, апноэ",
+        "query": "healthy weight loss", "source_scope": "official_health", "task_query": "healthy weight loss",
+        "context": [{"quote": "эпное", "status": "stated"}, {"quote": "астма", "status": "stated"},
+            {"quote": "гестамин", "status": "unspecified"}]}
+    result = parse_decision(decision(args), question)
+    assert [(question[row["span"][0]:row["span"][1]], row["status"]) for row in result["context"]] == [
+        ("эпное", "stated"), ("астма", "stated"), ("гестамин", "unspecified")]
+    assert "гестамин" not in json.dumps(result["context"], ensure_ascii=False)
+
+
+@pytest.mark.parametrize("context", [
+    [{"quote": "аллергия", "status": "stated"}],
+    [{"quote": "гистамин", "status": "stated"}],
+    [{"quote": "астма", "status": "diagnosed"}],
+    [{"quote": "астма", "status": ["stated"]}],
+    [{"quote": "астма", "status": "stated", "diagnosis": "allergy"}],
+    [{"quote": "астма", "status": "stated"}] * 2,
+    [{"quote": "стма", "status": "stated"}],
+    "аллергия", None,
+])
+def test_context_rejects_new_facts_or_unbounded_evidence(context):
+    with pytest.raises(ValueError):
+        parse_decision(decision({"action": "direct", "quote": "", "candidate": "", "query": "", "context": context}),
+            "У меня гестамин и астма")
+
+
+def test_context_preserves_negations_and_explicitly_stated_allergy():
+    question = "У меня аллергия на арахис, но нет астмы."
+    result = parse_decision(decision({"action": "direct", "quote": "", "candidate": "", "query": "",
+        "context": [{"quote": "аллергия на арахис", "status": "stated"}, {"quote": "нет астмы", "status": "stated"}]}), question)
+    assert [question[row["span"][0]:row["span"][1]] for row in result["context"]] == ["аллергия на арахис", "нет астмы"]
+
+
 def test_health_retrieval_uses_the_main_task_without_changing_named_conditions():
     args = {"action":"search", "quote":"гестамин эпное", "candidate":"гистамин, апноэ",
         "query":"weight loss asthma apnea histamine", "source_scope":"official_health", "task_query":"healthy weight loss advice"}

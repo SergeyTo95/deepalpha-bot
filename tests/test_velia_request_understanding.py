@@ -96,6 +96,10 @@ def test_live_medical_criterion_checks_a_useful_answer_without_forcing_a_spellin
     assert not medical_answer(answer + " Это безопасно и не усилит симптомы.")
     assert not medical_answer(answer + " Вешайся на весы дважды в неделю.")
     assert not medical_answer(answer + " Цель: 1–2 кг в неделю.")
+    assert not medical_answer(answer + " Обсудите с врачом план под вашу аллергию и хронические состояния.")
+    assert not medical_answer(answer + " С учётом гистаминовой непереносимости исключите продукты.")
+    assert medical_answer(answer + " Если у вас подтверждена аллергия, учитывайте рекомендации аллерголога.")
+    assert medical_answer(answer + " Упоминание гистамина не подтверждает аллергию.")
 
 
 def test_finance_live_criterion_rejects_observed_language_errors():

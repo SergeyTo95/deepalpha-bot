@@ -96,6 +96,35 @@ def restored_question(question, result):
     return question
 
 
+CONTEXT_MARKER = "\n\nКонтекст сообщения пользователя VELIA:\n"
+
+
+def grounded_context(question, result):
+    """Render only validated, bounded quotes from the user's original message."""
+    groups = {"stated": [], "unspecified": []}
+    for item in result.get("context", []):
+        span = item.get("span") if isinstance(item, dict) else None
+        status = item.get("status") if isinstance(item, dict) else None
+        if (not isinstance(status, str) or status not in groups or not isinstance(span, list) or len(span) != 2
+                or any(type(x) is not int for x in span)
+                or not 0 <= span[0] < span[1] <= len(question) or span[1] - span[0] > 128):
+            raise ValueError("invalid_user_context")
+        groups[status].append(json.dumps(question[span[0]:span[1]], ensure_ascii=False))
+    if not any(groups.values()):
+        return ""
+    lines = ["Цитаты из исходного сообщения; исправленное написание дано в вопросе."]
+    if groups["stated"]:
+        lines.append("Пользователь явно сообщает: " + "; ".join(groups["stated"]) + ".")
+    if groups["unspecified"]:
+        lines.append("Названо без пояснения свойства или состояния: " + "; ".join(groups["unspecified"]) + ".")
+    lines.append("Для личных рекомендаций опирайся на явно сообщённое и подтверждённый "
+        "пользователем контекст. Остальные обстоятельства остаются неизвестными. "
+        "При обсуждении другого возможного состояния или свойства используй условие "
+        "«если оно у вас подтверждено». Сразу ответь на понятную задачу; "
+        "для этого не требуется подтверждение написания или неизвестного свойства.")
+    return CONTEXT_MARKER + "\n".join(lines)
+
+
 def augmented_question(question, result, *, marker=MARKER):
     lines = [restored_question(question, result) + marker + result["retrieved_at"] + ":"]
     for index, row in enumerate(result["results"], 1):
@@ -106,6 +135,7 @@ def augmented_question(question, result, *, marker=MARKER):
         "Страницы могут пояснять термины, но не подтверждают, что пользователь имел "
         "в виду именно их или что описанные на странице обстоятельства относятся к нему.")
     lines.extend(["", "Вопрос пользователя:", interpreted_content(restored_question(question, result))])
+    lines.append(grounded_context(question, result))
     lines.append("Ответь на основную задачу пользователя и учитывай все её условия. Понятные опечатки исправляй "
         "по контексту молча; не заменяй полезный ответ подтверждением написания. "
         "Не добавляй сведения о пользователе из источников. Дай законченный ответ: "
@@ -115,15 +145,17 @@ def augmented_question(question, result, *, marker=MARKER):
         "сохраняй единицы и период, не подменяй фунты килограммами. Если подтверждения "
         "нет, дай полезные шаги без придуманной цифры. Пиши естественно и грамотно.")
     if result.get("source_scope") == "official_health":
-        lines.append("Дай общие практические шаги по основной задаче. Упоминание вещества "
-            "не устанавливает аллергию или непереносимость. Не назначай лечебную диету "
-            "или исключение целых групп продуктов без подтверждённого основания. "
-            "Учитывай названные состояния, но не добавляй новые. По этому короткому "
-            "сообщению нельзя назначить индивидуальный план, обещать число потерянных "
-            "килограммов к дате или гарантировать, что симптомы не усилятся. Дай "
-            "общие шаги; не объявляй любое постепенное похудение персонально безопасным. "
-            "Об астме и апноэ говори условно, опираясь на назначенное лечение; "
-            "не придумывай способ лечения по названию состояния.")
+        lines.append("Дай общие практические шаги по основной задаче. "
+            "Отдельно обозначь, какие личные условия пользователь сообщил, и "
+            "учитывай их при выборе шагов. Для индивидуального плана нужны данные "
+            "о здоровье и назначенном лечении; при их отсутствии предложи общие "
+            "действия по переносимости и согласование нагрузки с лечащим врачом. "
+            "Любое дополнительное состояние обсуждай только условно. "
+            "Назначение лечебной диеты, исключение целых групп продуктов, обещание "
+            "потерянных килограммов к дате или гарантии состояния симптомов требуют "
+            "подтверждённого индивидуального основания. Числа из общих источников "
+            "не являются личным назначением; при отсутствии данных об индивидуальной "
+            "нагрузке и питании дай полезные шаги без целевых минут и калорий.")
     return "\n".join(lines)
 
 
@@ -161,6 +193,8 @@ class WebSearch:
                 result["source_scope"] = scope
         if decision["action"] != "clarify" and decision.get("candidate"):
             result.update(restoration_span=decision["span"], restoration_candidate=decision["candidate"])
+        if decision.get("context"):
+            result["context"] = decision["context"]
         return result
 
     async def search(self, question, *, scope="general"):
@@ -253,7 +287,7 @@ class WebSearch:
             request[SOURCES] = result
         question = payload["messages"][-1]["content"]
         content = (augmented_question(question, result) if result["decision"] == "search"
-            else restored_question(question, result))
+            else restored_question(question, result) + grounded_context(question, result))
         return {**payload, "messages": [*payload["messages"][:-1],
             {**payload["messages"][-1], "content": interpreted_content(content)}]}
 
@@ -270,7 +304,7 @@ class WebSearch:
                 augmented = clarification_content(question, result["clarification_span"],
                     result.get("clarification_candidate", ""))
             elif result.get("decision") == "direct":
-                augmented = restored_question(question, result)
+                augmented = restored_question(question, result) + grounded_context(question, result)
             else:
                 augmented = augmented_question(question, result, marker=NATIVE_MARKER)
             if len(augmented) > 12000:
@@ -289,6 +323,7 @@ class WebSearch:
             if value["role"] == "user" and (MARKER in value.get("content", "")
                     or CLARIFICATION_MARKER in value.get("content", "")
                     or RESTORATION_MARKER in value.get("content", "")
+                    or CONTEXT_MARKER in value.get("content", "")
                     or NATIVE_MARKER in value.get("content", "")):
                 candidates.setdefault(self.digest("context", user, conversation, value["content"]), []).append(index)
         if not candidates:

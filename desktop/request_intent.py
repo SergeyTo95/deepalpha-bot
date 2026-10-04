@@ -47,7 +47,18 @@ INSTRUCTION = (
     "поиска action=search, query=краткий понятный поисковый запрос с исправленными "
     "словами. Не добавляй в query отсутствующие обстоятельства или диагнозы. "
     "Для арифметики, редактирования текста, обычных объяснений и простого кода "
-    "без актуальных сведений action=direct, query=''."
+    "без актуальных сведений action=direct, query=''. "
+    "В context отдели явно сообщённые личные условия (status=stated) от "
+    "упоминаний без пояснения состояния или свойства (status=unspecified). "
+    "quote в context — короткая ДОСЛОВНАЯ цитата последнего сообщения, включая "
+    "отрицание; не исправляй её и не добавляй диагноз, причину или модель. "
+    "Например: 'у меня железо, апноэ и астма' — железо unspecified, апноэ и "
+    "астма stated; 'у меня аллергия на железо' — аллергия на железо stated. "
+    "'Телефон Samsung, модель не знаю' — Телефон Samsung stated, "
+    "модель не знаю unspecified. Если личных условий нет, context=[]. "
+    "Неясное свойство не мешает ответить на понятную задачу: сохрани его "
+    "как unspecified, не превращай весь запрос в clarify. Не считай цитаты, "
+    "вопросы, предположения или утверждения ассистента фактами о пользователе."
 )
 TOOL = {"type": "function", "function": {
     "name": "understand_request", "description": "Выбрать ответ, поиск или уточнение до получения внешних данных.",
@@ -57,8 +68,36 @@ TOOL = {"type": "function", "function": {
         "candidate": {"type": "string", "description": "Ближайшее исправленное написание quote, только те же слова, при direct/search тоже. Если исправление не нужно или смысла нет, пустая строка."},
         "source_scope": {"type": "string", "enum": ["general", "official_health"], "description": "official_health для медицинских рекомендаций с поиском; иначе general."},
         "query": {"type": "string", "description": "Полный поисковый запрос с существенными условиями только при action=search, иначе пустая строка."},
-        "task_query": {"type": "string", "description": "При search: только ОСНОВНАЯ ЗАДАЧА, 2–8 слов, без перечня сопутствующих состояний. Пример: healthy weight loss advice. При direct/clarify: пустая строка."}},
-        "required": ["action", "quote", "candidate", "query", "source_scope", "task_query"], "additionalProperties": False}}}
+        "task_query": {"type": "string", "description": "При search: только ОСНОВНАЯ ЗАДАЧА, 2–8 слов, без перечня сопутствующих состояний. Пример: healthy weight loss advice. При direct/clarify: пустая строка."},
+        "context": {"type": "array", "maxItems": 6, "description": "Личные условия только из последнего сообщения. Дословные цитаты: stated — явно сообщённое состояние/свойство; unspecified — упоминание без пояснения свойства. Не дополняй цитату диагнозом. Иначе [].", "items": {
+            "type": "object", "properties": {"quote": {"type": "string", "maxLength": 128},
+                "status": {"type": "string", "enum": ["stated", "unspecified"]}},
+            "required": ["quote", "status"], "additionalProperties": False}}},
+        "required": ["action", "quote", "candidate", "query", "source_scope", "task_query", "context"], "additionalProperties": False}}}
+
+
+def context_spans(values, question):
+    """Carry exact evidence positions, never generated diagnoses or stored quotes."""
+    if not isinstance(values, list) or len(values) > 6:
+        raise ValueError("invalid_understanding_response")
+    result, seen = [], set()
+    for value in values:
+        if (not isinstance(value, dict) or set(value) != {"quote", "status"}
+                or not isinstance(value["quote"], str)
+                or not 1 <= len(value["quote"].strip()) <= 128
+                or value["quote"] not in question
+                or not isinstance(value["status"], str)
+                or value["status"] not in {"stated", "unspecified"}
+                or value["quote"] in seen):
+            raise ValueError("invalid_understanding_response")
+        start = question.index(value["quote"])
+        end = start + len(value["quote"])
+        if ((start and question[start - 1].isalnum() and value["quote"][0].isalnum())
+                or (end < len(question) and question[end].isalnum() and value["quote"][-1].isalnum())):
+            raise ValueError("invalid_understanding_response")
+        result.append({"span": [start, end], "status": value["status"]})
+        seen.add(value["quote"])
+    return result
 
 
 def parse_decision(result, question):
@@ -66,11 +105,12 @@ def parse_decision(result, question):
     if len(calls) != 1 or calls[0]["function"].get("name") != "understand_request":
         raise ValueError("invalid_understanding_response")
     args = json.loads(calls[0]["function"]["arguments"])
-    if (not isinstance(args, dict) or set(args) not in ({"action", "quote", "query"}, {"action", "quote", "candidate", "query"}, {"action", "quote", "candidate", "query", "source_scope"}, {"action", "quote", "candidate", "query", "source_scope", "task_query"})
-            or any(not isinstance(args[k], str) for k in args)
+    if (not isinstance(args, dict) or set(args) - {"context"} not in ({"action", "quote", "query"}, {"action", "quote", "candidate", "query"}, {"action", "quote", "candidate", "query", "source_scope"}, {"action", "quote", "candidate", "query", "source_scope", "task_query"})
+            or any(not isinstance(args[k], str) for k in args if k != "context")
             or args["action"] not in {"direct", "search", "clarify"}):
         raise ValueError("invalid_understanding_response")
     scope = args.get("source_scope", "general")
+    context = context_spans(args["context"], question) if "context" in args else None
     if scope not in {"general", "official_health"} or (scope != "general" and args["action"] != "search"):
         raise ValueError("invalid_understanding_response")
     quote, query, candidate = args["quote"], args["query"].strip(), args.get("candidate", "")
@@ -92,6 +132,8 @@ def parse_decision(result, question):
     if (args["action"] == "direct" and query) or (args["action"] == "search" and not 1 <= len(query) <= 400):
         raise ValueError("invalid_understanding_response")
     result = {"action": args["action"], "query": query}
+    if context is not None:
+        result["context"] = context
     if scope == "official_health":
         result["source_scope"] = scope
         if task_query:
@@ -125,7 +167,7 @@ async def understand(messages):
     hints = await asyncio.to_thread(spelling_hints, question)
     instruction = INSTRUCTION + ("\nСловарные подсказки (не подтверждённые факты):\n" + json.dumps(hints, ensure_ascii=False) if hints else "")
     payload = {"model": "velia-flash", "messages": [{"role": "system", "content": instruction}] + history,
-        "tools": [TOOL], "tool_choice": "required", "stream": False, "max_tokens": 224,
+        "tools": [TOOL], "tool_choice": "required", "stream": False, "max_tokens": 384,
         "temperature": 0.1, "top_p": 0.8, "top_k": 20, "min_p": 0.05,
         "chat_template_kwargs": {"enable_thinking": False}, "reasoning_format": "deepseek",
         "thinking_budget_tokens": 0, "parallel_tool_calls": False}

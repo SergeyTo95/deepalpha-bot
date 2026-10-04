@@ -8,6 +8,39 @@ from test_velia_web_chat import fixture, login, headers
 from test_velia_web_guest import BODY, guest, guest_headers
 
 
+@pytest.mark.parametrize("action", ["direct", "search"])
+def test_context_reaches_generation_without_leaking_into_account_history_or_cache(monkeypatch, tmp_path, action):
+    async def run():
+        question = "У меня телефон Самсунг, модель не знаю. Как сделать скриншот?"
+        intent = {"action": action, "quote": "", "candidate": "", "query": "Samsung screenshot" if action == "search" else "",
+            "context": [{"quote": "телефон Самсунг", "status": "stated"}, {"quote": "модель не знаю", "status": "unspecified"}]}
+        store = GuestStore(sqlite_path=tmp_path/"context.db")
+        async with fixture(monkeypatch, guest_store=store, with_search=True, intent=intent) as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            async with client.post(server.make_url("/web-api/v1/conversations"), headers=headers(cookie), json={"title": "Скриншот"}) as response:
+                cid = (await response.json())["conversation"]["id"]
+            body = {"content": question, "model": "velia-flash", "idempotency_key": "context-evidence-test"}
+            for _ in range(2):
+                async with client.post(server.make_url(f"/web-api/v1/conversations/{cid}/messages/stream"), headers=headers(cookie), json=body) as response:
+                    assert response.status == 200
+                    await response.read()
+            content = state["account_calls"][0]["content"]
+            assert content.startswith(question)
+            assert 'Пользователь явно сообщает: "телефон Самсунг"' in content
+            assert 'Названо без пояснения свойства или состояния: "модель не знаю"' in content
+            assert "Galaxy" not in content
+            assert state["account_calls"][1]["content"] == content
+            assert len(state["intent_payloads"]) == 1
+            async with client.get(server.make_url(f"/web-api/v1/conversations/{cid}/messages"), headers=headers(cookie)) as response:
+                values = (await response.json())["messages"]
+            assert all(row["content"] == question for row in values if row["role"] == "user")
+            with store.connect() as conn:
+                cached = conn.execute("SELECT result_json FROM velia_web_search_context").fetchone()[0]
+                assert question not in cached and "Самсунг" not in cached and "модель не знаю" not in cached
+                assert "span" in cached and "unspecified" in cached
+    asyncio.run(run())
+
+
 def test_duplicate_pages_leave_room_for_distinct_relevant_sources(monkeypatch, tmp_path):
     async def run():
         monkeypatch.setenv("VELIA_WEB_GUEST_ENABLED", "true")
