@@ -1,0 +1,46 @@
+{
+  "gateway": {
+    "id": "b0a95fe0-9667-4823-bf53-e98ffd96bdef",
+    "source_commit": "4e69273746c896d539a96f634c52478010119eb3",
+    "status": "SUCCESS",
+    "logs": [
+      {
+        "timestamp": "2026-10-04T08:49:16.097813334Z",
+        "message": "VELIA_WEB_SEARCH_CONFIGURATION {\"provider\": \"tavily\", \"configured\": true}"
+      },
+      {
+        "timestamp": "2026-10-04T08:49:56.080283711Z",
+        "message": "VELIA_FLASH_OPERATOR_TOOL {\"ok\": true, \"tool_names\": [\"read_probe\"], \"content_characters\": 0, \"finish_reason\": \"tool_calls\"}"
+      },
+      {
+        "timestamp": "2026-10-04T08:53:46.345447865Z",
+        "message": "VELIA_FLASH_HARNESS_PROBE {\"ok\":true,\"rounds\":2,\"readTool\":true,\"persona\":true,\"declaredTools\":24,\"requestCharacters\":23372,\"liveModel\":true,\"ownerPairingVerified\":false}"
+      },
+      {
+        "timestamp": "2026-10-04T08:53:46.345451385Z",
+        "message": "VELIA_DESKTOP_LIVE_PROBE {\"commit\": \"4e69273746c896d539a96f634c52478010119eb3\", \"correlated_tool_result\": true, \"flash_live_harness\": true, \"flash_paid_fallback\": false, \"guest_quota\": {\"accepted\": 30, \"atomic_limit\": 30, \"ok\": true, \"persistent\": true, \"rejected\": 8}, \"identity_health\": true, \"identity_rejects_no_token\": true, \"live_sse\": true, \"live_tool_call\": true, \"model_calls\": 2, \"ok\": true, \"owner_pairing_verified\": false, \"web_search\": {\"model_calls\": 0, \"ok\": true, \"persistent_sources\": true, \"primary_source\": true, \"source_count\": 3}}"
+      }
+    ]
+  },
+  "native": {
+    "id": "f432ec7b-013a-4b88-9c81-1faa5ed1f66b",
+    "source_commit": "9ca3ce84f98fac5b9949a95162a1e75c05ea4298",
+    "status": "SUCCESS",
+    "build_verification": [
+      {
+        "timestamp": "2026-10-04T08:57:17.016206205Z",
+        "message": "RAILWAY_CI_VERIFIED commit=9ca3ce84f98fac5b9949a95162a1e75c05ea4298 source_sha256=bc401c82fb1e2f34e3ac6c48fcefe249d234ea421990432bbe24eabe1e7df3ca\n"
+      }
+    ],
+    "model_probes": [
+      {
+        "timestamp": "2026-10-04T08:58:28.197927926Z",
+        "message": "VELIA_FLASH_ADAPTER_PROBE {\"case\": \"coding\", \"ok\": true, \"elapsed_seconds\": 21.468141245655715, \"first_token_seconds\": 20.124052103608847, \"text\": \"def add(a, b):\\n    return a + b\", \"usage\": {\"completion_tokens\": 13, \"prompt_tokens\": 594, \"total_tokens\": 607, \"prompt_tokens_details\": {\"cached_tokens\": 0}}, \"reason\": null, \"provider\": \"bonsai\", \"estimated_cost_usd\": 0.0}"
+      },
+      {
+        "timestamp": "2026-10-04T08:58:28.197933726Z",
+        "message": "VELIA_FLASH_ADAPTER_PROBE {\"case\": \"russian\", \"ok\": true, \"elapsed_seconds\": 3.8901348067447543, \"first_token_seconds\": 1.4222810063511133, \"text\": \"Переменная в Python — это идентификатор, который ссылается на объект и позволяет использовать его в программе.\", \"usage\": {\"completion_tokens\": 23, \"prompt_tokens\": 598, \"total_tokens\": 621, \"prompt_tokens_details\": {\"cached_tokens\": 567}}, \"reason\": null, \"provider\": \"bonsai\", \"estimated_cost_usd\": 0.0}"
+      }
+    ]
+  }
+}

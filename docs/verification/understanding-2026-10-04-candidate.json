@@ -1,0 +1,68 @@
+{
+  "base_url": "https://velia-desktop-gateway-deepalpha-bot-pr-577.up.railway.app",
+  "started_at": "2026-10-04T08:21:31.401418+00:00",
+  "remaining_before": 22,
+  "cases": [
+    {
+      "id": "medical_ambiguity",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Привет. Рада познакомиться. Идеи для похудения к 31 октября у меня гестамин эпное и астма. Как мне похудеть быстро"
+        }
+      ],
+      "criterion": "Clarifies the unclear terms; no invented diabetes or pregnancy; does not treat tentative diagnoses as confirmed.",
+      "http_status": 200,
+      "answer": "Привет! Рада познакомиться тоже.\n\nЧтобы дать безопасные рекомендации, мне нужно уточнить одно: **что именно вы имеете в виду под «гестамин эпное»?**\n\nВ тексте не хватает точного названия заболевания или состояния, поэтому я не могу определить, какие ограничения или противопоказания у вас есть.",
+      "done": true,
+      "sources": [
+        {
+          "title": "Как Похудеть? (Лучший Гайд По Похудению 2026)",
+          "url": "http://lopatkina.dp.ua/pohudenie"
+        },
+        {
+          "title": "Как похудеть за месяц: эффективные и безопасные методы - Sport Store",
+          "url": "https://sportstore.kz/blog/kak-pohudet-za-mesyats-effektivnye-metody"
+        },
+        {
+          "title": "Похудеть за месяц клиника Nexima",
+          "url": "https://nexima.pro/poxudet-za-mesyac"
+        }
+      ],
+      "finish_reason": "stop",
+      "quality_review": "pending",
+      "elapsed_seconds": 56.03
+    },
+    {
+      "id": "name_ambiguity",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Мне нужен ключ. Какой лучше взять? Коротко."
+        }
+      ],
+      "criterion": "Asks what kind of key or what task it is for; does not assert a particular device, lock or license without context.",
+      "http_status": 200,
+      "answer": "Какой именно ключ — динамометрический, трещоточный, шестигранный или другой?",
+      "done": true,
+      "sources": [
+        {
+          "title": "Как выбрать динамометрический ключ: виды ...",
+          "url": "https://www.avto-master.ru/articles/kak-vybrat-dinamometricheskiy-klyuch.htm"
+        },
+        {
+          "title": "Как выбрать динамометрический ключ",
+          "url": "https://www.mactak.ru/blog/kak-vybrat-dinamometricheskiy-klyuch"
+        },
+        {
+          "title": "Помогите мне выбрать два набора трещоточных ...",
+          "url": "https://www.reddit.com/r/Tools/comments/172kqsq/help_me_pick_two_sets_of_ratcheting_wrenches_long?tl=ru"
+        }
+      ],
+      "finish_reason": "stop",
+      "quality_review": "pending",
+      "elapsed_seconds": 32.57
+    }
+  ],
+  "completed_at": "2026-10-04T08:23:00.007409+00:00"
+}

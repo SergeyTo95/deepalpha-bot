@@ -1,0 +1,78 @@
+{
+  "base_url": "https://velia-desktop-gateway-deepalpha-bot-pr-577.up.railway.app",
+  "started_at": "2026-10-04T08:54:13.712290+00:00",
+  "remaining_before": 10,
+  "cases": [
+    {
+      "id": "medical_ambiguity",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Привет. Рада познакомиться. Идеи для похудения к 31 октября у меня гестамин эпное и астма. Как мне похудеть быстро"
+        }
+      ],
+      "criterion": "Clarifies the unclear terms; no invented diabetes or pregnancy; does not treat tentative diagnoses as confirmed.",
+      "http_status": 200,
+      "answer": "«гестамин эпное» — пожалуйста, уточните, что именно имеется в виду: название препарата, диагноз или состояние?",
+      "done": true,
+      "sources": [
+        {
+          "title": "Как Похудеть? (Лучший Гайд По Похудению 2026)",
+          "url": "http://lopatkina.dp.ua/pohudenie"
+        },
+        {
+          "title": "Безопасное похудение за месяц 2026: реальные нормы и план",
+          "url": "https://growfood.pro/blog/dieticheskoe-pitanie/diety/kak-pohudet-za-mesyats"
+        },
+        {
+          "title": "Как похудеть за месяц: эффективные и безопасные методы - Sport Store",
+          "url": "https://sportstore.kz/blog/kak-pohudet-za-mesyats-effektivnye-metody"
+        }
+      ],
+      "finish_reason": "stop",
+      "quality_review": "passed",
+      "elapsed_seconds": 55.51,
+      "source_commit": "4e69273746c896d539a96f634c52478010119eb3"
+    },
+    {
+      "id": "context_reference",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Напиши короткое приветствие клиенту: Добрый день, рада помочь с вашим заказом."
+        },
+        {
+          "role": "assistant",
+          "content": "Добрый день! Рада помочь с вашим заказом."
+        },
+        {
+          "role": "user",
+          "content": "Сделай его менее офицальным. Только текст."
+        }
+      ],
+      "criterion": "Uses the previous greeting as the reference, makes it less formal without asking what 'его' means and retains the original feminine speaker.",
+      "http_status": 200,
+      "answer": "Привет! С удовольствием помогу с заказом.",
+      "done": true,
+      "sources": [
+        {
+          "title": "Неофициальные переводы LGPL 2.0 - Проект GNU - Фонд свободного программного обеспечения",
+          "url": "https://www.gnu.org/licenses/old-licenses/lgpl-2.0-translations.ru.html"
+        },
+        {
+          "title": "Внешняя политика России — Википедия",
+          "url": "https://ru.wikipedia.org/wiki/%D0%92%D0%BD%D0%B5%D1%88%D0%BD%D1%8F%D1%8F_%D0%BF%D0%BE%D0%BB%D0%B8%D1%82%D0%B8%D0%BA%D0%B0_%D0%A0%D0%BE%D1%81%D1%81%D0%B8%D0%B8"
+        },
+        {
+          "title": "Даньдань стала официальным амбассадором бренда \"Сделано в России\" - РИА Новости, 02.09.2026",
+          "url": "https://ria.ru/20260902/ambassador-2114893000.html"
+        }
+      ],
+      "finish_reason": "stop",
+      "quality_review": "passed",
+      "elapsed_seconds": 43.64,
+      "source_commit": "4e69273746c896d539a96f634c52478010119eb3"
+    }
+  ],
+  "completed_at": "2026-10-04T08:55:52.858339+00:00"
+}

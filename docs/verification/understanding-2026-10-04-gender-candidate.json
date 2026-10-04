@@ -1,0 +1,78 @@
+{
+  "base_url": "https://velia-desktop-gateway-deepalpha-bot-pr-577.up.railway.app",
+  "started_at": "2026-10-04T08:44:33.741577+00:00",
+  "remaining_before": 12,
+  "cases": [
+    {
+      "id": "medical_ambiguity",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Привет. Рада познакомиться. Идеи для похудения к 31 октября у меня гестамин эпное и астма. Как мне похудеть быстро"
+        }
+      ],
+      "criterion": "Clarifies the unclear terms; no invented diabetes or pregnancy; does not treat tentative diagnoses as confirmed.",
+      "http_status": 200,
+      "answer": "Привет! Я тоже рада познакомиться.\n\nЧтобы дать вам безопасные и подходящие рекомендации с учётом астмы и «гестамины» (скорее всего, вы имели в виду **гипертония** или **гиперглюкемия/диабет**? Или это опечатка от другого слова?), мне нужно уточнить:\n\n**Какое именно состояние вы имеете в виду под «гестамин эпное»? Это опечатка, и что вы хотели сказать?**\n\nПока не буду давать конкретных планов питания или тренировок, так как при астме и некоторых хронических заболеваниях физические нагрузки и диета требуют строгой индивидуальной настройки, чтобы не вызвать обострение.",
+      "done": true,
+      "sources": [
+        {
+          "title": "Как Похудеть? (Лучший Гайд По Похудению 2026)",
+          "url": "http://lopatkina.dp.ua/pohudenie"
+        },
+        {
+          "title": "Безопасное похудение за месяц 2026: реальные нормы и план",
+          "url": "https://growfood.pro/blog/dieticheskoe-pitanie/diety/kak-pohudet-za-mesyats"
+        },
+        {
+          "title": "Как похудеть за месяц: эффективные и безопасные методы - Sport Store",
+          "url": "https://sportstore.kz/blog/kak-pohudet-za-mesyats-effektivnye-metody"
+        }
+      ],
+      "finish_reason": "stop",
+      "quality_review": "needs_no_speculative_diagnoses",
+      "elapsed_seconds": 70.67,
+      "source_commit": "89328752e66f56a829edfe1a8b920a060e2287f3"
+    },
+    {
+      "id": "context_reference",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Напиши короткое приветствие клиенту: Добрый день, рада помочь с вашим заказом."
+        },
+        {
+          "role": "assistant",
+          "content": "Добрый день! Рада помочь с вашим заказом."
+        },
+        {
+          "role": "user",
+          "content": "Сделай его менее офицальным. Только текст."
+        }
+      ],
+      "criterion": "Uses the previous greeting as the reference, makes it less formal without asking what 'его' means.",
+      "http_status": 200,
+      "answer": "Привет! Рад помочь с вашим заказом.",
+      "done": true,
+      "sources": [
+        {
+          "title": "Неофициальные переводы LGPL 2.0 - Проект GNU - Фонд свободного программного обеспечения",
+          "url": "https://www.gnu.org/licenses/old-licenses/lgpl-2.0-translations.ru.html"
+        },
+        {
+          "title": "Внешняя политика России — Википедия",
+          "url": "https://ru.wikipedia.org/wiki/%D0%92%D0%BD%D0%B5%D1%88%D0%BD%D1%8F%D1%8F_%D0%BF%D0%BE%D0%BB%D0%B8%D1%82%D0%B8%D0%BA%D0%B0_%D0%A0%D0%BE%D1%81%D1%81%D0%B8%D0%B8"
+        },
+        {
+          "title": "Даньдань стала официальным амбассадором бренда \"Сделано в России\" - РИА Новости, 02.09.2026",
+          "url": "https://ria.ru/20260902/ambassador-2114893000.html"
+        }
+      ],
+      "finish_reason": "stop",
+      "quality_review": "needs_gender_fix",
+      "elapsed_seconds": 42.62,
+      "source_commit": "89328752e66f56a829edfe1a8b920a060e2287f3"
+    }
+  ],
+  "completed_at": "2026-10-04T08:46:27.032162+00:00"
+}
