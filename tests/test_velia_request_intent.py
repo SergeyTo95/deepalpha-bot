@@ -46,7 +46,7 @@ def test_empty_model_candidate_can_use_unique_phonetic_readings_without_assertin
     question = "У меня гестамин эпное и астма"
     result = parse_decision(decision({"action": "clarify", "quote": "гестамин эпное",
         "candidate": "", "query": ""}), question)
-    assert result["candidate"] == "гистамин апноэ"
+    assert result["candidate"] == "гистамин, апноэ"
     reply = clarification_reply(clarification_content(question, result["span"], result["candidate"]))
     assert reply.startswith("Правильно ли я поняла:") and reply.endswith("?")
     assert phonetic_restoration("квампер") is None

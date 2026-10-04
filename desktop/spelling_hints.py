@@ -76,7 +76,7 @@ def phonetic_restoration(fragment):
     tokens = re.findall(r"[^\W\d_]+", fragment.casefold())
     if not 1 <= len(tokens) <= 4:
         return None
-    restored, changed = [], False
+    restored, changed = [], 0
     for word in tokens:
         language = "ru" if re.fullmatch(r"[а-яё]+", word) else "en"
         if word in _lexicon(language):
@@ -89,5 +89,8 @@ def phonetic_restoration(fragment):
         if len(nearby) != 1:
             return None
         restored.append(nearby[0])
-        changed = True
-    return " ".join(restored) if changed else None
+        changed += 1
+    # Individually restored unknown terms are proposed as a list; a space
+    # alone would falsely make them look like a single unfamiliar term.
+    separator = ", " if len(restored) > 1 and changed == len(restored) else " "
+    return separator.join(restored) if changed else None
