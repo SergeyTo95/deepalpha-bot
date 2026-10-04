@@ -114,7 +114,9 @@ async def fixture(monkeypatch, **state):
                 "function": {"name": "understand_request", "arguments": json.dumps(args, ensure_ascii=False)}}]}, "finish_reason": "tool_calls"}]})
         if data.get("stream") is False:
             state["review_payloads"].append(data)
-            return web.json_response({"choices": [{"message": {"content": state.get("review_content", "Привет, я Велия.")},
+            options = state.get("review_contents")
+            content = options[min(len(state["review_payloads"]) - 1, len(options) - 1)] if options else state.get("review_content", "Привет, я Велия.")
+            return web.json_response({"choices": [{"message": {"content": content},
                 "finish_reason": state.get("review_finish", "stop")}], "usage": {"private": True}}, status=state.get("review_status", 200))
         state["payloads"].append(data)
         event = {"model":"private-upstream-model", "system_fingerprint":"private-runtime", "choices":[{

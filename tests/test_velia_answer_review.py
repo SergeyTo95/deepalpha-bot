@@ -4,6 +4,7 @@ import json
 
 import pytest
 from desktop.guest_store import GuestStore
+from desktop.answer_review import review_omissions
 from tests.test_velia_web_chat import fixture
 from tests.test_velia_web_guest import BODY, guest, guest_headers
 
@@ -36,10 +37,49 @@ def test_guest_emits_only_reviewed_answer_with_original_sources_and_one_quota_ch
             if health:
                 assert evidence["question"] == question.replace("гестамин эпное", "гистамин, апноэ")
                 assert evidence["user_context"][:2] == [{"quote": "гистамин", "kind": "substance", "status": "unspecified"}, {"quote": "апноэ", "kind": "condition", "status": "stated"}]
+                assert [item["quote"] for item in evidence["required_context_mentions"]] == ["апноэ", "астма"]
                 assert wire.count('"web_search"') == 1
             async with client.get(server.make_url("/web-api/v1/guest"), headers=guest_headers(cookie)) as response:
                 assert (await response.json())["remaining"] == 29
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("omission", ["state", "citation", "citation_bounds"])
+@pytest.mark.parametrize("recover", [True, False])
+def test_missing_conditions_or_source_support_are_repaired_privately_once(monkeypatch, tmp_path, omission, recover):
+    async def run():
+        monkeypatch.setenv("VELIA_WEB_GUEST_ENABLED", "true")
+        question = "У меня эпное и астма. Как похудеть?"
+        incomplete = {"state":"Питание и прогулки [1].", "citation":"При астме и апноэ начните с питания и прогулок.",
+            "citation_bounds":"При астме и апноэ начните с питания и прогулок [9]."}[omission]
+        final = "При астме и апноэ начните с регулярного питания и спокойных прогулок [1]."
+        intent = {"action":"search", "quote":"эпное", "candidate":"апноэ", "query":"weight loss",
+            "source_scope":"official_health", "context":[{"quote":"эпное", "kind":"condition", "status":"stated"},
+                {"quote":"астма", "kind":"condition", "status":"stated"}]}
+        async with fixture(monkeypatch, with_search=True, guest_store=GuestStore(sqlite_path=tmp_path/"quota.db"),
+                intent=intent, search_response={"results":[{"title":"Weight advice", "url":"https://www.nhs.uk/weight", "content":"Eat well. Gradual activity."}]},
+                model_content="PRIVATE_DRAFT", review_contents=[incomplete, final if recover else incomplete]) as (server, client, state):
+            cookie, _, _ = await guest(server, client)
+            async with client.post(server.make_url("/web-api/v1/guest/chat/completions"), headers=guest_headers(cookie),
+                    json={**BODY, "messages":[{"role":"user", "content":question}]}) as response:
+                wire = await response.text()
+            assert len(state["review_payloads"]) == 2
+            assert len(state["intent_payloads"]) == len(state["payloads"]) == len(state["search_queries"]) == 1
+            assert "PRIVATE_DRAFT" not in wire and incomplete not in wire
+            repair = json.loads(state["review_payloads"][1]["messages"][-1]["content"])
+            original = json.loads(state["review_payloads"][0]["messages"][-1]["content"])
+            assert repair["question"] == original["question"] == question.replace("эпное", "апноэ")
+            assert repair["user_context"] == original["user_context"]
+            assert (final in wire and "[DONE]" in wire) if recover else ('"error"' in wire and "[DONE]" not in wire)
+            async with client.get(server.make_url("/web-api/v1/guest"), headers=guest_headers(cookie)) as response:
+                assert (await response.json())["remaining"] == 29
+    asyncio.run(run())
+
+
+def test_coverage_allows_case_endings_for_named_conditions():
+    data = {"required_context_mentions":[{"quote":"астма"}, {"quote":"апноэ"}], "sources":[]}
+    assert review_omissions("При астме и апноэ начните постепенно.", data) == {
+        "missing_stated_terms":[], "invalid_citations":False}
 
 
 @pytest.mark.parametrize("failure", [{"review_status": 503}, {"review_finish": "length"}, {"review_content": ""}])
