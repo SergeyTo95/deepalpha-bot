@@ -169,6 +169,10 @@ def parse_decision(result, question):
     if quote or candidate:
         if not quote.strip() or quote not in question:
             raise ValueError("invalid_understanding_response")
+        # Some planners repeat an already correct literal as its own candidate.
+        # It changes no text or facts and needs no restoration handoff or retry.
+        if quote == candidate:
+            return result
         restored = plausible_restoration(quote, candidate)
         if not restored:
             raise ValueError("invalid_understanding_response")

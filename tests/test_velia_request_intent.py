@@ -52,6 +52,26 @@ def test_context_preserves_negations_and_explicitly_stated_allergy():
     assert [question[row["span"][0]:row["span"][1]] for row in result["context"]] == ["аллергия на арахис", "нет астмы"]
 
 
+@pytest.mark.parametrize("quote", ["аллергия на арахис", "нет астмы"])
+def test_an_identical_candidate_preserves_the_valid_plan_without_a_restoration(quote):
+    question = "У меня аллергия на арахис, но нет астмы. Дай общие советы по питанию."
+    result = parse_decision(decision({"action":"search", "quote":quote, "candidate":quote,
+        "query":"peanut allergy diet advice", "source_scope":"official_health",
+        "task_query":"peanut allergy diet advice", "context":[
+            {"quote":"аллергия на арахис", "kind":"condition", "status":"stated"},
+            {"quote":"нет астмы", "kind":"condition", "status":"stated"}]}), question)
+    assert result["action"] == "search"
+    assert "span" not in result and "candidate" not in result
+    assert [question[row["span"][0]:row["span"][1]] for row in result["context"]] == [
+        "аллергия на арахис", "нет астмы"]
+
+
+def test_an_identical_candidate_still_cannot_supply_a_quote_absent_from_the_question():
+    with pytest.raises(ValueError):
+        parse_decision(decision({"action":"direct", "quote":"аллергия", "candidate":"аллергия",
+            "query":""}), "У меня гестамин и астма")
+
+
 def test_a_noun_quote_carries_its_immediate_original_negation():
     question = "У меня аллергия, но нет астмы."
     result = parse_decision(decision({"action":"direct", "quote":"", "query":"",
