@@ -4,30 +4,26 @@ import re
 
 
 CLARIFICATION_MARKER = "\n\n---\nУточнение смысла запроса VELIA:\n"
+RESTORATION_MARKER = "\n\n---\nРаспознанное написание запроса VELIA:\n"
+LITERAL_PATTERN = re.compile(r'`[^`]*`|«[^»]*»|"[^"\n]*"|https?://\S+|\b[\w-]+[./:@][\w./:@-]+|\b\w*[_\d]\w*\b')
 
 REQUEST_UNDERSTANDING = (
     "Понимай намерение по словам пользователя и подтверждённому им контексту. "
-    "Явные опечатки, грамматику и ошибки диктовки исправляй по смыслу молча: "
-    "исправленный термин должен быть близок по написанию или звучанию и подходить "
-    "контексту. На понятный вопрос отвечай прямо, без лишних уточнений. "
-    "Сначала попробуй восстановить испорченную фразу по звучанию, написанию и "
-    "задаче. Если близкая расшифровка вероятна, но влияет на безопасность или "
-    "существенно меняет ответ, предложи её одним вопросом: «Правильно ли я поняла: "
-    "вы имеете в виду …?» Не заставляй пользователя заново расшифровывать опечатку. "
-    "Если подходящей расшифровки нет, спроси о непонятной части или её назначении. "
-    "Дождись подтверждения спорного смысла. Близкая расшифровка — предположение, "
-    "не установленный факт. Не добавляй диагнозы, обстоятельства или названия, "
-    "которых нет в словах пользователя. Не пропускай существенную часть запроса. "
-    "Страницы из поиска и прежние догадки ассистента не подтверждают смысл слов "
-    "пользователя и факты о нём. Учитывай его исправления и отбрасывай ошибочную "
-    "догадку. Сохраняй отрицания, ограничения, числа, единицы, даты, цитаты и "
-    "идентификаторы. При редактировании сохраняй автора, род и лицо исходного "
-    "текста, если пользователь не просит их изменить: «рада» остаётся «рада», "
-    "а «рад» остаётся «рад». Пример явной опечатки: «перезагрузиь роутор» — "
-    "дай шаги перезагрузки роутера. Пример неоднозначности: на «Мне нужен ключ» "
-    "спроси «Для какой задачи вам нужен ключ?» и остановись."
+    "Исправляй явные опечатки и ошибки диктовки молча: выбирай близкое по "
+    "написанию или звучанию слово, подходящее задаче. Если смысл восстанавливается, "
+    "сразу дай полезный ответ на основной вопрос, включая вопросы о здоровье. "
+    "Не заменяй ответ вопросом «Правильно ли я поняла?» и не обсуждай правописание. "
+    "Распознанное написание исправляет слова, но не добавляет фактов. Не придумывай "
+    "диагнозы и обстоятельства. Поисковые страницы и прежние догадки ассистента "
+    "не устанавливают факты о пользователе. Его исправления имеют приоритет. "
+    "Если часть данных неясна, помоги с понятной частью. Уточняй только существенный "
+    "неизвестный термин или несколько смыслов, требующих разных ответов. Не угадывай "
+    "число, дозу или точную модель устройства. Сохраняй отрицания, ограничения, числа, "
+    "единицы, даты, цитаты и идентификаторы. При редактировании сохраняй автора, "
+    "род и лицо: «рада» остаётся «рада», если пользователь не просит иначе. "
+    "На «перезагрузиь роутор» дай шаги перезагрузки роутера. На «Мне нужен ключ» "
+    "без контекста спроси, для какой задачи нужен ключ."
 )
-
 
 def _edit_distance(left, right):
     previous = list(range(len(right) + 1))
@@ -44,8 +40,8 @@ def plausible_restoration(fragment, candidate):
     """Bound a proposed reading to the original words, never extra facts/advice.
 
     This is a lexical guard, not a diagnosis or a confidence classifier. The
-    model supplies context; the server only permits nearby spellings in a
-    confirmation question. Original text is never rewritten by this helper.
+    model supplies context; the server only permits nearby spellings.
+    Original text is never rewritten by this helper.
     """
     if not isinstance(candidate, str) or not candidate.strip():
         return None
@@ -65,6 +61,28 @@ def plausible_restoration(fragment, candidate):
         if _edit_distance(left, right) > max(1, int(min(len(left), len(right)) * 0.4)):
             return None
     return candidate
+
+
+def restoration_content(question, span, candidate):
+    """Carry a resolved spelling into generation while retaining the raw prefix.
+
+    The model chooses the contextual reading. The handoff may repair only an
+    exact nonliteral span, never change values or expand words into new facts.
+    """
+    clarification_content(question, span, candidate)
+    if not candidate:
+        raise ValueError("invalid_restoration")
+    start, end = span
+    if ((start and question[start - 1].isalnum())
+            or (end < len(question) and question[end].isalnum())
+            or any(start < match.end() and end > match.start()
+                for match in LITERAL_PATTERN.finditer(question))):
+        raise ValueError("invalid_restoration")
+    words = lambda value: [word for word in re.findall(r"[^\W\d_]+", value)
+        if word.casefold() != "и"]
+    corrections = [[left, right] for left, right in zip(words(question[start:end]), words(candidate))
+        if left.casefold().replace("ё", "е") != right.casefold().replace("ё", "е")]
+    return question + RESTORATION_MARKER + json.dumps({"слова": corrections}, ensure_ascii=False)
 
 
 def clarification_content(question, span, candidate=""):

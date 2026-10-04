@@ -125,7 +125,7 @@ def _with_live_context(messages, user_id):
     latest = _latest_user_message(copied)
     if not latest:
         return copied
-    if clarification_reply(latest) is not None:
+    if clarification_reply(latest) is not None or "\n\nLIVE_WEB_CONTEXT_UNTRUSTED:\n" in latest:
         return copied
     try:
         from services.velia_plugin_router import resolve_live_plugin_context
