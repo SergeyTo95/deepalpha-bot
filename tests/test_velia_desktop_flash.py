@@ -10,6 +10,15 @@ from velia_desktop_routes import flash_endpoint, setup_velia_desktop_routes, val
 from velia_request_understanding import REQUEST_UNDERSTANDING
 
 
+def test_plain_text_and_tools_keep_separate_qualified_sampling_profiles():
+    plain = {"model":"velia-flash", "messages":[{"role":"user", "content":"Объясни выручку"}]}
+    payload = validate_payload(plain)
+    assert payload["min_p"] == 0.0 and payload["presence_penalty"] == 1.5
+    tool = {"type":"function", "function":{"name":"read", "parameters":{"type":"object"}}}
+    payload = validate_payload({**plain, "tools":[tool]})
+    assert payload["min_p"] == 0.05 and "presence_penalty" not in payload
+
+
 @asynccontextmanager
 async def fixture(monkeypatch, *, enabled=True, input_tokens=300, model_status=200, redirect=None):
     state = {"kimi": 0, "flash": 0, "templates": []}

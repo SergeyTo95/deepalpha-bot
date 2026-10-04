@@ -25,6 +25,8 @@ def medical_answer(reply):
         and any(term in lowered for term in ("питан", "калори", "рацион"))
         and any(term in lowered for term in ("ходьб", "прогул", "физическ", "движен"))
         and not re.search(r"исключ\w*[^.!?\n]*(?:цитрусов|банан|арахис|ферментирован)", lowered)
+        and not re.search(r"\b(?:это|точно|гарантированно)\s+безопасно\b|\bне\s+(?:усилит|ухудшит)\s+симптом|\bвешай\w*\b", lowered)
+        and not re.search(r"\b1\s*[–—-]\s*2\s*кг.{0,20}(?:в\s+недел|за\s+недел|еженедел)", lowered)
         and not any(term in lowered for term in ("правильно ли я поняла", "что вы имеете в виду", "гестацион", "диабет", "беремен", "обмор")))
 
 
@@ -35,6 +37,13 @@ def router_answer(reply):
         and "правильно ли" not in lowered
         and ("reset" not in lowered or any(term in lowered for term in
             ("не нажим", "не удерж", "не трог", "не использ", "не зажим"))))
+
+
+def finance_answer(reply):
+    lowered = reply.casefold()
+    return (all(term in lowered for term in ("выруч", "прибыл"))
+        and any(term in lowered for term in ("расход", "затрат"))
+        and not any(term in lowered for term in ("правильно ли", "всё деньги", "кофий")))
 
 
 async def run_browser_probes():
@@ -53,7 +62,7 @@ async def run_browser_probes():
         ("device_ambiguity", [{"role": "user", "content": "У меня сломался квампер. Как его починить?"}], "clarify", lambda text: "квампер" in text and text.endswith("?")),
         ("arithmetic_typo", [{"role": "user", "content": "Сколько 17 умножть на 23? Только число."}], "direct", lambda text: text.strip() == "391"),
         ("confirmed_context", [{"role": "user", "content": "Как открыть терминал?"}, {"role": "assistant", "content": "На Windows открой PowerShell."}, {"role": "user", "content": "Нет, у меня Ubuntu. Как открыть терменал? Одной фразой."}], "direct", lambda text: "ctrlaltt" in re.sub(r"[^a-z]", "", text.casefold()) and "powershell" not in text.casefold()),
-        ("finance_typo", [{"role": "user", "content": "Объясни разницу межу выручкой и прибылю на простом примере. Кратко."}], "direct", lambda text: all(term in text.casefold() for term in ("выруч", "прибыл")) and any(term in text.casefold() for term in ("расход", "затрат")) and "правильно ли" not in text.casefold()),
+        ("finance_typo", [{"role": "user", "content": "Объясни разницу межу выручкой и прибылю на простом примере. Кратко."}], "direct", finance_answer),
         ("router_typo", [{"role": "user", "content": "Как перезагрузиь роутор, не сбрасывая настройки? Ответь кратко."}], "direct", router_answer),
         ("literal_constraints", [{"role": "user", "content": "В Python исправь синтаксис в строке print(\"app.py\". Не меняй текст app.py и ничего не удаляй. Только исправленная строка."}], "direct", lambda text: text.strip().strip(chr(96)).removeprefix("python\n").strip() == 'print("app.py")'),
     ]
@@ -111,7 +120,9 @@ async def run_browser_probes():
                     if name == "medical_spacing":
                         reading = search.decision.get("restoration_candidate", "").casefold()
                         relevant_sources = (relevant_sources and all(official_health_url(row["url"]) for row in sources)
-                            and all(term in reading for term in ("гистамин", "апноэ")))
+                            and all(term in reading for term in ("гистамин", "апноэ"))
+                            and any(re.search(r"weight|obes|похуд|веса", row["title"] + " " + row["url"], re.I) for row in sources)
+                            and len({(row["url"].split('/')[2].casefold(), row["title"].casefold()) for row in sources}) == len(sources))
                     ok = (search.decision["decision"] == action and done and stop == "stop" and relevant_sources
                         and remaining == str(29 - index) and acceptable(text))
                     row = {"case": name, "ok": bool(ok), "decision": search.decision["decision"],

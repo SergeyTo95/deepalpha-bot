@@ -154,9 +154,13 @@ def validate_payload(data):
     if is_flash:
         result["messages"] = flash_messages(result["messages"])
         result["max_tokens"] = min(result.pop("max_completion_tokens"), 512)
-        result.update(temperature=0.7, top_p=0.8, top_k=20, min_p=0.05,
+        # Keep the qualified tool profile; plain text follows the model's
+        # documented non-thinking profile rather than thinking-mode min_p.
+        result.update(temperature=0.7, top_p=0.8, top_k=20, min_p=0.05 if tools else 0.0,
                       chat_template_kwargs={"enable_thinking": False}, reasoning_effort="none",
                       reasoning_format="deepseek", thinking_budget_tokens=0, parallel_tool_calls=False)
+        if not tools:
+            result["presence_penalty"] = 1.5
     elif result["model"].lower().startswith("kimi-k3"):
         effort = os.getenv("VELIA_DESKTOP_REASONING_EFFORT", "low")
         result["reasoning_effort"] = effort if effort in {"low", "medium", "high"} else "low"

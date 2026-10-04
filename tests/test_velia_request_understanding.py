@@ -93,6 +93,17 @@ def test_live_medical_criterion_checks_a_useful_answer_without_forcing_a_spellin
     assert not medical_answer("Правильно ли я поняла: гистамин и апноэ? " + answer)
     assert not medical_answer(answer + " Исключите бананы, цитрусовые и арахис.")
     assert medical_answer(answer + " Исключите экстремальные голодовки.")
+    assert not medical_answer(answer + " Это безопасно и не усилит симптомы.")
+    assert not medical_answer(answer + " Вешайся на весы дважды в неделю.")
+    assert not medical_answer(answer + " Цель: 1–2 кг в неделю.")
+
+
+def test_finance_live_criterion_rejects_observed_language_errors():
+    from desktop.probe_request_intent import finance_answer
+    answer = "Выручка — все деньги от продаж. Прибыль — выручка минус расходы."
+    assert finance_answer(answer)
+    assert not finance_answer(answer.replace("все деньги", "всё деньги"))
+    assert not finance_answer(answer + " Продали сто кофий.")
 
 
 def test_live_router_criterion_rejects_reset_actions_and_allows_a_warning():

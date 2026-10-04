@@ -110,12 +110,20 @@ def augmented_question(question, result, *, marker=MARKER):
         "по контексту молча; не заменяй полезный ответ подтверждением написания. "
         "Не добавляй сведения о пользователе из источников. Дай законченный ответ: "
         "краткий вывод и до четырёх коротких пунктов, обычно до 120 слов. "
-        "Числовые рекомендации должны опираться на подходящие источники.")
+        "Каждая ссылка должна подтверждать ближайшее утверждение, а не ответ целиком. "
+        "Числовые рекомендации допустимы только если видны в подходящем отрывке: "
+        "сохраняй единицы и период, не подменяй фунты килограммами. Если подтверждения "
+        "нет, дай полезные шаги без придуманной цифры. Пиши естественно и грамотно.")
     if result.get("source_scope") == "official_health":
         lines.append("Дай общие практические шаги по основной задаче. Упоминание вещества "
             "не устанавливает аллергию или непереносимость. Не назначай лечебную диету "
             "или исключение целых групп продуктов без подтверждённого основания. "
-            "Учитывай названные состояния, но не добавляй новые.")
+            "Учитывай названные состояния, но не добавляй новые. По этому короткому "
+            "сообщению нельзя назначить индивидуальный план, обещать число потерянных "
+            "килограммов к дате или гарантировать, что симптомы не усилятся. Дай "
+            "общие шаги; не объявляй любое постепенное похудение персонально безопасным. "
+            "Об астме и апноэ говори условно, опираясь на назначенное лечение; "
+            "не придумывай способ лечения по названию состояния.")
     return "\n".join(lines)
 
 
@@ -168,22 +176,22 @@ class WebSearch:
         if self.provider == "tavily":
             endpoint = "https://api.tavily.com/search"
             kwargs["json"] = {"api_key": self.api_key, "query": query, "search_depth": "basic",
-                "max_results": 3, "include_answer": False, "include_raw_content": False, "auto_parameters": False}
+                "max_results": 6, "include_answer": False, "include_raw_content": False, "auto_parameters": False}
             if scope == "official_health":
                 kwargs["json"]["include_domains"] = list(HEALTH_DOMAINS)
                 kwargs["json"]["include_domains_mode"] = "restrict"
         elif self.provider == "serper":
             endpoint = "https://google.serper.dev/search"
             headers["X-API-KEY"] = self.api_key
-            kwargs["json"] = {"q": query, "num": 3}
+            kwargs["json"] = {"q": query, "num": 6}
         elif self.provider == "brave":
             method, endpoint = "GET", "https://api.search.brave.com/res/v1/web/search"
             headers["X-Subscription-Token"] = self.api_key
-            kwargs["params"] = {"q": query, "count": 3, "text_decorations": "false"}
+            kwargs["params"] = {"q": query, "count": 6, "text_decorations": "false"}
         else:
             method, endpoint = "GET", "https://api.bing.microsoft.com/v7.0/search"
             headers["Ocp-Apim-Subscription-Key"] = self.api_key
-            kwargs["params"] = {"q": query, "count": 3}
+            kwargs["params"] = {"q": query, "count": 6}
         if scope == "official_health" and self.provider != "tavily":
             scoped_query = query + " (" + " OR ".join("site:" + domain for domain in HEALTH_DOMAINS) + ")"
             (kwargs.get("json") or kwargs["params"])["q"] = scoped_query
@@ -205,18 +213,24 @@ class WebSearch:
             rows = (data.get("results") if self.provider == "tavily" else
                 data.get("organic") if self.provider == "serper" else
                 data.get("web", {}).get("results") if self.provider == "brave" else data.get("webPages", {}).get("value"))
-            selected, seen = [], set()
+            selected, seen, seen_titles = [], set(), set()
             for row in rows if isinstance(rows, list) else []:
                 if not isinstance(row, dict):
                     continue
                 url = public_url(row.get("url") or row.get("link"))
                 title = text(row.get("title") or row.get("name"), 160)
-                snippet = text(row.get("content") or row.get("snippet") or row.get("description"), 500)
-                if not url or url in seen or not title or not snippet:
+                snippet = text(row.get("content") or row.get("snippet") or row.get("description"), 900 if scope == "official_health" else 500)
+                if not url or not title or not snippet:
                     continue
                 if scope == "official_health" and not official_health_url(url):
                     continue
-                seen.add(url)
+                parsed = urlsplit(url)
+                identity = parsed._replace(fragment="").geturl().rstrip("/")
+                title_key = ((parsed.hostname or "").lower(), " ".join(title.casefold().split()))
+                if identity in seen or title_key in seen_titles:
+                    continue
+                seen.add(identity)
+                seen_titles.add(title_key)
                 selected.append({"title": title, "url": url, "snippet": snippet})
                 if len(selected) == 3:
                     break

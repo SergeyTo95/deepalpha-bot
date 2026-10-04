@@ -377,7 +377,7 @@ def _generate_once(messages, *, request_id="", on_delta=None):
                 return error("flash_context_too_long", request_id)
         payload = {"model": MODEL, "messages": [system] + history,
                    "max_tokens": output_limit, "temperature": 0.7,
-                   "top_p": 0.8, "top_k": 20, "presence_penalty": 1.5,
+                   "top_p": 0.8, "top_k": 20, "min_p": 0.0, "presence_penalty": 1.5,
                    "chat_template_kwargs": {"enable_thinking": False},
                    "reasoning_format": "deepseek",
                    "thinking_budget_tokens": 0,

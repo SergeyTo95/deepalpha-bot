@@ -39,6 +39,10 @@ INSTRUCTION = (
     "для официальных медицинских источников. query описывает основную задачу, "
     "не перечень всех сопутствующих состояний; они сохраняются в "
     "исходном вопросе для ответа. Для прочих тем, direct и clarify source_scope=general. "
+    "При search укажи также task_query: основная задача для поиска, 2–8 слов. "
+    "В task_query не перечисляй сопутствующие состояния. Например, 'как похудеть, "
+    "у меня астма и апноэ' — task_query='healthy weight loss advice'. Условия "
+    "пользователя сохраняются в исходном вопросе для ответа. При direct/clarify task_query=''. "
     "Для актуальных или внешних сведений, медицинских рекомендаций и явного запроса "
     "поиска action=search, query=краткий понятный поисковый запрос с исправленными "
     "словами. Не добавляй в query отсутствующие обстоятельства или диагнозы. "
@@ -52,8 +56,9 @@ TOOL = {"type": "function", "function": {
         "quote": {"type": "string", "description": "Точный исходный фрагмент для исправления или уточнения; если не нужен, пустая строка."},
         "candidate": {"type": "string", "description": "Ближайшее исправленное написание quote, только те же слова, при direct/search тоже. Если исправление не нужно или смысла нет, пустая строка."},
         "source_scope": {"type": "string", "enum": ["general", "official_health"], "description": "official_health для медицинских рекомендаций с поиском; иначе general."},
-        "query": {"type": "string", "description": "Поисковый запрос только при action=search, иначе пустая строка."}},
-        "required": ["action", "quote", "candidate", "query", "source_scope"], "additionalProperties": False}}}
+        "query": {"type": "string", "description": "Полный поисковый запрос с существенными условиями только при action=search, иначе пустая строка."},
+        "task_query": {"type": "string", "description": "При search: только ОСНОВНАЯ ЗАДАЧА, 2–8 слов, без перечня сопутствующих состояний. Пример: healthy weight loss advice. При direct/clarify: пустая строка."}},
+        "required": ["action", "quote", "candidate", "query", "source_scope", "task_query"], "additionalProperties": False}}}
 
 
 def parse_decision(result, question):
@@ -61,7 +66,7 @@ def parse_decision(result, question):
     if len(calls) != 1 or calls[0]["function"].get("name") != "understand_request":
         raise ValueError("invalid_understanding_response")
     args = json.loads(calls[0]["function"]["arguments"])
-    if (not isinstance(args, dict) or set(args) not in ({"action", "quote", "query"}, {"action", "quote", "candidate", "query"}, {"action", "quote", "candidate", "query", "source_scope"})
+    if (not isinstance(args, dict) or set(args) not in ({"action", "quote", "query"}, {"action", "quote", "candidate", "query"}, {"action", "quote", "candidate", "query", "source_scope"}, {"action", "quote", "candidate", "query", "source_scope", "task_query"})
             or any(not isinstance(args[k], str) for k in args)
             or args["action"] not in {"direct", "search", "clarify"}):
         raise ValueError("invalid_understanding_response")
@@ -69,6 +74,10 @@ def parse_decision(result, question):
     if scope not in {"general", "official_health"} or (scope != "general" and args["action"] != "search"):
         raise ValueError("invalid_understanding_response")
     quote, query, candidate = args["quote"], args["query"].strip(), args.get("candidate", "")
+    task_query = args.get("task_query", "").strip()
+    if "task_query" in args and ((args["action"] == "search" and not 1 <= len(task_query.split()) <= 16)
+            or len(task_query) > 200 or (args["action"] != "search" and task_query)):
+        raise ValueError("invalid_understanding_response")
     if args["action"] == "clarify":
         if not quote.strip() or len(quote) > 256 or quote not in question or query:
             raise ValueError("invalid_understanding_response")
@@ -85,6 +94,8 @@ def parse_decision(result, question):
     result = {"action": args["action"], "query": query}
     if scope == "official_health":
         result["source_scope"] = scope
+        if task_query:
+            result["query"] = task_query
     if quote or candidate:
         if not quote.strip() or quote not in question:
             raise ValueError("invalid_understanding_response")

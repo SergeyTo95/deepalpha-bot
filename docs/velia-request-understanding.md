@@ -66,7 +66,7 @@ retain their existing limits.
 
 ## Verification
 
-Local regression checks: **234 passed**, one PostgreSQL integration check skipped
+Local regression checks: **241 passed**, one PostgreSQL integration check skipped
 because no local test database was supplied. The deployed gate separately checks
 real PostgreSQL quota enforcement and source caching.
 
@@ -116,6 +116,21 @@ it does not clinically validate every recommendation. The retained sample still
 includes an inferred histamine sensitivity and a weight-loss rate that the intent
 gate has not validated. Some generated Russian wording also remains imperfect.
 These are limitations of the answer model, not accepted factual-quality results.
+
+The screenshot follow-up strengthens answer qualification: known incorrect
+Russian action verbs, personal safety promises and the observed pounds/kg rate
+error are rejected. Finance checks also reject the observed incorrect Russian
+wording. Health retrieval uses a separate bounded primary-task query; accompanying
+conditions remain in the unchanged inference question. One provider request asks
+for six candidates, keeps up to three distinct pages, and deduplicates anchors
+and repeated titles from the same host. Health excerpts retain up to 900 characters.
+Citation rules require support for the adjacent claim and preserve numerical units
+and periods. Unsupported numerical recommendations are omitted.
+
+Plain-text Flash generation uses the model publisher's documented non-thinking
+sampling profile (`temperature=0.7`, `top_p=0.8`, `top_k=20`, `min_p=0.0`,
+`presence_penalty=1.5`). The existing qualified tool profile is preserved.
+No second answer-generation or spelling-model call is added.
 
 The direct-answer preview was deployed on 2026-10-04 with gateway commit
 `93a0505665d82328b3427cb909c906b23ab68df3` (deployment

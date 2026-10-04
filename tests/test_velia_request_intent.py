@@ -17,6 +17,23 @@ def decision(args):
         "name": "understand_request", "arguments": json.dumps(args)}}]}}]}
 
 
+def test_health_retrieval_uses_the_main_task_without_changing_named_conditions():
+    args = {"action":"search", "quote":"гестамин эпное", "candidate":"гистамин, апноэ",
+        "query":"weight loss asthma apnea histamine", "source_scope":"official_health", "task_query":"healthy weight loss advice"}
+    result = parse_decision(decision(args), "Как похудеть, у меня гестамин эпное и астма?")
+    assert result["query"] == "healthy weight loss advice"
+    assert result["candidate"] == "гистамин, апноэ"
+    args.update(quote="", candidate="", source_scope="general")
+    assert parse_decision(decision(args), "Объясни текущие рекомендации") ["query"] == args["query"]
+
+
+@pytest.mark.parametrize("task_query", ["", "a" * 201, "a " * 17])
+def test_invalid_primary_task_queries_are_rejected(task_query):
+    with pytest.raises(ValueError):
+        parse_decision(decision({"action":"search", "quote":"", "candidate":"", "query":"weight loss",
+            "source_scope":"official_health", "task_query":task_query}), "Как похудеть?")
+
+
 def test_packaged_vocabulary_restores_the_screenshot_terms_and_ordinary_technical_words():
     hints = {value["word"]: value["candidates"] for value in spelling_hints(
         "У меня гестамин эпное и астма. Как перезагрузить роутор и открыть терменал?")}

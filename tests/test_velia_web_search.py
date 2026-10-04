@@ -8,6 +8,29 @@ from test_velia_web_chat import fixture, login, headers
 from test_velia_web_guest import BODY, guest, guest_headers
 
 
+def test_duplicate_pages_leave_room_for_distinct_relevant_sources(monkeypatch, tmp_path):
+    async def run():
+        monkeypatch.setenv("VELIA_WEB_GUEST_ENABLED", "true")
+        rows = [
+            {"title":"Weight advice", "url":"https://www.nhs.uk/weight#one", "content":"Weight guidance."},
+            {"title":"Weight advice with an anchor", "url":"https://www.nhs.uk/weight#two", "content":"Same page."},
+            {"title":"Weight advice", "url":"https://www.nhs.uk/weight-copy.pdf", "content":"Same title from same host."},
+            {"title":"Healthy Weight", "url":"https://www.cdc.gov/healthy-weight", "content":"Gradual weight loss."},
+            {"title":"Managing weight", "url":"https://www.niddk.nih.gov/weight", "content":"Nutrition and activity."},
+        ]
+        async with fixture(monkeypatch, guest_store=GuestStore(sqlite_path=tmp_path/"quota.db"), with_search=True,
+                intent={"action":"search", "quote":"", "candidate":"", "query":"healthy weight loss", "source_scope":"official_health"},
+                search_response={"results":rows}) as (server, client, state):
+            cookie, _, _ = await guest(server, client)
+            async with client.post(server.make_url("/web-api/v1/guest/chat/completions"), headers=guest_headers(cookie), json=BODY) as response:
+                assert response.status == 200
+                wire = await response.text()
+            assert "weight-copy.pdf" not in wire and "#two" not in wire
+            assert "https://www.cdc.gov/healthy-weight" in wire and "https://www.niddk.nih.gov/weight" in wire
+            assert len(state["search_queries"]) == 1
+    asyncio.run(run())
+
+
 def test_guest_internet_enriches_only_latest_turn_and_exposes_real_sources(monkeypatch, tmp_path):
     async def run():
         monkeypatch.setenv("VELIA_WEB_GUEST_ENABLED", "true")
