@@ -1,6 +1,21 @@
-# VELIA Web verification — 2026-10-03
+# VELIA Web verification — 2026-10-04
 
-## Automatic Internet search — current deployment
+## Streaming display — current deployment
+
+Implementation: 17200bf931fa9a3b783d65d019052f14d1651009.
+Deployed commit: 30cf70f9f39151e04ae371f29c6a8fa21c60820d.
+Railway deployment: f03a6096-580c-4b18-92db-ed627d7dd523 — SUCCESS.
+
+- Incoming SSE frames publish the latest text once per network chunk. The first available text paints immediately; later updates share a browser animation frame. Completion, error and stop cancel queued paints and retain the canonical latest answer. Source cards and existing history behavior are preserved.
+- The same-chunk account completion reset and final answer no longer trigger separate empty and full Markdown renders. Validated partial text is still shown if a later event in that chunk reports an error.
+- All 29 Desktop/Web Node cases passed locally; all 10 Web cases and 116 focused Python cases passed in the Railway build. New cases cover buffered bursts, canonical resets and partial text before an error. Existing UTF-8 byte boundaries, source metadata, interrupted streams and request restrictions pass.
+- Real Chromium fixture passed guest Flash, authenticated Flash and PRO, automatic Internet search, persisted sources and counters, native account history, code-entry flow, stop, logout, themes and 390px mobile navigation. Four synthetic model calls.
+- A local real-Chromium buffered-stream comparison used 1000 deltas, 9600 characters, 16 KiB network chunks and a 390px viewport. The original and changed parsers used the same text and Markdown renderer. Rendering/layout calls fell from 1000 to four; measured rendering time in this single synthetic trial fell from 2512 ms to 11.8 ms. Final text and HTML were identical; zero real model calls. This is browser work, not production model throughput or a measurement on the user's phone.
+- Existing Flash runtime logs show roughly 7–9 generated tokens per second on CPU. This change does not tune that runtime, sampling, limits or hardware. Production backend, Android, Telegram bot and model workers were not redeployed, and no PR was merged.
+- The live pre-deploy gate passed real Internet search and PostgreSQL provenance persistence, concurrent guest quota qualification, PRO tools/SSE and the shipped Flash Harness two-round file-read loop with all 24 tools.
+- Public acceptance passed: health and guest profile 200; all four published HTML/app/core/CSS assets match source bytes; automatic Internet capability true and no Internet toggle; Secure/HttpOnly guest cookie; account session/history 401; guest PRO and cross-origin generation 403. This asset/access acceptance made zero model calls. The separate live pre-deploy model gates above passed.
+
+## Automatic Internet search — previous deployment
 
 Implementation: ec7d373f946067535c3a7a3398a823f576e616ee.
 Deployed commit: 4d190e7893a25873cae02c35ca3d1230d196692b.
