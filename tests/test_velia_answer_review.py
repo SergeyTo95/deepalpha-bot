@@ -44,18 +44,19 @@ def test_guest_emits_only_reviewed_answer_with_original_sources_and_one_quota_ch
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("omission", ["state", "citation", "citation_bounds", "regimen"])
+@pytest.mark.parametrize("omission", ["state", "citation", "citation_bounds", "regimen", "unspecified"])
 @pytest.mark.parametrize("recover", [True, False])
 def test_missing_conditions_or_source_support_are_repaired_privately_once(monkeypatch, tmp_path, omission, recover):
     async def run():
         monkeypatch.setenv("VELIA_WEB_GUEST_ENABLED", "true")
-        question = "У меня эпное и астма. Как похудеть?"
+        question = "У меня гестамин эпное и астма. Как похудеть?"
         incomplete = {"state":"Питание и прогулки [1].", "citation":"При астме и апноэ начните с питания и прогулок.",
             "citation_bounds":"При астме и апноэ начните с питания и прогулок [9].",
-            "regimen":"При астме и апноэ создайте дефицит 1000 ккал и стремитесь к 90 минутам нагрузки [1]."}[omission]
+            "regimen":"При астме и апноэ создайте дефицит 1000 ккал и стремитесь к 90 минутам нагрузки [1].",
+            "unspecified":"При астме и апноэ начните постепенно [1]. Если есть реакция на гистамин, исключите продукты с высоким содержанием гистамина."}[omission]
         final = "При астме и апноэ начните с регулярного питания и спокойных прогулок [1]."
-        intent = {"action":"search", "quote":"эпное", "candidate":"апноэ", "query":"weight loss",
-            "source_scope":"official_health", "context":[{"quote":"эпное", "kind":"condition", "status":"stated"},
+        intent = {"action":"search", "quote":"гестамин эпное", "candidate":"гистамин, апноэ", "query":"weight loss",
+            "source_scope":"official_health", "context":[{"quote":"гестамин", "kind":"substance", "status":"unspecified"}, {"quote":"эпное", "kind":"condition", "status":"stated"},
                 {"quote":"астма", "kind":"condition", "status":"stated"}]}
         async with fixture(monkeypatch, with_search=True, guest_store=GuestStore(sqlite_path=tmp_path/"quota.db"),
                 intent=intent, search_response={"results":[{"title":"Weight advice", "url":"https://www.nhs.uk/weight", "content":"Eat well. Gradual activity."}]},
@@ -69,7 +70,7 @@ def test_missing_conditions_or_source_support_are_repaired_privately_once(monkey
             assert "PRIVATE_DRAFT" not in wire and incomplete not in wire
             repair = json.loads(state["review_payloads"][1]["messages"][-1]["content"])
             original = json.loads(state["review_payloads"][0]["messages"][-1]["content"])
-            assert repair["question"] == original["question"] == question.replace("эпное", "апноэ")
+            assert repair["question"] == original["question"] == question.replace("гестамин эпное", "гистамин, апноэ")
             assert repair["user_context"] == original["user_context"]
             assert (final in wire and "[DONE]" in wire) if recover else ('"error"' in wire and "[DONE]" not in wire)
             async with client.get(server.make_url("/web-api/v1/guest"), headers=guest_headers(cookie)) as response:
@@ -80,7 +81,19 @@ def test_missing_conditions_or_source_support_are_repaired_privately_once(monkey
 def test_coverage_allows_case_endings_for_named_conditions():
     data = {"required_context_mentions":[{"quote":"астма"}, {"quote":"апноэ"}], "sources":[]}
     assert review_omissions("При астме и апноэ начните постепенно.", data) == {
-        "missing_stated_terms":[], "invalid_citations":False, "new_personal_regimens":[]}
+        "missing_stated_terms":[], "invalid_citations":False, "new_personal_regimens":[], "unsupported_context_advice":[]}
+
+
+@pytest.mark.parametrize("quote,text", [
+    ("гистамин", "Если есть реакция на гистамин, временно исключите продукты с высоким содержанием гистамина."),
+    ("калий", "При повышенном калии ограничьте эти продукты."),
+    ("potassium", "If potassium is high, avoid these foods.")])
+def test_unspecified_substances_do_not_authorize_even_conditional_personal_advice(quote, text):
+    data = {"required_context_mentions":[], "sources":[],
+        "user_context":[{"quote":quote, "kind":"substance", "status":"unspecified"}]}
+    assert review_omissions(text, data)["unsupported_context_advice"] == [quote]
+    data["user_context"][0]["status"] = "stated"
+    assert review_omissions(text, data)["unsupported_context_advice"] == []
 
 
 @pytest.mark.parametrize("text", ["Начните с указанного вами числа 30 [1].", "Начните с указанного вами числа 12.5 [1].", "Начните с указанного вами числа 0,5 [1].", "Запрошенный расчёт: 17 × 23 = 391 [1].", "Справочная публикация содержит 500 участников [1]."])

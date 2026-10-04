@@ -21,8 +21,10 @@ INSTRUCTION = (
     "пользователь не сообщил. Название вещества не сообщает реакцию, отклонение "
     "показателя, аллергию или непереносимость; оно не является состоянием. "
     "Советы по такому неподтверждённому состоянию удаляются, а не превращаются "
-    "в общий запрет продуктов. Если полезно обсуждать дополнительное состояние, "
-    "обозначь его условно. Исправь неграмотные слова и согласование. "
+    "в общий или условный запрет продуктов. Не добавляй советы для возможной "
+    "реакции на вещество, даже с оговоркой 'если': пользователь её не сообщил. "
+    "Сосредоточься на основной задаче и сообщённых условиях. "
+    "Исправь неграмотные слова и согласование. "
     "Сверь ссылки и числа с приведёнными отрывками: ссылка должна подтверждать "
     "ближайшую мысль. Если citations_required=true, укажи непустой source_ids "
     "хотя бы у одного абзаца с советами, поддержанными приведённым отрывком. "
@@ -147,8 +149,25 @@ def review_omissions(text, data):
             if re.search(prescribing, sentence):
                 regimens.extend(value.replace(",", ".") for value in re.findall(r"\d+(?:[.,]\d+)?", sentence)
                     if value.replace(",", ".") not in stated_numbers)
+    unsupported = []
+    # An unspecified substance/measurement is literal evidence, not a reason
+    # for a personal regimen. Conditional wording does not establish it either.
+    directive = r"\b(?:исключ\w*|избег\w*|огранич\w*|откаж\w*|убер\w*|приним\w*|добав\w*|сократ\w*|увелич\w*|уменьш\w*|пей\w*|ешь\w*|avoid|exclude|limit|take|add|reduce|increase|drink|eat)\b"
+    for item in data.get("user_context", []):
+        if item.get("status") != "unspecified" or item.get("kind") not in {"substance", "measurement"}:
+            continue
+        words = [word for word in re.findall(r"[^\W\d_]+", item["quote"].casefold()) if len(word) >= 4]
+        for paragraph in text.casefold().split("\n\n"):
+            if not re.search(directive, paragraph):
+                continue
+            for word in words:
+                stem = word[:max(4, len(word) - 2)] if len(word) > 4 else word
+                if re.search(r"\b" + re.escape(stem) + r"\w*\b", paragraph):
+                    unsupported.append(item["quote"])
+                    break
     return {"missing_stated_terms": list(dict.fromkeys(missing)), "invalid_citations": invalid_citations,
-        "new_personal_regimens": list(dict.fromkeys(regimens))}
+        "new_personal_regimens": list(dict.fromkeys(regimens)),
+        "unsupported_context_advice": list(dict.fromkeys(unsupported))}
 
 
 async def review_answer(endpoint, headers, context, draft):
@@ -201,11 +220,12 @@ async def review_answer(endpoint, headers, context, draft):
                 continue
             raise ValueError("invalid_answer_review") from None
         omissions = review_omissions(text, data)
-        if not omissions["missing_stated_terms"] and not omissions["invalid_citations"] and not omissions["new_personal_regimens"]:
+        if not any(omissions.values()):
             return text.strip()
         print("VELIA_ANSWER_REVIEW " + json.dumps({"phase":"coverage", "attempt":attempt + 1,
             "missing_terms":len(omissions["missing_stated_terms"]),
-            "invalid_citations":omissions["invalid_citations"], "new_regimens":len(omissions["new_personal_regimens"])}), flush=True)
+            "invalid_citations":omissions["invalid_citations"], "new_regimens":len(omissions["new_personal_regimens"]),
+            "unsupported_advice":len(omissions["unsupported_context_advice"])}), flush=True)
         if attempt:
             raise ValueError("incomplete_answer_review")
         data.update(draft=text.strip(), repair=omissions)
