@@ -13,6 +13,7 @@ from services import velia_chat_streaming_runtime_patch as streaming
 from services import velia_plugin_router
 from services import velia_plugin_service
 from services.velia_mobile_streaming_service import _stream_send_kwargs
+from velia_request_understanding import REQUEST_UNDERSTANDING
 
 
 @pytest.fixture
@@ -91,6 +92,38 @@ def test_real_template_budget_and_free_result(enabled, monkeypatch):
     assert session.calls[-1][1]["json"]["thinking_budget_tokens"] == 0
     assert session.calls[-1][1]["json"]["reasoning_format"] == "deepseek"
     assert session.calls[-1][1]["json"]["max_tokens"] == 768
+
+
+def test_native_flash_uses_shared_understanding_without_editing_user_text(enabled, monkeypatch):
+    session = Session()
+    monkeypatch.setattr(flash.requests, "Session", lambda: session)
+    question = "Испраь app.py, не меняй порт 8080 и строку «0,5 TON»."
+    assert flash.generate([{"role": "user", "content": question}])["ok"]
+    sent = session.calls[-1][1]["json"]["messages"]
+    assert REQUEST_UNDERSTANDING in sent[0]["content"]
+    assert sent[1:] == [{"role": "user", "content": question}]
+
+
+def test_native_pro_prompt_retains_user_correction_and_literal_constraints(monkeypatch):
+    question = "Нет, Ubuntu. Испраь app.py, но не меняй порт 8080 и «0,5 TON»."
+    class Cursor:
+        def execute(self, *args):
+            pass
+        def fetchall(self):
+            return [{"role": "user", "content": question},
+                {"role": "assistant", "content": "Ты используешь Windows."}]
+        def close(self):
+            pass
+    class Connection:
+        def cursor(self, **kwargs):
+            return Cursor()
+        def close(self):
+            pass
+    monkeypatch.setattr(chat, "get_connection", Connection)
+    prompt = chat._build_prompt(7, "test-conversation")
+    assert REQUEST_UNDERSTANDING in prompt
+    assert "ASSISTANT: Ты используешь Windows." in prompt
+    assert prompt.endswith("USER: " + question)
 
 
 class StreamResponse(Response):

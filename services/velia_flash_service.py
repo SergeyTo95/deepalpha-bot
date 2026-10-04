@@ -10,6 +10,7 @@ import threading
 from urllib.parse import urlsplit
 
 import requests
+from velia_request_understanding import understanding_instruction
 
 MODEL = "velia-flash"
 PROVIDER = "bonsai"
@@ -290,7 +291,7 @@ def _generate_once(messages, *, request_id="", on_delta=None):
     context_limit = bounded_int("VELIA_FLASH_CONTEXT_TOKENS", 2048, 2048, 8192)
     input_limit = min(context_limit - output_limit - 32,
                       bounded_int("VELIA_FLASH_MAX_INPUT_TOKENS", 768, 128, 2048))
-    system = {"role": "system", "content": (
+    system = {"role": "system", "content": understanding_instruction(
         "You are VELIA Flash, a female AI assistant. Your persona is feminine. "
         "In languages with grammatical gender, always refer to yourself in feminine forms. "
         "In Russian use forms such as 'поняла', 'готова', 'рада', 'сделала' and never "
@@ -307,8 +308,9 @@ def _generate_once(messages, *, request_id="", on_delta=None):
         + (
             "This is a live voice conversation: answer naturally in 1 to 2 short spoken "
             "sentences unless the user explicitly asks for detail. Start with the answer. "
-            "If speech recognition wording is imperfect, infer the intended meaning from "
-            "the recent conversation before asking. If clarification is truly required, "
+            "For clear speech-recognition mistakes, use user-confirmed recent context. "
+            "For ambiguity that changes the answer, clarify instead of guessing. "
+            "If clarification is truly required, "
             "ask at most one short question. Never use a numbered clarification questionnaire. "
             "Avoid headings, lists and filler. "
             if voice_fast else ""
