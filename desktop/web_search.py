@@ -302,6 +302,9 @@ class WebSearch:
         if result["decision"] == "search":
             request[SOURCES] = result
         question = payload["messages"][-1]["content"]
+        if result.get("source_scope") == "official_health" or any(row["status"] == "unspecified" for row in result.get("context", [])):
+            from desktop.answer_review import REVIEW_CONTEXT
+            request[REVIEW_CONTEXT] = {"question": question, "result": result}
         content = (augmented_question(question, result) if result["decision"] == "search"
             else restored_question(question, result) + grounded_context(question, result))
         return {**payload, "messages": [*payload["messages"][:-1],

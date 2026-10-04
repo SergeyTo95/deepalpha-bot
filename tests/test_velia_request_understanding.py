@@ -102,6 +102,8 @@ def test_live_medical_criterion_checks_a_useful_answer_without_forcing_a_spellin
     assert medical_answer(answer + " Упоминание гистамина не подтверждает аллергию.")
     assert not medical_answer(answer + " Следите за переносимостью продуктов при гистамине.")
     assert not medical_answer(answer + " При хронической астеме обсудите нагрузку с пульмоном.")
+    assert not medical_answer(answer + " Быстрые методы могут обострить симптомы гистаминовых реакций.")
+    assert medical_answer(answer + " Если гистаминовая непереносимость подтверждена, ограничения согласуйте с врачом.")
 
 
 def test_finance_live_criterion_rejects_observed_language_errors():

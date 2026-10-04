@@ -25,11 +25,12 @@ def unconfirmed_personal_condition(reply):
     state an allergy/intolerance. It is not a production word filter.
     """
     for sentence in re.split(r"[.!?\n;]", reply.casefold()):
-        if not re.search(r"аллерг\w*|непереносим\w*", sentence):
+        histamine_reaction = re.search(r"гистамин\w+\s+(?:реакц\w*|непереносим\w*)", sentence)
+        if not re.search(r"аллерг\w*|непереносим\w*", sentence) and not histamine_reaction:
             continue
         if re.search(r"\bесли\b|\bпри\s+(?:наличии|подтвержд\w*|выявл\w*)|\bне\s+(?:означает|подтверждает|устанавливает)\b", sentence):
             continue
-        if re.search(r"\bваш\w*\b|\bу\s+(?:вас|тебя)\b|\bс\s+уч[её]том\b|\bучитыва\w*\b|\bпод\s+\w*\s*(?:аллерг|непереносим)", sentence):
+        if histamine_reaction or re.search(r"\bваш\w*\b|\bу\s+(?:вас|тебя)\b|\bс\s+уч[её]том\b|\bучитыва\w*\b|\bпод\s+\w*\s*(?:аллерг|непереносим)", sentence):
             return True
     return False
 
@@ -107,7 +108,7 @@ async def run_browser_probes():
             await site.start()
             base = "http://127.0.0.1:" + str(site._server.sockets[0].getsockname()[1])
             headers = {"Origin": origin, "X-Velia-Request": "1", "Sec-Fetch-Site": "same-origin", "X-Real-IP": "127.0.0.1"}
-            async with ClientSession(timeout=ClientTimeout(total=360, sock_read=300), cookie_jar=DummyCookieJar()) as client:
+            async with ClientSession(timeout=ClientTimeout(total=600, sock_read=300), cookie_jar=DummyCookieJar()) as client:
                 async with client.get(base + "/web-api/v1/guest", headers=headers) as response:
                     if response.status != 200:
                         raise RuntimeError("understanding_probe_guest_unavailable")

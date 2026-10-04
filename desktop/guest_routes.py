@@ -105,7 +105,7 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_
             return failure
         response = None
         try:
-            async with ClientSession(timeout=ClientTimeout(total=360, sock_read=300)) as client:
+            async with ClientSession(timeout=ClientTimeout(total=600, sock_read=300)) as client:
                 headers = {"Authorization": "Bearer " + os.environ["VELIA_DESKTOP_FLASH_API_KEY"]}
                 endpoint = flash_endpoint()
                 await check_flash_context(client, endpoint, headers, payload)
@@ -130,7 +130,10 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_
                     response = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-store",
                         "X-Accel-Buffering": "no", "X-Velia-Guest-Remaining": str(remaining)})
                     await response.prepare(request)
-                    async for chunk in public_web_stream(request, upstream.content):
+                    from desktop.answer_review import REVIEW_CONTEXT, reviewed_web_stream
+                    stream = (reviewed_web_stream(request, upstream.content, client, endpoint, headers)
+                        if request.get(REVIEW_CONTEXT) else public_web_stream(request, upstream.content))
+                    async for chunk in stream:
                         await response.write(chunk)
                     await response.write_eof()
                     return response

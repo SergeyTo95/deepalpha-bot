@@ -28,6 +28,7 @@ async def fixture(monkeypatch, **state):
     state["search_queries"] = []
     state["search_payloads"] = []
     state["intent_payloads"] = []
+    state["review_payloads"] = []
     async def search(request):
         data = await request.json()
         assert data["api_key"] == "fixture-search-key"
@@ -109,8 +110,14 @@ async def fixture(monkeypatch, **state):
                 return web.json_response({"error": "fixture failure"}, status=state["intent_status"])
             return web.json_response({"choices": [{"message": {"tool_calls": [{"type": "function", "id": "intent-1",
                 "function": {"name": "understand_request", "arguments": json.dumps(args, ensure_ascii=False)}}]}, "finish_reason": "tool_calls"}]})
+        if data.get("stream") is False:
+            state["review_payloads"].append(data)
+            return web.json_response({"choices": [{"message": {"content": state.get("review_content", "Привет, я Велия.")},
+                "finish_reason": state.get("review_finish", "stop")}], "usage": {"private": True}}, status=state.get("review_status", 200))
         state["payloads"].append(data)
-        return web.Response(text='data: {"model":"private-upstream-model","system_fingerprint":"private-runtime","choices":[{"delta":{"reasoning_content":"private-thought","content":"Привет, я Велия."}}]}\n\ndata: [DONE]\n\n', content_type="text/event-stream")
+        event = {"model":"private-upstream-model", "system_fingerprint":"private-runtime", "choices":[{
+            "delta":{"reasoning_content":"private-thought", "content":state.get("model_content", "Привет, я Велия.")}, "finish_reason": "stop"}]}
+        return web.Response(text="data: " + json.dumps(event, ensure_ascii=False) + '\n\ndata: [DONE]\n\n', content_type="text/event-stream")
     authority = web.Application()
     authority.router.add_get("/mobile-api/v1/health", health)
     authority.router.add_get("/mobile-api/v1/me", me)
