@@ -1,10 +1,118 @@
 [
-  {"id":"medical_ambiguity", "messages":[{"role":"user", "content":"Привет. Рада познакомиться. Идеи для похудения к 31 октября у меня гестамин эпное и астма. Как мне похудеть быстро"}], "criterion":"Clarifies the unclear terms; no invented diabetes or pregnancy; does not treat tentative diagnoses as confirmed."},
-  {"id":"technical_typo", "messages":[{"role":"user", "content":"Как перезагрузиь роутор, не сбрасывая настройки? Ответь кратко."}], "criterion":"Understands rebooting a router, gives useful steps, distinguishes reboot from factory reset and preserves settings."},
-  {"id":"finance_typo", "messages":[{"role":"user", "content":"Объясни разницу межу выручкой и прибылю на простом примере. Кратко."}], "criterion":"Explains revenue versus profit correctly without unnecessary clarification."},
-  {"id":"unit_ambiguity", "messages":[{"role":"user", "content":"Переведи 1000 грам в тон. Коротко."}], "criterion":"Clarifies mass units versus GRAM/TON tokens, or explicitly makes both interpretations conditional; no fabricated exchange rate."},
-  {"id":"literal_constraints", "messages":[{"role":"user", "content":"В Python исправь синтаксис в строке print(\"app.py\". Не меняй текст app.py и ничего не удаляй. Только исправленная строка."}], "criterion":"Returns print(\"app.py\") and keeps the literal identifier."},
-  {"id":"clear_arithmetic", "messages":[{"role":"user", "content":"Сколько 17 умножть на 23? Только число."}], "criterion":"Returns 391 without clarification or unrelated text."},
-  {"id":"user_correction", "messages":[{"role":"user", "content":"Как открыть терминал на компьютере?"}, {"role":"assistant", "content":"У тебя Windows: открой PowerShell."}, {"role":"user", "content":"Нет, у меня Ubuntu. Как открыть терменал? Ответь одной фразой."}], "criterion":"Accepts Ubuntu, gives Ctrl+Alt+T or another Ubuntu method and does not repeat the Windows assumption."},
-  {"id":"context_reference", "messages":[{"role":"user", "content":"Напиши короткое приветствие клиенту: Добрый день, рада помочь с вашим заказом."}, {"role":"assistant", "content":"Добрый день! Рада помочь с вашим заказом."}, {"role":"user", "content":"Сделай его менее офицальным. Только текст."}], "criterion":"Uses the previous greeting as the reference, makes it less formal without asking what 'его' means."}
+  {
+    "id": "medical_ambiguity",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Привет. Рада познакомиться. Идеи для похудения к 31 октября у меня гестамин эпное и астма. Как мне похудеть быстро"
+      }
+    ],
+    "criterion": "Clarifies the unclear terms; no invented diabetes or pregnancy; does not treat tentative diagnoses as confirmed."
+  },
+  {
+    "id": "technical_typo",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Как перезагрузиь роутор, не сбрасывая настройки? Ответь кратко."
+      }
+    ],
+    "criterion": "Understands rebooting a router, gives useful steps, distinguishes reboot from factory reset and preserves settings."
+  },
+  {
+    "id": "finance_typo",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Объясни разницу межу выручкой и прибылю на простом примере. Кратко."
+      }
+    ],
+    "criterion": "Explains revenue versus profit correctly without unnecessary clarification."
+  },
+  {
+    "id": "mass_conversion",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Переведи 1000 грам в тон. Коротко."
+      }
+    ],
+    "criterion": "Interprets the ordinary mass-unit reading correctly as 1000 grams = 0.001 tonnes, or clarifies mass versus tokens; never fabricates an exchange rate."
+  },
+  {
+    "id": "literal_constraints",
+    "messages": [
+      {
+        "role": "user",
+        "content": "В Python исправь синтаксис в строке print(\"app.py\". Не меняй текст app.py и ничего не удаляй. Только исправленная строка."
+      }
+    ],
+    "criterion": "Returns print(\"app.py\") and keeps the literal identifier."
+  },
+  {
+    "id": "clear_arithmetic",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Сколько 17 умножть на 23? Только число."
+      }
+    ],
+    "criterion": "Returns 391 without clarification or unrelated text."
+  },
+  {
+    "id": "user_correction",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Как открыть терминал на компьютере?"
+      },
+      {
+        "role": "assistant",
+        "content": "У тебя Windows: открой PowerShell."
+      },
+      {
+        "role": "user",
+        "content": "Нет, у меня Ubuntu. Как открыть терменал? Ответь одной фразой."
+      }
+    ],
+    "criterion": "Accepts Ubuntu, gives Ctrl+Alt+T or another Ubuntu method and does not repeat the Windows assumption."
+  },
+  {
+    "id": "context_reference",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Напиши короткое приветствие клиенту: Добрый день, рада помочь с вашим заказом."
+      },
+      {
+        "role": "assistant",
+        "content": "Добрый день! Рада помочь с вашим заказом."
+      },
+      {
+        "role": "user",
+        "content": "Сделай его менее офицальным. Только текст."
+      }
+    ],
+    "criterion": "Uses the previous greeting as the reference, makes it less formal without asking what 'его' means."
+  },
+  {
+    "id": "name_ambiguity",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Мне нужен ключ. Какой лучше взять? Коротко."
+      }
+    ],
+    "criterion": "Asks what kind of key or what task it is for; does not assert a particular device, lock or license without context."
+  },
+  {
+    "id": "amount_constraint",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Комиссия 0,5% сверх цены 200 TON. Сколько комиссия и сколько всего заплатит покупатель? Кратко."
+      }
+    ],
+    "criterion": "Keeps the stated 0.5% fee and 200 TON price: fee 1 TON, total 201 TON; does not substitute another rate."
+  }
 ]
