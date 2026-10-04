@@ -44,14 +44,15 @@ def test_guest_emits_only_reviewed_answer_with_original_sources_and_one_quota_ch
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("omission", ["state", "citation", "citation_bounds"])
+@pytest.mark.parametrize("omission", ["state", "citation", "citation_bounds", "regimen"])
 @pytest.mark.parametrize("recover", [True, False])
 def test_missing_conditions_or_source_support_are_repaired_privately_once(monkeypatch, tmp_path, omission, recover):
     async def run():
         monkeypatch.setenv("VELIA_WEB_GUEST_ENABLED", "true")
         question = "У меня эпное и астма. Как похудеть?"
         incomplete = {"state":"Питание и прогулки [1].", "citation":"При астме и апноэ начните с питания и прогулок.",
-            "citation_bounds":"При астме и апноэ начните с питания и прогулок [9]."}[omission]
+            "citation_bounds":"При астме и апноэ начните с питания и прогулок [9].",
+            "regimen":"При астме и апноэ создайте дефицит 1000 ккал и стремитесь к 90 минутам нагрузки [1]."}[omission]
         final = "При астме и апноэ начните с регулярного питания и спокойных прогулок [1]."
         intent = {"action":"search", "quote":"эпное", "candidate":"апноэ", "query":"weight loss",
             "source_scope":"official_health", "context":[{"quote":"эпное", "kind":"condition", "status":"stated"},
@@ -79,7 +80,14 @@ def test_missing_conditions_or_source_support_are_repaired_privately_once(monkey
 def test_coverage_allows_case_endings_for_named_conditions():
     data = {"required_context_mentions":[{"quote":"астма"}, {"quote":"апноэ"}], "sources":[]}
     assert review_omissions("При астме и апноэ начните постепенно.", data) == {
-        "missing_stated_terms":[], "invalid_citations":False}
+        "missing_stated_terms":[], "invalid_citations":False, "new_personal_regimens":[]}
+
+
+@pytest.mark.parametrize("text", ["Начните с указанного вами числа 30 [1].", "Начните с указанного вами числа 12.5 [1].", "Начните с указанного вами числа 0,5 [1].", "Запрошенный расчёт: 17 × 23 = 391 [1].", "Справочная публикация содержит 500 участников [1]."])
+def test_numeric_review_preserves_user_numbers_calculations_and_reference_facts(text):
+    data = {"question":"У меня астма. Сохрани 30, 12,5 и 0.5, вычисли 17 * 23.", "required_context_mentions":[],
+        "sources":[{}], "avoid_new_numeric_regimens":True}
+    assert review_omissions(text, data)["new_personal_regimens"] == []
 
 
 @pytest.mark.parametrize("failure", [{"review_status": 503}, {"review_finish": "length"}, {"review_content": ""}])

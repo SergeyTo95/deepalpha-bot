@@ -40,7 +40,8 @@ def medical_answer(reply):
     return (len(reply.strip()) >= 180
         and all(term in lowered for term in ("апноэ", "астм"))
         and any(term in lowered for term in ("питан", "калори", "рацион"))
-        and any(term in lowered for term in ("ходьб", "прогул", "физическ", "движен"))
+        and any(term in lowered for term in ("ходьб", "прогул", "физическ", "движен", "активност"))
+        and not re.search(r"\b(?:созда\w*|стрем\w*|начн\w*|увелич\w*)\b[^.!?\n]*\d[^.!?\n]{0,30}(?:ккал|минут)", re.sub(r"\[\d+\]", "", lowered))
         and not re.search(r"исключ\w*[^.!?\n]*(?:цитрусов|банан|арахис|ферментирован)", lowered)
         and not re.search(r"\b(?:это|точно|гарантированно)\s+безопасно\b|\bне\s+(?:усилит|ухудшит)\s+симптом|\bвешай\w*\b", lowered)
         and not re.search(r"\b1\s*[–—-]\s*2\s*кг.{0,20}(?:в\s+недел|за\s+недел|еженедел)", lowered)
