@@ -1,0 +1,66 @@
+{
+  "gateway": {
+    "id": "3f96d6ed-1573-4fc1-9162-ad3ec53ed24a",
+    "source_commit": "9ee3e1f81972fb0c2bdce9a37a354e7e792e5e80",
+    "status": "SUCCESS",
+    "gates": [
+      {
+        "timestamp": "2026-10-04T09:58:47.772210406Z",
+        "message": "VELIA_FLASH_OPERATOR_TOOL {\"ok\": true, \"tool_names\": [\"read_probe\"], \"content_characters\": 0, \"finish_reason\": \"tool_calls\"}"
+      },
+      {
+        "timestamp": "2026-10-04T10:02:39.020140435Z",
+        "message": "VELIA_FLASH_HARNESS_PROBE {\"ok\":true,\"rounds\":2,\"readTool\":true,\"persona\":true,\"declaredTools\":24,\"requestCharacters\":23372,\"liveModel\":true,\"ownerPairingVerified\":false}"
+      },
+      {
+        "timestamp": "2026-10-04T10:03:09.097774486Z",
+        "message": "VELIA_REQUEST_INTENT_CASE {\"case\": \"medical_spacing\", \"ok\": true, \"decision\": {\"action\": \"clarify\", \"span\": [69, 83]}, \"reply\": \"Уточните, пожалуйста, что вы имеете в виду под «гестамин эпное»?\"}"
+      },
+      {
+        "timestamp": "2026-10-04T10:03:14.586030918Z",
+        "message": "VELIA_REQUEST_INTENT_CASE {\"case\": \"medical_plain\", \"ok\": true, \"decision\": {\"action\": \"clarify\", \"span\": [7, 21]}, \"reply\": \"Уточните, пожалуйста, что вы имеете в виду под «гестамин эпное»?\"}"
+      },
+      {
+        "timestamp": "2026-10-04T10:03:21.555291753Z",
+        "message": "VELIA_REQUEST_INTENT_CASE {\"case\": \"device_ambiguity\", \"ok\": true, \"decision\": {\"action\": \"clarify\", \"span\": [16, 23]}, \"reply\": \"Уточните, пожалуйста, что вы имеете в виду под «квампер»?\"}"
+      },
+      {
+        "timestamp": "2026-10-04T10:03:28.251102068Z",
+        "message": "VELIA_REQUEST_INTENT_CASE {\"case\": \"arithmetic_typo\", \"ok\": true, \"decision\": {\"action\": \"direct\", \"query\": \"\"}, \"reply\": null}"
+      },
+      {
+        "timestamp": "2026-10-04T10:03:37.656302306Z",
+        "message": "VELIA_REQUEST_INTENT_CASE {\"case\": \"confirmed_context\", \"ok\": true, \"decision\": {\"action\": \"direct\", \"query\": \"\"}, \"reply\": null}"
+      },
+      {
+        "timestamp": "2026-10-04T10:03:45.716021644Z",
+        "message": "VELIA_REQUEST_INTENT_CASE {\"case\": \"current_search\", \"ok\": true, \"decision\": {\"action\": \"search\", \"query\": \"актуальная стабильная версия Python официальный сайт\"}, \"reply\": null}"
+      },
+      {
+        "timestamp": "2026-10-04T10:03:45.716032573Z",
+        "message": "VELIA_DESKTOP_LIVE_PROBE {\"commit\": \"9ee3e1f81972fb0c2bdce9a37a354e7e792e5e80\", \"correlated_tool_result\": true, \"flash_live_harness\": true, \"flash_paid_fallback\": false, \"guest_quota\": {\"accepted\": 30, \"atomic_limit\": 30, \"ok\": true, \"persistent\": true, \"rejected\": 8}, \"identity_health\": true, \"identity_rejects_no_token\": true, \"live_sse\": true, \"live_tool_call\": true, \"model_calls\": 2, \"ok\": true, \"owner_pairing_verified\": false, \"request_intent\": {\"cases\": 6, \"complete_clarification\": true, \"interpretation_before_search\": true, \"ok\": true, \"paid_fallback\": false}, \"web_search\": {\"model_calls\": 0, \"ok\": true, \"persistent_sources\": true, \"primary_source\": true, \"source_count\": 3}}"
+      }
+    ]
+  },
+  "native": {
+    "id": "387eb866-cf38-4ae3-8eea-314f65125316",
+    "source_commit": "dc312b0e9da7f619d6b9024763344918298eb04f",
+    "status": "SUCCESS",
+    "build": [
+      {
+        "timestamp": "2026-10-04T09:55:09.604930682Z",
+        "message": "RAILWAY_CI_VERIFIED commit=dc312b0e9da7f619d6b9024763344918298eb04f source_sha256=20153ca496ac02b2745bc0305a88161af0836faeef888d34a9b6c59646442e11\n"
+      }
+    ],
+    "model_probes": [
+      {
+        "timestamp": "2026-10-04T09:56:10.802795530Z",
+        "message": "VELIA_FLASH_ADAPTER_PROBE {\"case\": \"coding\", \"ok\": true, \"elapsed_seconds\": 23.236552391201258, \"first_token_seconds\": 21.132817059755325, \"text\": \"```python\\ndef add(a, b):\\n    return a + b\\n```\", \"usage\": {\"completion_tokens\": 18, \"prompt_tokens\": 600, \"total_tokens\": 618, \"prompt_tokens_details\": {\"cached_tokens\": 0}}, \"reason\": null, \"provider\": \"bonsai\", \"estimated_cost_usd\": 0.0}"
+      },
+      {
+        "timestamp": "2026-10-04T09:56:10.802801250Z",
+        "message": "VELIA_FLASH_ADAPTER_PROBE {\"case\": \"russian\", \"ok\": true, \"elapsed_seconds\": 3.5369280418381095, \"first_token_seconds\": 1.4255502400919795, \"text\": \"Переменная в Python — это имя, которое хранит значение для дальнейшего использования в программе.\", \"usage\": {\"completion_tokens\": 19, \"prompt_tokens\": 604, \"total_tokens\": 623, \"prompt_tokens_details\": {\"cached_tokens\": 573}}, \"reason\": null, \"provider\": \"bonsai\", \"estimated_cost_usd\": 0.0}"
+      }
+    ]
+  }
+}
