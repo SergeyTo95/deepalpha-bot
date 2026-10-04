@@ -206,7 +206,13 @@ export async function readCompletion(response, onText, onSearch = () => {}) {
     done = false,
     output = "",
     finish = null,
-    search = null;
+    search = null,
+    changed = false;
+  const publish = () => {
+    if (!changed) return;
+    changed = false;
+    onText(output);
+  };
   const consume = (frame) => {
     const data = frame
       .split("\n")
@@ -231,14 +237,14 @@ export async function readCompletion(response, onText, onSearch = () => {}) {
     }
     if (event.reset === true) {
       output = "";
-      onText(output);
+      changed = true;
     }
     const choice = event.choices?.[0];
     if (choice?.finish_reason) finish = choice.finish_reason;
     const content = choice?.delta?.content;
-    if (typeof content === "string") {
+    if (typeof content === "string" && content) {
       output += content;
-      onText(output);
+      changed = true;
     }
   };
   try {
@@ -246,15 +252,21 @@ export async function readCompletion(response, onText, onSearch = () => {}) {
       const part = await reader.read();
       pending += decoder.decode(part.value, { stream: !part.done });
       pending = pending.replace(/\r\n/g, "\n");
-      let boundary;
-      while ((boundary = pending.indexOf("\n\n")) !== -1) {
-        consume(pending.slice(0, boundary));
-        pending = pending.slice(boundary + 2);
-        if (done) break;
-      }
-      if (part.done) {
-        if (pending.trim()) consume(pending);
-        break;
+      try {
+        let boundary;
+        while ((boundary = pending.indexOf("\n\n")) !== -1) {
+          consume(pending.slice(0, boundary));
+          pending = pending.slice(boundary + 2);
+          if (done) break;
+        }
+        if (part.done) {
+          if (pending.trim()) consume(pending);
+          break;
+        }
+      } finally {
+        // One network chunk may contain hundreds of already available deltas.
+        // Publish their latest text immediately, without repeating Markdown work.
+        publish();
       }
     }
     if (!done) throw new Error(apiError("stream_incomplete"));

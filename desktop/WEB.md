@@ -47,6 +47,21 @@ admitted attempts, including stopped or failed provider calls, do. Database
 outages deny guest generation. The trial is a browser/network allowance, not a
 verified per-person identity limit.
 
+## Streaming display
+
+The browser publishes the latest complete text once per received network chunk,
+rather than rebuilding Markdown for every SSE delta already in that chunk.
+The first available text paints immediately; later updates share the next browser
+animation frame. There is no per-character typing timer or intentional text delay.
+Stopping, a stream error or completion cancels queued paints and renders the
+canonical latest answer, including validated partial text. An account completion
+reset and its final text in the same chunk are applied together without a blank
+intermediate answer. Source cards, scrolling and history retain their behavior.
+
+This reduces browser rendering work, especially for long PRO replies and buffered
+streams. It does not change model generation speed, sampling, output limits,
+hardware allocation or provider routing.
+
 ## Internet search
 
 Enable VELIA_WEB_SEARCH_ENABLED=true on the existing preview gateway.
