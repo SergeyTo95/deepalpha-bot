@@ -75,12 +75,27 @@ def finance_answer(reply):
 async def run_browser_probes():
     class RecordedSearch(WebSearch):
         async def _understand(self, messages):
-            return await understand(messages, on_invalid=lambda value: print("VELIA_REQUEST_INTENT_DIAGNOSTIC "
-                + json.dumps({"case":"browser_" + self.case, **value}, ensure_ascii=False), flush=True))
+            started = time.monotonic()
+            try:
+                return await understand(messages, on_invalid=lambda value: print("VELIA_REQUEST_INTENT_DIAGNOSTIC "
+                    + json.dumps({"case":"browser_" + self.case, **value}, ensure_ascii=False), flush=True))
+            finally:
+                self.intent_seconds = time.monotonic() - started
 
         async def search(self, query, *, scope="general"):
             self.query = query
-            return await super().search(query, scope=scope)
+            started = time.monotonic()
+            self.snapshot_reused = self.case == "medical_spacing_warm"
+            if self.snapshot_reused:
+                if scope != self.snapshot_key[1]:
+                    raise RuntimeError("latency_probe_changed_source_policy")
+                result = json.loads(json.dumps(self.snapshot))
+            else:
+                result = await super().search(query, scope=scope)
+                if self.case == "medical_spacing":
+                    self.snapshot_key, self.snapshot = (query, scope), result
+            self.search_seconds = time.monotonic() - started
+            return result
 
         async def plan(self, messages):
             self.decision = await super().plan(messages)
@@ -97,6 +112,9 @@ async def run_browser_probes():
         ("literal_constraints", [{"role": "user", "content": "В Python исправь синтаксис в строке print(\"app.py\". Не меняй текст app.py и ничего не удаляй. Только исправленная строка."}], "direct", lambda text: text.strip().strip(chr(96)).removeprefix("python\n").strip() == 'print("app.py")'),
         ("unspecified_device_model", [{"role": "user", "content": "У меня телефон Самсунг, модель не знаю. Как сделать скриншот кнопками? Ответь коротко."}], "direct", lambda text: (any(term in text.casefold() for term in ("громк", "volume")) and any(term in text.casefold() for term in ("питан", "power", "блокиров")) and not re.search(r"\b(?:galaxy\s+)?[sa]\s?\d{1,3}\b|iphone|айфон|правильно ли", text, re.I))),
     ]
+    # Generate a new answer after unrelated stages while keeping the exact
+    # source snapshot. This measures prompt-state reuse, never answer reuse.
+    cases.append(("medical_spacing_warm", *cases[0][1:]))
     rows = []
     with tempfile.TemporaryDirectory(prefix="velia-private-understanding-") as directory:
         store = GuestStore(sqlite_path=Path(directory) / "quota.db")
@@ -124,7 +142,7 @@ async def run_browser_probes():
                 for index, (name, messages, action, acceptable) in enumerate(cases):
                     search.case = name
                     started = time.monotonic()
-                    text, done, sources, stop = "", False, [], None
+                    text, done, sources, stop, first_text = "", False, [], None, None
                     async with client.post(base + "/web-api/v1/guest/chat/completions",
                             headers={**headers, "Cookie": COOKIE + "=" + cookie},
                             json={"model": "velia-flash", "stream": True, "messages": messages}) as response:
@@ -142,14 +160,17 @@ async def run_browser_probes():
                             event = json.loads(data)
                             sources = sources or event.get("web_search", {}).get("sources", [])
                             for choice in event.get("choices", []):
-                                text += choice.get("delta", {}).get("content") or ""
+                                piece = choice.get("delta", {}).get("content") or ""
+                                if piece and first_text is None:
+                                    first_text = time.monotonic() - started
+                                text += piece
                                 stop = choice.get("finish_reason") or stop
                             if len(text) > 4096:
                                 raise RuntimeError("understanding_probe_output_too_large:" + name)
                     source_text = json.dumps(sources, ensure_ascii=False).casefold()
                     relevant_sources = (bool(sources) == (action == "search")
                         and not any(term in source_text for term in ("гестацион", "диабет", "беремен", "gestational", "pregnan")))
-                    if name == "medical_spacing":
+                    if name.startswith("medical_spacing"):
                         reading = search.decision.get("restoration_candidate", "").casefold()
                         question = messages[-1]["content"]
                         context = [(question[row["span"][0]:row["span"][1]].casefold(), row["status"])
@@ -168,7 +189,12 @@ async def run_browser_probes():
                         "query": getattr(search, "query", None) if action == "search" else None,
                         "source_scope": search.decision.get("source_scope"),
                         "context": search.decision.get("context", []),
-                        "reply": text, "finish_reason": stop, "done": done, "sources": sources, "seconds": round(time.monotonic() - started, 2)}
+                        "reply": text, "finish_reason": stop, "done": done, "sources": sources,
+                        "seconds": round(time.monotonic() - started, 2),
+                        "first_text_seconds": round(first_text, 2) if first_text is not None else None,
+                        "intent_seconds": round(search.intent_seconds, 2),
+                        "search_seconds": round(search.search_seconds, 2) if action == "search" else 0,
+                        "source_snapshot_reused": search.snapshot_reused if action == "search" else False}
                     rows.append(row)
                     print("VELIA_REQUEST_UNDERSTANDING_BROWSER " + json.dumps(row, ensure_ascii=False), flush=True)
                     if not ok:
