@@ -21,10 +21,10 @@ from velia_request_understanding import clarification_content, clarification_rep
 def medical_answer(reply):
     lowered = reply.casefold()
     return (len(reply.strip()) >= 180
-        and all(term in lowered for term in ("гистамин", "апноэ", "астм"))
+        and all(term in lowered for term in ("апноэ", "астм"))
         and any(term in lowered for term in ("питан", "калори", "рацион"))
         and any(term in lowered for term in ("ходьб", "прогул", "физическ", "движен"))
-        and "исключите" not in lowered
+        and not re.search(r"исключ\w*[^.!?\n]*(?:цитрусов|банан|арахис|ферментирован)", lowered)
         and not any(term in lowered for term in ("правильно ли я поняла", "что вы имеете в виду", "гестацион", "диабет", "беремен", "обмор")))
 
 
@@ -100,7 +100,9 @@ async def run_browser_probes():
                     relevant_sources = (bool(sources) == (action == "search")
                         and not any(term in source_text for term in ("гестацион", "диабет", "беремен", "gestational", "pregnan")))
                     if name == "medical_spacing":
-                        relevant_sources = relevant_sources and all(official_health_url(row["url"]) for row in sources)
+                        reading = search.decision.get("restoration_candidate", "").casefold()
+                        relevant_sources = (relevant_sources and all(official_health_url(row["url"]) for row in sources)
+                            and all(term in reading for term in ("гистамин", "апноэ")))
                     ok = (search.decision["decision"] == action and done and stop == "stop" and relevant_sources
                         and remaining == str(29 - index) and acceptable(text))
                     row = {"case": name, "ok": bool(ok), "decision": search.decision["decision"],

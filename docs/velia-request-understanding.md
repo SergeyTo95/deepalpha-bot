@@ -33,8 +33,8 @@ The inference renderer applies that repair to a copy of the question before
 the model sees it. The raw question remains the stored prefix of the handoff.
 Unique independent sound-alike words retain a separating comma instead of
 becoming an invented compound. The model-selected words are never overridden. Search uses the recognized
-wording and retains bounded source provenance; its wrapper asks for a useful
-answer rather than waiting for spelling confirmation.
+wording and retains bounded source provenance; its wrapper repeats the recognized question after source snippets and asks for
+a useful answer rather than waiting for spelling confirmation.
 
 Clarification remains for a substantial unknown term or multiple plausible
 meanings requiring different answers. VELIA can answer the useful part of an
@@ -63,7 +63,7 @@ retain their existing limits.
 
 ## Verification
 
-Local regression checks: **232 passed**, one PostgreSQL integration check skipped
+Local regression checks: **233 passed**, one PostgreSQL integration check skipped
 because no local test database was supplied. The deployed gate separately checks
 real PostgreSQL quota enforcement and source caching.
 
@@ -80,7 +80,9 @@ answers on an isolated loopback guest server with a temporary quota database:
 
 - The exact screenshot query receives substantive weight-loss guidance, with the
   nearby readings `гистамин` and `апноэ`, rather than a spelling-confirmation
-  question. No invented gestational diabetes, pregnancy, confusion of apnea with fainting,
+  question. The pre-search reading must include both restored words; the answer must address
+  the useful task rather than give a spelling lecture. No invented gestational
+  diabetes, pregnancy, confusion of apnea with fainting,
   or unrelated source cards or unsupported broad food exclusions. Sources must
   be official; the complete answer must finish with `stop`.
 - An unknown device name remains a complete clarification.

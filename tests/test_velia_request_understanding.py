@@ -84,3 +84,12 @@ def test_inference_repairs_preserve_source_context_and_native_transcript_prefixe
 def test_invalid_restoration_metadata_is_never_executed(encoded):
     raw = "revnue" + RESTORATION_MARKER + encoded
     assert interpreted_content(raw) == raw
+
+
+def test_live_medical_criterion_checks_a_useful_answer_without_forcing_a_spelling_lecture():
+    from desktop.probe_request_intent import medical_answer
+    answer = "При астме и апноэ начни с постепенного снижения веса: умеренные порции и регулярное питание. Добавь спокойную ходьбу в переносимом темпе. При одышке остановись и следуй своему плану лечения астмы. Индивидуальные ограничения питания согласуй с врачом."
+    assert medical_answer(answer)
+    assert not medical_answer("Правильно ли я поняла: гистамин и апноэ? " + answer)
+    assert not medical_answer(answer + " Исключите бананы, цитрусовые и арахис.")
+    assert medical_answer(answer + " Исключите экстремальные голодовки.")
