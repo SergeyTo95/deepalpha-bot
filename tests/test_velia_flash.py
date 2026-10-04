@@ -13,7 +13,7 @@ from services import velia_chat_streaming_runtime_patch as streaming
 from services import velia_plugin_router
 from services import velia_plugin_service
 from services.velia_mobile_streaming_service import _stream_send_kwargs
-from velia_request_understanding import REQUEST_UNDERSTANDING, clarification_content
+from velia_request_understanding import REQUEST_UNDERSTANDING, clarification_content, restoration_content
 
 
 @pytest.fixture
@@ -102,6 +102,28 @@ def test_native_flash_uses_shared_understanding_without_editing_user_text(enable
     sent = session.calls[-1][1]["json"]["messages"]
     assert REQUEST_UNDERSTANDING in sent[0]["content"]
     assert sent[1:] == [{"role": "user", "content": question}]
+
+
+def test_native_resolved_spelling_generates_instead_of_returning_a_prepared_question(enabled, monkeypatch):
+    session = Session()
+    monkeypatch.setattr(flash.requests, "Session", lambda: session)
+    question = "Объясни revnue и оставь 0.5 TON"
+    start = question.index("revnue")
+    content = restoration_content(question, [start, start + len("revnue")], "revenue")
+    result = flash.generate([{"role": "user", "content": content}])
+    assert result["ok"] and not result.get("prepared_clarification")
+    assert session.calls[-1][0].endswith("/v1/chat/completions")
+    assert session.calls[-1][1]["json"]["messages"][-1]["content"] == content
+
+
+def test_browser_provided_native_sources_do_not_trigger_another_search(enabled, monkeypatch):
+    monkeypatch.setattr(flash, "web_search_available", lambda: True)
+    def unexpected_search(*args, **kwargs):
+        pytest.fail("Browser-provided sources triggered another interpretation/search")
+    monkeypatch.setattr(velia_plugin_router, "resolve_live_plugin_context", unexpected_search)
+    content = "Вопрос" + flash._LIVE_WEB_CONTEXT_MARKER + "Серверные источники"
+    messages = [{"role": "user", "content": content}]
+    assert flash._with_live_context(messages, 7) == messages
 
 
 @pytest.mark.parametrize("candidate", ["", "гистамин, апноэ"])

@@ -9,7 +9,7 @@ from desktop.request_intent import parse_decision
 from desktop.spelling_hints import spelling_hints, phonetic_restoration
 from tests.test_velia_web_chat import fixture, headers, login
 from tests.test_velia_web_guest import guest, guest_headers
-from velia_request_understanding import CLARIFICATION_MARKER, clarification_content, clarification_reply, plausible_restoration
+from velia_request_understanding import CLARIFICATION_MARKER, RESTORATION_MARKER, clarification_content, clarification_reply, plausible_restoration, restoration_content
 
 
 def decision(args):
@@ -141,23 +141,29 @@ def test_candidate_handoff_is_validated_again_at_native_boundary(candidate):
         "span": relative, "candidate": candidate}, ensure_ascii=False)) is None
 
 
-def test_guest_clarification_never_searches_and_never_generates_a_quote_only_answer(monkeypatch, tmp_path):
+@pytest.mark.parametrize("action", ["direct", "search"])
+def test_resolved_spelling_reaches_the_answer_generator_without_confirmation(monkeypatch, tmp_path, action):
     async def run():
         monkeypatch.setenv("VELIA_WEB_GUEST_ENABLED", "true")
         quote = "гестамин эпное"
         question = "Привет . Рада познакомиться . Идеи для похудения к 31 ок ября у меня " + quote + " и астма . Как мне похудеть быстро"
+        query = "безопасное снижение веса астма апноэ гистамин" if action == "search" else ""
         async with fixture(monkeypatch, with_search=True, guest_store=GuestStore(sqlite_path=tmp_path/"quota.db"),
-                intent={"action": "clarify", "quote": quote, "candidate": "гистамин, апноэ", "query": ""}) as (server, client, state):
+                intent={"action": action, "quote": quote, "candidate": "гистамин, апноэ", "query": query}) as (server, client, state):
             cookie, _, _ = await guest(server, client)
             async with client.post(server.make_url("/web-api/v1/guest/chat/completions"), headers=guest_headers(cookie),
                     json={"model": "velia-flash", "stream": True, "messages": [{"role": "user", "content": question}]}) as response:
                 assert response.status == 200 and response.headers["X-Velia-Guest-Remaining"] == "29"
                 wire = await response.text()
-            assert "Правильно ли я поняла" in wire and "«гистамин»" in wire and "«апноэ»?" in wire and "[DONE]" in wire
-            assert '"web_search"' not in wire and "гестацион" not in wire
-            assert state["search_queries"] == [] and state["payloads"] == []
-            assert len(state["intent_payloads"]) == 1
+            assert "Правильно ли я поняла" not in wire and "[DONE]" in wire
+            assert ('"web_search"' in wire) == (action == "search")
+            assert state["search_queries"] == ([query] if query else [])
+            assert len(state["payloads"]) == len(state["intent_payloads"]) == 1
             assert state["intent_payloads"][0]["messages"][-1]["content"] == question
+            content = state["payloads"][0]["messages"][-1]["content"]
+            assert content.startswith(question + RESTORATION_MARKER)
+            assert "гистамин" in content and "апноэ" in content
+            assert CLARIFICATION_MARKER not in content
     asyncio.run(run())
 
 
@@ -179,21 +185,21 @@ def test_legacy_signed_in_route_uses_the_same_complete_clarification(monkeypatch
 def test_account_clarification_persists_and_replay_does_not_repeat_intent_or_search(monkeypatch, tmp_path, model):
     async def run():
         async with fixture(monkeypatch, with_search=True, guest_store=GuestStore(sqlite_path=tmp_path/"quota.db"),
-                intent={"action": "clarify", "quote": "гестамин эпное", "candidate": "гистамин, апноэ", "query": ""}) as (server, client, state):
+                intent={"action": "clarify", "quote": "квампер", "candidate": "", "query": ""}) as (server, client, state):
             cookie, _, _ = await login(server, client)
             async with client.post(server.make_url("/web-api/v1/conversations"), headers=headers(cookie), json={"title": "Уточнение"}) as response:
                 cid = (await response.json())["conversation"]["id"]
-            question = "У меня гестамин эпное и астма. Как похудеть?"
+            question = "У меня сломался квампер. Как починить?"
             body = {"content": question, "model": model, "idempotency_key": "clarification-123"}
             for _ in range(2):
                 async with client.post(server.make_url(f"/web-api/v1/conversations/{cid}/messages/stream"), headers=headers(cookie), json=body) as response:
                     assert response.status == 200
                     wire = await response.text()
-                    assert "«гистамин»" in wire and "«апноэ»?" in wire and '"web_search"' not in wire
+                    assert "что вы имеете в виду под «квампер»?" in wire and '"web_search"' not in wire
             async with client.get(server.make_url(f"/web-api/v1/conversations/{cid}/messages"), headers=headers(cookie)) as response:
                 values = (await response.json())["messages"]
             assert all(v["content"] == question for v in values if v["role"] == "user")
-            assert all(v["content"].endswith("«апноэ»?") for v in values if v["role"] == "assistant")
+            assert all(v["content"].endswith("«квампер»?") for v in values if v["role"] == "assistant")
             assert len(state["intent_payloads"]) == 1 and state["search_queries"] == []
     asyncio.run(run())
 
@@ -228,4 +234,58 @@ def test_failed_interpretation_does_not_fall_through_to_guessed_search(monkeypat
                 assert response.status == 503
                 assert (await response.json())["error"] == "request_understanding_unavailable"
             assert state["search_queries"] == state["payloads"] == []
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("action", ["direct", "search"])
+def test_resolved_pair_is_validated_and_keeps_the_raw_question(action):
+    question = "Объясни revnue, оставь app.py, порт 8080 и 0,5 TON."
+    args = {"action": action, "quote": "revnue", "candidate": "revenue", "query": "revenue definition" if action == "search" else ""}
+    result = parse_decision(decision(args), question)
+    assert result["action"] == action and result["candidate"] == "revenue"
+    content = restoration_content(question, result["span"], result["candidate"])
+    assert content.startswith(question + RESTORATION_MARKER)
+    assert clarification_reply(content) is None
+
+
+@pytest.mark.parametrize("question,quote,candidate", [
+    ('Оставь «гестамин» дословно', 'гестамин', 'гистамин'),
+    ('Оставь `терменал` дословно', 'терменал', 'терминал'),
+    ('Оставь "revnue" дословно', 'revnue', 'revenue'),
+    ('Не меняй error_100', 'error', 'errors'),
+    ('Не меняй app.py', 'app', 'apps'),
+    ('Объясни супергестамин', 'гестамин', 'гистамин'),
+    ('У меня гестамин эпное', 'гестамин эпное', 'гестационный диабет'),
+    ('У меня гестамин эпное', 'гестамин эпное', 'гистаминовая непереносимость и апноэ'),
+])
+def test_resolved_interpretation_cannot_change_literals_or_add_diagnoses(question, quote, candidate):
+    with pytest.raises(ValueError):
+        parse_decision(decision({"action": "direct", "quote": quote, "candidate": candidate, "query": ""}), question)
+
+
+@pytest.mark.parametrize("model", ["velia-flash", "velia-pro"])
+@pytest.mark.parametrize("action", ["direct", "search"])
+def test_account_resolved_spelling_generates_and_restores_raw_history_on_replay(monkeypatch, tmp_path, model, action):
+    async def run():
+        query = "revenue definition" if action == "search" else ""
+        async with fixture(monkeypatch, with_search=True, guest_store=GuestStore(sqlite_path=tmp_path/"quota.db"),
+                intent={"action": action, "quote": "revnue", "candidate": "revenue", "query": query}) as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            async with client.post(server.make_url("/web-api/v1/conversations"), headers=headers(cookie), json={"title": "Выручка"}) as response:
+                cid = (await response.json())["conversation"]["id"]
+            question = "Explain revnue. Keep app.py and 0.5 TON."
+            body = {"content": question, "model": model, "idempotency_key": "restored-reading-123"}
+            for _ in range(2):
+                async with client.post(server.make_url(f"/web-api/v1/conversations/{cid}/messages/stream"), headers=headers(cookie), json=body) as response:
+                    assert response.status == 200
+                    wire = await response.text()
+                    assert "Ответ из аккаунта" in wire and "Правильно ли я поняла" not in wire
+            sent = state["account_calls"][0]["content"]
+            assert sent.startswith(question + RESTORATION_MARKER) and "revenue" in sent
+            assert state["account_calls"][1]["content"] == sent
+            assert len(state["intent_payloads"]) == 1
+            assert state["search_queries"] == ([query] if query else [])
+            async with client.get(server.make_url(f"/web-api/v1/conversations/{cid}/messages"), headers=headers(cookie)) as response:
+                values = (await response.json())["messages"]
+            assert all(v["content"] == question for v in values if v["role"] == "user")
     asyncio.run(run())

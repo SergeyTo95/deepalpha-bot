@@ -7,16 +7,26 @@
         "content": "Привет. Рада познакомиться. Идеи для похудения к 31 октября у меня гестамин эпное и астма. Как мне похудеть быстро"
       }
     ],
-    "criterion": "Proposes the nearby reading гистамин and апноэ in a complete confirmation question, keeping uncertainty explicit; no gestational diabetes, pregnancy, advice under an unconfirmed diagnosis, or sources before confirmation."
+    "criterion": "Answers the weight-loss question substantively using the nearby readings гистамин and апноэ without a blocking spelling-confirmation question. Preserves uncertainty about the exact histamine condition; no invented diagnosis, gestational diabetes, pregnancy or irrelevant sources."
   },
   {
     "id": "medical_spacing",
-    "messages": [{"role": "user", "content": "Привет . Рада познакомиться . Идеи для похудения к 31 ок ября у меня гестамин эпное и астма . Как мне похудеть быстро"}],
-    "criterion": "The exact screenshot wording proposes both гистамин and апноэ as a reading to confirm, rather than merely asking the user to decode the spelling; no invented diagnosis, pregnancy or irrelevant sources."
+    "messages": [
+      {
+        "role": "user",
+        "content": "Привет . Рада познакомиться . Идеи для похудения к 31 ок ября у меня гестамин эпное и астма . Как мне похудеть быстро"
+      }
+    ],
+    "criterion": "Answers the weight-loss question substantively using the nearby readings гистамин and апноэ without a blocking spelling-confirmation question. Preserves uncertainty about the exact histamine condition; no invented diagnosis, gestational diabetes, pregnancy or irrelevant sources."
   },
   {
     "id": "device_ambiguity",
-    "messages": [{"role": "user", "content": "У меня сломался квампер. Как его починить?"}],
+    "messages": [
+      {
+        "role": "user",
+        "content": "У меня сломался квампер. Как его починить?"
+      }
+    ],
     "criterion": "Asks what the unknown device name means; no invented device or repair instructions and no sources before clarification."
   },
   {

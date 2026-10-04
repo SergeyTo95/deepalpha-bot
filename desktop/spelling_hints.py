@@ -3,10 +3,10 @@ from functools import lru_cache
 import re
 
 from wordfreq import top_n_list
-from velia_request_understanding import _edit_distance
+from velia_request_understanding import _edit_distance, LITERAL_PATTERN
 
 
-_PROTECTED = re.compile(r'`[^`]*`|«[^»]*»|"[^"\n]*"|https?://\S+|\b[\w-]+[./:@][\w./:@-]+|\b\w*[_\d]\w*\b')
+_PROTECTED = LITERAL_PATTERN
 _WORDS = re.compile(r"(?<![\w./:@-])(?:[а-яёА-ЯЁ]{4,24}|[a-zA-Z]{4,24})(?![\w./:@-])")
 _VOWELS = str.maketrans({letter: "_" for letter in "аеёиоуыэюяaeiouy"})
 

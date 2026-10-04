@@ -18,12 +18,13 @@ from desktop.web_search import WebSearch
 from velia_request_understanding import clarification_content, clarification_reply
 
 
-def medical_confirmation(reply):
+def medical_answer(reply):
     lowered = reply.casefold()
-    return (reply.startswith("Правильно ли я поняла:") and reply.endswith("?")
-        and "гистамин" in lowered and "апноэ" in lowered
-        and "«гистамин апноэ»" not in lowered
-        and not any(term in lowered for term in ("гестацион", "диабет", "беремен")))
+    return (len(reply.strip()) >= 180
+        and all(term in lowered for term in ("гистамин", "апноэ", "астм"))
+        and any(term in lowered for term in ("питан", "калори", "рацион"))
+        and any(term in lowered for term in ("ходьб", "активн", "нагруз", "движен"))
+        and not any(term in lowered for term in ("правильно ли я поняла", "что вы имеете в виду", "гестацион", "диабет", "беремен")))
 
 
 async def run_browser_probes():
@@ -34,10 +35,12 @@ async def run_browser_probes():
 
     origin = "https://private-understanding.invalid"
     cases = [
-        ("medical_spacing", [{"role": "user", "content": "Привет . Рада познакомиться . Идеи для похудения к 31 ок ября у меня гестамин эпное и астма . Как мне похудеть быстро"}], "clarify", medical_confirmation),
+        ("medical_spacing", [{"role": "user", "content": "Привет . Рада познакомиться . Идеи для похудения к 31 ок ября у меня гестамин эпное и астма . Как мне похудеть быстро"}], "search", medical_answer),
         ("device_ambiguity", [{"role": "user", "content": "У меня сломался квампер. Как его починить?"}], "clarify", lambda text: "квампер" in text and text.endswith("?")),
         ("arithmetic_typo", [{"role": "user", "content": "Сколько 17 умножть на 23? Только число."}], "direct", lambda text: text.strip() == "391"),
         ("confirmed_context", [{"role": "user", "content": "Как открыть терминал?"}, {"role": "assistant", "content": "На Windows открой PowerShell."}, {"role": "user", "content": "Нет, у меня Ubuntu. Как открыть терменал? Одной фразой."}], "direct", lambda text: "ctrlaltt" in re.sub(r"[^a-z]", "", text.casefold()) and "powershell" not in text.casefold()),
+        ("finance_typo", [{"role": "user", "content": "Объясни разницу межу выручкой и прибылю на простом примере. Кратко."}], "direct", lambda text: all(term in text.casefold() for term in ("выруч", "прибыл")) and any(term in text.casefold() for term in ("расход", "затрат")) and "правильно ли" not in text.casefold()),
+        ("router_typo", [{"role": "user", "content": "Как перезагрузиь роутор, не сбрасывая настройки? Ответь кратко."}], "direct", lambda text: any(term in text.casefold() for term in ("питан", "розетк", "отключ", "выключ")) and "правильно ли" not in text.casefold()),
         ("literal_constraints", [{"role": "user", "content": "В Python исправь синтаксис в строке print(\"app.py\". Не меняй текст app.py и ничего не удаляй. Только исправленная строка."}], "direct", lambda text: text.strip().strip(chr(96)).removeprefix("python\n").strip() == 'print("app.py")'),
     ]
     rows = []
@@ -66,7 +69,7 @@ async def run_browser_probes():
                     raise RuntimeError("understanding_probe_not_isolated")
                 for index, (name, messages, action, acceptable) in enumerate(cases):
                     started = time.monotonic()
-                    text, done, sources, stop = "", False, False, None
+                    text, done, sources, stop = "", False, [], None
                     async with client.post(base + "/web-api/v1/guest/chat/completions",
                             headers={**headers, "Cookie": COOKIE + "=" + cookie},
                             json={"model": "velia-flash", "stream": True, "messages": messages}) as response:
@@ -82,16 +85,19 @@ async def run_browser_probes():
                                 done = True
                                 continue
                             event = json.loads(data)
-                            sources = sources or "web_search" in event
+                            sources = sources or event.get("web_search", {}).get("sources", [])
                             for choice in event.get("choices", []):
                                 text += choice.get("delta", {}).get("content") or ""
                                 stop = choice.get("finish_reason") or stop
                             if len(text) > 4096:
                                 raise RuntimeError("understanding_probe_output_too_large:" + name)
-                    ok = (search.decision["decision"] == action and done and stop == "stop" and not sources
+                    source_text = json.dumps(sources, ensure_ascii=False).casefold()
+                    relevant_sources = (bool(sources) == (action == "search")
+                        and not any(term in source_text for term in ("гестацион", "диабет", "беремен", "gestational", "pregnan")))
+                    ok = (search.decision["decision"] == action and done and stop == "stop" and relevant_sources
                         and remaining == str(29 - index) and acceptable(text))
                     row = {"case": name, "ok": bool(ok), "decision": search.decision["decision"],
-                        "candidate": search.decision.get("clarification_candidate"),
+                        "candidate": search.decision.get("restoration_candidate") or search.decision.get("clarification_candidate"),
                         "reply": text, "done": done, "sources": sources, "seconds": round(time.monotonic() - started, 2)}
                     rows.append(row)
                     print("VELIA_REQUEST_UNDERSTANDING_BROWSER " + json.dumps(row, ensure_ascii=False), flush=True)
@@ -103,12 +109,12 @@ async def run_browser_probes():
 
 
 async def run():
-    # Start with the user's exact failing wording. A generic question is no
-    # longer sufficient to qualify this fix.
+    # The user's exact wording must produce useful advice, not a spelling question.
+    # Check complete real replies before the more expensive Harness qualification.
     browser_rows = await run_browser_probes()
     cases = [
-        ("medical_plain", [{"role": "user", "content": "У меня гестамин эпное и астма. Как похудеть к 31 октября?"}], "clarify"),
-        ("finance_typo", [{"role": "user", "content": "Объясни разницу межу выручкой и прибылю на простом примере. Кратко."}], "direct"),
+        ("medical_plain", [{"role": "user", "content": "У меня гестамин эпное и астма. Как похудеть к 31 октября?"}], "search"),
+        ("english_spelling", [{"role": "user", "content": "Explain revnue versus profit briefly."}], "direct"),
         ("current_search", [{"role": "user", "content": "Найди актуальную стабильную версию Python на официальном сайте."}], "search"),
     ]
     rows = []
@@ -117,7 +123,7 @@ async def run():
         ok, reply = result["action"] == action, None
         if result["action"] == "clarify":
             reply = clarification_reply(clarification_content(messages[-1]["content"], result["span"], result.get("candidate", "")))
-            ok = ok and medical_confirmation(reply)
+            ok = False
         row = {"case": name, "ok": bool(ok), "decision": result, "reply": reply}
         rows.append(row)
         print("VELIA_REQUEST_INTENT_CASE " + json.dumps(row, ensure_ascii=False), flush=True)
@@ -125,7 +131,7 @@ async def run():
             raise RuntimeError("request_intent_qualification_failed:" + name)
     return {"request_intent": {"ok": True, "cases": len(browser_rows) + len(rows),
         "live_browser_sse_cases": len(browser_rows), "interpretation_before_search": True,
-        "specific_meaning_confirmation": True, "paid_fallback": False}}
+        "resolved_spelling_answers": True, "substantive_medical_answer": True, "paid_fallback": False}}
 
 
 if __name__ == "__main__":

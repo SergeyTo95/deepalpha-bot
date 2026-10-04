@@ -9,45 +9,43 @@ import asyncio
 
 from aiohttp import ClientSession, ClientTimeout, DummyCookieJar
 from velia_desktop_routes import check_flash_context, flash_endpoint
-from velia_request_understanding import plausible_restoration
+from velia_request_understanding import plausible_restoration, restoration_content
 from desktop.spelling_hints import spelling_hints, phonetic_restoration
 
 
 INSTRUCTION = (
-    "Ты определяешь, понятен ли запрос пользователя ДО поиска. Вызови understand_request. "
+    "Определи смысл запроса ДО поиска и вызови understand_request. "
     "Восстанавливай опечатки и ошибки диктовки по написанию, звучанию и контексту "
-    "задачи во всех темах. Очевидные исправления понятны и не требуют уточнения. "
-    "Словарные подсказки в конце инструкции — только близкие написания. Выбери "
-    "осмысленные варианты по контексту, не считай их фактами. Если близкий вариант "
-    "подходит, ОБЯЗАТЕЛЬНО укажи его в candidate при clarify, не оставляй пустым. "
-    "Сохраняй отрицания, числа, единицы, цитаты и идентификаторы. Учитывай исправления "
-    "и подтверждения пользователя; догадки ассистента не подтверждают факты. "
-    "Если вероятная расшифровка меняет ключевые исходные данные (например диагноз, "
-    "препарат или точную модель устройства) и ещё не подтверждена, action=clarify: "
-    "quote=точная цитата испорченной "
-    "фразы, candidate=её ближайшее исправленное написание, query=''. Расшифруй ВСЕ "
-    "слова этой фразы. Несколько соседних испорченных слов рассматривай вместе. "
-    "candidate содержит только исправленные слова, без пояснений "
-    "и дополнительных диагнозов. Не заменяй созвучное слово далёким по написанию "
-    "названием. Если подходящего смысла вообще нет, candidate='', уточни quote. "
-    "Не выбирай clarify лишь потому, что слово написано с ошибкой. Примеры: "
-    "'пере загрузи роутор' — direct; 'что такое карбюратар' — direct; "
-    "'у меня сломался карбюратар или стартир, не знаю что именно' — clarify, "
-    "quote='карбюратар или стартир', candidate=''; 'что за флумпенсор' — clarify "
-    "без candidate; 'нейропотия, какое лечение' — clarify с candidate='нейропатия'. "
-    "Если запрос понятен и для него нужны актуальные или внешние сведения, медицинские "
-    "рекомендации либо пользователь просит поиск, action=search, query=краткий понятный "
-    "поисковый запрос, quote='', candidate=''. Сохраняй числа, отрицания и условия. "
-    "Для арифметики, редактирования текста, обычных объяснений и простого кода без "
-    "запроса актуальных сведений action=direct, query='', quote='', candidate=''. "
-    "'Сделай его короче' относится к предыдущему тексту."
+    "во всех темах, включая здоровье. Словарные подсказки — близкие написания, "
+    "выбирай подходящие по контексту. Если смысл восстанавливается, сразу выбирай "
+    "direct или search, НЕ clarify. Не проси подтвердить понятное исправление. "
+    "Для восстановленного термина укажи quote=точный фрагмент исходного запроса, "
+    "candidate=исправленное написание тех же слов. Исправь все слова фрагмента; "
+    "candidate не содержит пояснений, дополнительных диагнозов или новых фактов. "
+    "Если исправление не нужно, quote='', candidate=''. Сохраняй отрицания, числа, "
+    "единицы, даты, цитаты и идентификаторы. Учитывай подтверждения и исправления "
+    "пользователя, а не прежние догадки ассистента. "
+    "action=clarify только если существенный термин вообще непонятен или несколько "
+    "правдоподобных смыслов требуют разных ответов. quote=точная непонятная часть, "
+    "query=''; candidate=ближайшее написание, если оно помогает уточнению, иначе ''. "
+    "Не угадывай число, дозу или точную модель устройства. Если полезный ответ "
+    "возможен без этих данных, отвечай на понятную часть. Примеры: "
+    "'что такое карбюратар' — direct, candidate='карбюратор'; "
+    "'нейропотия, что это' — search, candidate='нейропатия'; "
+    "'как починить флумпенсор' — clarify; 'мне нужен ключ' — clarify; "
+    "'сделай его короче' относится к предыдущему тексту — direct. "
+    "Для актуальных или внешних сведений, медицинских рекомендаций и явного запроса "
+    "поиска action=search, query=краткий понятный поисковый запрос с исправленными "
+    "словами. Не добавляй в query отсутствующие обстоятельства или диагнозы. "
+    "Для арифметики, редактирования текста, обычных объяснений и простого кода "
+    "без актуальных сведений action=direct, query=''."
 )
 TOOL = {"type": "function", "function": {
     "name": "understand_request", "description": "Выбрать ответ, поиск или уточнение до получения внешних данных.",
     "parameters": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["direct", "search", "clarify"]},
-        "quote": {"type": "string", "description": "Точная цитата непонятного существенного фрагмента, иначе пустая строка."},
-        "candidate": {"type": "string", "description": "При clarify ближайшее исправленное написание quote, только те же слова. Если смысла нет, пустая строка. При direct/search пустая строка."},
+        "quote": {"type": "string", "description": "Точный исходный фрагмент для исправления или уточнения; если не нужен, пустая строка."},
+        "candidate": {"type": "string", "description": "Ближайшее исправленное написание quote, только те же слова, при direct/search тоже. Если исправление не нужно или смысла нет, пустая строка."},
         "query": {"type": "string", "description": "Поисковый запрос только при action=search, иначе пустая строка."}},
         "required": ["action", "quote", "candidate", "query"], "additionalProperties": False}}}
 
@@ -73,9 +71,20 @@ def parse_decision(result, question):
         if restored:
             result["candidate"] = restored
         return result
-    if quote or candidate or (args["action"] == "direct" and query) or (args["action"] == "search" and not 1 <= len(query) <= 400):
+    if (args["action"] == "direct" and query) or (args["action"] == "search" and not 1 <= len(query) <= 400):
         raise ValueError("invalid_understanding_response")
-    return {"action": args["action"], "query": query}
+    result = {"action": args["action"], "query": query}
+    if quote or candidate:
+        if not quote.strip() or quote not in question:
+            raise ValueError("invalid_understanding_response")
+        restored = plausible_restoration(quote, candidate)
+        if not restored:
+            raise ValueError("invalid_understanding_response")
+        start = question.index(quote)
+        span = [start, start + len(quote)]
+        restoration_content(question, span, restored)
+        result.update(span=span, candidate=restored)
+    return result
 
 
 async def understand(messages):
