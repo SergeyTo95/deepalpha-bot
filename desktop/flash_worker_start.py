@@ -1,4 +1,4 @@
-"""Desktop-only worker: preserve the verified CPU runtime and allow request-owned reasoning mode."""
+"""Desktop worker: keep exact inference settings and reuse computed prompt state."""
 import os
 from pathlib import Path
 
@@ -11,14 +11,7 @@ def number(name, default, low, high):
     return str(min(high, max(low, result)))
 
 
-if __name__ == "__main__":
-    key = os.environ.get("VELIA_FLASH_API_KEY", "").strip()
-    if len(key) < 32 or "\n" in key:
-        raise SystemExit("VELIA_FLASH_API_KEY must contain at least 32 characters")
-    key_path = Path("/tmp/velia-flash-api-key")
-    descriptor = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w") as stream:
-        stream.write(key + "\n")
+def worker_args(key_path):
     args = ["/opt/bonsai/llama-server", "-m", "/opt/bonsai/model.gguf",
             "--alias", "velia-flash", "--host", "::", "--port", os.getenv("PORT", "8080"),
             "--api-key-file", str(key_path), "-ngl", "0", "--parallel", "1",
@@ -27,9 +20,25 @@ if __name__ == "__main__":
             "-tb", number("VELIA_FLASH_CPU_THREADS", 8, 1, 8),
             "-b", "256", "-ub", "128", "-n", "512", "--jinja",
             "--reasoning", "auto", "--reasoning-budget", "0",
-            "--reasoning-format", "deepseek", "--cache-ram", "0",
+            # Keep prompt states when the single slot switches between intent,
+            # answer and editor. This reuses computed tokens, never answers.
+            # Bound RAM independently of the full model/context allocation.
+            "--reasoning-format", "deepseek", "--cache-ram",
+            number("VELIA_FLASH_PROMPT_CACHE_MIB", 1024, 0, 4096),
             "--chat-template-kwargs", '{"enable_thinking": false}',
             "--no-webui"]
     if os.getenv("VELIA_FLASH_REPACK", "false").lower() in {"false", "0", "no"}:
         args.append("--no-repack")
+    return args
+
+
+if __name__ == "__main__":
+    key = os.environ.get("VELIA_FLASH_API_KEY", "").strip()
+    if len(key) < 32 or "\n" in key:
+        raise SystemExit("VELIA_FLASH_API_KEY must contain at least 32 characters")
+    key_path = Path("/tmp/velia-flash-api-key")
+    descriptor = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w") as stream:
+        stream.write(key + "\n")
+    args = worker_args(key_path)
     os.execv(args[0], args)
