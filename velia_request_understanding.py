@@ -113,6 +113,16 @@ def clarification_reply(content):
     except (ValueError, TypeError):
         return None
     if candidate:
+        original_words = [word for word in re.findall(r"[^\W\d_]+", fragment) if word.casefold() != "и"]
+        candidate_words = [word for word in re.findall(r"[^\W\d_]+", candidate) if word.casefold() != "и"]
+        corrections = [(left, right) for left, right in zip(original_words, candidate_words)
+            if left.casefold().replace("ё", "е") != right.casefold().replace("ё", "е")]
+        if len(corrections) > 1:
+            # Confirm the individual readings without creating a new compound
+            # term (or turning a real compound into separate diagnoses).
+            clauses = ["«" + left + "» — " + ("это " if index == 0 else "") + "«" + right + "»"
+                for index, (left, right) in enumerate(corrections)]
+            return "Правильно ли я поняла: " + ", ".join(clauses[:-1]) + ", а " + clauses[-1] + "?"
         return "Правильно ли я поняла: под «" + fragment + "» вы имеете в виду «" + candidate + "»?"
     return "Уточните, пожалуйста, что вы имеете в виду под «" + fragment + "»?"
 
