@@ -44,6 +44,7 @@ def medical_answer(reply):
         and not re.search(r"\b(?:это|точно|гарантированно)\s+безопасно\b|\bне\s+(?:усилит|ухудшит)\s+симптом|\bвешай\w*\b", lowered)
         and not re.search(r"\b1\s*[–—-]\s*2\s*кг.{0,20}(?:в\s+недел|за\s+недел|еженедел)", lowered)
         and not unconfirmed_personal_condition(reply)
+        and not re.search(r"\b(?:при|с\s+уч[её]том)\s+гистамин(?:е|а)?\b", lowered)
         and not any(term in lowered for term in ("правильно ли я поняла", "что вы имеете в виду", "гестацион", "диабет", "беремен", "обмор")))
 
 

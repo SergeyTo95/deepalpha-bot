@@ -26,8 +26,8 @@ def test_context_reaches_generation_without_leaking_into_account_history_or_cach
                     await response.read()
             content = state["account_calls"][0]["content"]
             assert content.startswith(question)
-            assert 'Пользователь явно сообщает: "телефон Самсунг"' in content
-            assert 'Названо без пояснения свойства или состояния: "модель не знаю"' in content
+            assert 'Сообщено: "телефон Самсунг"' in content
+            assert 'Без пояснения: "модель не знаю"' in content
             assert "Galaxy" not in content
             assert state["account_calls"][1]["content"] == content
             assert len(state["intent_payloads"]) == 1

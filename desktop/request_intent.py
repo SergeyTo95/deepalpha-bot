@@ -54,6 +54,10 @@ INSTRUCTION = (
     "отрицание; не исправляй её и не добавляй диагноз, причину или модель. "
     "Например: 'у меня железо, апноэ и астма' — железо unspecified, апноэ и "
     "астма stated; 'у меня аллергия на железо' — аллергия на железо stated. "
+    "stated означает сообщённое пользователем, а не проверенный врачом диагноз. "
+    "Узнаваемая опечатка в названии сообщённого состояния или свойства тоже "
+    "stated: 'у меня астмма' — quote='астмма', status=stated. "
+    "В context сохраняй исходное написание; восстановление уже дано в candidate. "
     "'Телефон Samsung, модель не знаю' — Телефон Samsung stated, "
     "модель не знаю unspecified. Если личных условий нет, context=[]. "
     "Неясное свойство не мешает ответить на понятную задачу: сохрани его "
@@ -69,7 +73,7 @@ TOOL = {"type": "function", "function": {
         "source_scope": {"type": "string", "enum": ["general", "official_health"], "description": "official_health для медицинских рекомендаций с поиском; иначе general."},
         "query": {"type": "string", "description": "Полный поисковый запрос с существенными условиями только при action=search, иначе пустая строка."},
         "task_query": {"type": "string", "description": "При search: только ОСНОВНАЯ ЗАДАЧА, 2–8 слов, без перечня сопутствующих состояний. Пример: healthy weight loss advice. При direct/clarify: пустая строка."},
-        "context": {"type": "array", "maxItems": 6, "description": "Личные условия только из последнего сообщения. Дословные цитаты: stated — явно сообщённое состояние/свойство; unspecified — упоминание без пояснения свойства. Не дополняй цитату диагнозом. Иначе [].", "items": {
+        "context": {"type": "array", "maxItems": 6, "description": "Личные условия только из последнего сообщения. Дословные цитаты: stated — явно названное состояние/свойство, включая узнаваемую опечатку; unspecified — упоминание без пояснения свойства. stated не требует подтверждения врачом. Не дополняй цитату диагнозом. Иначе [].", "items": {
             "type": "object", "properties": {"quote": {"type": "string", "maxLength": 128},
                 "status": {"type": "string", "enum": ["stated", "unspecified"]}},
             "required": ["quote", "status"], "additionalProperties": False}}},
