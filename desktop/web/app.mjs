@@ -497,6 +497,22 @@ async function generate(retry = false) {
         ? "Flash готовит ответ. Первый запрос может занять несколько минут."
         : "Велия работает над ответом…";
   }, 20000);
+  let paintFrame = null, textPainted = false;
+  const article = $("messages").lastElementChild,
+    contentNode = article.querySelector(".message-content"),
+    conversationScroll = $("conversation-scroll");
+  const paint = () => {
+    paintFrame = null;
+    const shouldScroll = conversationScroll.scrollHeight - conversationScroll.scrollTop - conversationScroll.clientHeight < 180;
+    contentNode.innerHTML = renderMarkdown(answer.content);
+    textPainted = true;
+    if (shouldScroll) scrollDown(true);
+  };
+  const queuePaint = () => {
+    // Show the first text immediately; later bursts share a browser frame.
+    if (!textPainted) paint();
+    else if (paintFrame === null) paintFrame = requestAnimationFrame(paint);
+  };
   try {
     const response = await request(!profile ? "guest/chat/completions" : chat.remote ? "conversations/" + chat.id + "/messages/stream" : "chat/completions", payload, abort.signal);
     if (!profile && guest && response.headers.has("X-Velia-Guest-Remaining")) {
@@ -504,18 +520,10 @@ async function generate(retry = false) {
       $("guest-counter").textContent = guest.remaining > 0 ? "Без регистрации · осталось " + guest.remaining + " из 30 сообщений" : "30 гостевых сообщений использованы. Войди, чтобы продолжить.";
     }
     const result = await readCompletion(response, (content) => {
-      const shouldScroll =
-        $("conversation-scroll").scrollHeight -
-          $("conversation-scroll").scrollTop -
-          $("conversation-scroll").clientHeight <
-        180;
       answer.content = content;
-      $("messages").lastElementChild.querySelector(
-        ".message-content",
-      ).innerHTML = renderMarkdown(content);
       $("generation-status").textContent = "";
+      queuePaint();
       scheduleSave();
-      if (shouldScroll) scrollDown(true);
     }, (search) => {
       answer.search = search;
       const article = $("messages").lastElementChild;
@@ -545,6 +553,7 @@ async function generate(retry = false) {
       }
     }
   } finally {
+    if (paintFrame !== null) cancelAnimationFrame(paintFrame);
     clearTimeout(slowTimer);
     clearTimeout(saveTimer);
     saveTimer = null;

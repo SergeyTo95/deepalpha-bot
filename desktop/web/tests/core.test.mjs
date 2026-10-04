@@ -81,6 +81,21 @@ test("truncated streams preserve received text but report interruption", async (
   );
   assert.equal(visible, "Часть");
 });
+test("a buffered burst publishes once and a canonical reset never flashes empty text", async () => {
+  const frames = Array.from({length: 1000}, () => 'data: {"choices":[{"delta":{"content":"текст "}}]}\n\n').join("");
+  const text = "текст ".repeat(1000), visible = [];
+  const final = 'data: ' + JSON.stringify({reset: true, choices: [{delta: {content: text}, finish_reason: "stop"}]}) + '\n\ndata: [DONE]\n\n';
+  const result = await readCompletion(response(frames + final, 1000000), (value) => visible.push(value));
+  assert.deepEqual(visible, [text]);
+  assert.equal(result.text, text);
+});
+test("a provider error preserves validated partial text from the same chunk", async () => {
+  let visible;
+  await assert.rejects(readCompletion(response(
+    'data: {"choices":[{"delta":{"content":"Часть ответа"}}]}\n\ndata: {"error":{"message":"model_request_failed"}}\n\n', 1000000),
+    value => {visible = value;}));
+  assert.equal(visible, "Часть ответа");
+});
 test("server refusal keeps an actionable error and status", async () => {
   await assert.rejects(
     readCompletion(
