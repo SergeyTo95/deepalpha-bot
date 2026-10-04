@@ -57,3 +57,19 @@ def test_review_failure_never_falls_back_to_the_unreviewed_draft(monkeypatch, tm
             assert '"error"' in wire and "model_request_failed" in wire
             assert len(state["review_payloads"]) == 1
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("finish,draft", [(None, ""), ("length", "Начни с")])
+def test_a_completed_transport_can_hand_off_an_empty_or_truncated_draft_to_a_complete_editor(monkeypatch, tmp_path, finish, draft):
+    async def run():
+        monkeypatch.setenv("VELIA_WEB_GUEST_ENABLED", "true")
+        async with fixture(monkeypatch, with_search=True, guest_store=GuestStore(sqlite_path=tmp_path/"quota.db"),
+                intent={"action":"direct", "quote":"", "query":"", "context":[{"quote":"модель не знаю", "status":"unspecified"}]},
+                model_content=draft, model_finish=finish, review_content="Нажмите питание и уменьшение громкости.") as (server, client, state):
+            cookie, _, _ = await guest(server, client)
+            async with client.post(server.make_url("/web-api/v1/guest/chat/completions"), headers=guest_headers(cookie),
+                    json={**BODY, "messages":[{"role":"user", "content":"Модель не знаю: модель не знаю. Как сделать скриншот?"}]}) as response:
+                wire = await response.text()
+            assert "Нажмите питание" in wire and "[DONE]" in wire
+            assert len(state["review_payloads"]) == 1
+    asyncio.run(run())

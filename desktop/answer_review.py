@@ -3,7 +3,7 @@ import json
 import re
 
 from aiohttp import ClientError, web
-from velia_desktop_routes import check_flash_context
+from velia_desktop_routes import check_flash_context, FlashContextTooLong
 from velia_request_understanding import interpreted_content
 
 REVIEW_CONTEXT = web.RequestKey("velia_answer_review", dict)
@@ -58,7 +58,8 @@ async def review_answer(client, endpoint, headers, context, draft):
         {"role": "user", "content": json.dumps(data, ensure_ascii=False)}], "stream": False,
         "max_tokens": 512, "temperature": 0.1, "top_p": 0.8, "top_k": 20,
         "min_p": 0.0, "presence_penalty": 0.0, "chat_template_kwargs": {"enable_thinking": False},
-        "reasoning_format": "deepseek", "thinking_budget_tokens": 0}
+        "reasoning_effort": "none", "reasoning_format": "deepseek", "thinking_budget_tokens": 0,
+        "parallel_tool_calls": False}
     await check_flash_context(client, endpoint, headers, payload)
     async with client.post(endpoint + "/v1/chat/completions", json=payload, headers=headers, allow_redirects=False) as response:
         if response.status != 200:
@@ -101,15 +102,23 @@ async def reviewed_web_stream(request, source, client, endpoint, headers):
         if len(text) > 16384:
             raise ValueError("draft_too_large")
         yield b": processing\n\n"
-    if not done or finish != "stop" or not text.strip():
+    print("VELIA_ANSWER_REVIEW " + json.dumps({"phase": "draft", "done": done,
+        "finish_reason": finish, "characters": len(text)}), flush=True)
+    # A draft may be empty or truncated. Only the editor's complete result is
+    # public, so it can finish that draft from the request and source evidence.
+    if not done or finish not in {None, "stop", "length"}:
         yield b'data: {"error":{"message":"model_request_failed"}}\n\n'
         return
     yield b": reviewing\n\n"
     try:
         final = await review_answer(client, endpoint, headers, request[REVIEW_CONTEXT], text)
-    except (ClientError, TimeoutError, OSError, ValueError):
+    except (ClientError, TimeoutError, OSError, ValueError, FlashContextTooLong) as exc:
+        print("VELIA_ANSWER_REVIEW " + json.dumps({"phase": "review", "ok": False,
+            "error_type": type(exc).__name__}), flush=True)
         yield b'data: {"error":{"message":"model_request_failed"}}\n\n'
         return
+    print("VELIA_ANSWER_REVIEW " + json.dumps({"phase": "review", "ok": True,
+        "characters": len(final)}), flush=True)
     event = {"model": request[WEB_MODEL],
         "choices": [{"index": 0, "delta": {"content": final}, "finish_reason": "stop"}]}
     yield ("data: " + json.dumps(event, ensure_ascii=False) + "\n\ndata: [DONE]\n\n").encode()

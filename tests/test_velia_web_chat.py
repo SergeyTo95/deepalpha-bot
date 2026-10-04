@@ -116,7 +116,7 @@ async def fixture(monkeypatch, **state):
                 "finish_reason": state.get("review_finish", "stop")}], "usage": {"private": True}}, status=state.get("review_status", 200))
         state["payloads"].append(data)
         event = {"model":"private-upstream-model", "system_fingerprint":"private-runtime", "choices":[{
-            "delta":{"reasoning_content":"private-thought", "content":state.get("model_content", "Привет, я Велия.")}, "finish_reason": "stop"}]}
+            "delta":{"reasoning_content":"private-thought", "content":state.get("model_content", "Привет, я Велия.")}, "finish_reason": state.get("model_finish", "stop")}]}
         return web.Response(text="data: " + json.dumps(event, ensure_ascii=False) + '\n\ndata: [DONE]\n\n', content_type="text/event-stream")
     authority = web.Application()
     authority.router.add_get("/mobile-api/v1/health", health)
