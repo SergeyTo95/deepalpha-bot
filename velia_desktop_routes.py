@@ -288,6 +288,8 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                 headers = {"Authorization": "Bearer " + key}
                 if enrich_payload is not None:
                     payload = await enrich_payload(request, payload)
+                    if isinstance(payload, web.StreamResponse):
+                        return payload
                 if is_flash:
                     await check_flash_context(client, endpoint, headers, payload)
                 async with client.post(endpoint + ("/v1/chat/completions" if is_flash else "/chat/completions"), json=payload,

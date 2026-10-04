@@ -13,7 +13,7 @@ from services import velia_chat_streaming_runtime_patch as streaming
 from services import velia_plugin_router
 from services import velia_plugin_service
 from services.velia_mobile_streaming_service import _stream_send_kwargs
-from velia_request_understanding import REQUEST_UNDERSTANDING
+from velia_request_understanding import REQUEST_UNDERSTANDING, clarification_content
 
 
 @pytest.fixture
@@ -102,6 +102,39 @@ def test_native_flash_uses_shared_understanding_without_editing_user_text(enable
     sent = session.calls[-1][1]["json"]["messages"]
     assert REQUEST_UNDERSTANDING in sent[0]["content"]
     assert sent[1:] == [{"role": "user", "content": question}]
+
+
+def test_native_flash_persists_the_same_complete_question_without_another_model_call(enabled, monkeypatch):
+    def unexpected_session():
+        pytest.fail("Clarification unexpectedly reached a provider")
+    monkeypatch.setattr(flash.requests, "Session", unexpected_session)
+    question = "У меня гестамин эпное и астма"
+    fragment = "гестамин эпное"
+    start = question.index(fragment)
+    deltas = []
+    result = flash.generate([{"role": "user", "content": clarification_content(question, [start, start+len(fragment)])}],
+        request_id="clarification-123", on_delta=deltas.append)
+    assert result["ok"] and result["prepared_clarification"]
+    assert result["text"] == "".join(deltas) == "Уточните, пожалуйста, что вы имеете в виду под «гестамин эпное»?"
+    assert result["usage"]["total_tokens"] == 0 and not result["fallback_used"]
+
+
+def test_native_pro_stream_persists_the_same_question_without_a_paid_call(monkeypatch):
+    question = "Как починить флумпенсор?"
+    start = question.index("флумпенсор")
+    encoded = clarification_content(question, [start, start + len("флумпенсор")])
+    def unexpected_provider(*args, **kwargs):
+        pytest.fail("Prepared clarification reached a paid provider")
+    module = SimpleNamespace(generate_velia_chat_result=unexpected_provider)
+    monkeypatch.setattr(streaming, "install_client_request_id_serialization", lambda module: None)
+    monkeypatch.setattr(streaming, "_latest_request_user_message", lambda *args: encoded)
+    monkeypatch.setattr(streaming, "resolve_velia_provider", lambda: "kimi")
+    deltas = []
+    monkeypatch.setattr(streaming._STREAM_CONTEXT, "on_delta", deltas.append, raising=False)
+    streaming.install(module)
+    result = module.generate_velia_chat_result("unused prompt", user_id=7, conversation_id="c", request_id="r")
+    assert result["text"] == "".join(deltas) == "Уточните, пожалуйста, что вы имеете в виду под «флумпенсор»?"
+    assert result["prepared_clarification"] and result["usage"]["total_tokens"] == 0
 
 
 def test_native_pro_prompt_retains_user_correction_and_literal_constraints(monkeypatch):

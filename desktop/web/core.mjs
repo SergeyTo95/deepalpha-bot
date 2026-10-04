@@ -168,6 +168,7 @@ export function apiError(code) {
       model_request_failed: "Не удалось получить ответ. Повтори запрос.",
       model_connection_failed: "Соединение прервалось. Попробуй ещё раз.",
       web_search_unavailable: "Не удалось выполнить поиск в интернете. Повтори позже.",
+      request_understanding_unavailable: "Не удалось обработать вопрос. Попробуй повторить его.",
       web_search_context_too_long: "В этот диалог не помещаются веб-источники. Начни новый диалог.",
     }[code] || "Не удалось выполнить запрос. Попробуй ещё раз."
   );

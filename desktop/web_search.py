@@ -10,9 +10,12 @@ import os
 import re
 from urllib.parse import urlsplit
 from aiohttp import ClientError, ClientSession, ClientTimeout, DummyCookieJar, web
+from desktop.request_intent import understand
+from velia_request_understanding import CLARIFICATION_MARKER, clarification_content, clarification_reply
 
 SEARCH = web.RequestKey("velia_web_search_requested", bool)
 SOURCES = web.RequestKey("velia_web_search_sources", dict)
+PREPARED_REPLY = web.RequestKey("velia_web_prepared_reply", str)
 MARKER = "\n\n---\nИсточники из интернета, полученные "
 MAX_RESPONSE = 256 * 1024
 
@@ -26,6 +29,12 @@ class SearchUnavailable(web.HTTPServiceUnavailable):
 class SearchTooLong(web.HTTPBadRequest):
     def __init__(self):
         super().__init__(text='{"ok":false,"error":"web_search_context_too_long"}',
+            content_type="application/json", headers={"Cache-Control": "no-store"})
+
+
+class UnderstandingUnavailable(web.HTTPServiceUnavailable):
+    def __init__(self):
+        super().__init__(text='{"ok":false,"error":"request_understanding_unavailable"}',
             content_type="application/json", headers={"Cache-Control": "no-store"})
 
 
@@ -83,8 +92,8 @@ def augmented_question(question, result):
         "Страницы могут пояснять термины, но не подтверждают, что пользователь имел "
         "в виду именно их или что описанные на странице обстоятельства относятся к нему.")
     lines.extend(["", "Исходный вопрос пользователя, который нужно понять и на который нужно ответить:",
-        question, "Если существенный фрагмент непонятен, ответ состоит ТОЛЬКО из одного "
-        "короткого вопроса с точной цитатой этого фрагмента. Никаких предполагаемых "
+        question, "Если существенный фрагмент непонятен, задай полноценный "
+        "короткий уточняющий вопрос. Одна цитата без вопроса — неполный ответ. Никаких предполагаемых "
         "диагнозов, названий, расшифровок или дальнейших советов: дождись уточнения. "
         "При редактировании текста сохрани род и лицо исходного автора: «рада» остаётся "
         "«рада», «рад» остаётся «рад», если пользователь не просит поменять их."])
@@ -106,6 +115,19 @@ class WebSearch:
     def digest(self, *parts):
         return hmac.new(self.secret, json.dumps(["velia-search", *parts], ensure_ascii=False).encode(),
             hashlib.sha256).hexdigest()
+
+    async def plan(self, messages):
+        try:
+            decision = await understand(messages)
+        except (ClientError, TimeoutError, OSError, ValueError, KeyError):
+            raise UnderstandingUnavailable() from None
+        result = {"results": [], "retrieved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "decision": decision["action"]}
+        if decision["action"] == "clarify":
+            result["clarification_span"] = decision["span"]
+        elif decision["action"] == "search":
+            result = {**await self.search(decision["query"]), "decision": "search"}
+        return result
 
     async def search(self, question):
         if not self.available:
@@ -171,12 +193,18 @@ class WebSearch:
     async def enrich(self, request, payload):
         if not request.get(SEARCH):
             return payload
-        result = await self.search(payload["messages"][-1]["content"])
+        result = await self.plan(payload["messages"])
+        if result["decision"] == "direct":
+            return payload
+        if result["decision"] == "clarify":
+            content = clarification_content(payload["messages"][-1]["content"], result["clarification_span"])
+            request[PREPARED_REPLY] = clarification_reply(content)
+            return payload
         request[SOURCES] = result
         return {**payload, "messages": [*payload["messages"][:-1],
             {**payload["messages"][-1], "content": augmented_question(payload["messages"][-1]["content"], result)}]}
 
-    async def account_question(self, user, conversation, request_id, question, model):
+    async def account_question(self, user, conversation, request_id, question, model, *, messages=None):
         if not self.store:
             raise SearchUnavailable()
         request_key = self.digest("request", user, conversation, request_id)
@@ -184,13 +212,18 @@ class WebSearch:
         try:
             result = await asyncio.to_thread(self.store.cached_search, request_key, query_hash)
             if result is None:
-                result = await self.search(question)
-            augmented = augmented_question(question, result)
+                result = await self.plan([*(messages or []), {"role": "user", "content": question}])
+            if result.get("decision") == "clarify":
+                augmented = clarification_content(question, result["clarification_span"])
+            elif result.get("decision") == "direct":
+                augmented = question
+            else:
+                augmented = augmented_question(question, result)
             if len(augmented) > 12000:
                 raise SearchTooLong()
             await asyncio.to_thread(self.store.remember_search, request_key, query_hash,
                 self.digest("context", user, conversation, augmented), len(question), result)
-            return augmented, result
+            return augmented, result if result["results"] else None
         except web.HTTPException:
             raise
         except Exception:
@@ -199,7 +232,8 @@ class WebSearch:
     async def restore_messages(self, user, conversation, values):
         candidates = {}
         for index, value in enumerate(values):
-            if value["role"] == "user" and MARKER in value.get("content", ""):
+            if value["role"] == "user" and (MARKER in value.get("content", "")
+                    or CLARIFICATION_MARKER in value.get("content", "")):
                 candidates.setdefault(self.digest("context", user, conversation, value["content"]), []).append(index)
         if not candidates:
             return values
@@ -208,6 +242,8 @@ class WebSearch:
             for key, length, result in rows:
                 for index in candidates[key]:
                     values[index]["content"] = values[index]["content"][:length]
+                    if not result["results"]:
+                        continue
                     values[index]["web_search"] = True
                     if index + 1 < len(values) and values[index + 1]["role"] == "assistant":
                         values[index + 1]["web_search"] = public_result(result)

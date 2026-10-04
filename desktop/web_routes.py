@@ -95,6 +95,18 @@ async def public_web_stream(request, source):
             yield wire
 
 
+async def prepared_web_response(request, text, *, headers=None):
+    """A complete, validated clarification; sources and provider deltas are absent."""
+    response = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-store",
+        "X-Accel-Buffering": "no", **(headers or {})})
+    await response.prepare(request)
+    event = {"model": request[WEB_MODEL], "choices": [{"index": 0,
+        "delta": {"content": text}, "finish_reason": "stop"}]}
+    await response.write(("data: " + json.dumps(event, ensure_ascii=False) + "\n\ndata: [DONE]\n\n").encode())
+    await response.write_eof()
+    return response
+
+
 @dataclass
 class Session:
     id: str

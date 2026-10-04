@@ -173,8 +173,16 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
             if (web_search and web_search.available) or data.get("web_search"):
                 if web_search is None:
                     raise SearchUnavailable()
+                status, previous = await relay(request, "GET", "/messages?limit=20")
+                if not previous.get("ok"):
+                    return json_response(previous, status)
+                history = [message(v) for v in previous.get("messages", [])[-20:]
+                    if v.get("role") in {"user", "assistant"}]
+                history = await web_search.restore_messages(session.user_id,
+                    request.match_info["conversation_id"], history)
                 content, result = await web_search.account_question(session.user_id,
-                    request.match_info["conversation_id"], data["idempotency_key"], content, data["model"])
+                    request.match_info["conversation_id"], data["idempotency_key"], content, data["model"],
+                    messages=[{"role": m["role"], "content": m.get("content") or ""} for m in history])
             source = upstream_stream("/mobile-api/v1/conversations/" + request.match_info["conversation_id"] + "/messages/stream",
                 token=session.access, data={"content": content, "chat_mode": "flash" if data["model"] == FLASH_ID else "pro",
                     "idempotency_key": data["idempotency_key"]})

@@ -11,7 +11,7 @@ import secrets
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
 from cryptography.fernet import Fernet, InvalidToken
 from desktop.guest_store import GuestLimitReached, GuestStore, LIMIT
-from desktop.web_routes import WEB_CHAT, prepare_web_payload, public_web_stream
+from desktop.web_routes import WEB_CHAT, prepare_web_payload, public_web_stream, prepared_web_response
 from velia_desktop_routes import FlashContextTooLong, check_flash_context, flash_enabled, flash_endpoint, validate_payload, FLASH_ID
 
 COOKIE = "__Host-velia-guest"
@@ -115,11 +115,14 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_
                     return error("guest_limit_reached", 429)
                 except Exception:
                     return error("guest_service_unavailable", 503)
-                from desktop.web_search import SEARCH, SearchUnavailable
+                from desktop.web_search import SEARCH, PREPARED_REPLY, SearchUnavailable
                 if request.get(SEARCH):
                     if web_search is None:
                         raise SearchUnavailable()
                     payload = await web_search.enrich(request, payload)
+                    if request.get(PREPARED_REPLY):
+                        return await prepared_web_response(request, request[PREPARED_REPLY],
+                            headers={"X-Velia-Guest-Remaining": str(remaining)})
                     await check_flash_context(client, endpoint, headers, payload)
                 async with client.post(endpoint + "/v1/chat/completions", json=payload, headers=headers, allow_redirects=False) as upstream:
                     if upstream.status != 200 or "text/event-stream" not in upstream.headers.get("Content-Type", ""):

@@ -26,6 +26,7 @@ async def fixture(monkeypatch, **state):
     state.setdefault("conversations", {})
     state["account_calls"] = []
     state["search_queries"] = []
+    state["intent_payloads"] = []
     async def search(request):
         data = await request.json()
         assert data["api_key"] == "fixture-search-key"
@@ -86,7 +87,8 @@ async def fixture(monkeypatch, **state):
         value = state["conversations"].get(request.match_info["conversation_id"])
         if not value:
             return web.Response(text='data: {"type":"error","error":"conversation_not_found"}\n\n', content_type="text/event-stream")
-        answer = {"id": str(uuid.uuid4()), "role": "assistant", "content": "Ответ из аккаунта", "status": "completed", "chat_mode": data["chat_mode"], "provider": "private-provider", "usage": {"private": True}}
+        from velia_request_understanding import clarification_reply
+        answer = {"id": str(uuid.uuid4()), "role": "assistant", "content": clarification_reply(data["content"]) or "Ответ из аккаунта", "status": "completed", "chat_mode": data["chat_mode"], "provider": "private-provider", "usage": {"private": True}}
         value["messages"].extend([{"role": "user", "content": data["content"], "status": "completed"}, answer])
         events = [{"type": "ready"}, {"type": "delta", "text": "Ответ из аккаунта"},
             {"type": "complete", "result": {"ok": True, "assistant_message": answer, "generation": {"private": "never"}}}]
@@ -98,6 +100,13 @@ async def fixture(monkeypatch, **state):
     async def model(request):
         assert request.headers.get("Authorization") == "Bearer fixture-provider-key"
         data = await request.json()
+        if data.get("tools", [{}])[0].get("function", {}).get("name") == "understand_request":
+            state["intent_payloads"].append(data)
+            args = state.get("intent", {"action": "search", "quote": "", "query": data["messages"][-1]["content"][:400]})
+            if state.get("intent_status"):
+                return web.json_response({"error": "fixture failure"}, status=state["intent_status"])
+            return web.json_response({"choices": [{"message": {"tool_calls": [{"type": "function", "id": "intent-1",
+                "function": {"name": "understand_request", "arguments": json.dumps(args, ensure_ascii=False)}}]}, "finish_reason": "tool_calls"}]})
         state["payloads"].append(data)
         return web.Response(text='data: {"model":"private-upstream-model","system_fingerprint":"private-runtime","choices":[{"delta":{"reasoning_content":"private-thought","content":"Привет, я Велия."}}]}\n\ndata: [DONE]\n\n', content_type="text/event-stream")
     authority = web.Application()

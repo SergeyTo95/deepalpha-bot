@@ -9,6 +9,7 @@ on:
       - 'velia_desktop_routes.py'
       - 'velia_request_understanding.py'
       - 'tests/test_velia_request_understanding.py'
+      - 'tests/test_velia_request_intent.py'
       - 'tests/test_velia_desktop_gateway.py'
       - '.github/workflows/velia-desktop-preview.yml'
   pull_request:
@@ -17,6 +18,7 @@ on:
       - 'velia_desktop_routes.py'
       - 'velia_request_understanding.py'
       - 'tests/test_velia_request_understanding.py'
+      - 'tests/test_velia_request_intent.py'
       - 'tests/test_velia_desktop_gateway.py'
       - '.github/workflows/velia-desktop-preview.yml'
 
@@ -39,7 +41,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install pytest -r desktop/requirements-gateway.txt
-      - run: python -m pytest tests/test_velia_desktop_gateway.py tests/test_velia_request_understanding.py -q
+      - run: python -m pytest tests/test_velia_desktop_gateway.py tests/test_velia_request_understanding.py tests/test_velia_request_intent.py -q
       - run: npm test
         working-directory: desktop
       - run: node --check src/main.mjs

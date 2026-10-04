@@ -205,11 +205,15 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
     app.router.add_post("/mobile-api/v1/auth/exchange", relay_session)
     app.router.add_post("/mobile-api/v1/auth/refresh", relay_session)
     async def enrich_web(request, payload):
-        from desktop.web_search import SEARCH, SearchUnavailable
+        from desktop.web_search import SEARCH, PREPARED_REPLY, SearchUnavailable
         if request.get(SEARCH):
             if web_search is None:
                 raise SearchUnavailable()
-            return await web_search.enrich(request, payload)
+            payload = await web_search.enrich(request, payload)
+            if request.get(PREPARED_REPLY):
+                from desktop.web_routes import prepared_web_response
+                return await prepared_web_response(request, request[PREPARED_REPLY])
+            return payload
         return payload
     def prepare_browser_payload(request, data):
         return prepare_web_payload(request, data, search_enabled=bool(web_search and web_search.available))

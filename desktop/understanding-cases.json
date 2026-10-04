@@ -7,7 +7,17 @@
         "content": "Привет. Рада познакомиться. Идеи для похудения к 31 октября у меня гестамин эпное и астма. Как мне похудеть быстро"
       }
     ],
-    "criterion": "Clarifies the unclear terms; no invented diabetes or pregnancy; does not treat tentative diagnoses as confirmed."
+    "criterion": "Asks a complete clarification with the original unclear phrase; no invented diagnosis or pregnancy and no sources before clarification."
+  },
+  {
+    "id": "medical_spacing",
+    "messages": [{"role": "user", "content": "Привет . Рада познакомиться . Идеи для похудения к 31 ок ября у меня гестамин эпное и астма . Как мне похудеть быстро"}],
+    "criterion": "The exact screenshot wording produces a complete clarification, not a lone quote, and does not show irrelevant sources."
+  },
+  {
+    "id": "device_ambiguity",
+    "messages": [{"role": "user", "content": "У меня сломался квампер. Как его починить?"}],
+    "criterion": "Asks what the unknown device name means; no invented device or repair instructions and no sources before clarification."
   },
   {
     "id": "technical_typo",
