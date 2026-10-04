@@ -72,6 +72,8 @@ def test_missing_conditions_or_source_support_are_repaired_privately_once(monkey
             original = json.loads(state["review_payloads"][0]["messages"][-1]["content"])
             assert repair["question"] == original["question"] == question.replace("гестамин эпное", "гистамин, апноэ")
             assert repair["user_context"] == original["user_context"]
+            assert "unsupported_context_advice" in repair["repair"]["instruction"]
+            assert "включая условные" in repair["repair"]["instruction"]
             assert (final in wire and "[DONE]" in wire) if recover else ('"error"' in wire and "[DONE]" not in wire)
             async with client.get(server.make_url("/web-api/v1/guest"), headers=guest_headers(cookie)) as response:
                 assert (await response.json())["remaining"] == 29

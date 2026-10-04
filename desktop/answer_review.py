@@ -222,12 +222,27 @@ async def review_answer(endpoint, headers, context, draft):
         omissions = review_omissions(text, data)
         if not any(omissions.values()):
             return text.strip()
+        # Only isolated fixed-fixture probes install this callback. Production
+        # requests keep text private and log counts only.
+        if callable(context.get("on_invalid")):
+            context["on_invalid"]({"attempt":attempt + 1, "text":text, "issues":omissions})
         print("VELIA_ANSWER_REVIEW " + json.dumps({"phase":"coverage", "attempt":attempt + 1,
             "missing_terms":len(omissions["missing_stated_terms"]),
             "invalid_citations":omissions["invalid_citations"], "new_regimens":len(omissions["new_personal_regimens"]),
             "unsupported_advice":len(omissions["unsupported_context_advice"])}), flush=True)
         if attempt:
             raise ValueError("incomplete_answer_review")
+        omissions["instruction"] = (
+            "Исправь перечисленные нарушения в предыдущем варианте. "
+            "unsupported_context_advice — неподтверждённые свойства пользователя: "
+            "удали все советы о реакции, непереносимости, ограничениях или лечении "
+            "из-за этих сущностей, включая условные 'если'. Не требуй уточнения "
+            "этих слов: оставь ответ на основную задачу. "
+            "missing_stated_terms — сохрани эти сообщённые условия и отрицания. "
+            "invalid_citations — укажи source_ids для поддержанных абзацев. "
+            "new_personal_regimens — убери новые числовые назначения. "
+            "Вызови publish_reviewed_answer и проверь те же правила ещё раз."
+        )
         data.update(draft=text.strip(), repair=omissions)
         payload["messages"][-1]["content"] = json.dumps(data, ensure_ascii=False)
 

@@ -74,6 +74,14 @@ def finance_answer(reply):
 
 async def run_browser_probes():
     class RecordedSearch(WebSearch):
+        async def enrich(self, request, payload):
+            from desktop.answer_review import REVIEW_CONTEXT
+            result = await super().enrich(request, payload)
+            if REVIEW_CONTEXT in request:
+                request[REVIEW_CONTEXT]["on_invalid"] = lambda value: print("VELIA_ANSWER_REVIEW_DIAGNOSTIC "
+                    + json.dumps({"case":self.case, **value}, ensure_ascii=False), flush=True)
+            return result
+
         async def _understand(self, messages):
             started = time.monotonic()
             try:
