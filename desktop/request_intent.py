@@ -34,8 +34,11 @@ INSTRUCTION = (
     "'нейропотия, что это' — search, candidate='нейропатия'; "
     "'как починить флумпенсор' — clarify; 'мне нужен ключ' — clarify; "
     "'сделай его короче' относится к предыдущему тексту — direct. "
-    "В поиске сохраняй ОСНОВНУЮ ЗАДАЧУ и существенные условия запроса. Для здоровья "
-    "ищи официальные рекомендации по основной задаче, а не только описание болезни. "
+    "В поиске сохраняй ОСНОВНУЮ ЗАДАЧУ и существенные условия запроса. Для советов "
+    "о здоровье source_scope=official_health: query на английском по основной задаче "
+    "для официальных медицинских источников. Не перечисляй в query все сопутствующие "
+    "состояния, если они мешают найти рекомендации по задаче; они сохраняются в "
+    "исходном вопросе для ответа. Для прочих тем, direct и clarify source_scope=general. "
     "Для актуальных или внешних сведений, медицинских рекомендаций и явного запроса "
     "поиска action=search, query=краткий понятный поисковый запрос с исправленными "
     "словами. Не добавляй в query отсутствующие обстоятельства или диагнозы. "
@@ -48,8 +51,9 @@ TOOL = {"type": "function", "function": {
         "action": {"type": "string", "enum": ["direct", "search", "clarify"]},
         "quote": {"type": "string", "description": "Точный исходный фрагмент для исправления или уточнения; если не нужен, пустая строка."},
         "candidate": {"type": "string", "description": "Ближайшее исправленное написание quote, только те же слова, при direct/search тоже. Если исправление не нужно или смысла нет, пустая строка."},
+        "source_scope": {"type": "string", "enum": ["general", "official_health"], "description": "official_health для медицинских рекомендаций с поиском; иначе general."},
         "query": {"type": "string", "description": "Поисковый запрос только при action=search, иначе пустая строка."}},
-        "required": ["action", "quote", "candidate", "query"], "additionalProperties": False}}}
+        "required": ["action", "quote", "candidate", "query", "source_scope"], "additionalProperties": False}}}
 
 
 def parse_decision(result, question):
@@ -57,9 +61,12 @@ def parse_decision(result, question):
     if len(calls) != 1 or calls[0]["function"].get("name") != "understand_request":
         raise ValueError("invalid_understanding_response")
     args = json.loads(calls[0]["function"]["arguments"])
-    if (not isinstance(args, dict) or set(args) not in ({"action", "quote", "query"}, {"action", "quote", "candidate", "query"})
+    if (not isinstance(args, dict) or set(args) not in ({"action", "quote", "query"}, {"action", "quote", "candidate", "query"}, {"action", "quote", "candidate", "query", "source_scope"})
             or any(not isinstance(args[k], str) for k in args)
             or args["action"] not in {"direct", "search", "clarify"}):
+        raise ValueError("invalid_understanding_response")
+    scope = args.get("source_scope", "general")
+    if scope not in {"general", "official_health"} or (scope != "general" and args["action"] != "search"):
         raise ValueError("invalid_understanding_response")
     quote, query, candidate = args["quote"], args["query"].strip(), args.get("candidate", "")
     if args["action"] == "clarify":
@@ -76,6 +83,8 @@ def parse_decision(result, question):
     if (args["action"] == "direct" and query) or (args["action"] == "search" and not 1 <= len(query) <= 400):
         raise ValueError("invalid_understanding_response")
     result = {"action": args["action"], "query": query}
+    if scope == "official_health":
+        result["source_scope"] = scope
     if quote or candidate:
         if not quote.strip() or quote not in question:
             raise ValueError("invalid_understanding_response")

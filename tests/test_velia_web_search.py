@@ -152,3 +152,42 @@ def test_legacy_account_web_chat_also_receives_search_context(monkeypatch, tmp_p
             assert len(state["search_queries"]) == len(state["payloads"]) == 1
             assert MARKER in state["payloads"][0]["messages"][-1]["content"]
     asyncio.run(run())
+
+
+def test_health_search_restricts_provider_and_filters_unrelated_or_impostor_sources(monkeypatch, tmp_path):
+    async def run():
+        monkeypatch.setenv("VELIA_WEB_GUEST_ENABLED", "true")
+        intent = {"action": "search", "quote": "", "candidate": "", "query": "safe gradual weight loss", "source_scope": "official_health"}
+        results = [
+            {"title": "Clinic exclusions", "url": "https://clinic.example/diet", "content": "Exclude many foods."},
+            {"title": "Impostor", "url": "https://www.cdc.gov.example/diet", "content": "Not an official CDC source."},
+            {"title": "Healthy weight", "url": "https://www.cdc.gov/healthy-weight-growth/losing-weight/index.html", "content": "Gradual weight loss, healthy food and physical activity."},
+        ]
+        async with fixture(monkeypatch, guest_store=GuestStore(sqlite_path=tmp_path/"quota.db"), with_search=True,
+                intent=intent, search_response={"results": results}) as (server, client, state):
+            cookie, _, _ = await guest(server, client)
+            async with client.post(server.make_url("/web-api/v1/guest/chat/completions"), headers=guest_headers(cookie),
+                    json={**BODY, "messages": [{"role": "user", "content": "Как безопасно снизить вес?"}]}) as response:
+                assert response.status == 200
+                wire = await response.text()
+            query = state["search_payloads"][0]
+            assert "cdc.gov" in query["include_domains"] and query["include_domains_mode"] == "restrict"
+            assert len(state["search_queries"]) == len(state["intent_payloads"]) == len(state["payloads"]) == 1
+            assert "https://www.cdc.gov/" in wire and "clinic.example" not in wire and "cdc.gov.example" not in wire
+            content = state["payloads"][0]["messages"][-1]["content"]
+            assert "Exclude many foods" not in content and "Not an official" not in content
+    asyncio.run(run())
+
+
+def test_health_source_failure_does_not_fall_back_to_unverified_restrictions(monkeypatch, tmp_path):
+    async def run():
+        monkeypatch.setenv("VELIA_WEB_GUEST_ENABLED", "true")
+        async with fixture(monkeypatch, guest_store=GuestStore(sqlite_path=tmp_path/"quota.db"), with_search=True,
+                intent={"action": "search", "quote": "", "candidate": "", "query": "weight loss", "source_scope": "official_health"},
+                search_response={"results": [{"title": "Clinic", "url": "https://clinic.example/diet", "content": "Exclude foods."}]}) as (server, client, state):
+            cookie, _, _ = await guest(server, client)
+            async with client.post(server.make_url("/web-api/v1/guest/chat/completions"), headers=guest_headers(cookie), json=BODY) as response:
+                assert response.status == 503
+                assert (await response.json())["error"] == "web_search_unavailable"
+            assert len(state["search_queries"]) == 1 and state["payloads"] == []
+    asyncio.run(run())

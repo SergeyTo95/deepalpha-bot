@@ -14,7 +14,7 @@ from aiohttp import ClientSession, ClientTimeout, DummyCookieJar, web
 from desktop.guest_routes import COOKIE, setup_guest_routes
 from desktop.guest_store import GuestStore
 from desktop.request_intent import understand
-from desktop.web_search import WebSearch
+from desktop.web_search import WebSearch, official_health_url
 from velia_request_understanding import clarification_content, clarification_reply
 
 
@@ -23,15 +23,16 @@ def medical_answer(reply):
     return (len(reply.strip()) >= 180
         and all(term in lowered for term in ("гистамин", "апноэ", "астм"))
         and any(term in lowered for term in ("питан", "калори", "рацион"))
-        and any(term in lowered for term in ("ходьб", "активн", "нагруз", "движен"))
+        and any(term in lowered for term in ("ходьб", "прогул", "физическ", "движен"))
+        and "исключите" not in lowered
         and not any(term in lowered for term in ("правильно ли я поняла", "что вы имеете в виду", "гестацион", "диабет", "беремен", "обмор")))
 
 
 async def run_browser_probes():
     class RecordedSearch(WebSearch):
-        async def search(self, query):
+        async def search(self, query, *, scope="general"):
             self.query = query
-            return await super().search(query)
+            return await super().search(query, scope=scope)
 
         async def plan(self, messages):
             self.decision = await super().plan(messages)
@@ -98,11 +99,14 @@ async def run_browser_probes():
                     source_text = json.dumps(sources, ensure_ascii=False).casefold()
                     relevant_sources = (bool(sources) == (action == "search")
                         and not any(term in source_text for term in ("гестацион", "диабет", "беремен", "gestational", "pregnan")))
+                    if name == "medical_spacing":
+                        relevant_sources = relevant_sources and all(official_health_url(row["url"]) for row in sources)
                     ok = (search.decision["decision"] == action and done and stop == "stop" and relevant_sources
                         and remaining == str(29 - index) and acceptable(text))
                     row = {"case": name, "ok": bool(ok), "decision": search.decision["decision"],
                         "candidate": search.decision.get("restoration_candidate") or search.decision.get("clarification_candidate"),
                         "query": getattr(search, "query", None) if action == "search" else None,
+                        "source_scope": search.decision.get("source_scope"),
                         "reply": text, "finish_reason": stop, "done": done, "sources": sources, "seconds": round(time.monotonic() - started, 2)}
                     rows.append(row)
                     print("VELIA_REQUEST_UNDERSTANDING_BROWSER " + json.dumps(row, ensure_ascii=False), flush=True)

@@ -26,12 +26,14 @@ async def fixture(monkeypatch, **state):
     state.setdefault("conversations", {})
     state["account_calls"] = []
     state["search_queries"] = []
+    state["search_payloads"] = []
     state["intent_payloads"] = []
     async def search(request):
         data = await request.json()
         assert data["api_key"] == "fixture-search-key"
         assert request.headers.get("Cookie") is None
         state["search_queries"].append(data["query"])
+        state["search_payloads"].append(data)
         return web.json_response(state.get("search_response", {"results": [
             {"title":"Python official", "url":"https://www.python.org/downloads/", "content":"Python test release, official source."},
             {"title":"Docs", "url":"https://docs.python.org/", "content":"Python documentation."}]}),

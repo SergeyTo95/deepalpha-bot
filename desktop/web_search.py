@@ -20,6 +20,12 @@ PREPARED_REPLY = web.RequestKey("velia_web_prepared_reply", str)
 MARKER = "\n\n---\nИсточники из интернета, полученные "
 NATIVE_MARKER = "\n\nLIVE_WEB_CONTEXT_UNTRUSTED:\n"
 MAX_RESPONSE = 256 * 1024
+HEALTH_DOMAINS = ("nhs.uk", "cdc.gov", "nhlbi.nih.gov", "niddk.nih.gov", "nice.org.uk", "who.int")
+
+
+def official_health_url(url):
+    host = (urlsplit(url).hostname or "").lower().rstrip(".")
+    return any(host == domain or host.endswith("." + domain) for domain in HEALTH_DOMAINS)
 
 
 class SearchUnavailable(web.HTTPServiceUnavailable):
@@ -104,6 +110,11 @@ def augmented_question(question, result, *, marker=MARKER):
         "Не добавляй сведения о пользователе из источников. Дай законченный ответ: "
         "краткий вывод и до четырёх коротких пунктов, обычно до 120 слов. "
         "Числовые рекомендации должны опираться на подходящие источники.")
+    if result.get("source_scope") == "official_health":
+        lines.append("Дай общие практические шаги по основной задаче. Упоминание вещества "
+            "не устанавливает аллергию или непереносимость. Не назначай лечебную диету "
+            "или исключение целых групп продуктов без подтверждённого основания. "
+            "Учитывай названные состояния, но не добавляй новые.")
     return "\n".join(lines)
 
 
@@ -135,13 +146,18 @@ class WebSearch:
             if decision.get("candidate"):
                 result["clarification_candidate"] = decision["candidate"]
         elif decision["action"] == "search":
-            result = {**await self.search(decision["query"]), "decision": "search"}
+            scope = decision.get("source_scope", "general")
+            result = {**await self.search(decision["query"], scope=scope), "decision": "search"}
+            if scope != "general":
+                result["source_scope"] = scope
         if decision["action"] != "clarify" and decision.get("candidate"):
             result.update(restoration_span=decision["span"], restoration_candidate=decision["candidate"])
         return result
 
-    async def search(self, question):
+    async def search(self, question, *, scope="general"):
         if not self.available:
+            raise SearchUnavailable()
+        if scope not in {"general", "official_health"}:
             raise SearchUnavailable()
         query = " ".join(question.split()[:50])[:400].strip()
         if not query:
@@ -152,6 +168,9 @@ class WebSearch:
             endpoint = "https://api.tavily.com/search"
             kwargs["json"] = {"api_key": self.api_key, "query": query, "search_depth": "basic",
                 "max_results": 3, "include_answer": False, "include_raw_content": False, "auto_parameters": False}
+            if scope == "official_health":
+                kwargs["json"]["include_domains"] = list(HEALTH_DOMAINS)
+                kwargs["json"]["include_domains_mode"] = "restrict"
         elif self.provider == "serper":
             endpoint = "https://google.serper.dev/search"
             headers["X-API-KEY"] = self.api_key
@@ -164,6 +183,9 @@ class WebSearch:
             method, endpoint = "GET", "https://api.bing.microsoft.com/v7.0/search"
             headers["Ocp-Apim-Subscription-Key"] = self.api_key
             kwargs["params"] = {"q": query, "count": 3}
+        if scope == "official_health" and self.provider != "tavily":
+            scoped_query = query + " (" + " OR ".join("site:" + domain for domain in HEALTH_DOMAINS) + ")"
+            (kwargs.get("json") or kwargs["params"])["q"] = scoped_query
         try:
             async with ClientSession(timeout=ClientTimeout(total=15, connect=5, sock_read=10),
                     cookie_jar=DummyCookieJar()) as client:
@@ -190,6 +212,8 @@ class WebSearch:
                 title = text(row.get("title") or row.get("name"), 160)
                 snippet = text(row.get("content") or row.get("snippet") or row.get("description"), 500)
                 if not url or url in seen or not title or not snippet:
+                    continue
+                if scope == "official_health" and not official_health_url(url):
                     continue
                 seen.add(url)
                 selected.append({"title": title, "url": url, "snippet": snippet})

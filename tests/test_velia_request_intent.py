@@ -293,3 +293,16 @@ def test_account_resolved_spelling_generates_and_restores_raw_history_on_replay(
                 values = (await response.json())["messages"]
             assert all(v["content"] == question for v in values if v["role"] == "user")
     asyncio.run(run())
+
+
+def test_health_advice_selects_official_sources_without_changing_the_user_question():
+    result = parse_decision(decision({"action": "search", "quote": "", "candidate": "",
+        "query": "safe gradual weight loss", "source_scope": "official_health"}), "Как безопасно снизить вес?")
+    assert result == {"action": "search", "query": "safe gradual weight loss", "source_scope": "official_health"}
+
+
+@pytest.mark.parametrize("action,scope", [("direct", "official_health"), ("clarify", "official_health"), ("search", "unbounded")])
+def test_invalid_source_scope_cannot_change_the_retrieval_policy(action, scope):
+    with pytest.raises(ValueError):
+        parse_decision(decision({"action": action, "quote": "", "candidate": "",
+            "query": "weight loss" if action == "search" else "", "source_scope": scope}), "Пример")

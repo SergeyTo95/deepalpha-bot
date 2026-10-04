@@ -48,19 +48,30 @@ restores the exact original question using its authenticated context metadata.
 The resolved-spelling marker is hidden from the browser. Native search uses the
 existing `LIVE_WEB_CONTEXT_UNTRUSTED` envelope so Flash can shorten only added
 sources to its measured input budget, and it avoids a duplicate native search.
+For medical recommendations the interpretation selects `official_health` and
+an English query about the main task. Retrieved results are restricted to official
+health services and public-health authorities (NHS, CDC, NHLBI, NIDDK, NICE, WHO).
+The server verifies the hostname after retrieval, including rejecting lookalike
+domains. It makes one search and does not fall back to clinic advice if no official
+result is available. The original conditions remain in the inference question;
+search need not combine every uncommon condition into an ineffective query.
+The answer gives general useful steps without establishing an intolerance from
+an isolated substance name or prescribing unsupported food exclusions.
+
 Quotas, credentials, permissions, tool-call correlations and paid fallback rules
 retain their existing limits.
 
 ## Verification
 
-Local regression checks: **226 passed**, one PostgreSQL integration check skipped
+Local regression checks: **232 passed**, one PostgreSQL integration check skipped
 because no local test database was supplied. The deployed gate separately checks
 real PostgreSQL quota enforcement and source caching.
 
 HTTP checks exercise resolved spelling through normal generation for direct and
 search turns, clean account history and replay, Flash/PRO compatibility, original
 input/history, protected identifiers and values, rejected invented diagnoses and
-unknown-term clarifications. Native checks verify that restored text reaches the
+unknown-term clarifications. Source tests exercise official-domain restriction,
+lookalike-domain rejection and no unverified fallback. Native checks verify that restored text reaches the
 free generator instead of returning a prepared spelling question and that
 browser-provided native sources do not trigger another search.
 
@@ -70,7 +81,8 @@ answers on an isolated loopback guest server with a temporary quota database:
 - The exact screenshot query receives substantive weight-loss guidance, with the
   nearby readings `гистамин` and `апноэ`, rather than a spelling-confirmation
   question. No invented gestational diabetes, pregnancy, confusion of apnea with fainting,
-  or unrelated source cards. The complete answer must finish with `stop`.
+  or unrelated source cards or unsupported broad food exclusions. Sources must
+  be official; the complete answer must finish with `stop`.
 - An unknown device name remains a complete clarification.
 - Arithmetic returns 391.
 - A corrected Ubuntu context returns Ctrl+Alt+T.
