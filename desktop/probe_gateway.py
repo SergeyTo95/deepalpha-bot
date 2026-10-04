@@ -101,8 +101,11 @@ async def run_probe():
             "provider": search.provider, "configured": search.available}), flush=True)
         if not search.available:
             raise RuntimeError("web_search_not_configured")
-        result = await search.search("Python downloads official python.org")
-        if not any((urlsplit(row["url"]).hostname or "").endswith("python.org") for row in result["results"]):
+        result = await search.search("site:python.org Python downloads")
+        hosts = [(urlsplit(row["url"]).hostname or "").lower().rstrip(".") for row in result["results"]]
+        primary = any(host == "python.org" or host.endswith(".python.org") for host in hosts)
+        print("VELIA_WEB_SEARCH_OPERATOR_SOURCE " + json.dumps({"hosts":hosts, "primary_source":primary}), flush=True)
+        if not primary:
             raise RuntimeError("web_search_source_qualification_failed")
         await asyncio.to_thread(store.initialize_search)
         nonce = "private-search-qualification:" + secrets.token_hex(24)
