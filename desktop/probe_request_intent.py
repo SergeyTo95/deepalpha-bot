@@ -45,16 +45,22 @@ def medical_answer(reply):
         and not re.search(r"\b1\s*[–—-]\s*2\s*кг.{0,20}(?:в\s+недел|за\s+недел|еженедел)", lowered)
         and not unconfirmed_personal_condition(reply)
         and not re.search(r"\b(?:при|с\s+уч[её]том)\s+гистамин(?:е|а)?\b", lowered)
-        and not any(term in lowered for term in ("правильно ли я поняла", "что вы имеете в виду", "гестацион", "диабет", "беремен", "обмор")))
+        and not any(term in lowered for term in ("правильно ли я поняла", "что вы имеете в виду", "гестацион", "диабет", "беремен", "обмор", "астеме", "пульмоном")))
 
 
 def router_answer(reply):
     """A restart must preserve the user's settings, including in the actual steps."""
     lowered = reply.casefold()
+    for clause in re.split(r"[.!?;\n]", lowered):
+        if "reset" not in clause:
+            continue
+        negative = any(term in clause for term in ("не нажим", "не удерж", "не трог", "не использ", "не зажим"))
+        explanation = ("сброс" in clause and "наруш" in clause
+            and not re.search(r"\b(?:нажми\w*|нажмите|удерживай\w*|удерживайте|зажми\w*)\b", clause))
+        if not (negative or explanation):
+            return False
     return (any(term in lowered for term in ("питан", "розетк", "отключ", "выключ"))
-        and "правильно ли" not in lowered
-        and ("reset" not in lowered or any(term in lowered for term in
-            ("не нажим", "не удерж", "не трог", "не использ", "не зажим"))))
+        and "правильно ли" not in lowered)
 
 
 def finance_answer(reply):

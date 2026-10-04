@@ -13,7 +13,8 @@ from velia_request_understanding import REQUEST_UNDERSTANDING
 def test_plain_text_and_tools_keep_separate_qualified_sampling_profiles():
     plain = {"model":"velia-flash", "messages":[{"role":"user", "content":"Объясни выручку"}]}
     payload = validate_payload(plain)
-    assert payload["min_p"] == 0.0 and payload["presence_penalty"] == 1.5
+    assert payload["min_p"] == 0.0 and payload["presence_penalty"] == 0.0
+    assert payload["temperature"] == 0.3
     tool = {"type":"function", "function":{"name":"read", "parameters":{"type":"object"}}}
     payload = validate_payload({**plain, "tools":[tool]})
     assert payload["min_p"] == 0.05 and "presence_penalty" not in payload

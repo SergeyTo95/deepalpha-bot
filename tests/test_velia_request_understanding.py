@@ -101,6 +101,7 @@ def test_live_medical_criterion_checks_a_useful_answer_without_forcing_a_spellin
     assert medical_answer(answer + " Если у вас подтверждена аллергия, учитывайте рекомендации аллерголога.")
     assert medical_answer(answer + " Упоминание гистамина не подтверждает аллергию.")
     assert not medical_answer(answer + " Следите за переносимостью продуктов при гистамине.")
+    assert not medical_answer(answer + " При хронической астеме обсудите нагрузку с пульмоном.")
 
 
 def test_finance_live_criterion_rejects_observed_language_errors():
@@ -116,5 +117,8 @@ def test_live_router_criterion_rejects_reset_actions_and_allows_a_warning():
     safe = "Выключи питание роутера и включи снова. Настройки сохранятся."
     assert router_answer(safe)
     assert router_answer(safe + " Не нажимай Reset.")
+    assert router_answer(safe + " Удерживание кнопки Reset выполняет сброс до заводских значений и нарушает ваше условие.")
     assert not router_answer("Нажми Reset и удерживай 10 секунд.")
     assert not router_answer(safe + " Затем нажми Reset на 10 секунд.")
+    assert not router_answer(safe + " Нажмите Reset: это выполняет сброс и нарушает ваше условие.")
+    assert not router_answer(safe + " Не нажимай Reset. Затем нажми Reset на 10 секунд.")
