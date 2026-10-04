@@ -90,6 +90,44 @@ def test_numeric_review_preserves_user_numbers_calculations_and_reference_facts(
     assert review_omissions(text, data)["new_personal_regimens"] == []
 
 
+@pytest.mark.parametrize("invalid", [None, "out_of_bounds", "boolean", "duplicate", "extra_field", "empty_text"])
+def test_structured_editor_sources_are_validated_and_rendered_next_to_their_paragraph(monkeypatch, tmp_path, invalid):
+    async def run():
+        monkeypatch.setenv("VELIA_WEB_GUEST_ENABLED", "true")
+        args = {"paragraphs":[{"text":"Вы указали астму и апноэ.", "source_ids":[]},
+            {"text":"Питание и прогулки.", "source_ids":[1]}]}
+        if invalid == "out_of_bounds":
+            args["paragraphs"][1]["source_ids"] = [9]
+        elif invalid == "boolean":
+            args["paragraphs"][1]["source_ids"] = [True]
+        elif invalid == "duplicate":
+            args["paragraphs"][1]["source_ids"] = [1, 1]
+        elif invalid == "extra_field":
+            args["url"] = "https://unverified.example"
+        elif invalid == "empty_text":
+            args["paragraphs"][1]["text"] = "  "
+        intent = {"action":"search", "quote":"", "candidate":"", "query":"weight loss", "source_scope":"official_health",
+            "context":[{"quote":"астма", "kind":"condition", "status":"stated"}, {"quote":"апноэ", "kind":"condition", "status":"stated"}]}
+        async with fixture(monkeypatch, with_search=True, guest_store=GuestStore(sqlite_path=tmp_path/"quota.db"), intent=intent,
+                search_response={"results":[{"title":"Weight advice", "url":"https://www.nhs.uk/weight", "content":"Eat well. Gradual activity."}]},
+                model_content="PRIVATE_DRAFT", review_tool_args=args) as (server, client, state):
+            cookie, _, _ = await guest(server, client)
+            async with client.post(server.make_url("/web-api/v1/guest/chat/completions"), headers=guest_headers(cookie),
+                    json={**BODY, "messages":[{"role":"user", "content":"У меня астма и апноэ. Как похудеть?"}]}) as response:
+                wire = await response.text()
+            assert len(state["review_payloads"]) == (1 if invalid is None else 2)
+            assert state["review_payloads"][0]["tools"][0]["function"]["name"] == "publish_reviewed_answer"
+            assert all(value not in wire for value in ("PRIVATE_DRAFT", "PRIVATE_REVIEW_WRAPPER", "publish_reviewed_answer", "unverified.example"))
+            if invalid is None:
+                assert 'Вы указали астму и апноэ.\\n\\nПитание и прогулки. [1]' in wire and "[DONE]" in wire
+            else:
+                assert '"error"' in wire and "[DONE]" not in wire and "Питание и прогулки" not in wire
+            assert wire.count('"web_search"') == 1
+            async with client.get(server.make_url("/web-api/v1/guest"), headers=guest_headers(cookie)) as response:
+                assert (await response.json())["remaining"] == 29
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("failure", [{"review_status": 503}, {"review_finish": "length"}, {"review_content": ""}])
 def test_review_failure_never_falls_back_to_the_unreviewed_draft(monkeypatch, tmp_path, failure):
     async def run():
