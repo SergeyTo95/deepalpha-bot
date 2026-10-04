@@ -12,6 +12,7 @@ import time
 from aiohttp import web
 from cryptography.fernet import Fernet, InvalidToken
 from velia_desktop_routes import AuthenticationUnavailable, FLASH_ID, MODEL_ID, flash_enabled
+from velia_request_understanding import understanding_instruction
 from desktop.web_search import SEARCH, SOURCES, source_event
 
 WEB_CHAT = web.RequestKey("velia_browser_chat", bool)
@@ -20,7 +21,7 @@ WEB_SESSION = web.RequestKey("velia_browser_session", object)
 COOKIE = "__Host-velia-web"
 LIFETIME = 7 * 24 * 3600
 STATIC = Path(__file__).parent / "web"
-PERSONA = ("Ты Велия (VELIA), персональная ИИ-помощница на Velyon Core. "
+PERSONA = understanding_instruction("Ты Велия (VELIA), персональная ИИ-помощница на Velyon Core. "
     "Говори о себе в женском роде, по умолчанию отвечай по-русски. "
     "Пиши ясно и по существу, используй Markdown при необходимости. "
     "Не утверждай, что выполнила действие на устройстве или нашла актуальные сведения "

@@ -7,6 +7,7 @@ from aiohttp.test_utils import TestServer
 import pytest
 
 from velia_desktop_routes import flash_endpoint, setup_velia_desktop_routes, validate_payload
+from velia_request_understanding import REQUEST_UNDERSTANDING
 
 
 @asynccontextmanager
@@ -66,7 +67,8 @@ def test_flash_normalizes_template_and_preserves_correlated_tool_result():
         {"role": "tool", "tool_call_id": "read-1", "content": "текст файла"},
         {"role": "system", "content": "Без изменений файлов"},
     ]})
-    assert result["messages"][0] == {"role": "system", "content": "Ты Велия\n\nРабочая папка\n\nБез изменений файлов"}
+    assert result["messages"][0] == {"role": "system", "content":
+        "Ты Велия\n\n" + REQUEST_UNDERSTANDING + "\n\nРабочая папка\n\nБез изменений файлов"}
     assert len([m for m in result["messages"] if m["role"] == "system"]) == 1
     assert "reasoning_content" not in result["messages"][2]
     assert result["messages"][2]["tool_calls"][0]["function"]["arguments"] == "{}"

@@ -5,6 +5,7 @@ import json
 from types import SimpleNamespace
 from aiohttp import web
 from velia_desktop_routes import setup_velia_desktop_routes
+from velia_request_understanding import REQUEST_UNDERSTANDING
 
 
 def test_tool_round_trip_retains_tool_call_ids(monkeypatch):
@@ -17,7 +18,8 @@ def test_tool_round_trip_retains_tool_call_ids(monkeypatch):
     ]
     result = validate_payload({'model': 'velia-pro', 'messages': messages, 'stream': True,
         'tools': [{'type': 'function', 'function': {'name': 'read', 'parameters': {'type': 'object'}}}]})
-    assert result['messages'] == messages
+    assert result['messages'][0] == {'role': 'system', 'content': REQUEST_UNDERSTANDING}
+    assert result['messages'][1:] == messages
     assert result['stream'] is True
     assert result['model'] == 'test-model'
     assert result['tools'][0]['function']['name'] == 'read'
@@ -27,7 +29,7 @@ def test_accepts_harness_text_content_blocks():
     result = validate_payload({'model': 'velia-pro', 'messages': [
         {'role': 'user', 'content': [{'type': 'text', 'text': 'Read file'},
                                     {'type': 'text', 'text': 'Then summarize'}]}]})
-    assert result['messages'][0]['content'] == 'Read file\nThen summarize'
+    assert result['messages'][1]['content'] == 'Read file\nThen summarize'
 
 
 @pytest.mark.parametrize('change', [
@@ -118,8 +120,8 @@ def test_streaming_and_tool_round_trip_through_http_gateway(monkeypatch):
                     result = await response.json()
                     assert response.status == 200
                     assert result['model'] == 'velia-pro'
-                assert received[-1]['messages'][1]['tool_call_id'] == 'call_1'
-                assert received[-1]['messages'][1]['content'] == 'actual file text'
+                assert received[-1]['messages'][2]['tool_call_id'] == 'call_1'
+                assert received[-1]['messages'][2]['content'] == 'actual file text'
     asyncio.run(scenario())
 
 

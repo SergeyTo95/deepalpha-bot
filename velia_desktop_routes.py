@@ -12,6 +12,7 @@ from collections import deque
 from urllib.parse import urlsplit
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
+from velia_request_understanding import understanding_messages
 
 MAX_BODY = 1024 * 1024
 MODEL_ID = "velia-pro"
@@ -148,10 +149,10 @@ def validate_payload(data):
         raise ValueError("invalid_stream")
     is_flash = data["model"] == FLASH_ID
     result = {"model": os.getenv("VELIA_DESKTOP_PRO_MODEL", "kimi-k3") if not is_flash else FLASH_ID,
-              "messages": normalized_messages, "max_completion_tokens": limit,
+              "messages": understanding_messages(normalized_messages), "max_completion_tokens": limit,
               "stream": data.get("stream", False)}
     if is_flash:
-        result["messages"] = flash_messages(normalized_messages)
+        result["messages"] = flash_messages(result["messages"])
         result["max_tokens"] = min(result.pop("max_completion_tokens"), 512)
         result.update(temperature=0.7, top_p=0.8, top_k=20, min_p=0.05,
                       chat_template_kwargs={"enable_thinking": False}, reasoning_effort="none",
