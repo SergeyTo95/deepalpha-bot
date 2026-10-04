@@ -1,0 +1,34 @@
+{
+  "base_url": "https://velia-desktop-gateway-deepalpha-bot-pr-577.up.railway.app",
+  "started_at": "2026-10-04T11:40:59.929511+00:00",
+  "remaining_before": 1,
+  "cases": [
+    {
+      "id": "medical_spacing",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Привет . Рада познакомиться . Идеи для похудения к 31 ок ября у меня гестамин эпное и астма . Как мне похудеть быстро"
+        }
+      ],
+      "criterion": "The exact screenshot wording proposes both гистамин and апноэ as a reading to confirm, rather than merely asking the user to decode the spelling; no invented diagnosis, pregnancy or irrelevant sources.",
+      "http_status": 200,
+      "answer": "Правильно ли я поняла: «гестамин» — это «гистамин», а «эпное» — «апноэ»?",
+      "done": true,
+      "sources": [],
+      "finish_reason": "stop",
+      "quality_review": {
+        "status": "passed",
+        "reason": "Specific confirmation of both nearby word readings, a complete question, no invented diagnosis or pregnancy and no source cards."
+      },
+      "elapsed_seconds": 51.18,
+      "source_commit": "59a6462eb05ecfe811835fa300b067d4dc4a75bc"
+    }
+  ],
+  "completed_at": "2026-10-04T11:41:51.114630+00:00",
+  "quality_summary": {
+    "passed": 1,
+    "failed": 0,
+    "reviewed": true
+  }
+}

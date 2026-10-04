@@ -1,0 +1,199 @@
+{
+  "recorded_at": "2026-10-04T11:43:28.702Z",
+  "target": "Existing PR-577 preview",
+  "gateway": {
+    "commit": "59a6462eb05ecfe811835fa300b067d4dc4a75bc",
+    "deployment": "6b351d0a-3ba9-41a5-b593-83ed811b2b06",
+    "status": "SUCCESS",
+    "docker_python_tests_passed": 170,
+    "qualification": {
+      "commit": "59a6462eb05ecfe811835fa300b067d4dc4a75bc",
+      "correlated_tool_result": true,
+      "flash_live_harness": true,
+      "flash_paid_fallback": false,
+      "guest_quota": {
+        "accepted": 30,
+        "atomic_limit": 30,
+        "ok": true,
+        "persistent": true,
+        "rejected": 8
+      },
+      "identity_health": true,
+      "identity_rejects_no_token": true,
+      "live_sse": true,
+      "live_tool_call": true,
+      "model_calls": 2,
+      "ok": true,
+      "owner_pairing_verified": false,
+      "request_intent": {
+        "cases": 8,
+        "interpretation_before_search": true,
+        "live_browser_sse_cases": 5,
+        "ok": true,
+        "paid_fallback": false,
+        "specific_meaning_confirmation": true
+      },
+      "web_search": {
+        "model_calls": 0,
+        "ok": true,
+        "persistent_sources": true,
+        "primary_source": true,
+        "source_count": 3
+      }
+    },
+    "understanding": [
+      {
+        "timestamp": "2026-10-04T11:30:21.842631760Z",
+        "case": "medical_spacing",
+        "ok": true,
+        "decision": "clarify",
+        "candidate": "гистамин апноэ",
+        "reply": "Правильно ли я поняла: «гестамин» — это «гистамин», а «эпное» — «апноэ»?",
+        "done": true,
+        "sources": false,
+        "seconds": 45.3
+      },
+      {
+        "timestamp": "2026-10-04T11:30:23.970156034Z",
+        "case": "device_ambiguity",
+        "ok": true,
+        "decision": "clarify",
+        "candidate": null,
+        "reply": "Уточните, пожалуйста, что вы имеете в виду под «квампер»?",
+        "done": true,
+        "sources": false,
+        "seconds": 9.33
+      },
+      {
+        "timestamp": "2026-10-04T11:31:03.984504540Z",
+        "case": "arithmetic_typo",
+        "ok": true,
+        "decision": "direct",
+        "candidate": null,
+        "reply": "391",
+        "done": true,
+        "sources": false,
+        "seconds": 31.24
+      },
+      {
+        "timestamp": "2026-10-04T11:32:03.999090478Z",
+        "case": "confirmed_context",
+        "ok": true,
+        "decision": "direct",
+        "candidate": null,
+        "reply": "Нажми Ctrl+Alt+T.",
+        "done": true,
+        "sources": false,
+        "seconds": 65.22
+      },
+      {
+        "timestamp": "2026-10-04T11:33:04.404297602Z",
+        "case": "literal_constraints",
+        "ok": true,
+        "decision": "direct",
+        "candidate": null,
+        "reply": "print(\"app.py\")",
+        "done": true,
+        "sources": false,
+        "seconds": 60.96
+      },
+      {
+        "timestamp": "2026-10-04T11:33:54.519380060Z",
+        "case": "medical_plain",
+        "ok": true,
+        "decision": {
+          "action": "clarify",
+          "span": [
+            7,
+            21
+          ],
+          "candidate": "гистамин, апноэ"
+        },
+        "reply": "Правильно ли я поняла: «гестамин» — это «гистамин», а «эпное» — «апноэ»?"
+      },
+      {
+        "timestamp": "2026-10-04T11:34:03.030505809Z",
+        "case": "finance_typo",
+        "ok": true,
+        "decision": {
+          "action": "direct",
+          "query": ""
+        },
+        "reply": null
+      },
+      {
+        "timestamp": "2026-10-04T11:34:23.029984264Z",
+        "case": "current_search",
+        "ok": true,
+        "decision": {
+          "action": "search",
+          "query": "актуальная стабильная версия Python официальный сайт"
+        },
+        "reply": null
+      }
+    ]
+  },
+  "native": {
+    "commit": "a79e85e105f9d76d418bc48e8d1c9a28ced54d12",
+    "deployment": "e0ac9897-4358-4e8b-a63e-89a43e27cf3b",
+    "status": "SUCCESS",
+    "probes": [
+      {
+        "timestamp": "2026-10-04T11:28:06.215848859Z",
+        "case": "coding",
+        "ok": true,
+        "elapsed_seconds": 26.489642165601254,
+        "first_token_seconds": 24.730787612497807,
+        "text": "def add(a, b):\n    return a + b",
+        "usage": {
+          "completion_tokens": 13,
+          "prompt_tokens": 635,
+          "total_tokens": 648,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        },
+        "reason": null,
+        "provider": "bonsai",
+        "estimated_cost_usd": 0
+      },
+      {
+        "timestamp": "2026-10-04T11:28:07.461644521Z",
+        "case": "russian",
+        "ok": true,
+        "elapsed_seconds": 5.406152158975601,
+        "first_token_seconds": 1.693566009402275,
+        "text": "Переменная в Python — это идентификатор, который ссылается на объект в памяти для последующего доступа к нему.",
+        "usage": {
+          "completion_tokens": 26,
+          "prompt_tokens": 639,
+          "total_tokens": 665,
+          "prompt_tokens_details": {
+            "cached_tokens": 608
+          }
+        },
+        "reason": null,
+        "provider": "bonsai",
+        "estimated_cost_usd": 0
+      }
+    ]
+  },
+  "local_verification": {
+    "python_passed": 199,
+    "python_skipped": 1,
+    "skip_reason": "No isolated PostgreSQL test database; persistent production-schema quotas separately passed the private operator gate.",
+    "node_passed": 10
+  },
+  "initial_failed_candidate": {
+    "commit": "3a2fc54bcd0b44ca4acc7994170ebe7498e9a79f",
+    "deployment": "9df4514d-99db-4189-9c8d-2d80bf995dbe",
+    "status": "FAILED",
+    "reason": "Generic clarification did not restore the likely terms; prevented publication."
+  },
+  "public_screenshot_replay": "request-restoration-public-2026-10-04.json",
+  "limitations": [
+    "Passing these samples does not guarantee correct interpretation of every possible question.",
+    "The CPU worker remains slow; the final public clarification sample took 51.18 seconds.",
+    "Owner Desktop pairing is not established by the synthetic operator gate."
+  ]
+}
