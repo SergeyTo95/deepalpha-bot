@@ -1,0 +1,316 @@
+{
+  "recorded_at": "2026-10-04T13:31:34.881Z",
+  "repository": "SergeyTo95/deepalpha-bot",
+  "scope": "PR 577 preview; recognizable spelling restored before generation with immediate useful answers",
+  "local_verification": {
+    "passed": 234,
+    "skipped": 1,
+    "skip_reason": "No local PostgreSQL test database; deployment gate verifies persistent PostgreSQL quotas"
+  },
+  "gateway_image_verification": {
+    "passed": 201,
+    "logs": [
+      {
+        "time": "2026-10-04T13:12:53.546971931Z",
+        "message": "201 passed in 5.37s\n"
+      }
+    ]
+  },
+  "native": {
+    "id": "c4315f24-1176-4d6f-ba0f-d16746ddade8",
+    "status": "SUCCESS",
+    "sha": "4d413d3b6dbc4d5f77f6ec4fa32c83db9cea1c7f",
+    "adapter_cases": [
+      {
+        "timestamp": "2026-10-04T13:10:58.034267034Z",
+        "case": "coding",
+        "ok": true,
+        "elapsed_seconds": 23.552182440645993,
+        "first_token_seconds": 21.45921025890857,
+        "text": "```python\ndef add(a, b):\n    return a + b\n```",
+        "usage": {
+          "completion_tokens": 18,
+          "prompt_tokens": 596,
+          "total_tokens": 614,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        },
+        "reason": null,
+        "provider": "bonsai",
+        "estimated_cost_usd": 0
+      },
+      {
+        "timestamp": "2026-10-04T13:10:58.034270564Z",
+        "case": "russian",
+        "ok": true,
+        "elapsed_seconds": 4.359583786688745,
+        "first_token_seconds": 1.3842552360147238,
+        "text": "Переменная в Python — это имя, которому можно присвоить значение для хранения и использования данных в программе.",
+        "usage": {
+          "completion_tokens": 23,
+          "prompt_tokens": 600,
+          "total_tokens": 623,
+          "prompt_tokens_details": {
+            "cached_tokens": 569
+          }
+        },
+        "reason": null,
+        "provider": "bonsai",
+        "estimated_cost_usd": 0
+      }
+    ]
+  },
+  "gateway": {
+    "commit": "93a0505665d82328b3427cb909c906b23ab68df3",
+    "deployment_id": "c5da94b1-c265-4afd-87fe-2bb8576ce041",
+    "url": "https://velia-desktop-gateway-deepalpha-bot-pr-577.up.railway.app",
+    "live_browser_sse_cases": [
+      {
+        "timestamp": "2026-10-04T13:15:33.207541375Z",
+        "case": "medical_spacing",
+        "ok": true,
+        "decision": "search",
+        "candidate": "гистамин, апноэ",
+        "query": "weight loss plan asthma sleep apnea histamine intolerance",
+        "source_scope": "official_health",
+        "reply": "Привет! Быстро и безопасно похудеть при астме, апноэ и повышенной чувствительности к гистамину можно только через постепенное снижение калорийного дефицита и улучшение качества сна.\n\n*   **Сон и дыхание:** Улучшение сна критично для снижения веса. При апноэ важно использовать назначенное лечение (например, CPAP), так как недосып повышает аппетит и мешает потере жира [1, 3].\n*   **Питание:** Исключите продукты, провоцирующие приступы астмы или реакции на гистамин. Не вводите жесткие диетические запреты без консультации специалиста.\n*   **Движение:** Выбирайте умеренную активность, не вызывающую одышку. Дыхательные упражнения могут помочь контролировать симптомы.\n*   **Цель:** Снизьте вес постепенно (1–2 кг в неделю). Это безопаснее и эффективнее для улучшения контроля астмы [1, 2].",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [
+          {
+            "title": "Guidelines for the Diagnosis and Management of Asthma",
+            "url": "https://www.nhlbi.nih.gov/sites/default/files/media/docs/asthsumm.pdf"
+          },
+          {
+            "title": "Guidelines for the Diagnosis and Management of Asthma",
+            "url": "https://www.nhlbi.nih.gov/sites/default/files/media/docs/EPR-3_Asthma_Full_Report_2007.pdf"
+          },
+          {
+            "title": "Obesity Education Initiative",
+            "url": "https://www.nhlbi.nih.gov/files/docs/guidelines/ob_gdlns.pdf"
+          }
+        ],
+        "seconds": 122.73
+      },
+      {
+        "timestamp": "2026-10-04T13:16:23.980861602Z",
+        "case": "device_ambiguity",
+        "ok": true,
+        "decision": "clarify",
+        "candidate": null,
+        "query": null,
+        "source_scope": null,
+        "reply": "Уточните, пожалуйста, что вы имеете в виду под «квампер»?",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 43.4
+      },
+      {
+        "timestamp": "2026-10-04T13:16:53.985934986Z",
+        "case": "arithmetic_typo",
+        "ok": true,
+        "decision": "direct",
+        "candidate": "умножить",
+        "query": null,
+        "source_scope": null,
+        "reply": "391",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 35.48
+      },
+      {
+        "timestamp": "2026-10-04T13:18:03.821434786Z",
+        "case": "confirmed_context",
+        "ok": true,
+        "decision": "direct",
+        "candidate": "терминал",
+        "query": null,
+        "source_scope": null,
+        "reply": "Нажми Ctrl+Alt+T.",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 67.61
+      },
+      {
+        "timestamp": "2026-10-04T13:19:23.679481335Z",
+        "case": "finance_typo",
+        "ok": true,
+        "decision": "direct",
+        "candidate": "между выручкой и прибылью",
+        "query": null,
+        "source_scope": null,
+        "reply": "Выручка — это всё деньги, полученные от продаж. Прибыль — это разница между выручкой и затратами на производство или закупку товаров.\n\nПример: Вы продали 100 кофий по 500 рублей. Выручка — 50 000 рублей. Если кофе, чашки и аренда помещения стоили 30 000 рублей, то прибыль составит 20 000 рублей.",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 78.14
+      },
+      {
+        "timestamp": "2026-10-04T13:20:34.372212910Z",
+        "case": "router_typo",
+        "ok": true,
+        "decision": "direct",
+        "candidate": "перезагрузить роутер",
+        "query": null,
+        "source_scope": null,
+        "reply": "Выключите питание роутера, подождите 10–30 секунд и включите его обратно. Это перезапустит устройство без сброса настроек.",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 71.36
+      },
+      {
+        "timestamp": "2026-10-04T13:21:33.807668413Z",
+        "case": "literal_constraints",
+        "ok": true,
+        "decision": "direct",
+        "candidate": null,
+        "query": null,
+        "source_scope": null,
+        "reply": "print(\"app.py\")",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 65.58
+      }
+    ],
+    "live_interpretation_cases": [
+      {
+        "timestamp": "2026-10-04T13:22:24.215818277Z",
+        "case": "medical_plain",
+        "ok": true,
+        "decision": {
+          "action": "search",
+          "query": "weight loss plan asthma obstructive sleep apnea",
+          "source_scope": "official_health",
+          "span": [
+            7,
+            21
+          ],
+          "candidate": "гистамин, апноэ"
+        },
+        "reply": null
+      },
+      {
+        "timestamp": "2026-10-04T13:22:33.037186749Z",
+        "case": "english_spelling",
+        "ok": true,
+        "decision": {
+          "action": "direct",
+          "query": "",
+          "span": [
+            8,
+            14
+          ],
+          "candidate": "revenue"
+        },
+        "reply": null
+      },
+      {
+        "timestamp": "2026-10-04T13:22:52.680962535Z",
+        "case": "current_search",
+        "ok": true,
+        "decision": {
+          "action": "search",
+          "query": "latest stable Python version official site"
+        },
+        "reply": null
+      }
+    ],
+    "status": "SUCCESS",
+    "live_gate": {
+      "timestamp": "2026-10-04T13:27:14.243128678Z",
+      "commit": "93a0505665d82328b3427cb909c906b23ab68df3",
+      "correlated_tool_result": true,
+      "flash_live_harness": true,
+      "flash_paid_fallback": false,
+      "guest_quota": {
+        "accepted": 30,
+        "atomic_limit": 30,
+        "ok": true,
+        "persistent": true,
+        "rejected": 8
+      },
+      "identity_health": true,
+      "identity_rejects_no_token": true,
+      "live_sse": true,
+      "live_tool_call": true,
+      "model_calls": 2,
+      "ok": true,
+      "owner_pairing_verified": false,
+      "request_intent": {
+        "cases": 10,
+        "interpretation_before_search": true,
+        "live_browser_sse_cases": 7,
+        "ok": true,
+        "paid_fallback": false,
+        "resolved_spelling_answers": true,
+        "substantive_medical_answer": true
+      },
+      "web_search": {
+        "model_calls": 0,
+        "ok": true,
+        "persistent_sources": true,
+        "primary_source": true,
+        "source_count": 3
+      }
+    },
+    "harness_receipt": [
+      {
+        "timestamp": "2026-10-04T13:27:14.243114801Z",
+        "ok": true,
+        "rounds": 2,
+        "readTool": true,
+        "persona": true,
+        "declaredTools": 24,
+        "requestCharacters": 23372,
+        "liveModel": true,
+        "ownerPairingVerified": false
+      }
+    ],
+    "public_readiness": {
+      "health": {
+        "status": 200,
+        "ok": true
+      },
+      "page": {
+        "status": 200,
+        "content_type": "text/html"
+      }
+    }
+  },
+  "constraints": {
+    "public_guest_quota_reset": false,
+    "public_guest_replay": false,
+    "account_messages_spent": false,
+    "live_browser_checks_use_isolated_loopback_quota": true,
+    "owner_pairing_verified": false,
+    "production_merge": false
+  },
+  "medical_claims_clinically_validated": false,
+  "prior_gate_failure": {
+    "commit": "a589f6e72012f22172fc8fc7fa46b994dfb17e4c",
+    "deployment_id": "196d502f-05df-4cd9-aa4d-981be5304c51",
+    "case": "router_typo",
+    "status": "FAILED",
+    "reason": "Suggested holding Reset despite the user's explicit no-reset condition; rejected before rollout."
+  },
+  "verification_limits": [
+    "The intent gate verifies recognized wording, complete useful answers, source provenance and explicit task constraints; it does not clinically validate every generated medical statement.",
+    "The actual generated replies are retained for review; this change does not promise perfect language or factual accuracy for every question."
+  ],
+  "observed_model_limitations": [
+    {
+      "case": "medical_spacing",
+      "detail": "The generated sample inferred histamine sensitivity and described 1–2 kg/week as gradual. These clinical details are outside the intent checks and are not accepted as validated medical recommendations."
+    },
+    {
+      "case": "finance_typo",
+      "detail": "The meaning and arithmetic were correct, but some generated Russian wording remained grammatically imperfect."
+    }
+  ]
+}

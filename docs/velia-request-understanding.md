@@ -110,3 +110,19 @@ not reset public quota or spend a user's account messages.
 
 The free CPU worker remains slow. This change does not claim perfect understanding
 of every question or a latency improvement.
+
+The medical fixture qualifies restored wording and a complete task response;
+it does not clinically validate every recommendation. The retained sample still
+includes an inferred histamine sensitivity and a weight-loss rate that the intent
+gate has not validated. Some generated Russian wording also remains imperfect.
+These are limitations of the answer model, not accepted factual-quality results.
+
+The direct-answer preview was deployed on 2026-10-04 with gateway commit
+`93a0505665d82328b3427cb909c906b23ab68df3` (deployment
+`c5da94b1-c265-4afd-87fe-2bb8576ce041`) and native commit
+`4d413d3b6dbc4d5f77f6ec4fa32c83db9cea1c7f` (deployment
+`c4315f24-1176-4d6f-ba0f-d16746ddade8`). Both deployments succeeded.
+The gateway image passed 201 checks; all ten live understanding cases and the
+24-tool, two-round Harness gate passed. Public `/health` and `/` returned HTTP 200.
+The full receipt and actual generated replies are retained in
+[the deployment evidence](verification/request-direct-understanding-deployments-2026-10-04.json).
