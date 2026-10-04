@@ -10,7 +10,7 @@ import threading
 from urllib.parse import urlsplit
 
 import requests
-from velia_request_understanding import understanding_instruction
+from velia_request_understanding import understanding_instruction, clarification_result, clarification_reply
 
 MODEL = "velia-flash"
 PROVIDER = "bonsai"
@@ -124,6 +124,8 @@ def _with_live_context(messages, user_id):
         return copied
     latest = _latest_user_message(copied)
     if not latest:
+        return copied
+    if clarification_reply(latest) is not None:
         return copied
     try:
         from services.velia_plugin_router import resolve_live_plugin_context
@@ -268,6 +270,8 @@ def build_prompt(chat_module, user_id, conversation_id):
                 )
         messages.append({"role": role, "content": content})
 
+    if clarification_reply(_latest_user_message(messages)) is not None:
+        return messages
     if _voice_fast_enabled():
         # Intent routing is local and cheap for ordinary speech. Preserve live
         # weather/search capability only when the existing router actually
@@ -281,6 +285,11 @@ def build_prompt(chat_module, user_id, conversation_id):
 def _generate_once(messages, *, request_id="", on_delta=None):
     if not available():
         return error("flash_unavailable", request_id)
+    if messages and messages[-1].get("role") == "user":
+        prepared = clarification_result(messages[-1].get("content"), provider=PROVIDER,
+            model=MODEL, request_id=request_id, on_delta=on_delta)
+        if prepared is not None:
+            return prepared
     timeout = bounded_int("VELIA_FLASH_TIMEOUT_SECONDS", 180, 15, 300)
     voice_fast = _voice_fast_enabled()
     output_limit = (
