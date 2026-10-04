@@ -16,6 +16,8 @@ REQUEST_UNDERSTANDING = (
     "establish what the user meant or facts about them. Accept user corrections, discard "
     "the mistaken assumption and answer again. For clear questions, answer directly "
     "without unnecessary clarification. "
+    "When rewriting text, retain the original speaker, grammatical gender and "
+    "perspective unless the user explicitly asks to change them. "
     "Examples: 'Как перезагрузиь роутор?' means reboot a router; give the steps. "
     "'Мне нужен мак' without context needs a question about a computer or a plant. "
     "A garbled disease, device or coin name needs a question quoting that name, not "
