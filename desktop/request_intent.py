@@ -23,8 +23,10 @@ INSTRUCTION = (
     "Для восстановленного термина укажи quote=точный фрагмент исходного запроса, "
     "candidate=исправленное написание тех же слов. Исправь все слова фрагмента; "
     "candidate не содержит пояснений, дополнительных диагнозов или новых фактов. "
-    "Если исправление не нужно, quote='', candidate=''. Сохраняй отрицания, числа, "
-    "единицы, даты, цитаты и идентификаторы. Учитывай подтверждения и исправления "
+    "Если исправление не нужно, quote='', candidate=''. "
+    "Узнаваемое имя устройства или программы в другом алфавите не требует "
+    "переименования: сохраняй исходное имя, quote='', candidate=''. "
+    "Сохраняй отрицания, числа, единицы, даты, цитаты и идентификаторы. Учитывай подтверждения и исправления "
     "пользователя, а не прежние догадки ассистента. "
     "action=clarify только если существенный термин вообще непонятен или несколько "
     "правдоподобных смыслов требуют разных ответов. quote=точная непонятная часть, "
@@ -171,10 +173,26 @@ def parse_decision(result, question):
             raise ValueError("invalid_understanding_response")
         # Some planners repeat an already correct literal as its own candidate.
         # It changes no text or facts and needs no restoration handoff or retry.
-        if quote == candidate:
+        if quote.casefold() == candidate.casefold():
             return result
         restored = plausible_restoration(quote, candidate)
         if not restored:
+            # A recognizable device/software name may already be written in
+            # the user's alphabet. Do not replace it with a proposed Latin or
+            # Cyrillic recoding. Keep the exact original; never use this for a
+            # search query, diagnosis, new model number or changed word list.
+            left, right = quote.split(), candidate.split()
+            scripts = lambda word: "latin" if re.fullmatch(r"[A-Za-z]+", word) else "cyrillic" if re.fullmatch(r"[А-Яа-яЁё]+", word) else None
+            recoding = (len(left) == len(right) and 1 <= len(left) <= 4 and len(candidate) <= 128
+                and any(scripts(a) and scripts(b) and scripts(a) != scripts(b) for a, b in zip(left, right))
+                and all(a.casefold() == b.casefold() or scripts(a) and scripts(b) and scripts(a) != scripts(b) for a, b in zip(left, right)))
+            start, end = question.index(quote), question.index(quote) + len(quote)
+            whole_words = not ((start and question[start-1].isalnum() and quote[0].isalnum())
+                or (end < len(question) and question[end].isalnum() and quote[-1].isalnum()))
+            named = any(item.get("kind") in {"device", "software"} and item["status"] == "stated"
+                and item["span"][0] <= start < end <= item["span"][1] for item in context or [])
+            if args["action"] == "direct" and recoding and whole_words and named:
+                return result
             raise ValueError("invalid_understanding_response")
         # Unique independent sound-alike words remain a list, not an invented
         # compound. Only punctuation changes; never override the chosen words.

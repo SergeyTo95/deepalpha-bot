@@ -66,6 +66,23 @@ def test_an_identical_candidate_preserves_the_valid_plan_without_a_restoration(q
         "аллергия на арахис", "нет астмы"]
 
 
+@pytest.mark.parametrize("kind,quote,candidate", [("device", "телефон Самсунг", "телефон Samsung"), ("software", "Файерфокс", "Firefox"), ("device", "Самсунг", "самсунг")])
+def test_nonessential_entity_recoding_keeps_the_original_name_and_unknown_properties(kind, quote, candidate):
+    question = "У меня " + quote + ", модель не знаю. Помоги."
+    result = parse_decision(decision({"action":"direct", "quote":quote, "candidate":candidate, "query":"",
+        "context":[{"quote":quote, "kind":kind, "status":"stated"}, {"quote":"модель не знаю", "kind":"other", "status":"unspecified"}]}), question)
+    assert result["action"] == "direct" and "span" not in result and "candidate" not in result
+    assert [question[row["span"][0]:row["span"][1]] for row in result["context"]] == [quote, "модель не знаю"]
+
+
+@pytest.mark.parametrize("action,kind,candidate", [("search", "device", "Samsung"), ("direct", "condition", "Samsung"),
+    ("direct", "device", "Сони"), ("direct", "device", "Samsung Galaxy S23")])
+def test_entity_recoding_cannot_supply_search_terms_diagnoses_or_a_new_model(action, kind, candidate):
+    with pytest.raises(ValueError):
+        parse_decision(decision({"action":action, "quote":"Самсунг", "candidate":candidate, "query":"Samsung" if action == "search" else "",
+            "context":[{"quote":"Самсунг", "kind":kind, "status":"stated"}]}), "У меня Самсунг")
+
+
 def test_an_identical_candidate_still_cannot_supply_a_quote_absent_from_the_question():
     with pytest.raises(ValueError):
         parse_decision(decision({"action":"direct", "quote":"аллергия", "candidate":"аллергия",
