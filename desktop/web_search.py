@@ -101,26 +101,33 @@ CONTEXT_MARKER = "\n\nКонтекст сообщения пользовател
 
 def grounded_context(question, result, *, compact=False):
     """Render only validated, bounded quotes from the user's original message."""
-    groups = {"stated": [], "unspecified": []}
+    groups = {"stated": [], "unspecified": [], "substance": []}
     for item in result.get("context", []):
         span = item.get("span") if isinstance(item, dict) else None
         status = item.get("status") if isinstance(item, dict) else None
-        if (not isinstance(status, str) or status not in groups or not isinstance(span, list) or len(span) != 2
+        if (not isinstance(status, str) or status not in {"stated", "unspecified"} or not isinstance(span, list) or len(span) != 2
                 or any(type(x) is not int for x in span)
                 or not 0 <= span[0] < span[1] <= len(question) or span[1] - span[0] > 128):
             raise ValueError("invalid_user_context")
-        groups[status].append(json.dumps(question[span[0]:span[1]], ensure_ascii=False))
+        group = "substance" if item.get("kind") == "substance" else status
+        groups[group].append(json.dumps(question[span[0]:span[1]], ensure_ascii=False))
     if not any(groups.values()):
         return ""
     if compact:
         return (CONTEXT_MARKER + "Сообщено: " + "; ".join(groups["stated"]) + ". "
             + "Без пояснения: " + "; ".join(groups["unspecified"]) + ". "
+            + ("Вещество, состояние не указано: " + "; ".join(groups["substance"]) + ". " if groups["substance"] else "")
             + "Личные советы — по сообщённому. Остальное — только условно.")
     lines = ["Цитаты из исходного сообщения; исправленное написание дано в вопросе."]
     if groups["stated"]:
         lines.append("Пользователь явно сообщает: " + "; ".join(groups["stated"]) + ".")
     if groups["unspecified"]:
         lines.append("Названо без пояснения свойства или состояния: " + "; ".join(groups["unspecified"]) + ".")
+    if groups["substance"]:
+        lines.append("Названо вещество: " + "; ".join(groups["substance"]) + ". Это название "
+            "вещества; реакция на него, отклонение показателя или диагноз не сообщены. "
+            "Вещество не добавляется к списку состояний пользователя и не требует "
+            "лечебных пищевых ограничений по одному его упоминанию.")
     lines.append("Для личных рекомендаций опирайся на явно сообщённое и подтверждённый "
         "пользователем контекст. Остальные обстоятельства остаются неизвестными. "
         "Непояснённое упоминание не нужно перечислять в ответе или использовать "

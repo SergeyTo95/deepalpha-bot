@@ -52,6 +52,34 @@ def test_context_preserves_negations_and_explicitly_stated_allergy():
     assert [question[row["span"][0]:row["span"][1]] for row in result["context"]] == ["аллергия на арахис", "нет астмы"]
 
 
+def test_a_substance_mention_cannot_be_promoted_to_a_personal_condition():
+    question = "У меня гестамин эпное и астма."
+    result = parse_decision(decision({"action": "direct", "quote": "гестамин эпное", "candidate": "гистамин, апноэ", "query": "",
+        "context": [{"quote": "гестамин", "kind": "substance", "status": "stated"},
+            {"quote": "эпное", "kind": "condition", "status": "stated"}, {"quote": "астма", "kind": "condition", "status": "stated"}]}), question)
+    assert result["context"][0]["status"] == "unspecified"
+    from desktop.web_search import grounded_context
+    context = grounded_context(question, result)
+    assert 'Пользователь явно сообщает: "эпное"; "астма"' in context
+    assert 'Названо вещество: "гестамин"' in context
+    assert 'Пользователь явно сообщает: "гестамин"' not in context
+
+
+@pytest.mark.parametrize("kind", ["condition", "measurement"])
+def test_an_explicit_reaction_or_measurement_remains_a_reported_fact(kind):
+    question = "Аллергия на железо" if kind == "condition" else "Сывороточное железо 15 мкмоль/л"
+    result = parse_decision(decision({"action": "direct", "quote": "", "candidate": "", "query": "",
+        "context": [{"quote": question, "kind": kind, "status": "stated"}]}), question)
+    assert result["context"][0]["status"] == "stated"
+
+
+@pytest.mark.parametrize("kind", [None, [], "invented_diagnosis"])
+def test_context_kind_is_bounded_to_a_known_semantic_category(kind):
+    with pytest.raises(ValueError):
+        parse_decision(decision({"action": "direct", "quote": "", "query": "",
+            "context": [{"quote": "астма", "kind": kind, "status": "stated"}]}), "У меня астма")
+
+
 def test_health_retrieval_uses_the_main_task_without_changing_named_conditions():
     args = {"action":"search", "quote":"гестамин эпное", "candidate":"гистамин, апноэ",
         "query":"weight loss asthma apnea histamine", "source_scope":"official_health", "task_query":"healthy weight loss advice"}

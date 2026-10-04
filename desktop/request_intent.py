@@ -50,14 +50,23 @@ INSTRUCTION = (
     "без актуальных сведений action=direct, query=''. "
     "В context отдели явно сообщённые личные условия (status=stated) от "
     "упоминаний без пояснения состояния или свойства (status=unspecified). "
+    "kind определяет ТИП понятия после восстановления написания: condition — "
+    "название состояния или реакции; substance — только название вещества без "
+    "описания реакции или измерения; device — устройство/марка; software — "
+    "программа/ОС; measurement — явно указанное измерение; other — другое. "
+    "Название вещества не является названием состояния. Для substance всегда "
+    "status=unspecified: его наличие не описывает состояние пользователя. "
     "quote в context — короткая ДОСЛОВНАЯ цитата последнего сообщения, включая "
     "отрицание; не исправляй её и не добавляй диагноз, причину или модель. "
-    "Например: 'у меня железо, апноэ и астма' — железо unspecified, апноэ и "
-    "астма stated; 'у меня аллергия на железо' — аллергия на железо stated. "
+    "Например: 'у меня железо, апноэ и астма' — железо kind=substance, "
+    "апноэ и астма kind=condition; 'у меня аллергия на железо' — "
+    "целиком 'аллергия на железо' kind=condition, stated. "
     "stated означает сообщённое пользователем, а не проверенный врачом диагноз. "
     "Узнаваемая опечатка в названии сообщённого состояния или свойства тоже "
     "stated: 'у меня астмма' — quote='астмма', status=stated. "
     "В context сохраняй исходное написание; восстановление уже дано в candidate. "
+    "Каждый элемент context описывает одно понятие или одно самостоятельное "
+    "условие; не объединяй название вещества с соседними состояниями. "
     "'Телефон Samsung, модель не знаю' — Телефон Samsung stated, "
     "модель не знаю unspecified. Если личных условий нет, context=[]. "
     "Неясное свойство не мешает ответить на понятную задачу: сохрани его "
@@ -73,10 +82,11 @@ TOOL = {"type": "function", "function": {
         "source_scope": {"type": "string", "enum": ["general", "official_health"], "description": "official_health для медицинских рекомендаций с поиском; иначе general."},
         "query": {"type": "string", "description": "Полный поисковый запрос с существенными условиями только при action=search, иначе пустая строка."},
         "task_query": {"type": "string", "description": "При search: только ОСНОВНАЯ ЗАДАЧА, 2–8 слов, без перечня сопутствующих состояний. Пример: healthy weight loss advice. При direct/clarify: пустая строка."},
-        "context": {"type": "array", "maxItems": 6, "description": "Личные условия только из последнего сообщения. Дословные цитаты: stated — явно названное состояние/свойство, включая узнаваемую опечатку; unspecified — упоминание без пояснения свойства. stated не требует подтверждения врачом. Не дополняй цитату диагнозом. Иначе [].", "items": {
+        "context": {"type": "array", "maxItems": 6, "description": "Личные условия только из последнего сообщения. Дословные цитаты, включая узнаваемую опечатку; тип понятия определяй по восстановленному написанию. Для bare substance всегда unspecified. stated — сообщил пользователь, не проверил врач. Иначе [].", "items": {
             "type": "object", "properties": {"quote": {"type": "string", "maxLength": 128},
+                "kind": {"type": "string", "enum": ["condition", "substance", "device", "software", "measurement", "other"], "description": "Тип понятия: substance — только вещество, не состояние/реакция/измерение; condition — названное состояние или реакция, включая опечатки."},
                 "status": {"type": "string", "enum": ["stated", "unspecified"]}},
-            "required": ["quote", "status"], "additionalProperties": False}}},
+            "required": ["quote", "kind", "status"], "additionalProperties": False}}},
         "required": ["action", "quote", "candidate", "query", "source_scope", "task_query", "context"], "additionalProperties": False}}}
 
 
@@ -86,7 +96,7 @@ def context_spans(values, question):
         raise ValueError("invalid_understanding_response")
     result, seen = [], set()
     for value in values:
-        if (not isinstance(value, dict) or set(value) != {"quote", "status"}
+        if (not isinstance(value, dict) or set(value) not in ({"quote", "status"}, {"quote", "kind", "status"})
                 or not isinstance(value["quote"], str)
                 or not 1 <= len(value["quote"].strip()) <= 128
                 or value["quote"] not in question
@@ -94,12 +104,18 @@ def context_spans(values, question):
                 or value["status"] not in {"stated", "unspecified"}
                 or value["quote"] in seen):
             raise ValueError("invalid_understanding_response")
+        kind = value.get("kind")
+        if "kind" in value and (not isinstance(kind, str) or kind not in {"condition", "substance", "device", "software", "measurement", "other"}):
+            raise ValueError("invalid_understanding_response")
         start = question.index(value["quote"])
         end = start + len(value["quote"])
         if ((start and question[start - 1].isalnum() and value["quote"][0].isalnum())
                 or (end < len(question) and question[end].isalnum() and value["quote"][-1].isalnum())):
             raise ValueError("invalid_understanding_response")
-        result.append({"span": [start, end], "status": value["status"]})
+        item = {"span": [start, end], "status": "unspecified" if kind == "substance" else value["status"]}
+        if kind is not None:
+            item["kind"] = kind
+        result.append(item)
         seen.add(value["quote"])
     return result
 
@@ -171,7 +187,7 @@ async def understand(messages):
     hints = await asyncio.to_thread(spelling_hints, question)
     instruction = INSTRUCTION + ("\nСловарные подсказки (не подтверждённые факты):\n" + json.dumps(hints, ensure_ascii=False) if hints else "")
     payload = {"model": "velia-flash", "messages": [{"role": "system", "content": instruction}] + history,
-        "tools": [TOOL], "tool_choice": "required", "stream": False, "max_tokens": 384,
+        "tools": [TOOL], "tool_choice": "required", "stream": False, "max_tokens": 512,
         "temperature": 0.1, "top_p": 0.8, "top_k": 20, "min_p": 0.05,
         "chat_template_kwargs": {"enable_thinking": False}, "reasoning_format": "deepseek",
         "thinking_budget_tokens": 0, "parallel_tool_calls": False}
