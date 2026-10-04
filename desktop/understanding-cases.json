@@ -93,7 +93,7 @@
         "content": "Сделай его менее офицальным. Только текст."
       }
     ],
-    "criterion": "Uses the previous greeting as the reference, makes it less formal without asking what 'его' means."
+    "criterion": "Uses the previous greeting as the reference, makes it less formal without asking what 'его' means and retains the original feminine speaker."
   },
   {
     "id": "name_ambiguity",
