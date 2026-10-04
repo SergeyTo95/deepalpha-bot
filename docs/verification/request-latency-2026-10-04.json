@@ -1,0 +1,1394 @@
+{
+  "date": "2026-10-04",
+  "scope": "PR577 preview only",
+  "status": "qualified_prompt_state_cache_8_threads",
+  "baseline": {
+    "worker_threads": 8,
+    "prompt_cache_mib": 0,
+    "gateway": {
+      "code": "4668a9ed7d5a2c7844715b8aecf4d631c754befd",
+      "deployment": "b9efb92a-c191-4938-8f35-351d8c9d5af2",
+      "status": "SUCCESS"
+    },
+    "cases": [
+      {
+        "case": "medical_spacing",
+        "ok": true,
+        "decision": "search",
+        "candidate": "гистамин, апноэ",
+        "query": "healthy weight loss advice",
+        "source_scope": "official_health",
+        "context": [
+          {
+            "span": [
+              69,
+              77
+            ],
+            "status": "unspecified",
+            "kind": "substance"
+          },
+          {
+            "span": [
+              78,
+              83
+            ],
+            "status": "stated",
+            "kind": "condition"
+          },
+          {
+            "span": [
+              86,
+              91
+            ],
+            "status": "stated",
+            "kind": "condition"
+          }
+        ],
+        "reply": "Привет! С учётом астмы и апноэ «быстрое» похудение без контроля врача опасно: резкие дефициты и нагрузки могут ухудшить дыхание.\n\nОбщие шаги: ешьте меньше, будьте активнее, выбирайте продукты с меньшим содержанием жиров и добавленных сахаров, следите за порциями. [1] [2]\n\nДвижение: начните с лёгких прогулок, которые не провоцируют одышку; при апноэ важна работа над массой тела, но без резких нагрузок. [2] [3]\n\nКонтроль: ведите дневник питания и самочувствия, чтобы врач мог скорректировать план. [3]\n\nДля точного плана нужны данные о вашем лечении и переносимости продуктов.",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [
+          {
+            "title": "8 tips for healthy eating - NHS",
+            "url": "https://www.nhs.uk/live-well/eat-well/how-to-eat-a-balanced-diet/eight-tips-for-healthy-eating"
+          },
+          {
+            "title": "[PDF] Facts About Healthy Weight - nhlbi",
+            "url": "https://www.nhlbi.nih.gov/sites/default/files/publications/06-5830.pdf"
+          },
+          {
+            "title": "Tips for Keeping Weight Off | Healthy Weight and Growth | CDC",
+            "url": "https://www.cdc.gov/healthy-weight-growth/losing-weight/keeping-it-off.html"
+          }
+        ],
+        "seconds": 229.09,
+        "timestamp": "2026-10-04T19:33:07.416581960Z"
+      },
+      {
+        "case": "device_ambiguity",
+        "ok": true,
+        "decision": "clarify",
+        "candidate": null,
+        "query": null,
+        "source_scope": null,
+        "context": [],
+        "reply": "Уточните, пожалуйста, что вы имеете в виду под «квампер»?",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 71.9,
+        "timestamp": "2026-10-04T19:34:27.618100336Z"
+      },
+      {
+        "case": "arithmetic_typo",
+        "ok": true,
+        "decision": "direct",
+        "candidate": "умножить",
+        "query": null,
+        "source_scope": null,
+        "context": [],
+        "reply": "391",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 40.09,
+        "timestamp": "2026-10-04T19:35:07.699999509Z"
+      },
+      {
+        "case": "confirmed_context",
+        "ok": true,
+        "decision": "direct",
+        "candidate": "терминал",
+        "query": null,
+        "source_scope": null,
+        "context": [],
+        "reply": "Нажми Ctrl+Alt+T.",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 98.76,
+        "timestamp": "2026-10-04T19:36:38.065220242Z"
+      },
+      {
+        "case": "finance_typo",
+        "ok": true,
+        "decision": "direct",
+        "candidate": "между выручкой и прибылью",
+        "query": null,
+        "source_scope": null,
+        "context": [],
+        "reply": "Выручка — это все деньги, которые ты получил за продажу товаров или услуг. Прибыль — это то, что осталось после вычета всех расходов.\n\nПростой пример: ты продал 10 торт по 1000 рублей. Твоя выручка — 10 000 рублей. Если на ингредиенты и упаковку ты потратил 4 000 рублей, то твоя прибыль — 6 000 рублей.",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 109.66,
+        "timestamp": "2026-10-04T19:38:28.350830404Z"
+      },
+      {
+        "case": "router_typo",
+        "ok": true,
+        "decision": "direct",
+        "candidate": "перезагрузить роутер",
+        "query": null,
+        "source_scope": null,
+        "context": [],
+        "reply": "Отключите питание роутера, подождите 10–15 секунд и включите его обратно. Это перезагрузит устройство без сброса настроек.",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 102.05,
+        "timestamp": "2026-10-04T19:40:18.262901263Z"
+      },
+      {
+        "case": "literal_constraints",
+        "ok": true,
+        "decision": "direct",
+        "candidate": null,
+        "query": null,
+        "source_scope": null,
+        "context": [],
+        "reply": "print(\"app.py\")",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 98.13,
+        "timestamp": "2026-10-04T19:41:48.298494876Z"
+      },
+      {
+        "case": "unspecified_device_model",
+        "ok": true,
+        "decision": "direct",
+        "candidate": null,
+        "query": null,
+        "source_scope": null,
+        "context": [
+          {
+            "span": [
+              7,
+              22
+            ],
+            "status": "stated",
+            "kind": "device"
+          },
+          {
+            "span": [
+              24,
+              38
+            ],
+            "status": "unspecified",
+            "kind": "other"
+          }
+        ],
+        "reply": "Нажмите и удерживайте одновременно кнопки Громкость вниз и Стороннюю (Power) на 1–2 секунды. Экран мигнёт, и скриншот сохранится в Галерее.",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 157.12,
+        "timestamp": "2026-10-04T19:44:28.417172545Z"
+      }
+    ]
+  },
+  "cache_only_8_threads": {
+    "status": "SUCCESS",
+    "worker": {
+      "id": "52f812c5-d1b1-45e5-a9bc-caf18a7dbac7",
+      "status": "SUCCESS",
+      "code": "eb8e7a67a7548968fef62a5fe609b4e5739b36c3"
+    },
+    "gateway": {
+      "id": "c54a7d52-fbef-4762-80a7-d616fae7f29a",
+      "status": "SUCCESS",
+      "code": "ffaf79fefbc4bdea13ba9eb1977d1f656e86ddbd"
+    },
+    "threads": 8,
+    "prompt_cache_mib": 4096,
+    "live_browser_cases": [
+      {
+        "case": "medical_spacing",
+        "ok": true,
+        "decision": "search",
+        "candidate": "гистамин, апноэ",
+        "query": "healthy weight loss advice",
+        "source_scope": "official_health",
+        "context": [
+          {
+            "span": [
+              69,
+              77
+            ],
+            "status": "unspecified",
+            "kind": "substance"
+          },
+          {
+            "span": [
+              78,
+              83
+            ],
+            "status": "stated",
+            "kind": "condition"
+          },
+          {
+            "span": [
+              86,
+              91
+            ],
+            "status": "stated",
+            "kind": "condition"
+          }
+        ],
+        "reply": "Привет! При астме и апноэ быстрый и безопасный путь к похудению — постепенные изменения питания и активности, согласованные с врачом.\n\nВ питании сократите порции, добавьте овощи и белки, ограничьте сладкие напитки и быстрые углеводы. [1] [2]\n\nВ движении начните с коротких прогулок или лёгких упражнений, которые не вызывают одышки, и увеличивайте нагрузку постепенно. [2] [3]\n\nУлучшите качество сна, так как апноэ может мешать восстановлению и увеличивать аппетит. [3]\n\nНе назначайте себе строгие диеты или интенсивные тренировки без консультации с врачом, учитывая астму и гистамин.",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [
+          {
+            "title": "8 tips for healthy eating - NHS",
+            "url": "https://www.nhs.uk/live-well/eat-well/how-to-eat-a-balanced-diet/eight-tips-for-healthy-eating"
+          },
+          {
+            "title": "[PDF] Facts About Healthy Weight - nhlbi",
+            "url": "https://www.nhlbi.nih.gov/sites/default/files/publications/06-5830.pdf"
+          },
+          {
+            "title": "How to lose weight | Weight loss tips and advice - Better Health - NHS",
+            "url": "https://www.nhs.uk/better-health/lose-weight"
+          }
+        ],
+        "seconds": 294.01,
+        "first_text_seconds": 294.01,
+        "intent_seconds": 40.11,
+        "search_seconds": 0.29,
+        "source_snapshot_reused": false,
+        "timestamp": "2026-10-04T21:00:50.841647147Z"
+      },
+      {
+        "case": "device_ambiguity",
+        "ok": true,
+        "decision": "clarify",
+        "candidate": null,
+        "query": null,
+        "source_scope": null,
+        "context": [],
+        "reply": "Уточните, пожалуйста, что вы имеете в виду под «квампер»?",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 20.6,
+        "first_text_seconds": 20.59,
+        "intent_seconds": 20.54,
+        "search_seconds": 0,
+        "source_snapshot_reused": false,
+        "timestamp": "2026-10-04T21:01:12.282160307Z"
+      },
+      {
+        "case": "arithmetic_typo",
+        "ok": true,
+        "decision": "direct",
+        "candidate": "умножить",
+        "query": null,
+        "source_scope": null,
+        "context": [],
+        "reply": "391",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 25.53,
+        "first_text_seconds": 25.09,
+        "intent_seconds": 22.99,
+        "search_seconds": 0,
+        "source_snapshot_reused": false,
+        "timestamp": "2026-10-04T21:01:32.131195246Z"
+      },
+      {
+        "case": "confirmed_context",
+        "ok": true,
+        "decision": "direct",
+        "candidate": "терминал",
+        "query": null,
+        "source_scope": null,
+        "context": [],
+        "reply": "Нажми Ctrl+Alt+T.",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 27.81,
+        "first_text_seconds": 26.44,
+        "intent_seconds": 23.11,
+        "search_seconds": 0,
+        "source_snapshot_reused": false,
+        "timestamp": "2026-10-04T21:02:01.929518289Z"
+      },
+      {
+        "case": "finance_typo",
+        "ok": true,
+        "decision": "direct",
+        "candidate": "между выручкой и прибылью",
+        "query": null,
+        "source_scope": null,
+        "context": [],
+        "reply": "Выручка — это всё, что вы получили от продаж. Прибыль — то, что осталось после вычета всех расходов.\n\nПример: вы продали 10 кружек по 1000 ₽.\n*   **Выручка:** 10 000 ₽.\n*   **Расходы:** 6000 ₽ (закупка, доставка, налог).\n*   **Прибыль:** 4000 ₽ (10 000 − 6000).",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 46.37,
+        "first_text_seconds": 27.24,
+        "intent_seconds": 24.84,
+        "search_seconds": 0,
+        "source_snapshot_reused": false,
+        "timestamp": "2026-10-04T21:02:41.644727552Z"
+      },
+      {
+        "case": "router_typo",
+        "ok": true,
+        "decision": "direct",
+        "candidate": "перезагрузить роутер",
+        "query": null,
+        "source_scope": null,
+        "context": [],
+        "reply": "Выключите роутер из розетки на 10–30 секунд, затем включите его обратно. Это перезагрузит устройство без сброса настроек.",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 32.34,
+        "first_text_seconds": 26.53,
+        "intent_seconds": 24.59,
+        "search_seconds": 0,
+        "source_snapshot_reused": false,
+        "timestamp": "2026-10-04T21:03:22.499509872Z"
+      },
+      {
+        "case": "literal_constraints",
+        "ok": true,
+        "decision": "direct",
+        "candidate": null,
+        "query": null,
+        "source_scope": null,
+        "context": [],
+        "reply": "print(\"app.py\")",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 22.6,
+        "first_text_seconds": 21.82,
+        "intent_seconds": 18.91,
+        "search_seconds": 0,
+        "source_snapshot_reused": false,
+        "timestamp": "2026-10-04T21:03:43.060142909Z"
+      },
+      {
+        "case": "unspecified_device_model",
+        "ok": true,
+        "decision": "direct",
+        "candidate": null,
+        "query": null,
+        "source_scope": null,
+        "context": [
+          {
+            "span": [
+              7,
+              22
+            ],
+            "status": "stated",
+            "kind": "device"
+          },
+          {
+            "span": [
+              24,
+              38
+            ],
+            "status": "unspecified",
+            "kind": "other"
+          }
+        ],
+        "reply": "Нажмите и удерживайте боковую кнопку (Power) и кнопку уменьшения громкости одновременно. Отпустите, когда появится звуковой сигнал или уведомление.",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [],
+        "seconds": 103.87,
+        "first_text_seconds": 103.87,
+        "intent_seconds": 25.87,
+        "search_seconds": 0,
+        "source_snapshot_reused": false,
+        "timestamp": "2026-10-04T21:05:28.866719008Z"
+      },
+      {
+        "case": "medical_spacing_warm",
+        "ok": true,
+        "decision": "search",
+        "candidate": "гистамин, апноэ",
+        "query": "healthy weight loss advice",
+        "source_scope": "official_health",
+        "context": [
+          {
+            "span": [
+              69,
+              77
+            ],
+            "status": "unspecified",
+            "kind": "substance"
+          },
+          {
+            "span": [
+              78,
+              83
+            ],
+            "status": "stated",
+            "kind": "condition"
+          },
+          {
+            "span": [
+              86,
+              91
+            ],
+            "status": "stated",
+            "kind": "condition"
+          }
+        ],
+        "reply": "Привет! С астмой и апноэ «быстро» похудеть без риска сложно. Безопасный путь — умеренное снижение калорий, регулярная физическая активность и контроль сна. Конкретный план лучше согласовать с врачом. [2] [3]\n\nВ питании: меньше порций, больше овощей и белка, меньше сладких напитков и добавленных сахаров. Избегайте интенсивных нагрузок, если они вызывают одышку или ухудшают сон. [1] [2]\n\nДвижение: начните с коротких прогулок и лёгкой растяжки. Апноэ может снижать энергию и влиять на аппетит, поэтому важно следить за самочувствием. [3]\n\nСон: улучшите качество сна, так как апноэ может влиять на энергию и аппетит. Если есть одышка или обострение астмы, остановитесь и обратитесь к врачу. [3]",
+        "finish_reason": "stop",
+        "done": true,
+        "sources": [
+          {
+            "title": "8 tips for healthy eating - NHS",
+            "url": "https://www.nhs.uk/live-well/eat-well/how-to-eat-a-balanced-diet/eight-tips-for-healthy-eating"
+          },
+          {
+            "title": "[PDF] Facts About Healthy Weight - nhlbi",
+            "url": "https://www.nhlbi.nih.gov/sites/default/files/publications/06-5830.pdf"
+          },
+          {
+            "title": "How to lose weight | Weight loss tips and advice - Better Health - NHS",
+            "url": "https://www.nhs.uk/better-health/lose-weight"
+          }
+        ],
+        "seconds": 239.1,
+        "first_text_seconds": 239.1,
+        "intent_seconds": 40.92,
+        "search_seconds": 0,
+        "source_snapshot_reused": true,
+        "timestamp": "2026-10-04T21:09:22.320127801Z"
+      }
+    ],
+    "live_intent_cases": [
+      {
+        "case": "unspecified_device_model",
+        "ok": true,
+        "decision": {
+          "action": "direct",
+          "query": "",
+          "context": [
+            {
+              "span": [
+                7,
+                22
+              ],
+              "status": "stated",
+              "kind": "device"
+            },
+            {
+              "span": [
+                24,
+                38
+              ],
+              "status": "unspecified",
+              "kind": "other"
+            }
+          ]
+        },
+        "reply": null,
+        "timestamp": "2026-10-04T20:53:55.507150985Z"
+      },
+      {
+        "case": "stated_allergy",
+        "ok": true,
+        "decision": {
+          "action": "search",
+          "query": "general nutrition advice",
+          "context": [
+            {
+              "span": [
+                7,
+                25
+              ],
+              "status": "stated",
+              "kind": "condition"
+            },
+            {
+              "span": [
+                30,
+                39
+              ],
+              "status": "stated",
+              "kind": "condition"
+            }
+          ],
+          "source_scope": "official_health"
+        },
+        "reply": null,
+        "timestamp": "2026-10-04T20:54:24.993189730Z"
+      },
+      {
+        "case": "medical_plain",
+        "ok": true,
+        "decision": {
+          "action": "search",
+          "query": "healthy weight loss advice",
+          "context": [
+            {
+              "span": [
+                7,
+                15
+              ],
+              "status": "unspecified",
+              "kind": "substance"
+            },
+            {
+              "span": [
+                16,
+                21
+              ],
+              "status": "stated",
+              "kind": "condition"
+            },
+            {
+              "span": [
+                24,
+                29
+              ],
+              "status": "stated",
+              "kind": "condition"
+            }
+          ],
+          "source_scope": "official_health",
+          "span": [
+            7,
+            21
+          ],
+          "candidate": "гистамин, апноэ"
+        },
+        "reply": null,
+        "timestamp": "2026-10-04T20:55:06.727519824Z"
+      },
+      {
+        "case": "english_spelling",
+        "ok": true,
+        "decision": {
+          "action": "direct",
+          "query": "",
+          "context": [],
+          "span": [
+            8,
+            14
+          ],
+          "candidate": "revenue"
+        },
+        "reply": null,
+        "timestamp": "2026-10-04T20:55:26.731895835Z"
+      },
+      {
+        "case": "current_search",
+        "ok": true,
+        "decision": {
+          "action": "search",
+          "query": "latest stable Python version official site",
+          "context": []
+        },
+        "reply": null,
+        "timestamp": "2026-10-04T20:55:55.933054433Z"
+      }
+    ],
+    "live_gateway_gate": {
+      "commit": "ffaf79fefbc4bdea13ba9eb1977d1f656e86ddbd",
+      "correlated_tool_result": true,
+      "flash_live_harness": true,
+      "flash_paid_fallback": false,
+      "guest_quota": {
+        "accepted": 30,
+        "atomic_limit": 30,
+        "ok": true,
+        "persistent": true,
+        "rejected": 8
+      },
+      "identity_health": true,
+      "identity_rejects_no_token": true,
+      "live_sse": true,
+      "live_tool_call": true,
+      "model_calls": 2,
+      "ok": true,
+      "owner_pairing_verified": false,
+      "request_intent": {
+        "cases": 14,
+        "interpretation_before_search": true,
+        "live_browser_sse_cases": 9,
+        "ok": true,
+        "paid_fallback": false,
+        "personal_context_grounded": true,
+        "resolved_spelling_answers": true,
+        "substantive_medical_answer": true
+      },
+      "web_search": {
+        "model_calls": 0,
+        "ok": true,
+        "persistent_sources": true,
+        "primary_source": true,
+        "source_count": 3
+      },
+      "timestamp": "2026-10-04T21:15:00.873594479Z"
+    },
+    "live_harness_gate": {
+      "ok": true,
+      "rounds": 2,
+      "readTool": true,
+      "persona": true,
+      "declaredTools": 24,
+      "requestCharacters": 23372,
+      "liveModel": true,
+      "ownerPairingVerified": false,
+      "timestamp": "2026-10-04T21:15:00.873587607Z"
+    },
+    "worker_metrics": [
+      {
+        "measurement": "CPU_USAGE",
+        "current": 0,
+        "average": 4.0896100207650266,
+        "min": 0,
+        "max": 9.410267216666666,
+        "sampleCount": 61
+      },
+      {
+        "measurement": "CPU_LIMIT",
+        "current": 24,
+        "average": 24,
+        "min": 24,
+        "max": 24,
+        "sampleCount": 61
+      },
+      {
+        "measurement": "MEMORY_USAGE_GB",
+        "current": 5.63595264,
+        "average": 2.7622605135737697,
+        "min": 0.86155264,
+        "max": 5.63595264,
+        "sampleCount": 61
+      },
+      {
+        "measurement": "MEMORY_LIMIT_GB",
+        "current": 24,
+        "average": 24,
+        "min": 24,
+        "max": 24,
+        "sampleCount": 61
+      }
+    ],
+    "build_receipt": [
+      {
+        "timestamp": "2026-10-04T20:51:26.625480925Z",
+        "severity": "info",
+        "message": "272 passed in 6.64s\n",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"info\""
+          },
+          {
+            "key": "source",
+            "value": "\"buildkit\""
+          },
+          {
+            "key": "type",
+            "value": "\"log\""
+          },
+          {
+            "key": "vertex",
+            "value": "\"sha256:a1fad91360950bcc0c8ff8e45356f3dcdc13ecf963b74eba0c5613dd268f5915\""
+          },
+          {
+            "key": "stream",
+            "value": "1"
+          },
+          {
+            "key": "data",
+            "value": "\"MjcyIHBhc3NlZCBpbiA2LjY0cwo=\""
+          },
+          {
+            "key": "timestamp",
+            "value": "\"2026-10-04T20:51:26.625298669Z\""
+          }
+        ]
+      }
+    ]
+  },
+  "changes": {
+    "model_weights": "unchanged",
+    "model_revision": "6ed5e12bf84b7a63069882c91dd9e9218647d17b",
+    "model_sha256": "3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1",
+    "runtime_commit": "01ae597e3f7d4742909e1e831abb12fe3d24b2cf",
+    "source_search": "unchanged",
+    "output_token_limits": "unchanged",
+    "answer_review": "retained; same two-call maximum",
+    "cpu_memory_service_limits": "unchanged at 24 CPU / 24 GiB",
+    "prompt_cache_mib": 4096,
+    "worker_cpu_threads_trial": 16,
+    "temperature": 0.3,
+    "top_p": 0.8,
+    "top_k": 20,
+    "min_p": 0,
+    "presence_penalty": 0,
+    "parallel": 1,
+    "context_tokens": 8192,
+    "output_tokens": 512,
+    "worker_cpu_threads_final": 8
+  },
+  "measurement_limits": [
+    "Single sequential fixture run; not a production latency distribution.",
+    "The warm medical fixture reuses exactly the original source snapshot only in the private operator probe; production search stays fresh.",
+    "Cache-only 8-thread run improved ordinary questions but not medical total latency relative to the previous baseline.",
+    "Cached token state does not cache or replay final answers; new output is generated and reviewed.",
+    "Passing these probes is not a clinical certification or a guarantee for every question.",
+    "The 16-thread result is one failed trial, not proof that all hosts or workloads perform worse at 16 threads."
+  ],
+  "rejected_16_thread_trial": {
+    "gateway": {
+      "id": "2fdc57a1-48cd-4444-87a4-de1fd67b22d4",
+      "status": "FAILED",
+      "code": "e7c58ee02dc636a90157f87f6872e43335bb2ae1"
+    },
+    "worker": {
+      "id": "f53cf40f-8790-4d57-914b-e8e523a3381a",
+      "status": "SUCCESS",
+      "code": "3c8b8f54b1978074929210df4757b9061af8888b"
+    },
+    "reason": "16-thread trial processed the 644-token native coding prompt at 3.56 tokens/sec, timed out at 180s; browser intent queued behind it timed out. Reject and restore 8 threads.",
+    "worker_logs": [
+      {
+        "timestamp": "2026-10-04T21:24:06.792940338Z",
+        "severity": "error",
+        "message": "0.00.036.150 I srv          init: The UI is disabled",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:24:06.792949194Z",
+        "severity": "error",
+        "message": "0.00.036.150 I srv          init: Use --ui/--no-ui (or deprecated --webui/--no-webui) to enable/disable",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:24:06.792988264Z",
+        "severity": "error",
+        "message": "0.00.037.755 I srv    load_model: loading model '/opt/bonsai/model.gguf'",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:24:10.015232758Z",
+        "severity": "error",
+        "message": "0.04.935.336 I cmn          init: llama threadpool init, n_threads = 16",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:25:21.380288123Z",
+        "severity": "error",
+        "message": "1.10.905.836 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 8192, kv_unified = 'false'",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:25:21.380294996Z",
+        "severity": "error",
+        "message": "1.10.917.687 I srv          init: chat template supports preserving reasoning, consider enabling it via --reasoning-preserve",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:25:21.380301672Z",
+        "severity": "error",
+        "message": "1.10.918.039 I srv  llama_server: model loaded",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:25:21.380307946Z",
+        "severity": "error",
+        "message": "1.10.918.046 I srv  llama_server: listening on http://[::]:8080",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:25:21.380314098Z",
+        "severity": "error",
+        "message": "1.10.918.047 W srv  llama_server: NOTICE: server default port will be changed to :9931 in a future release",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:25:21.380320683Z",
+        "severity": "error",
+        "message": "1.10.918.048 W srv  llama_server:         ref: https://github.com/ggml-org/llama.cpp/pull/26508",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:26:13.683609345Z",
+        "severity": "error",
+        "message": "2.05.918.284 I slot get_availabl: id  0 | task -1 | selected slot by LRU, t_last = -1",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:26:13.683618920Z",
+        "severity": "error",
+        "message": "2.05.918.525 I slot launch_slot_: id  0 | task 0 | processing task, is_child = 0",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:27:36.331792267Z",
+        "severity": "error",
+        "message": "3.31.752.456 I slot print_timing: id  0 | task 0 | prompt processing, n_tokens =    256, progress = 0.40, t =  85.83 s / 2.98 tokens per second",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:28:59.334611054Z",
+        "severity": "error",
+        "message": "4.45.336.133 I slot print_timing: id  0 | task 0 | prompt processing, n_tokens =    508, progress = 0.79, t = 159.42 s / 3.19 tokens per second",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:28:59.334620308Z",
+        "severity": "error",
+        "message": "4.52.707.120 W srv          stop: cancel task, id_task = 2",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:28:59.334627180Z",
+        "severity": "error",
+        "message": "4.53.592.905 I slot print_timing: id  0 | task 0 | prompt processing, n_tokens =    613, progress = 0.96, t = 167.67 s / 3.66 tokens per second",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:29:09.031288857Z",
+        "severity": "error",
+        "message": "5.04.697.055 I slot print_timing: id  0 | task 0 | prompt processing, n_tokens =    636, progress = 0.99, t = 178.78 s / 3.56 tokens per second",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:29:10.894935983Z",
+        "severity": "error",
+        "message": "5.06.569.578 W srv          stop: cancel task, id_task = 0",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:29:12.094903821Z",
+        "severity": "error",
+        "message": "5.07.007.266 I slot      release: id  0 | task 0 | stop processing: n_tokens = 644, truncated = 0",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:29:12.094911915Z",
+        "severity": "error",
+        "message": "5.07.007.297 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.957 (> 0.100 thold), f_keep = 0.957",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:29:12.094919684Z",
+        "severity": "error",
+        "message": "5.07.007.443 I slot launch_slot_: id  0 | task 11 | processing task, is_child = 0",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      }
+    ],
+    "native_logs": [
+      {
+        "timestamp": "2026-10-04T21:29:11.346893205Z",
+        "severity": "info",
+        "message": "VELIA_FLASH_ADAPTER_PROBE {\"case\": \"coding\", \"ok\": false, \"elapsed_seconds\": 180.35041519347578, \"first_token_seconds\": 179.54365023225546, \"text\": \"\", \"usage\": null, \"reason\": \"flash_timeout\", \"provider\": \"bonsai\", \"estimated_cost_usd\": 0.0}",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"info\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:29:31.355333295Z",
+        "severity": "info",
+        "message": "VELIA_FLASH_ADAPTER_PROBE {\"case\": \"russian\", \"ok\": true, \"elapsed_seconds\": 12.08187651913613, \"first_token_seconds\": 3.6092248614877462, \"text\": \"Переменная в Python — это имя, привязанное к значению, которое можно использовать и изменять в программе.\", \"usage\": {\"completion_tokens\": 26, \"prompt_tokens\": 644, \"total_tokens\": 670, \"prompt_tokens_details\": {\"cached_tokens\": 613}}, \"reason\": null, \"provider\": \"bonsai\", \"estimated_cost_usd\": 0.0}",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"info\""
+          }
+        ]
+      }
+    ]
+  },
+  "restored_configuration": {
+    "worker": {
+      "id": "a72e739c-a9c1-479f-838f-1f71155955f1",
+      "status": "SUCCESS",
+      "code": "3c8b8f54b1978074929210df4757b9061af8888b"
+    },
+    "native": {
+      "id": "39addd15-4bb1-4801-aa6e-1b51421497c2",
+      "status": "SUCCESS",
+      "code": "3c8b8f54b1978074929210df4757b9061af8888b"
+    },
+    "cpu_threads": 8,
+    "prompt_cache_mib": 4096,
+    "startup_logs": [
+      {
+        "timestamp": "2026-10-04T21:33:26.661106041Z",
+        "severity": "error",
+        "message": "warning: no usable GPU found, --gpu-layers option will be ignored",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:33:26.661109731Z",
+        "severity": "error",
+        "message": "warning: one possible reason is that llama.cpp was compiled without GPU support",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:33:26.661113281Z",
+        "severity": "error",
+        "message": "warning: consult docs/build.md for compilation instructions",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:33:26.661116361Z",
+        "severity": "error",
+        "message": "0.00.021.976 W Setting 'enable_thinking' via --chat-template-kwargs is deprecated. Use --reasoning on / --reasoning off instead.",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:33:26.661119421Z",
+        "severity": "error",
+        "message": "0.00.022.078 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:33:26.661123031Z",
+        "severity": "error",
+        "message": "0.00.022.209 I srv          init: The UI is disabled",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:33:26.661126031Z",
+        "severity": "error",
+        "message": "0.00.022.211 I srv          init: Use --ui/--no-ui (or deprecated --webui/--no-webui) to enable/disable",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:33:26.661129931Z",
+        "severity": "error",
+        "message": "0.00.023.533 I srv    load_model: loading model '/opt/bonsai/model.gguf'",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:33:26.987627845Z",
+        "severity": "info",
+        "message": "Starting Container",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"info\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:33:31.331180996Z",
+        "severity": "error",
+        "message": "0.04.761.268 I cmn          init: llama threadpool init, n_threads = 8",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:33:31.859134663Z",
+        "severity": "error",
+        "message": "0.05.212.373 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 8192, kv_unified = 'false'",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:33:31.859137723Z",
+        "severity": "error",
+        "message": "0.05.215.769 I srv          init: chat template supports preserving reasoning, consider enabling it via --reasoning-preserve",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:33:31.859140823Z",
+        "severity": "error",
+        "message": "0.05.215.829 I srv  llama_server: model loaded",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:33:31.859144243Z",
+        "severity": "error",
+        "message": "0.05.215.836 I srv  llama_server: listening on http://[::]:8080",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:33:31.859146943Z",
+        "severity": "error",
+        "message": "0.05.215.837 W srv  llama_server: NOTICE: server default port will be changed to :9931 in a future release",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:33:31.859150173Z",
+        "severity": "error",
+        "message": "0.05.215.837 W srv  llama_server:         ref: https://github.com/ggml-org/llama.cpp/pull/26508",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      }
+    ],
+    "native_probes": [
+      {
+        "case": "coding",
+        "ok": true,
+        "elapsed_seconds": 23.627034223638475,
+        "first_token_seconds": 21.71626784838736,
+        "text": "```python\ndef add(a, b):\n    return a + b\n```",
+        "usage": {
+          "completion_tokens": 18,
+          "prompt_tokens": 640,
+          "total_tokens": 658,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        },
+        "reason": null,
+        "provider": "bonsai",
+        "estimated_cost_usd": 0,
+        "timestamp": "2026-10-04T21:34:54.631138230Z"
+      },
+      {
+        "case": "russian",
+        "ok": true,
+        "elapsed_seconds": 4.3875403283163905,
+        "first_token_seconds": 1.451761431992054,
+        "text": "Переменная в Python — это имя, привязанное к значению, которое можно использовать и изменять в программе.",
+        "usage": {
+          "completion_tokens": 26,
+          "prompt_tokens": 644,
+          "total_tokens": 670,
+          "prompt_tokens_details": {
+            "cached_tokens": 613
+          }
+        },
+        "reason": null,
+        "provider": "bonsai",
+        "estimated_cost_usd": 0,
+        "timestamp": "2026-10-04T21:34:54.631143680Z"
+      }
+    ],
+    "prefill_timing_logs": [
+      {
+        "timestamp": "2026-10-04T21:34:48.121858767Z",
+        "severity": "error",
+        "message": "1.21.507.020 I slot print_timing: id  0 | task 0 | prompt eval time =   21688.96 ms /   640 tokens (   33.89 ms per token,    29.51 tokens per second)",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:34:48.121861937Z",
+        "severity": "error",
+        "message": "1.21.507.028 I slot print_timing: id  0 | task 0 |        eval time =    1910.55 ms /    18 tokens (  112.39 ms per token,     8.90 tokens per second)",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:34:52.580676133Z",
+        "severity": "error",
+        "message": "1.25.893.189 I slot print_timing: id  0 | task 23 | prompt eval time =    1422.72 ms /    31 tokens (   45.89 ms per token,    21.79 tokens per second)",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      },
+      {
+        "timestamp": "2026-10-04T21:34:52.580684903Z",
+        "severity": "error",
+        "message": "1.25.893.206 I slot print_timing: id  0 | task 23 |        eval time =    2933.61 ms /    26 tokens (  117.34 ms per token,     8.52 tokens per second)",
+        "attributes": [
+          {
+            "key": "level",
+            "value": "\"error\""
+          }
+        ]
+      }
+    ]
+  },
+  "comparison": [
+    {
+      "case": "medical_spacing",
+      "before_seconds": 229.09,
+      "after_seconds": 294.01,
+      "after_first_text_seconds": 294.01,
+      "speedup": 0.78,
+      "quality_ok": true
+    },
+    {
+      "case": "device_ambiguity",
+      "before_seconds": 71.9,
+      "after_seconds": 20.6,
+      "after_first_text_seconds": 20.59,
+      "speedup": 3.49,
+      "quality_ok": true
+    },
+    {
+      "case": "arithmetic_typo",
+      "before_seconds": 40.09,
+      "after_seconds": 25.53,
+      "after_first_text_seconds": 25.09,
+      "speedup": 1.57,
+      "quality_ok": true
+    },
+    {
+      "case": "confirmed_context",
+      "before_seconds": 98.76,
+      "after_seconds": 27.81,
+      "after_first_text_seconds": 26.44,
+      "speedup": 3.55,
+      "quality_ok": true
+    },
+    {
+      "case": "finance_typo",
+      "before_seconds": 109.66,
+      "after_seconds": 46.37,
+      "after_first_text_seconds": 27.24,
+      "speedup": 2.36,
+      "quality_ok": true
+    },
+    {
+      "case": "router_typo",
+      "before_seconds": 102.05,
+      "after_seconds": 32.34,
+      "after_first_text_seconds": 26.53,
+      "speedup": 3.16,
+      "quality_ok": true
+    },
+    {
+      "case": "literal_constraints",
+      "before_seconds": 98.13,
+      "after_seconds": 22.6,
+      "after_first_text_seconds": 21.82,
+      "speedup": 4.34,
+      "quality_ok": true
+    },
+    {
+      "case": "unspecified_device_model",
+      "before_seconds": 157.12,
+      "after_seconds": 103.87,
+      "after_first_text_seconds": 103.87,
+      "speedup": 1.51,
+      "quality_ok": true
+    }
+  ],
+  "qualified_at": "2026-10-04T21:34:54.631143680Z",
+  "active_gateway": {
+    "id": "c54a7d52-fbef-4762-80a7-d616fae7f29a",
+    "status": "SUCCESS",
+    "code": "ffaf79fefbc4bdea13ba9eb1977d1f656e86ddbd"
+  },
+  "active_gateway_status": "SLEEPING (qualified deployment retained; failed 16-thread trial not promoted)",
+  "final_thread_trial_retained": false,
+  "regression_checks": {
+    "local_main_suite": {
+      "passed": 311,
+      "skipped": 1,
+      "skip_reason": "Existing PostgreSQL-only test not configured locally"
+    },
+    "worker_start_argument_suite": {
+      "passed": 12,
+      "scope": "bounded cache and CPU argument cases; run before CPU trial"
+    },
+    "gateway_image": {
+      "passed": 272,
+      "source": "qualified cache-8 deployment build"
+    },
+    "live_request_cases": 14,
+    "live_browser_sse_cases": 9,
+    "live_harness_tools": 24,
+    "live_harness_rounds": 2
+  },
+  "manual_public_recheck": {
+    "performed": false,
+    "reason": "Local execution/browser environment became offline; search fetch could not access this preview. The retained gateway had already passed its live SSE gate."
+  }
+}
