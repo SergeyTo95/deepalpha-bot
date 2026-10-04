@@ -116,7 +116,7 @@ def test_native_flash_persists_the_same_complete_question_without_another_model_
     result = flash.generate([{"role": "user", "content": clarification_content(question, [start, start+len(fragment)], candidate)}],
         request_id="clarification-123", on_delta=deltas.append)
     assert result["ok"] and result["prepared_clarification"]
-    expected = ("Правильно ли я поняла: под «гестамин эпное» вы имеете в виду «гистамин, апноэ»?" if candidate
+    expected = ("Правильно ли я поняла: «гестамин» — это «гистамин», а «эпное» — «апноэ»?" if candidate
         else "Уточните, пожалуйста, что вы имеете в виду под «гестамин эпное»?")
     assert result["text"] == "".join(deltas) == expected
     assert result["usage"]["total_tokens"] == 0 and not result["fallback_used"]
@@ -137,7 +137,7 @@ def test_native_pro_stream_persists_the_same_question_without_a_paid_call(monkey
     monkeypatch.setattr(streaming._STREAM_CONTEXT, "on_delta", deltas.append, raising=False)
     streaming.install(module)
     result = module.generate_velia_chat_result("unused prompt", user_id=7, conversation_id="c", request_id="r")
-    expected = ("Правильно ли я поняла: под «гестамин эпное» вы имеете в виду «гистамин, апноэ»?" if candidate
+    expected = ("Правильно ли я поняла: «гестамин» — это «гистамин», а «эпное» — «апноэ»?" if candidate
         else "Уточните, пожалуйста, что вы имеете в виду под «флумпенсор»?")
     assert result["text"] == "".join(deltas) == expected
     assert result["prepared_clarification"] and result["usage"]["total_tokens"] == 0

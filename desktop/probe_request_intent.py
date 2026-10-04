@@ -22,6 +22,7 @@ def medical_confirmation(reply):
     lowered = reply.casefold()
     return (reply.startswith("Правильно ли я поняла:") and reply.endswith("?")
         and "гистамин" in lowered and "апноэ" in lowered
+        and "«гистамин апноэ»" not in lowered
         and not any(term in lowered for term in ("гестацион", "диабет", "беремен")))
 
 

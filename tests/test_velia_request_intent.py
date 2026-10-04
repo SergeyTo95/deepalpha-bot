@@ -94,7 +94,21 @@ def test_nearby_readings_become_a_confirmation_without_rewriting_user_text(sourc
     content = clarification_content(question, result["span"], result["candidate"])
     reply = clarification_reply(content.strip())
     assert content.startswith(question) and reply.startswith("Правильно ли я поняла:")
-    assert "«" + source + "»" in reply and "«" + candidate + "»?" in reply
+    if source in {"гестамин эпное", "стартир генератр"}:
+        assert " — это «" in reply and ", а «" in reply and reply.endswith("?")
+    else:
+        assert "«" + source + "»" in reply and "«" + candidate + "»?" in reply
+
+
+@pytest.mark.parametrize("source,candidate,expected", [
+    ("гестамин эпное", "гистамин апноэ", "Правильно ли я поняла: «гестамин» — это «гистамин», а «эпное» — «апноэ»?"),
+    ("сульфат магнйя", "сульфат магния", "Правильно ли я поняла: под «сульфат магнйя» вы имеете в виду «сульфат магния»?"),
+    ("opn sorce", "open source", "Правильно ли я поняла: «opn» — это «open», а «sorce» — «source»?"),
+])
+def test_multiple_readings_do_not_create_a_false_compound_or_split_a_real_one(source, candidate, expected):
+    question = "Что означает " + source + "?"
+    start = question.index(source)
+    assert clarification_reply(clarification_content(question, [start, start + len(source)], candidate)) == expected
 
 
 @pytest.mark.parametrize("source,candidate", [
@@ -139,7 +153,7 @@ def test_guest_clarification_never_searches_and_never_generates_a_quote_only_ans
                     json={"model": "velia-flash", "stream": True, "messages": [{"role": "user", "content": question}]}) as response:
                 assert response.status == 200 and response.headers["X-Velia-Guest-Remaining"] == "29"
                 wire = await response.text()
-            assert "Правильно ли я поняла" in wire and "«гистамин, апноэ»?" in wire and "[DONE]" in wire
+            assert "Правильно ли я поняла" in wire and "«гистамин»" in wire and "«апноэ»?" in wire and "[DONE]" in wire
             assert '"web_search"' not in wire and "гестацион" not in wire
             assert state["search_queries"] == [] and state["payloads"] == []
             assert len(state["intent_payloads"]) == 1
@@ -175,11 +189,11 @@ def test_account_clarification_persists_and_replay_does_not_repeat_intent_or_sea
                 async with client.post(server.make_url(f"/web-api/v1/conversations/{cid}/messages/stream"), headers=headers(cookie), json=body) as response:
                     assert response.status == 200
                     wire = await response.text()
-                    assert "вы имеете в виду «гистамин, апноэ»?" in wire and '"web_search"' not in wire
+                    assert "«гистамин»" in wire and "«апноэ»?" in wire and '"web_search"' not in wire
             async with client.get(server.make_url(f"/web-api/v1/conversations/{cid}/messages"), headers=headers(cookie)) as response:
                 values = (await response.json())["messages"]
             assert all(v["content"] == question for v in values if v["role"] == "user")
-            assert all(v["content"].endswith("«гистамин, апноэ»?") for v in values if v["role"] == "assistant")
+            assert all(v["content"].endswith("«апноэ»?") for v in values if v["role"] == "assistant")
             assert len(state["intent_payloads"]) == 1 and state["search_queries"] == []
     asyncio.run(run())
 
