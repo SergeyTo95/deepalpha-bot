@@ -28,6 +28,15 @@ def medical_answer(reply):
         and not any(term in lowered for term in ("правильно ли я поняла", "что вы имеете в виду", "гестацион", "диабет", "беремен", "обмор")))
 
 
+def router_answer(reply):
+    """A restart must preserve the user's settings, including in the actual steps."""
+    lowered = reply.casefold()
+    return (any(term in lowered for term in ("питан", "розетк", "отключ", "выключ"))
+        and "правильно ли" not in lowered
+        and ("reset" not in lowered or any(term in lowered for term in
+            ("не нажим", "не удерж", "не трог", "не использ", "не зажим"))))
+
+
 async def run_browser_probes():
     class RecordedSearch(WebSearch):
         async def search(self, query, *, scope="general"):
@@ -45,7 +54,7 @@ async def run_browser_probes():
         ("arithmetic_typo", [{"role": "user", "content": "Сколько 17 умножть на 23? Только число."}], "direct", lambda text: text.strip() == "391"),
         ("confirmed_context", [{"role": "user", "content": "Как открыть терминал?"}, {"role": "assistant", "content": "На Windows открой PowerShell."}, {"role": "user", "content": "Нет, у меня Ubuntu. Как открыть терменал? Одной фразой."}], "direct", lambda text: "ctrlaltt" in re.sub(r"[^a-z]", "", text.casefold()) and "powershell" not in text.casefold()),
         ("finance_typo", [{"role": "user", "content": "Объясни разницу межу выручкой и прибылю на простом примере. Кратко."}], "direct", lambda text: all(term in text.casefold() for term in ("выруч", "прибыл")) and any(term in text.casefold() for term in ("расход", "затрат")) and "правильно ли" not in text.casefold()),
-        ("router_typo", [{"role": "user", "content": "Как перезагрузиь роутор, не сбрасывая настройки? Ответь кратко."}], "direct", lambda text: any(term in text.casefold() for term in ("питан", "розетк", "отключ", "выключ")) and "правильно ли" not in text.casefold()),
+        ("router_typo", [{"role": "user", "content": "Как перезагрузиь роутор, не сбрасывая настройки? Ответь кратко."}], "direct", router_answer),
         ("literal_constraints", [{"role": "user", "content": "В Python исправь синтаксис в строке print(\"app.py\". Не меняй текст app.py и ничего не удаляй. Только исправленная строка."}], "direct", lambda text: text.strip().strip(chr(96)).removeprefix("python\n").strip() == 'print("app.py")'),
     ]
     rows = []

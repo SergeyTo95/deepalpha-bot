@@ -11,6 +11,9 @@ native Flash, PRO and voice. User corrections take priority over earlier assista
 guesses. Search pages cannot establish facts about the user. Numbers, units,
 negations, dates, quoted literals, identifiers and the original author's gender
 and perspective are retained.
+Restrictions also govern the actual proposed actions, rather than merely the
+recognized wording. A restart that must retain router settings uses power cycling;
+holding Reset is a factory reset and violates that restriction.
 
 ## Interpretation and generation
 
@@ -63,7 +66,7 @@ retain their existing limits.
 
 ## Verification
 
-Local regression checks: **233 passed**, one PostgreSQL integration check skipped
+Local regression checks: **234 passed**, one PostgreSQL integration check skipped
 because no local test database was supplied. The deployed gate separately checks
 real PostgreSQL quota enforcement and source caching.
 

@@ -93,3 +93,12 @@ def test_live_medical_criterion_checks_a_useful_answer_without_forcing_a_spellin
     assert not medical_answer("Правильно ли я поняла: гистамин и апноэ? " + answer)
     assert not medical_answer(answer + " Исключите бананы, цитрусовые и арахис.")
     assert medical_answer(answer + " Исключите экстремальные голодовки.")
+
+
+def test_live_router_criterion_rejects_reset_actions_and_allows_a_warning():
+    from desktop.probe_request_intent import router_answer
+    safe = "Выключи питание роутера и включи снова. Настройки сохранятся."
+    assert router_answer(safe)
+    assert router_answer(safe + " Не нажимай Reset.")
+    assert not router_answer("Нажми Reset и удерживай 10 секунд.")
+    assert not router_answer(safe + " Затем нажми Reset на 10 секунд.")
