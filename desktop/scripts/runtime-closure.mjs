@@ -24,7 +24,19 @@ export function runtimeClosure(checkout, targetPlatform = process.platform) {
       if (packages.has(peer)) { required.add(peer); visit(peer); }
     }
   }
-  visit(cli.name); required.delete(cli.name);
+  visit(cli.name);
+  if (process.env.VELIA_AGENT_CORE_BROWSER_RUNTIME === 'true') {
+    for (const name of [
+      '@deepseek-ai/dsh-browser-use',
+      '@deepseek-ai/dsh-experimental-browser-use-runtime',
+      '@deepseek-ai/dsh-experimental-browser-use-playwright-mcp',
+    ]) {
+      if (!packages.has(name)) throw new Error('VELIA Agent Core browser package missing: ' + name);
+      required.add(name);
+      visit(name);
+    }
+  }
+  required.delete(cli.name);
   const added = [...required].filter(name => !(name in cli.dependencies)).sort();
   for (const name of added) cli.dependencies[name] = 'workspace:*';
   // link: overrides retain links to the build checkout after relocation.
