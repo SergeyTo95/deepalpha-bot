@@ -78,15 +78,43 @@ class FlashContextTooLong(Exception):
     pass
 
 
+class _FlashWorkerStarting(Exception):
+    """A transient metadata response while the worker is waking."""
+
+
+async def _wait_for_flash_worker(client, endpoint, headers, deadline):
+    """Wait only for readiness; never retry a model completion."""
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            async with client.get(endpoint + "/health", headers=headers, allow_redirects=False,
+                    timeout=ClientTimeout(total=min(5, remaining))) as response:
+                if response.status == 200:
+                    return
+                if response.status not in {502, 503, 504}:
+                    raise ValueError("flash_context_validation_failed")
+        except (ClientError, TimeoutError, OSError):
+            pass
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            await asyncio.sleep(min(0.5, remaining))
+    raise ValueError("flash_context_validation_failed")
+
+
 async def check_flash_context(client, endpoint, headers, payload):
+    readiness_deadline = time.monotonic() + 75
     template = {"messages": payload["messages"], "chat_template_kwargs": {"enable_thinking": False},
                 "add_generation_prompt": True}
     if payload.get("tools"):
         template["tools"] = payload["tools"]
     if "tool_choice" in payload:
         template["tool_choice"] = payload["tool_choice"]
-    async def post(path, data):
+    async def send_metadata(path, data):
         async with client.post(endpoint + path, json=data, headers=headers, allow_redirects=False) as response:
+            if response.status in {502, 503, 504}:
+                raise _FlashWorkerStarting()
             if response.status != 200:
                 raise ValueError("flash_context_validation_failed")
             body = bytearray()
@@ -95,6 +123,17 @@ async def check_flash_context(client, endpoint, headers, payload):
                 if len(body) > 4 * 1024 * 1024:
                     raise ValueError("flash_context_validation_failed")
             return json.loads(body)
+
+    async def post(path, data):
+        try:
+            return await send_metadata(path, data)
+        except (_FlashWorkerStarting, ClientError, TimeoutError, OSError):
+            await _wait_for_flash_worker(client, endpoint, headers, readiness_deadline)
+            try:
+                return await send_metadata(path, data)
+            except _FlashWorkerStarting:
+                raise ValueError("flash_context_validation_failed") from None
+
     rendered = await post("/apply-template", template)
     if not isinstance(rendered, dict) or not isinstance(rendered.get("prompt"), str):
         raise ValueError("flash_context_validation_failed")

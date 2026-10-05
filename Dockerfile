@@ -39,8 +39,8 @@ COPY velia_desktop_routes.py /app/velia_desktop_routes.py
 COPY velia_request_understanding.py /app/velia_request_understanding.py
 COPY desktop/gateway.py desktop/probe_gateway.py desktop/probe_request_intent.py desktop/answer_review.py desktop/web_routes.py desktop/account_routes.py desktop/guest_routes.py desktop/guest_store.py desktop/web_search.py desktop/request_intent.py desktop/spelling_hints.py desktop/flash_worker_start.py /app/desktop/
 COPY desktop/web /app/desktop/web
-COPY tests/test_velia_desktop_gateway.py tests/test_velia_desktop_relay.py tests/test_velia_desktop_flash.py tests/test_velia_web_chat.py tests/test_velia_web_guest.py tests/test_velia_web_search.py tests/test_velia_request_understanding.py tests/test_velia_request_intent.py tests/test_velia_answer_review.py tests/test_velia_flash_worker_start.py /app/tests/
-RUN python -m pytest -q -p no:cacheprovider tests/test_velia_desktop_gateway.py tests/test_velia_desktop_relay.py tests/test_velia_desktop_flash.py tests/test_velia_web_chat.py tests/test_velia_web_guest.py tests/test_velia_web_search.py tests/test_velia_request_understanding.py tests/test_velia_request_intent.py tests/test_velia_answer_review.py tests/test_velia_flash_worker_start.py
+COPY tests/test_velia_desktop_gateway.py tests/test_velia_desktop_relay.py tests/test_velia_desktop_flash.py tests/test_velia_web_chat.py tests/test_velia_web_guest.py tests/test_velia_web_search.py tests/test_velia_request_understanding.py tests/test_velia_request_intent.py tests/test_velia_answer_review.py tests/test_velia_flash_worker_start.py tests/test_velia_desktop_flash_readiness.py /app/tests/
+RUN python -m pytest -q -p no:cacheprovider tests/test_velia_desktop_gateway.py tests/test_velia_desktop_relay.py tests/test_velia_desktop_flash.py tests/test_velia_web_chat.py tests/test_velia_web_guest.py tests/test_velia_web_search.py tests/test_velia_request_understanding.py tests/test_velia_request_intent.py tests/test_velia_answer_review.py tests/test_velia_flash_worker_start.py tests/test_velia_desktop_flash_readiness.py
 
 FROM python:3.12-slim-bookworm
 WORKDIR /app

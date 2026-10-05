@@ -12,13 +12,17 @@ def number(name, default, low, high):
 
 
 def worker_args(key_path):
+    # Tune only prompt-processing block sizes. Keep the verified defaults and
+    # cap the physical block at the logical block to bound working memory.
+    batch = number("VELIA_FLASH_BATCH_TOKENS", 256, 1, 512)
+    microbatch = number("VELIA_FLASH_MICROBATCH_TOKENS", 128, 1, int(batch))
     args = ["/opt/bonsai/llama-server", "-m", "/opt/bonsai/model.gguf",
             "--alias", "velia-flash", "--host", "::", "--port", os.getenv("PORT", "8080"),
             "--api-key-file", str(key_path), "-ngl", "0", "--parallel", "1",
             "-c", number("VELIA_FLASH_CONTEXT_TOKENS", 2048, 2048, 8192),
             "-t", number("VELIA_FLASH_CPU_THREADS", 8, 1, 24),
             "-tb", number("VELIA_FLASH_CPU_THREADS", 8, 1, 24),
-            "-b", "256", "-ub", "128", "-n", "512", "--jinja",
+            "-b", batch, "-ub", microbatch, "-n", "512", "--jinja",
             "--reasoning", "auto", "--reasoning-budget", "0",
             # Keep prompt states when the single slot switches between intent,
             # answer and editor. This reuses computed tokens, never answers.
