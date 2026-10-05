@@ -131,6 +131,13 @@ async def detail(request):
     body += "<div class='lab-actions'><a class='button' href='/admin/research'>Все исследования</a><a class='button' href=''>Обновить</a>"
     if run["status"] in {"running", "queued"}:
         body += f"<form method='post' action='/admin/research/{core._e(run['id'])}/cancel'>{csrf}<button>Отменить задание</button></form>"
+    elif run["status"] == "failed":
+        body += f"""<form method='post' action='/admin/research/runs'>{csrf}
+        <input type='hidden' name='kind' value='{core._e(run["kind"])}'>
+        <input type='hidden' name='label' value='{core._e(run["label"])}'>
+        <input type='hidden' name='goal' value='{core._e(run["goal"])}'>
+        <input type='hidden' name='request_id' value='{uuid.uuid4()}'>
+        <button class='primary'>Повторить исследование</button></form>"""
     body += "</div><p class='hint'>После отмены текущий сетевой запрос может ещё завершаться; его результат не сохранится.</p></div>"
     if run["kind"] == "benchmark":
         metrics = run["metrics"]
