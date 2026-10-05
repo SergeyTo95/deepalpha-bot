@@ -127,3 +127,17 @@ def test_live_router_criterion_rejects_reset_actions_and_allows_a_warning():
     assert not router_answer(safe + " Затем нажми Reset на 10 секунд.")
     assert not router_answer(safe + " Нажмите Reset: это выполняет сброс и нарушает ваше условие.")
     assert not router_answer(safe + " Не нажимай Reset. Затем нажми Reset на 10 секунд.")
+
+
+@pytest.mark.parametrize("answer,expected", [
+    ("Одновременно нажмите питание и уменьшение громкости.", True),
+    ("Нажмите Громкость вниз и боковую кнопку.", True),
+    ("Нажмите Side и Volume Down одновременно.", True),
+    ("Нажмите Громкость вниз и Сиде-кнопку.", False),
+    ("Нажмите Громкость вниз и Стороннюю кнопку.", False),
+    ("Нажмите Громкость вверх и питание.", False),
+    ("На Galaxy S24 нажмите питание и уменьшение громкости.", False),
+])
+def test_phone_live_criterion_preserves_documented_names_and_rejects_corruption(answer, expected):
+    from desktop.probe_request_intent import phone_answer
+    assert phone_answer(answer) is expected

@@ -78,6 +78,21 @@ def finance_answer(reply):
         and not any(term in lowered for term in ("правильно ли", "всё деньги", "кофий")))
 
 
+def phone_answer(reply):
+    """Accept the documented Power/Side key, but reject garbled translations.
+
+    Samsung's support page names this key Power/Side. The fixture does not
+    establish an exact model, and the answer must not invent one.
+    """
+    lowered = reply.casefold()
+    volume_down = bool(re.search(r"громк\w*\s+(?:вниз|меньш\w*)|(?:уменьш\w*|пониж\w*)\s+громк\w*|volume\s+down", lowered))
+    power_side = (any(term in lowered for term in ("питан", "power", "блокиров"))
+        or bool(re.search(r"\bside\b|\bбоков\w*\s+(?:кноп\w*|клавиш\w*)", lowered)))
+    corrupted = bool(re.search(r"\b(?:сиде|сторонн\w*)\b", lowered))
+    invented = bool(re.search(r"\b(?:galaxy\s+)?[sa]\s?\d{1,3}\b|iphone|айфон|правильно ли", lowered))
+    return volume_down and power_side and not corrupted and not invented
+
+
 async def run_browser_probes():
     class RecordedSearch(WebSearch):
         async def enrich(self, request, payload):
@@ -124,7 +139,7 @@ async def run_browser_probes():
         ("finance_typo", [{"role": "user", "content": "Объясни разницу межу выручкой и прибылю на простом примере. Кратко."}], "direct", finance_answer),
         ("router_typo", [{"role": "user", "content": "Как перезагрузиь роутор, не сбрасывая настройки? Ответь кратко."}], "direct", router_answer),
         ("literal_constraints", [{"role": "user", "content": "В Python исправь синтаксис в строке print(\"app.py\". Не меняй текст app.py и ничего не удаляй. Только исправленная строка."}], "direct", lambda text: text.strip().strip(chr(96)).removeprefix("python\n").strip() == 'print("app.py")'),
-        ("unspecified_device_model", [{"role": "user", "content": "У меня телефон Самсунг, модель не знаю. Как сделать скриншот кнопками? Ответь коротко."}], "direct", lambda text: (any(term in text.casefold() for term in ("громк", "volume")) and any(term in text.casefold() for term in ("питан", "power", "блокиров")) and not re.search(r"\b(?:galaxy\s+)?[sa]\s?\d{1,3}\b|iphone|айфон|правильно ли", text, re.I))),
+        ("unspecified_device_model", [{"role": "user", "content": "У меня телефон Самсунг, модель не знаю. Как сделать скриншот кнопками? Ответь коротко."}], "direct", phone_answer),
     ]
     # Generate a new answer after unrelated stages while keeping the exact
     # source snapshot. This measures prompt-state reuse, never answer reuse.
