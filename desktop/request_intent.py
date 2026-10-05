@@ -215,7 +215,12 @@ async def understand(messages, *, on_invalid=None):
     while len(history) > 1 and sum(len(m.get("content") or "") for m in history[:-1]) > 6000:
         history.pop(0)
     hints = await asyncio.to_thread(spelling_hints, question)
-    instruction = INSTRUCTION + ("\nСловарные подсказки (не подтверждённые факты):\n" + json.dumps(hints, ensure_ascii=False) if hints else "")
+    instruction = INSTRUCTION
+    if hints:
+        # Keep the system/tool prefix constant. The recurrent runtime saves
+        # checkpoints at user-message boundaries, not at every changed hint.
+        # The submitted text remains verbatim at the start of its copied turn.
+        history[-1]["content"] = question + "\n\nСловарные подсказки (не подтверждённые факты):\n" + json.dumps(hints, ensure_ascii=False)
     payload = {"model": "velia-flash", "messages": [{"role": "system", "content": instruction}] + history,
         "tools": [TOOL], "tool_choice": "required", "stream": False, "max_tokens": 512,
         "temperature": 0.1, "top_p": 0.8, "top_k": 20, "min_p": 0.05,

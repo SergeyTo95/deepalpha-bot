@@ -90,6 +90,9 @@ def test_live_medical_criterion_checks_a_useful_answer_without_forcing_a_spellin
     from desktop.probe_request_intent import medical_answer
     answer = "При астме и апноэ начни с постепенного снижения веса: умеренные порции и регулярное питание. Добавь спокойную ходьбу в переносимом темпе. При одышке остановись и следуй своему плану лечения астмы. Индивидуальные ограничения питания согласуй с врачом."
     assert medical_answer(answer)
+    assert not medical_answer(answer + " Реалистично потерять 1–2 фунта в неделю.")
+    assert not medical_answer(answer + " Взвешивайтесь 1 раз в неделю.")
+    assert not medical_answer(answer + " Это поможет без риска.")
     assert not medical_answer("Правильно ли я поняла: гистамин и апноэ? " + answer)
     assert not medical_answer(answer + " Исключите бананы, цитрусовые и арахис.")
     assert medical_answer(answer + " Исключите экстремальные голодовки.")

@@ -32,7 +32,11 @@ def test_guest_emits_only_reviewed_answer_with_original_sources_and_one_quota_ch
             assert len(state["payloads"]) == len(state["review_payloads"]) == 1
             payload = state["review_payloads"][0]
             assert payload["model"] == "velia-flash" and payload["stream"] is False
+            sources = json.loads(payload["messages"][1]["content"])["sources"]
             evidence = json.loads(payload["messages"][-1]["content"])
+            assert "sources" not in evidence
+            assert sources == ([{"id": 1, "title": "Weight advice", "url": "https://www.nhs.uk/weight",
+                "snippet": "Eat well. Gradual physical activity."}] if health else [])
             assert evidence["draft"].startswith("UNSAFE_DRAFT")
             if health:
                 assert evidence["question"] == question.replace("гестамин эпное", "гистамин, апноэ")
@@ -44,7 +48,7 @@ def test_guest_emits_only_reviewed_answer_with_original_sources_and_one_quota_ch
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("omission", ["state", "citation", "citation_bounds", "regimen", "unspecified"])
+@pytest.mark.parametrize("omission", ["state", "citation", "citation_bounds", "regimen", "unspecified", "result_rate", "measurement_schedule", "assurance"])
 @pytest.mark.parametrize("recover", [True, False])
 def test_missing_conditions_or_source_support_are_repaired_privately_once(monkeypatch, tmp_path, omission, recover):
     async def run():
@@ -53,6 +57,9 @@ def test_missing_conditions_or_source_support_are_repaired_privately_once(monkey
         incomplete = {"state":"Питание и прогулки [1].", "citation":"При астме и апноэ начните с питания и прогулок.",
             "citation_bounds":"При астме и апноэ начните с питания и прогулок [9].",
             "regimen":"При астме и апноэ создайте дефицит 1000 ккал и стремитесь к 90 минутам нагрузки [1].",
+            "result_rate":"При астме и апноэ реалистично потерять 1–2 фунта в неделю [1].",
+            "measurement_schedule":"При астме и апноэ взвешивайтесь 1 раз в неделю [1].",
+            "assurance":"При астме и апноэ можно похудеть без риска [1].",
             "unspecified":"При астме и апноэ начните постепенно [1]. Если есть реакция на гистамин, исключите продукты с высоким содержанием гистамина."}[omission]
         final = "При астме и апноэ начните с регулярного питания и спокойных прогулок [1]."
         intent = {"action":"search", "quote":"гестамин эпное", "candidate":"гистамин, апноэ", "query":"weight loss",
@@ -72,6 +79,7 @@ def test_missing_conditions_or_source_support_are_repaired_privately_once(monkey
             original = json.loads(state["review_payloads"][0]["messages"][-1]["content"])
             assert repair["question"] == original["question"] == question.replace("гестамин эпное", "гистамин, апноэ")
             assert repair["user_context"] == original["user_context"]
+            assert state["review_payloads"][0]["messages"][:-1] == state["review_payloads"][1]["messages"][:-1]
             assert "unsupported_context_advice" in repair["repair"]["instruction"]
             assert "включая условные" in repair["repair"]["instruction"]
             assert (final in wire and "[DONE]" in wire) if recover else ('"error"' in wire and "[DONE]" not in wire)
@@ -83,7 +91,8 @@ def test_missing_conditions_or_source_support_are_repaired_privately_once(monkey
 def test_coverage_allows_case_endings_for_named_conditions():
     data = {"required_context_mentions":[{"quote":"астма"}, {"quote":"апноэ"}], "sources":[]}
     assert review_omissions("При астме и апноэ начните постепенно.", data) == {
-        "missing_stated_terms":[], "invalid_citations":False, "new_personal_regimens":[], "unsupported_context_advice":[]}
+        "missing_stated_terms":[], "invalid_citations":False, "new_personal_regimens":[], "unsupported_context_advice":[],
+        "unsupported_safety_assurances":[]}
 
 
 @pytest.mark.parametrize("quote,text", [
@@ -103,6 +112,24 @@ def test_numeric_review_preserves_user_numbers_calculations_and_reference_facts(
     data = {"question":"У меня астма. Сохрани 30, 12,5 и 0.5, вычисли 17 * 23.", "required_context_mentions":[],
         "sources":[{}], "avoid_new_numeric_regimens":True}
     assert review_omissions(text, data)["new_personal_regimens"] == []
+
+
+@pytest.mark.parametrize("text,blocked", [
+    ("Этот план поможет без риска.", True),
+    ("Это без какого-либо риска для вас.", True),
+    ("This plan is risk-free.", True),
+    ("Нельзя обещать похудение без риска.", False),
+    ("Похудение без риска невозможно гарантировать.", False),
+    ("Не обещаю, что это без какого-либо риска.", False),
+    ("We cannot guarantee a risk-free plan.", False),
+    ("This plan is not risk-free.", False),
+])
+def test_health_review_rejects_safety_assurances_but_preserves_negated_claims(text, blocked):
+    data = {"question": "У меня астма.", "required_context_mentions": [], "sources": [],
+        "avoid_new_numeric_regimens": True}
+    assert bool(review_omissions(text, data)["unsupported_safety_assurances"]) is blocked
+    data["avoid_new_numeric_regimens"] = False
+    assert review_omissions(text, data)["unsupported_safety_assurances"] == []
 
 
 @pytest.mark.parametrize("invalid", [None, "out_of_bounds", "boolean", "duplicate", "extra_field", "empty_text"])

@@ -17,6 +17,31 @@ def decision(args):
         "name": "understand_request", "arguments": json.dumps(args)}}]}}]}
 
 
+def test_spelling_hints_preserve_the_original_turn_and_a_stable_instruction(monkeypatch, tmp_path):
+    from desktop.request_intent import INSTRUCTION, understand
+
+    async def run():
+        questions = ["Как открыть терменал?", "Как перезагрузиь роутор?"]
+        originals = [[{"role": "user", "content": "Сохрани app.py и порт 8080."},
+            {"role": "assistant", "content": "Хорошо."},
+            {"role": "user", "content": question}] for question in questions]
+        before = json.loads(json.dumps(originals))
+        monkeypatch.setattr("desktop.request_intent.spelling_hints", lambda question: [{"original": question}])
+        async with fixture(monkeypatch, with_search=True, guest_store=GuestStore(sqlite_path=tmp_path/"quota.db"),
+                intent={"action": "direct", "quote": "", "query": ""}) as (_, _, state):
+            for messages in originals:
+                assert (await understand(messages))["action"] == "direct"
+            assert originals == before
+            for payload, messages in zip(state["intent_payloads"], originals):
+                assert payload["messages"][0] == {"role": "system", "content": INSTRUCTION}
+                assert payload["messages"][1:-1] == messages[:-1]
+                original, hints = payload["messages"][-1]["content"].split(
+                    "\n\nСловарные подсказки (не подтверждённые факты):\n", 1)
+                assert original == messages[-1]["content"]
+                assert json.loads(hints) == [{"original": original}]
+    asyncio.run(run())
+
+
 def test_personal_context_carries_exact_spans_without_invented_diagnoses():
     question = "У меня гестамин эпное и астма. Как похудеть?"
     args = {"action": "search", "quote": "гестамин эпное", "candidate": "гистамин, апноэ",
@@ -112,7 +137,7 @@ def test_schema_repair_keeps_the_original_question_and_never_searches_an_invalid
                 assert response.status == (200 if recover else 503)
                 await response.read()
             assert len(state["intent_payloads"]) == 2
-            assert all(data["messages"][-1]["content"] == question for data in state["intent_payloads"])
+            assert all(data["messages"][-1]["content"].split("\n\nСловарные подсказки (не подтверждённые факты):\n", 1)[0] == question for data in state["intent_payloads"])
             assert len(state["search_queries"]) == (1 if recover else 0)
             assert len(state["payloads"]) == (1 if recover else 0)
             async with client.get(server.make_url("/web-api/v1/guest"), headers=guest_headers(cookie)) as response:
@@ -307,7 +332,7 @@ def test_resolved_spelling_reaches_the_answer_generator_without_confirmation(mon
             assert ('"web_search"' in wire) == (action == "search")
             assert state["search_queries"] == ([query] if query else [])
             assert len(state["payloads"]) == len(state["intent_payloads"]) == 1
-            assert state["intent_payloads"][0]["messages"][-1]["content"] == question
+            assert state["intent_payloads"][0]["messages"][-1]["content"].split("\n\nСловарные подсказки (не подтверждённые факты):\n", 1)[0] == question
             content = state["payloads"][0]["messages"][-1]["content"]
             assert content.startswith(question.replace(quote, "гистамин, апноэ"))
             assert "гистамин" in content and "апноэ" in content
@@ -365,7 +390,9 @@ def test_direct_turn_keeps_history_and_constraints_without_irrelevant_sources(mo
                     json={"model": "velia-flash", "stream": True, "messages": messages}) as response:
                 assert response.status == 200
                 assert '"web_search"' not in await response.text()
-            assert state["intent_payloads"][0]["messages"][1:] == messages
+            turns = state["intent_payloads"][0]["messages"][1:]
+            assert turns[:-1] == messages[:-1]
+            assert turns[-1]["content"].split("\n\nСловарные подсказки (не подтверждённые факты):\n", 1)[0] == messages[-1]["content"]
             assert state["payloads"][0]["messages"][1:] == messages
             assert state["search_queries"] == []
     asyncio.run(run())

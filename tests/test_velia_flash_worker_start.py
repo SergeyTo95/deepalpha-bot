@@ -5,7 +5,7 @@ from desktop.flash_worker_start import worker_args
 
 
 @pytest.mark.parametrize("setting,expected", [(None, "1024"), ("0", "0"), ("512", "512"),
-    ("invalid", "1024"), ("-1", "0"), ("999999", "4096")])
+    ("invalid", "1024"), ("-1", "0"), ("999999", "8192")])
 def test_prompt_state_cache_has_a_bounded_default_and_explicit_disable(monkeypatch, setting, expected):
     monkeypatch.delenv("VELIA_FLASH_PROMPT_CACHE_MIB", raising=False)
     if setting is not None:

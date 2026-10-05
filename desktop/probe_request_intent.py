@@ -16,6 +16,9 @@ from desktop.guest_store import GuestStore
 from desktop.request_intent import understand
 from desktop.web_search import WebSearch, official_health_url
 from velia_request_understanding import clarification_content, clarification_reply
+from desktop.answer_review import review_omissions
+
+MEDICAL_QUESTION = "Привет . Рада познакомиться . Идеи для похудения к 31 ок ября у меня гестамин эпное и астма . Как мне похудеть быстро"
 
 
 def unconfirmed_personal_condition(reply):
@@ -46,6 +49,9 @@ def medical_answer(reply):
         and not re.search(r"\b(?:это|точно|гарантированно)\s+безопасно\b|\bне\s+(?:усилит|ухудшит)\s+симптом|\bвешай\w*\b", lowered)
         and not re.search(r"\b1\s*[–—-]\s*2\s*кг.{0,20}(?:в\s+недел|за\s+недел|еженедел)", lowered)
         and not unconfirmed_personal_condition(reply)
+        and not any(review_omissions(reply, {"question": MEDICAL_QUESTION,
+            "required_context_mentions": [], "sources": [],
+            "avoid_new_numeric_regimens": True}).values())
         and not re.search(r"\b(?:при|с\s+уч[её]том)\s+гистамин(?:е|а)?\b", lowered)
         and not any(term in lowered for term in ("правильно ли я поняла", "что вы имеете в виду", "гестацион", "диабет", "беремен", "обмор", "астеме", "пульмоном")))
 
@@ -111,7 +117,7 @@ async def run_browser_probes():
 
     origin = "https://private-understanding.invalid"
     cases = [
-        ("medical_spacing", [{"role": "user", "content": "Привет . Рада познакомиться . Идеи для похудения к 31 ок ября у меня гестамин эпное и астма . Как мне похудеть быстро"}], "search", medical_answer),
+        ("medical_spacing", [{"role": "user", "content": MEDICAL_QUESTION}], "search", medical_answer),
         ("device_ambiguity", [{"role": "user", "content": "У меня сломался квампер. Как его починить?"}], "clarify", lambda text: "квампер" in text and text.endswith("?")),
         ("arithmetic_typo", [{"role": "user", "content": "Сколько 17 умножть на 23? Только число."}], "direct", lambda text: text.strip() == "391"),
         ("confirmed_context", [{"role": "user", "content": "Как открыть терминал?"}, {"role": "assistant", "content": "На Windows открой PowerShell."}, {"role": "user", "content": "Нет, у меня Ubuntu. Как открыть терменал? Одной фразой."}], "direct", lambda text: "ctrlaltt" in re.sub(r"[^a-z]", "", text.casefold()) and "powershell" not in text.casefold()),

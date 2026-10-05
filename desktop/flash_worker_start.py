@@ -28,7 +28,7 @@ def worker_args(key_path):
             # answer and editor. This reuses computed tokens, never answers.
             # Bound RAM independently of the full model/context allocation.
             "--reasoning-format", "deepseek", "--cache-ram",
-            number("VELIA_FLASH_PROMPT_CACHE_MIB", 1024, 0, 4096),
+            number("VELIA_FLASH_PROMPT_CACHE_MIB", 1024, 0, 8192),
             "--chat-template-kwargs", '{"enable_thinking": false}',
             "--no-webui"]
     if os.getenv("VELIA_FLASH_REPACK", "false").lower() in {"false", "0", "no"}:
