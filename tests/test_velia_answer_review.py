@@ -95,6 +95,30 @@ def test_coverage_allows_case_endings_for_named_conditions():
         "unsupported_safety_assurances":[]}
 
 
+@pytest.mark.parametrize("ending,blocked", [
+    ("быстро похудеть без риска для здоровья не получится.", False),
+    ("похудеть без риска не удастся.", False),
+    ("похудеть без риска возможно.", True),
+    ("без риска похудеть не получится. Этот план поможет без риска.", True),
+])
+def test_health_review_handles_negation_after_a_risk_phrase(ending, blocked):
+    data = {"question":"Как похудеть?", "required_context_mentions":[], "sources":[],
+        "avoid_new_numeric_regimens":True}
+    assert bool(review_omissions(ending, data)["unsupported_safety_assurances"]) is blocked
+
+
+@pytest.mark.parametrize("text,blocked", [
+    ("В питании сократите порции, добавьте овощи. Гистамин не подтверждает реакцию или непереносимость, поэтому без данных о симптомах я не даю индивидуальных запретов.", False),
+    ("Гистамин не подтверждает аллергию. Исключите продукты с высоким содержанием гистамина.", True),
+    ("Гистамин не подтверждает аллергию, но исключите эти продукты.", True),
+    ("Гистамин может вызывать реакцию. Исключите эти продукты.", True),
+])
+def test_health_review_separates_a_limit_explanation_from_unrelated_preceding_advice(text, blocked):
+    data = {"question":"Гистамин", "required_context_mentions":[], "sources":[],
+        "user_context":[{"quote":"гистамин", "kind":"substance", "status":"unspecified"}]}
+    assert bool(review_omissions(text, data)["unsupported_context_advice"]) is blocked
+
+
 @pytest.mark.parametrize("quote,text", [
     ("гистамин", "Если есть реакция на гистамин, временно исключите продукты с высоким содержанием гистамина."),
     ("калий", "При повышенном калии ограничьте эти продукты."),

@@ -165,7 +165,7 @@ def review_omissions(text, data):
             if not phrase:
                 continue
             qualified = (re.search(r"\b(?:нельзя|невозможн\w*|не\s+(?:бывает|можем|можно|гарантир\w*|обеща\w*)|нет\s+гарант\w*|cannot|can.t|not)\b.{0,80}(?:без\s+(?:какого-либо\s+)?риска|risk[- ]free)", sentence)
-                or re.search(r"(?:без\s+(?:какого-либо\s+)?риска|risk[- ]free).{0,40}\b(?:невозможн\w*|сложно|нельзя)\b", sentence))
+                or re.search(r"(?:без\s+(?:какого-либо\s+)?риска|risk[- ]free).{0,40}\b(?:невозможн\w*|сложно|нельзя|не\s+(?:получ\w*|удастся|возможно|бывает|можно|гарантир\w*|обеща\w*))\b", sentence))
             if not qualified:
                 assurances.append(phrase.group())
     unsupported = []
@@ -181,8 +181,21 @@ def review_omissions(text, data):
                 continue
             for word in words:
                 stem = word[:max(4, len(word) - 2)] if len(word) > 4 else word
-                if re.search(r"\b" + re.escape(stem) + r"\w*\b", paragraph):
+                mention = r"\b" + re.escape(stem) + r"\w*\b"
+                for sentence in re.split(r"[.!?;]", paragraph):
+                    if not re.search(mention, sentence):
+                        continue
+                    # An explicit explanation that a named substance does not
+                    # establish a diagnosis must not turn preceding general
+                    # task advice into advice about that substance. Keep the
+                    # guard if an instruction occurs in or after this sentence.
+                    after = paragraph[paragraph.find(sentence):]
+                    explains_limit = re.search(r"\bне\s+(?:подтвержд\w*|означа\w*|доказ\w*|указыв\w*|устанавл\w*)\b", sentence)
+                    if explains_limit and not re.search(directive, after):
+                        continue
                     unsupported.append(item["quote"])
+                    break
+                if item["quote"] in unsupported:
                     break
     return {"missing_stated_terms": list(dict.fromkeys(missing)), "invalid_citations": invalid_citations,
         "new_personal_regimens": list(dict.fromkeys(regimens)),
