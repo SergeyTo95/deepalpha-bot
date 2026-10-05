@@ -202,6 +202,28 @@ def _layout(title: str, active: str, key: str, body: str, flash: str = "") -> st
    }}
  }});
  document.querySelectorAll('[data-confirm]').forEach(el=>{{el.addEventListener('click',ev=>{{if(!window.confirm(el.getAttribute('data-confirm')||'Confirm action?')) ev.preventDefault();}})}});
+ document.querySelectorAll('[data-copy-target]').forEach(button=>{{
+   button.addEventListener('click',async()=>{{
+     const id=button.getAttribute('data-copy-target')||'';
+     const source=document.getElementById(id);
+     const status=document.querySelector('[data-copy-status="'+id+'"]');
+     if(!source) return;
+     const value=('value' in source ? source.value : source.innerText)||'';
+     let copied=false;
+     try{{
+       if(navigator.clipboard && window.isSecureContext){{
+         await navigator.clipboard.writeText(value); copied=true;
+       }}
+     }}catch(_err){{copied=false;}}
+     if(!copied){{
+       try{{source.focus(); source.select(); copied=document.execCommand('copy');}}catch(_err){{copied=false;}}
+     }}
+     if(status) status.textContent=copied?'Скопировано':'Не удалось скопировать';
+     const original=button.textContent;
+     button.textContent=copied?'Скопировано ✓':'Ошибка копирования';
+     setTimeout(()=>{{button.textContent=original;if(status) status.textContent='';}},1800);
+   }});
+ }});
 }})();
 </script>
 </body></html>"""
