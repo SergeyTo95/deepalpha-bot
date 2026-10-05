@@ -61,6 +61,17 @@ def _redirect(message="", run_id=""):
     return web.HTTPSeeOther(url + ("?notice=" + quote(message, safe="") if message else ""))
 
 
+def _flash_lab_form(request, prompt=""):
+    return f"""<div class='card full'><h2>Flash Lab · прямой запрос</h2>
+    <p>Отправьте любой запрос прямо в текущую VELIA Flash и посмотрите фактический ответ, задержку, токены и ревизию модели. Это отдельная лабораторная сессия: она не читает пользователей DeepAlpha, их чаты или историю.</p>
+    <form method='post' action='/admin/research/flash'>{_csrf(request)}
+      <label>Запрос для Flash<textarea name='prompt' minlength='1' maxlength='6000' required placeholder='Например: объясни разницу между корреляцией и причинностью простыми словами'>{core._e(prompt)}</textarea></label>
+      <div class='lab-actions'><button class='primary'>Отправить в Flash</button></div>
+    </form>
+    <p class='hint'>Запрос идёт в текущий production-профиль Flash с тем же системным поведением, но без пользовательского диалога и без записи в историю VELIA. Если Flash занят живым запросом, лаборатория не перебивает пользователя.</p>
+    </div>"""
+
+
 async def index(request):
     denied = await _authorize(request)
     if denied is not None:
@@ -85,6 +96,7 @@ async def index(request):
     <div class='card'><div class='label'>Веб-поиск</div><p>{state(caps['search'])}</p></div>
     <div class='card'><div class='label'>Исследовательская модель</div><p>{state(caps['teacher'])}</p><div class='hint'>{core._e(caps['teacher_provider'])}</div></div>
     <div class='card'><div class='label'>Рабочий процесс</div><p>{'Работает' if worker.get('alive') else 'Ожидается'}</p><div class='hint'>{core._e(worker.get('seen_at') or 'Нет сигнала')}</div></div>
+    {_flash_lab_form(request)}
     <div class='card wide'><h2>Исследовать метод улучшения</h2><form method='post' action='/admin/research/runs'>{csrf}<input type='hidden' name='kind' value='research'><input type='hidden' name='request_id' value='{uuid.uuid4()}'>
     <label>Название<input name='label' maxlength='120' required value='Улучшение Flash через веса Bonsai'></label>
     <label>Цель<textarea name='goal' minlength='8' maxlength='2000' required>Улучшить правильность ответов, понимание опечаток и контекста Flash, сохранив компактность Bonsai. Проверить LoRA и дистилляцию; выяснить совместимость с текущим форматом весов и стоимость по RAM и размеру.</textarea></label>
@@ -162,6 +174,57 @@ async def detail(request):
     return _page(request, body + "</div>", run["label"])
 
 
+async def flash_probe(request):
+    denied = await _authorize(request)
+    if denied is not None:
+        return denied
+    form = await request.post()
+    prompt = str(form.get("prompt", "") or "").strip()
+    try:
+        result = await asyncio.to_thread(lab.manual_flash_probe, _owner(request), prompt)
+    except ValueError as exc:
+        return _page(request, _flash_lab_form(request, prompt) +
+            f"<div class='flash'>{core._e(str(exc))}</div>", "Flash Lab", status=400)
+
+    if not result.get("ok"):
+        errors = {
+            "flash_busy": "Flash сейчас занят живым запросом пользователя. Лаборатория не стала его перебивать.",
+            "flash_unavailable": "Flash сейчас не подключён или недоступен.",
+            "flash_timeout": "Flash не успел ответить за лимит времени.",
+            "flash_provider_error": "Worker Flash вернул ошибку.",
+            "flash_invalid_response": "Flash вернул некорректный ответ.",
+            "flash_context_too_long": "Запрос не помещается в текущий контекст Flash.",
+        }
+        message = errors.get(result.get("error"), "Не удалось получить ответ Flash.")
+        body = _flash_lab_form(request, prompt) + f"<div class='flash'>{core._e(message)}</div>"
+        return _page(request, body, "Flash Lab", status=503 if result.get("error") != "flash_busy" else 409)
+
+    usage = result.get("usage") or {}
+    profile = result.get("profile") or {}
+    text = str(result.get("text") or "")
+    body = f"""<div class='grid'>
+    <div class='card full'><h2>Запрос</h2><pre>{core._e(prompt)}</pre></div>
+    <div class='card full'><h2>Ответ Flash</h2><pre>{core._e(text)}</pre></div>
+    <div class='card'><div class='label'>Latency</div><div class='value'>{core._e(round(result.get('latency_ms',0)/1000,2))} s</div></div>
+    <div class='card'><div class='label'>Model</div><p><code>{core._e(result.get('model') or profile.get('model') or 'velia-flash')}</code></p></div>
+    <div class='card'><div class='label'>Revision</div><p><code>{core._e(profile.get('revision') or 'не указана')}</code></p></div>
+    <div class='card'><div class='label'>Finish</div><p>{core._e(result.get('finish_reason') or '—')}</p></div>
+    <div class='card full'><h2>Usage</h2><pre>{core._e(__import__('json').dumps(usage, ensure_ascii=False, indent=2))}</pre></div>
+    <div class='card wide'><h2>Превратить в обучающий пример</h2>
+      <p>Если ответ неверный — исправьте поле «Правильный ответ». Если верный — можно оставить его как есть. Только после вашей проверки пример имеет смысл помечать подтверждённым.</p>
+      <form method='post' action='/admin/research/examples'>{_csrf(request)}
+        <label>Вопрос<textarea name='prompt' maxlength='6000' required>{core._e(prompt)}</textarea></label>
+        <label>Правильный ответ / критерии<textarea name='target' maxlength='6000' required>{core._e(text)}</textarea></label>
+        <label>Назначение<select name='split'><option value='train'>Для обучения</option><option value='holdout'>Для независимой проверки</option></select></label>
+        <label class='confirm'><input type='checkbox' name='approved' value='1'> Я проверил вопрос и правильный ответ</label>
+        <button class='primary'>Сохранить пример</button>
+      </form>
+    </div>
+    <div class='card wide'><h2>Следующий запрос</h2>{_flash_lab_form(request)}</div>
+    </div>"""
+    return _page(request, body, "Flash Lab")
+
+
 async def create_run(request):
     denied = await _authorize(request)
     if denied is not None:
@@ -230,6 +293,7 @@ async def dataset(request):
 def setup_model_lab_routes(app):
     app.cleanup_ctx.append(lab.worker_context)
     app.router.add_get("/admin/research", index)
+    app.router.add_post("/admin/research/flash", flash_probe)
     app.router.add_post("/admin/research/runs", create_run)
     app.router.add_post("/admin/research/examples", create_example)
     app.router.add_get("/admin/research/dataset.jsonl", dataset)
