@@ -486,6 +486,49 @@ def _flash_slot():
         conn.close()
 
 
+
+def manual_flash_probe(owner_id: int, prompt: str) -> dict:
+    """Run one isolated owner-only prompt against the current production Flash."""
+    owner_id = _owner(owner_id)
+    prompt = str(prompt or "").strip()
+    if not prompt:
+        raise ValueError("Введите запрос для Flash.")
+    if len(prompt) > 6000:
+        raise ValueError("Запрос для Flash должен быть не длиннее 6000 символов.")
+    if not enabled():
+        raise ValueError("Лаборатория Velyon Core отключена.")
+    from services import velia_flash_service as flash
+    if not flash.available():
+        return {"ok": False, "error": "flash_unavailable", "latency_ms": 0, "profile": _profile()}
+    with _flash_slot() as acquired:
+        if not acquired:
+            return {"ok": False, "error": "flash_busy", "latency_ms": 0, "profile": _profile()}
+        started = time.monotonic()
+        request_id = "lab-manual-" + uuid.uuid4().hex
+        result = flash.generate([{"role": "user", "content": prompt}], request_id=request_id)
+        latency_ms = max(0, round((time.monotonic() - started) * 1000))
+    safe = {
+        "ok": bool(result.get("ok")),
+        "text": str(result.get("text") or ""),
+        "error": str(result.get("error") or result.get("reason") or ""),
+        "provider": str(result.get("provider") or ""),
+        "model": str(result.get("model") or ""),
+        "request_id": request_id,
+        "usage": result.get("usage") if isinstance(result.get("usage"), dict) else {},
+        "finish_reason": str(result.get("finish_reason") or ""),
+        "latency_ms": latency_ms,
+        "profile": _profile(),
+    }
+    try:
+        with _transaction() as cur:
+            _audit(cur, owner_id, "manual_flash_probe", request_id,
+                   ok=safe["ok"], model=safe["model"], provider=safe["provider"],
+                   latency_ms=latency_ms, finish_reason=safe["finish_reason"])
+    except Exception:
+        logger.exception("VELIA_MODEL_LAB_MANUAL_PROBE_AUDIT_FAILED")
+    return safe
+
+
 def _benchmark_step(run: dict) -> str:
     from services import velia_flash_service as flash
     profile = _profile()
