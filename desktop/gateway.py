@@ -293,10 +293,15 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
         filter_stream=public_web_stream, authorize_model=authorize_model, enrich_payload=enrich_web)
     if os.getenv("VELIA_WEB_ENABLED", "").lower() in {"true", "1"}:
         origin = web_origin or https_origin(os.environ["VELIA_WEB_ORIGIN"])
+        agent_available = (
+            os.getenv("VELIA_BROWSER_AGENT_ENABLED", "").lower() in {"true", "1", "yes", "on"}
+            and bool(config.agent_origin)
+            and bool(str(os.getenv("VELIA_AGENT_CORE_INTERNAL_KEY", "") or "").strip())
+        )
         setup_web_routes(app, origin=origin, upstream=upstream, authenticate=authenticate,
             allowed=allowed, valid_session=valid_session, json_response=json_response, handlers=handlers,
             account_balance=account_balance, authorize_model=authorize_model, upstream_stream=upstream_stream,
-            web_search=web_search, browser_agent_run=browser_agent_run)
+            web_search=web_search, browser_agent_run=browser_agent_run if agent_available else None)
         if os.getenv("VELIA_WEB_GUEST_ENABLED") == "true":
             from desktop.guest_routes import setup_guest_routes
             setup_guest_routes(app, origin=origin, handlers=handlers, json_response=json_response,
