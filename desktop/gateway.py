@@ -38,11 +38,17 @@ def https_origin(value):
 class GatewayConfig:
     auth_origin: str
     browser_origin: str
+    admin_origin: str = ""
 
     @classmethod
     def from_env(cls):
-        return cls(https_origin(os.environ["VELIA_DESKTOP_AUTH_ORIGIN"]),
-                   https_origin(os.environ["VELIA_DESKTOP_BROWSER_ORIGIN"]))
+        auth_origin = https_origin(os.environ["VELIA_DESKTOP_AUTH_ORIGIN"])
+        admin_raw = str(os.getenv("VELIA_DESKTOP_ADMIN_ORIGIN", "") or "").strip()
+        return cls(
+            auth_origin,
+            https_origin(os.environ["VELIA_DESKTOP_BROWSER_ORIGIN"]),
+            https_origin(admin_raw) if admin_raw else auth_origin,
+        )
 
 
 def json_response(data, status=200):
@@ -233,7 +239,7 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
     else:
         app.router.add_get("/", pairing_page)
     if os.getenv("VELIA_DESKTOP_ADMIN_PROXY_ENABLED", "").lower() in {"true", "1", "yes", "on"}:
-        setup_owner_admin_proxy(app, upstream_origin=config.auth_origin, client_key=CLIENT)
+        setup_owner_admin_proxy(app, upstream_origin=(config.admin_origin or config.auth_origin), client_key=CLIENT)
     return app
 
 
