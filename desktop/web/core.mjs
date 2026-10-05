@@ -170,6 +170,11 @@ export function apiError(code) {
       web_search_unavailable: "Не удалось выполнить поиск в интернете. Повтори позже.",
       request_understanding_unavailable: "Не удалось обработать вопрос. Попробуй повторить его.",
       web_search_context_too_long: "В этот диалог не помещаются веб-источники. Начни новый диалог.",
+      browser_agent_busy: "Browser Agent сейчас занят. Повтори через несколько секунд.",
+      browser_agent_timeout: "Browser Agent не успел завершить задачу. Попробуй ещё раз.",
+      browser_agent_unavailable: "Browser Agent временно недоступен. Попробуй позже.",
+      browser_agent_disabled: "Browser Agent пока отключён.",
+      invalid_browser_task: "Не удалось понять задачу для Browser Agent.",
     }[code] || "Не удалось выполнить запрос. Попробуй ещё раз."
   );
 }
