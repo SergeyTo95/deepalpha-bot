@@ -1,4 +1,5 @@
 import hashlib
+import inspect
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -232,6 +233,14 @@ def test_user_mutations_require_explicit_confirmation_in_route_source():
     assert 'form.get("confirmed", "")' in source
     assert "Explicit confirmation required" in source
     assert "data-confirm" in source
+
+
+def test_velyon_core_snapshot_does_not_read_deepalpha_users():
+    source = inspect.getsource(velia_admin_control_service.velyon_core_snapshot)
+    assert "count_users" not in source
+    assert "get_users_page" not in source
+    assert "search_users" not in source
+    assert '"users"' not in source
 
 
 def test_deployment_snapshot_never_substitutes_github_head(monkeypatch):
