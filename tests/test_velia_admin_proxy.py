@@ -1,4 +1,5 @@
 import asyncio
+import gzip
 
 from aiohttp import ClientSession, DummyCookieJar, web
 from aiohttp.test_utils import TestServer
@@ -79,4 +80,44 @@ def test_admin_proxy_rejects_external_redirects():
                 async with client.get(gateway_server.make_url("/admin/research"), allow_redirects=False) as response:
                     assert response.status == 502
                     assert "rejected" in await response.text()
+    asyncio.run(scenario())
+
+
+def test_admin_proxy_drops_content_encoding_after_upstream_auto_decompression():
+    async def scenario():
+        html = b"<!doctype html><html><body>VELIA Control Center</body></html>"
+
+        async def compressed_login(request):
+            return web.Response(
+                body=gzip.compress(html),
+                headers={
+                    "Content-Type": "text/html; charset=utf-8",
+                    "Content-Encoding": "gzip",
+                    "Cache-Control": "no-store",
+                },
+            )
+
+        core = web.Application()
+        core.router.add_get("/admin/login", compressed_login)
+        key = web.AppKey("admin_proxy_compression_client", ClientSession)
+        gateway = web.Application()
+
+        async def lifecycle(app):
+            async with ClientSession(cookie_jar=DummyCookieJar()) as client:
+                app[key] = client
+                yield
+
+        gateway.cleanup_ctx.append(lifecycle)
+        async with TestServer(core) as core_server:
+            setup_owner_admin_proxy(
+                gateway,
+                upstream_origin=str(core_server.make_url("/")).rstrip("/"),
+                client_key=key,
+            )
+            async with TestServer(gateway) as gateway_server, ClientSession() as client:
+                async with client.get(gateway_server.make_url("/admin/login")) as response:
+                    assert response.status == 200
+                    assert "Content-Encoding" not in response.headers
+                    assert await response.read() == html
+
     asyncio.run(scenario())
