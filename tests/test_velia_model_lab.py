@@ -340,6 +340,9 @@ def test_research_validates_citations_and_records_no_training(database, monkeypa
     monkeypatch.setenv("WEB_SEARCH_API_KEY", "test-search")
     monkeypatch.setenv("LLM_PROVIDER_RESEARCH", "kimi")
     monkeypatch.setenv("KIMI_API_KEY", "test-teacher")
+    monkeypatch.setenv("KIMI_ENABLED", "true")
+    monkeypatch.setenv("KIMI_BACKGROUND_ENABLED", "true")
+    monkeypatch.setenv("VELIA_RESEARCH_CENTER_ENABLED", "true")
     queries = []
     def search(query, limit):
         queries.append(query)
