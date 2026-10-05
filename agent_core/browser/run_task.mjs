@@ -1,0 +1,127 @@
+/** Execute one private VELIA Agent Core browser task with VELIA Flash only. */
+import assert from 'node:assert/strict';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { spawn } from 'node:child_process';
+import { startProxy } from '../../desktop/src/proxy.mjs';
+import { profilePatch } from '../../desktop/src/config.mjs';
+import { BROWSER_TOOL_ALLOWLIST } from './tool_policy.mjs';
+
+const gateway = new URL(process.argv[2]);
+if (gateway.protocol !== 'http:' || gateway.hostname !== '127.0.0.1' || !gateway.port) {
+  throw new Error('VELIA Agent Core internal gateway must be loopback');
+}
+const token = process.argv[3];
+const runtime = resolve(process.argv[4]);
+const chromium = resolve(process.argv[5] || '/usr/bin/chromium');
+const maxPromptBytes = 12 * 1024;
+
+let input = '';
+for await (const chunk of process.stdin) {
+  input += chunk.toString();
+  if (Buffer.byteLength(input, 'utf8') > maxPromptBytes) throw new Error('browser_agent_prompt_too_large');
+}
+const prompt = input.trim();
+if (!prompt) throw new Error('browser_agent_prompt_required');
+
+const temporary = await mkdtemp(join(tmpdir(), 'velia-agent-core-run-'));
+const origin = 'https://velia-agent-core.internal.invalid';
+let child;
+let declaredTools = 0;
+const proxy = await startProxy(
+  origin + '/desktop-api/v1',
+  async () => ({ origin, access_token: token }),
+  async (url, options) => fetch(new URL(new URL(url).pathname, gateway), options),
+  { allowedToolNames: BROWSER_TOOL_ALLOWLIST },
+);
+
+try {
+  const credentials = join(temporary, 'credentials.json');
+  const patchPath = join(temporary, 'patch.json');
+  await writeFile(credentials, JSON.stringify({
+    version: 1, refs: { VELIA_ACCESS_TOKEN: proxy.key }, records: {},
+  }), { mode: 0o600 });
+
+  const settings = profilePatch(origin + '/desktop-api/v1', credentials, proxy.url);
+  const provider = settings.find(row => row.id === 'llm-pi-ai').config.providers.velia;
+  provider.models = provider.models.filter(model => model.id === 'velia-flash');
+  settings.find(row => row.id === 'agent-default-model').config.model = 'velia-flash';
+  settings.find(row => row.id === 'system-prompt').config = {
+    personaPrefix: 'Ты Велия (VELIA), браузерный ИИ-агент. Говори о себе в женском роде. Выполняй веб-задачи через доступные браузерные инструменты. Не утверждай, что действие выполнено, пока инструмент не подтвердил результат. Не проси пользователя выполнять браузерные шаги, которые можешь выполнить сама.',
+    personaSuffix: 'This is a hosted browser-only agent session. Local shell and host filesystem access are unavailable.',
+  };
+  for (const id of [
+    'tool-bash', 'tool-pwsh', 'tool-fs', 'tool-fs-search', 'tool-jobs',
+    'tool-schedule', 'tool-skill', 'tool-goal', 'tool-subagent-control',
+    'tool-subagent-list-agents', 'tool-subagent', 'tool-subagent-fork',
+    'tool-workflow', 'tool-ralph', 'tool-todo', 'tool-web',
+  ]) settings.push({ id, disabled: true });
+  settings.push({ insert: [
+    { id: 'velia-browser-use', name: '@deepseek-ai/dsh-browser-use' },
+    { id: 'velia-browser-provider', name: '@deepseek-ai/dsh-experimental-browser-use-playwright-mcp',
+      config: { mode: 'launch', headless: true, executablePath: chromium, toolCallTimeoutMs: 45000 } },
+  ] });
+  await writeFile(patchPath, JSON.stringify(settings), { mode: 0o600 });
+
+  child = spawn(process.execPath, [
+    join(runtime, 'lib', 'bin.js'), '--profile', 'headless', '--patch', patchPath, '--json',
+  ], {
+    cwd: temporary,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: {
+      PATH: process.env.PATH,
+      LANG: 'C.UTF-8',
+      DSH_HOME: join(temporary, 'home'),
+      DSH_PERMISSION_MODE: 'read-only',
+    },
+  });
+  child.stdin.end(prompt);
+
+  let stdout = '', stderr = '';
+  child.stdout.on('data', chunk => {
+    stdout += chunk.toString();
+    if (Buffer.byteLength(stdout, 'utf8') > 2 * 1024 * 1024) child.kill('SIGKILL');
+  });
+  child.stderr.on('data', chunk => {
+    stderr = (stderr + chunk.toString()).slice(-65536);
+  });
+
+  const code = await new Promise((ok, fail) => {
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      fail(new Error('browser_agent_timeout'));
+    }, 420000);
+    child.once('error', error => { clearTimeout(timer); fail(error); });
+    child.once('exit', exitCode => { clearTimeout(timer); ok(exitCode); });
+  });
+
+  const events = stdout.split('\n').filter(Boolean).map(line => {
+    try { return JSON.parse(line); } catch { return null; }
+  }).filter(Boolean);
+  const session = events.find(event => event.type === 'session')?.sessionId || null;
+  const final = [...events].reverse().find(event => event.type === 'final');
+  const toolCalls = events.filter(event => event.type === 'tool_call');
+  declaredTools = new Set(toolCalls.map(event => event.tool)).size;
+
+  if (code !== 0 || !final || typeof final.text !== 'string') {
+    const projected = events.find(event => event.type === 'error')?.message;
+    throw new Error(projected || stderr.trim().slice(-2000) || 'browser_agent_failed');
+  }
+  assert.ok(toolCalls.every(event => BROWSER_TOOL_ALLOWLIST.includes(event.tool)),
+    'Browser Agent executed a tool outside the allowlist');
+
+  process.stdout.write(JSON.stringify({
+    ok: true,
+    text: final.text,
+    session_id: session,
+    model: 'velia-flash',
+    tool_calls: toolCalls.map(event => ({ tool: event.tool, call_id: event.callId })),
+    tool_count: toolCalls.length,
+    distinct_tools: declaredTools,
+  }) + '\n');
+} finally {
+  if (child?.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  await proxy.close();
+  await rm(temporary, { recursive: true, force: true });
+}
