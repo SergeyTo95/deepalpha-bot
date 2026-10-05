@@ -121,3 +121,15 @@ def test_admin_proxy_drops_content_encoding_after_upstream_auto_decompression():
                     assert await response.read() == html
 
     asyncio.run(scenario())
+
+
+def test_gateway_uses_separate_identity_and_velyon_admin_origins(monkeypatch):
+    from desktop.gateway import GatewayConfig
+
+    monkeypatch.setenv("VELIA_DESKTOP_AUTH_ORIGIN", "https://deepalpha-bot-production.up.railway.app")
+    monkeypatch.setenv("VELIA_DESKTOP_BROWSER_ORIGIN", "https://velia.example")
+    monkeypatch.setenv("VELIA_DESKTOP_ADMIN_ORIGIN", "https://velyon-preview.example")
+    config = GatewayConfig.from_env()
+    assert config.auth_origin == "https://deepalpha-bot-production.up.railway.app"
+    assert config.browser_origin == "https://velia.example"
+    assert config.admin_origin == "https://velyon-preview.example"
