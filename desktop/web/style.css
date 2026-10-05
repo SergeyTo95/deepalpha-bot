@@ -537,6 +537,28 @@ span[data-icon] {
 .model-button:hover {
   background: var(--hover);
 }
+.agent-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 33px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .35px;
+  color: var(--soft);
+}
+.agent-toggle:hover { background: var(--hover); }
+.agent-toggle.active {
+  background: var(--strong);
+  color: var(--on);
+  border-color: var(--strong);
+}
+.agent-toggle .icon { width: 13px; height: 13px; }
+.agent-toggle[hidden] { display: none; }
+.agent-toggle:disabled { opacity: .45; cursor: default; }
 .model-button .icon {
   width: 13px;
   height: 13px;
