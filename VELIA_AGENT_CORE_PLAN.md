@@ -1,0 +1,72 @@
+# VELIA Agent Core — project plan
+
+Status: active design / implementation.
+
+Naming: the product/runtime is **VELIA Agent Core**. DeepSeek Harness is only the pinned upstream source lineage retained for licensing and provenance; it is not the product name.
+
+## Goal
+
+One VELIA agent core, shared across three surfaces:
+
+- Desktop — local computer tools: files, terminal, git, processes, browser.
+- Browser — cloud/browser tools: navigation, DOM inspection, clicks, forms, downloads, extraction.
+- Android — native phone tools: files, camera, share sheet, app/url launch, calendar, voice and later screen/accessibility with explicit user permission.
+
+The model-facing agent loop stays common. Each device/surface advertises only the capabilities it can safely execute.
+
+## Architecture
+
+VELIA AI -> VELIA Agent Core -> capability/tool host -> Desktop / Browser / Android.
+
+A session owns its tool capabilities. The model never receives unavailable tools. Provider/model credentials stay server-side. Device credentials are never exposed to model tools.
+
+Cross-device continuation is a later phase: a task started on Android/Web can hand off to an active Desktop agent when terminal/repository access is needed, and results return to the originating device.
+
+## Browser Agent — current priority
+
+The browser agent uses **VELIA Flash**, not Kimi/VELIA PRO.
+
+Requirements:
+
+1. Flash is the only model exposed by the browser-agent profile. No paid/provider fallback.
+2. Chromium automation uses the pinned upstream browser-use integration with Playwright MCP.
+3. Browser state belongs to one live agent/session and is cleaned up with that session.
+4. Browser tools are intentionally minimal so Flash's 8192-token context is not crowded by Desktop-only tools.
+5. First acceptance test is controlled: Flash must navigate a local fixture page with the real browser tool, read a marker, and return it through the real agent loop.
+6. Only after that gate passes do we expose a user-facing hosted browser-agent UI.
+7. Hosted access must reuse VELIA authentication and fail closed; no anonymous browser-control endpoint.
+8. Destructive or account-sensitive actions need explicit approval boundaries before production.
+
+## Planned phases
+
+### Phase 1 — Browser proof
+- Build a VELIA Agent Core browser profile.
+- Default/only model: VELIA Flash.
+- Add Playwright MCP Chromium provider.
+- Remove Desktop-only filesystem/terminal/git tools from the browser preset.
+- Run a real Flash + browser-tool acceptance fixture.
+
+### Phase 2 — Hosted Browser Agent
+- Run Agent Core + Chromium as an isolated Railway service.
+- Put it behind VELIA authentication/gateway.
+- Session isolation, quotas, timeouts, browser cleanup, download limits.
+- Web UI branded VELIA, not upstream product branding.
+
+### Phase 3 — Android Tool Host
+- Kotlin capability bridge for safe native tools.
+- Start with open URL/app, file picker/share, camera/gallery.
+- Add calendar/location/etc only with Android runtime permissions and per-action policy.
+- Keep the same Agent Core protocol.
+
+### Phase 4 — Cross-device continuation
+- Capability registry per signed-in device.
+- Handoff of a task to another device only when required capabilities are absent locally.
+- Preserve task/session provenance and approval state across handoff.
+
+## Non-goals / safety boundaries
+
+- Browser Agent must not silently inherit Desktop filesystem or shell access.
+- No Kimi dependency for Browser Agent inference.
+- No provider/API secret in browser JavaScript.
+- No silent fallback from Flash to a paid model.
+- No claim that a platform capability is verified until its real acceptance gate passes.
