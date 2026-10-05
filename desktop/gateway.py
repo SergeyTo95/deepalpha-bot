@@ -20,6 +20,7 @@ from desktop.admin_proxy import setup_owner_admin_proxy
 
 MAX_AUTH_BODY = 16 * 1024
 MAX_AUTH_RESPONSE = 64 * 1024
+MAX_AGENT_RESPONSE = 1024 * 1024
 CLIENT = web.AppKey("identity_client", ClientSession)
 READY = web.AppKey("identity_ready", bool)
 ACCESS = re.compile(r"va_[A-Za-z0-9_-]{16,256}\Z")
@@ -34,20 +35,36 @@ def https_origin(value):
     return value.rstrip("/")
 
 
+def internal_agent_origin(value):
+    parsed = urlsplit(value)
+    private_http = parsed.scheme == "http" and (
+        parsed.hostname == "127.0.0.1" or parsed.hostname == "localhost"
+        or (parsed.hostname or "").endswith(".railway.internal")
+    )
+    if ((parsed.scheme != "https" and not private_http) or not parsed.hostname
+            or parsed.username or parsed.password or parsed.path not in {"", "/"}
+            or parsed.query or parsed.fragment):
+        raise ValueError("Browser Agent must use HTTPS or a Railway-private HTTP origin")
+    return value.rstrip("/")
+
+
 @dataclass(frozen=True)
 class GatewayConfig:
     auth_origin: str
     browser_origin: str
     admin_origin: str = ""
+    agent_origin: str = ""
 
     @classmethod
     def from_env(cls):
         auth_origin = https_origin(os.environ["VELIA_DESKTOP_AUTH_ORIGIN"])
         admin_raw = str(os.getenv("VELIA_DESKTOP_ADMIN_ORIGIN", "") or "").strip()
+        agent_raw = str(os.getenv("VELIA_AGENT_CORE_BROWSER_ORIGIN", "") or "").strip()
         return cls(
             auth_origin,
             https_origin(os.environ["VELIA_DESKTOP_BROWSER_ORIGIN"]),
             https_origin(admin_raw) if admin_raw else auth_origin,
+            internal_agent_origin(agent_raw) if agent_raw else "",
         )
 
 
@@ -138,6 +155,54 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
                 raise AuthenticationUnavailable()
             async for chunk in response.content.iter_chunked(65536):
                 yield chunk
+
+    async def browser_agent_run(user_id, prompt):
+        if os.getenv("VELIA_BROWSER_AGENT_ENABLED", "").lower() not in {"true", "1", "yes", "on"}:
+            return 503, {"ok": False, "error": "browser_agent_disabled"}
+        secret = str(os.getenv("VELIA_AGENT_CORE_INTERNAL_KEY", "") or "").strip()
+        if not config.agent_origin or not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", secret):
+            return 503, {"ok": False, "error": "browser_agent_unavailable"}
+        headers = {
+            "Authorization": "Bearer " + secret,
+            "User-Agent": "VELIA-Web-Browser-Agent/0.1",
+            "X-Velia-User": str(user_id),
+        }
+        try:
+            async with app[CLIENT].post(
+                    config.agent_origin + "/v1/run",
+                    json={"prompt": prompt},
+                    headers=headers,
+                    allow_redirects=False,
+                    timeout=ClientTimeout(total=460, sock_read=450)) as response:
+                body = bytearray()
+                async for chunk in response.content.iter_chunked(65536):
+                    body.extend(chunk)
+                    if len(body) > MAX_AGENT_RESPONSE:
+                        return 502, {"ok": False, "error": "browser_agent_invalid_response"}
+                try:
+                    result = json.loads(body)
+                except (ValueError, UnicodeDecodeError):
+                    return 502, {"ok": False, "error": "browser_agent_invalid_response"}
+                if not isinstance(result, dict):
+                    return 502, {"ok": False, "error": "browser_agent_invalid_response"}
+                if response.status == 200 and result.get("ok") is True:
+                    return 200, {
+                        "ok": True,
+                        "text": str(result.get("text") or "")[:128000],
+                        "model": "velia-flash",
+                        "session_id": str(result.get("session_id") or "")[:160],
+                        "tool_count": int(result.get("tool_count") or 0),
+                    }
+                code = str(result.get("error") or "browser_agent_failed")
+                if response.status == 429:
+                    return 429, {"ok": False, "error": "browser_agent_busy"}
+                if response.status == 504:
+                    return 504, {"ok": False, "error": "browser_agent_timeout"}
+                if response.status == 400:
+                    return 400, {"ok": False, "error": "invalid_browser_task"}
+                return 503, {"ok": False, "error": "browser_agent_unavailable"}
+        except (ClientError, TimeoutError, OSError):
+            return 503, {"ok": False, "error": "browser_agent_unavailable"}
 
     async def lifecycle(application):
         async with ClientSession(timeout=ClientTimeout(total=15, sock_read=10),
@@ -231,7 +296,7 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
         setup_web_routes(app, origin=origin, upstream=upstream, authenticate=authenticate,
             allowed=allowed, valid_session=valid_session, json_response=json_response, handlers=handlers,
             account_balance=account_balance, authorize_model=authorize_model, upstream_stream=upstream_stream,
-            web_search=web_search)
+            web_search=web_search, browser_agent_run=browser_agent_run)
         if os.getenv("VELIA_WEB_GUEST_ENABLED") == "true":
             from desktop.guest_routes import setup_guest_routes
             setup_guest_routes(app, origin=origin, handlers=handlers, json_response=json_response,
