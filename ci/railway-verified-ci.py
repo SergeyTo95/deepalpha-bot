@@ -106,7 +106,7 @@ def test_group(group, sha):
                 job_env[key] = str(value)
             dsn = f'postgresql://postgres@127.0.0.1:55432/{db_name}'
             job_env.update(TEST_DATABASE_URL=dsn, VELIA_FLASH_TEST_DATABASE_URL=dsn,
-                           DATABASE_URL=dsn)
+                           VELIA_MODEL_LAB_TEST_DATABASE_URL=dsn, DATABASE_URL=dsn)
             count = 0
             for index in spec['steps']:
                 step = job['steps'][index]
