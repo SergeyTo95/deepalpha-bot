@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 from aiohttp import ClientError, ClientSession, ClientTimeout, DummyCookieJar, TCPConnector, web
 from velia_desktop_routes import AuthenticationUnavailable, setup_velia_desktop_routes
 from desktop.web_routes import prepare_web_payload, public_web_stream, setup_web_routes
+from desktop.admin_proxy import setup_owner_admin_proxy
 
 MAX_AUTH_BODY = 16 * 1024
 MAX_AUTH_RESPONSE = 64 * 1024
@@ -231,6 +232,8 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
                 store=guest_store, web_search=web_search)
     else:
         app.router.add_get("/", pairing_page)
+    if os.getenv("VELIA_DESKTOP_ADMIN_PROXY_ENABLED", "").lower() in {"true", "1", "yes", "on"}:
+        setup_owner_admin_proxy(app, upstream_origin=config.auth_origin, client_key=CLIENT)
     return app
 
 
