@@ -85,7 +85,7 @@ def phone_answer(reply):
     establish an exact model, and the answer must not invent one.
     """
     lowered = reply.casefold()
-    volume_down = bool(re.search(r"громк\w*\s+(?:вниз|меньш\w*)|(?:уменьш\w*|пониж\w*)\s+громк\w*|volume\s+down", lowered))
+    volume_down = bool(re.search(r"громк\w*\s+(?:вниз|меньш\w*)|(?:уменьш\w*|пониж\w*|снижен\w*)\s+громк\w*|volume\s+down", lowered))
     power_side = (any(term in lowered for term in ("питан", "power", "блокиров"))
         or bool(re.search(r"\bside\b|\bбоков\w*\s+(?:кноп\w*|клавиш\w*)", lowered)))
     corrupted = bool(re.search(r"\b(?:сиде|сторонн\w*)\b", lowered))
