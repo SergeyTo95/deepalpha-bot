@@ -19,6 +19,7 @@ from services import velia_research_report_service as reports
 from services import velia_research_systematic_review_service as systematic_review
 from services import velia_research_living_service as living_research
 from services import velia_research_living_reassessment_service as living_reassessment
+from services import velia_model_lab_service as model_lab
 
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,10 @@ def main() -> None:
     director_on = director.enabled()
     living_on = living_research.worker_enabled()
     reassessment_on = living_reassessment.worker_enabled()
-    if not director_on and not living_on and not reassessment_on:
+    model_lab_on = model_lab.worker_ready()
+    if model_lab_on:
+        model_lab.ensure_tables()
+    if not director_on and not living_on and not reassessment_on and not model_lab_on:
         logger.warning("VELIA_RESEARCH_WORKER_DISABLED")
         return
 
@@ -69,6 +73,13 @@ def main() -> None:
     while not stop.is_set():
         try:
             worked = False
+            if model_lab_on:
+                model_lab.worker_heartbeat(worker)
+                model_run = model_lab.claim_next(worker)
+                if model_run:
+                    worked = True
+                    model_status = model_lab.execute_claimed(model_run, worker)
+                    logger.info("VELIA_MODEL_LAB_STEP run=%s status=%s", model_run["id"], model_status)
             if director_on:
                 run = director.claim_next(worker)
                 if run:
