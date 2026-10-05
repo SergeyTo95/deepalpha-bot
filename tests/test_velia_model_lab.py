@@ -72,7 +72,8 @@ def test_source_links_reject_unsafe_or_unrelated_urls(url):
 
 @pytest.mark.parametrize("operation,args", [(lab.snapshot, ()), (lab.get_run, ("id",)),
     (lab.enqueue, ("benchmark", "long enough goal", "label", str(uuid.uuid4()))),
-    (lab.export_dataset, ()), (lab.cancel, ("id",)), (lab.add_example, ("p", "a", "train", True))])
+    (lab.export_dataset, ()), (lab.cancel, ("id",)), (lab.add_example, ("p", "a", "train", True)),
+    (lab.manual_flash_probe, ("test prompt",))])
 def test_service_operations_enforce_owner(monkeypatch, operation, args):
     monkeypatch.setenv("ADMIN_ID", "123")
     with pytest.raises(PermissionError):
@@ -100,7 +101,7 @@ def _request(monkeypatch, method, path, *, cookie="", data=None):
 
 @pytest.mark.parametrize("method,path", [("GET", "/admin/research"),
     ("GET", "/admin/research/dataset.jsonl"), ("GET", "/admin/research/abc"),
-    ("POST", "/admin/research/runs"), ("POST", "/admin/research/abc/cancel"),
+    ("POST", "/admin/research/flash"), ("POST", "/admin/research/runs"), ("POST", "/admin/research/abc/cancel"),
     ("POST", "/admin/research/abc/review/answer"), ("POST", "/admin/research/examples"),
     ("POST", "/admin/research/examples/abc/approval")])
 def test_all_lab_routes_require_existing_owner_session(monkeypatch, method, path):
@@ -108,6 +109,43 @@ def test_all_lab_routes_require_existing_owner_session(monkeypatch, method, path
     assert status == (302 if method == "GET" else 401)
     if method == "GET":
         assert headers["Location"] == "/admin/login"
+
+
+def test_flash_lab_page_has_direct_prompt_field(monkeypatch):
+    data = {"runs": [], "examples": [], "worker": {"alive": True},
+        "capabilities": {"enabled": True, "flash": True, "search": False, "teacher": False,
+        "teacher_provider": "kimi", "profile": {"model": "velia-flash", "revision": "r1"}}}
+    monkeypatch.setattr(lab, "snapshot", lambda owner: data)
+    status, body, _ = _request(monkeypatch, "GET", "/admin/research",
+        cookie="velia_admin_session=valid; velia_admin_csrf=csrf-good")
+    assert status == 200
+    assert "Flash Lab · прямой запрос" in body
+    assert "name='prompt'" in body
+    assert "/admin/research/flash" in body
+    assert "не читает пользователей DeepAlpha" in body
+
+
+def test_manual_flash_probe_uses_worker_lock_and_returns_diagnostics(monkeypatch):
+    monkeypatch.setenv("ADMIN_ID", "123")
+    monkeypatch.setenv("VELIA_MODEL_LAB_ENABLED", "true")
+    monkeypatch.setattr(flash, "available", lambda: True)
+    monkeypatch.setattr(lab, "_profile", lambda: {"model": "velia-flash", "revision": "r-test"})
+    @contextmanager
+    def slot():
+        yield True
+    monkeypatch.setattr(lab, "_flash_slot", slot)
+    monkeypatch.setattr(lab, "_transaction", lambda: (_ for _ in ()).throw(RuntimeError("audit offline")))
+    monkeypatch.setattr(flash, "generate", lambda messages, **kwargs: {
+        "ok": True, "text": "Ответ Flash", "model": "velia-flash", "provider": "bonsai",
+        "usage": {"completion_tokens": 3}, "finish_reason": "stop",
+    })
+    result = lab.manual_flash_probe(123, "Тестовый запрос")
+    assert result["ok"] is True
+    assert result["text"] == "Ответ Flash"
+    assert result["model"] == "velia-flash"
+    assert result["provider"] == "bonsai"
+    assert result["profile"]["revision"] == "r-test"
+    assert result["latency_ms"] >= 0
 
 
 def test_mutations_require_csrf_and_do_not_enqueue_when_denied(monkeypatch):
