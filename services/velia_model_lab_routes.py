@@ -118,6 +118,48 @@ async def index(request):
     return _page(request, body)
 
 
+def _research_copy_text(run: dict) -> str:
+    report = run.get("report") or {}
+    lines = [
+        str(run.get("label") or "Исследование Velyon Core"),
+        "",
+        str(run.get("goal") or ""),
+        "",
+    ]
+    summary = str(report.get("summary") or "").strip()
+    if summary:
+        lines.extend(["Гипотезы улучшения", summary, ""])
+    for hypothesis in report.get("hypotheses", []) or []:
+        lines.extend([
+            str(hypothesis.get("title") or ""),
+            str(hypothesis.get("method") or ""),
+            "",
+            "Проверка: " + str(hypothesis.get("test") or ""),
+            "",
+            "Риск: " + str(hypothesis.get("risk") or ""),
+            "",
+            "Источники: " + ", ".join(str(v) for v in (hypothesis.get("source_ids") or [])),
+            "",
+        ])
+    unknowns = report.get("unknowns") or []
+    if unknowns:
+        lines.append("Что ещё выяснить")
+        lines.extend(str(value) for value in unknowns)
+        lines.append("")
+    sources = report.get("sources") or []
+    if sources:
+        lines.append("Источники")
+        for source in sources:
+            lines.append(f"{source.get('id','')}: {source.get('title') or source.get('url') or ''}")
+            if source.get("url"):
+                lines.append(str(source.get("url")))
+            if source.get("snippet"):
+                lines.append(str(source.get("snippet")))
+            lines.append("")
+    return "\n".join(lines).strip()
+
+
+
 async def detail(request):
     denied = await _authorize(request)
     if denied is not None:
@@ -173,7 +215,14 @@ async def detail(request):
             body += "</div>"
         body += "</div>"
     elif report.get("summary"):
-        body += f"<div class='card full'><h2>Гипотезы улучшения</h2><p>{core._e(report['summary'])}</p><p class='hint'>План создан по поисковым выдержкам. Совместимость методов нужно подтвердить по полным материалам; обучение не проводилось.</p>"
+        copy_text = _research_copy_text(run)
+        body += f"""<div class='card full'>
+        <div class='lab-actions' style='margin-bottom:12px'>
+          <button type='button' class='primary' data-copy-target='research-copy-text'>Скопировать весь отчёт</button>
+          <span class='hint' data-copy-status='research-copy-text'></span>
+        </div>
+        <textarea id='research-copy-text' aria-hidden='true' tabindex='-1' style='position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden'>{core._e(copy_text)}</textarea>
+        <h2>Гипотезы улучшения</h2><p>{core._e(report['summary'])}</p><p class='hint'>План создан по поисковым выдержкам. Совместимость методов нужно подтвердить по полным материалам; обучение не проводилось.</p>"""
         for h in report.get("hypotheses", []):
             body += f"<div class='lab-result'><h3>{core._e(h['title'])}</h3><p>{core._e(h['method'])}</p><p><strong>Проверка:</strong> {core._e(h['test'])}</p><p><strong>Риск:</strong> {core._e(h['risk'])}</p><p class='hint'>Источники: {core._e(', '.join(h['source_ids']))}</p></div>"
         body += "<h3>Что ещё выяснить</h3><ul>" + "".join(f"<li>{core._e(v)}</li>" for v in report.get("unknowns", [])) + "</ul><h3>Источники</h3><ul>"
