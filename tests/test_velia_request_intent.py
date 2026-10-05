@@ -54,6 +54,27 @@ def test_personal_context_carries_exact_spans_without_invented_diagnoses():
     assert "гестамин" not in json.dumps(result["context"], ensure_ascii=False)
 
 
+@pytest.mark.parametrize("question,quote,candidate,kind", [
+    ("У меня гестамин эпное и астма.", "гестамин эпное", "гистамин, апноэ", "condition"),
+    ("У меня роутор терминал.", "роутор терминал", "роутер, терминал", "device"),
+])
+def test_restored_independent_concepts_cannot_share_a_context_type(question, quote, candidate, kind):
+    args = {"action": "direct", "quote": quote, "candidate": candidate, "query": "",
+        "context": [{"quote": quote, "kind": kind, "status": "stated"}]}
+    with pytest.raises(ValueError):
+        parse_decision(decision(args), question)
+    args["context"] = [{"quote": word, "kind": kind, "status": "stated"} for word in quote.split()]
+    assert len(parse_decision(decision(args), question)["context"]) == 2
+
+
+def test_a_restored_compound_condition_keeps_its_whole_evidence():
+    question = "У меня сахарный деабет."
+    args = {"action": "direct", "quote": "сахарный деабет", "candidate": "сахарный диабет", "query": "",
+        "context": [{"quote": "сахарный деабет", "kind": "condition", "status": "stated"}]}
+    result = parse_decision(decision(args), question)
+    assert result["context"] == [{"span": [7, 22], "status": "stated", "kind": "condition"}]
+
+
 @pytest.mark.parametrize("context", [
     [{"quote": "аллергия", "status": "stated"}],
     [{"quote": "гистамин", "status": "stated"}],

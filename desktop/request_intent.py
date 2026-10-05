@@ -53,6 +53,10 @@ INSTRUCTION = (
     "без актуальных сведений action=direct, query=''. "
     "В context отдели явно сообщённые личные условия (status=stated) от "
     "упоминаний без пояснения состояния или свойства (status=unspecified). "
+    "Один элемент context описывает одно самостоятельное понятие: разные "
+    "понятия перечисляй отдельно, даже если в диктовке пропущена запятая. "
+    "Не объединяй вещество и состояние в один диагноз. Например, в списке "
+    "'калий, астма' калий — substance/unspecified, астма — condition/stated. "
     "kind определяет ТИП понятия после восстановления написания: condition — "
     "название состояния или реакции; substance — только название вещества без "
     "описания реакции или измерения; device — устройство/марка; software — "
@@ -202,6 +206,22 @@ def parse_decision(result, question):
         start = question.index(quote)
         span = [start, start + len(quote)]
         restoration_content(question, span, restored)
+        # A comma-separated restoration explicitly names independent concepts.
+        # A single context row cannot give that entire list one type/status.
+        # Preserve compound terms (no comma) and the original evidence spans.
+        parts = candidate.split(",")
+        original_words = [m for m in re.finditer(r"[^\W\d_]+", quote) if m.group().casefold() != "и"]
+        counts = [len(re.findall(r"[^\W\d_]+", part)) for part in parts]
+        if len(parts) > 1 and all(counts) and sum(counts) == len(original_words):
+            concept_spans, offset = [], 0
+            for count in counts:
+                concept_spans.append((start + original_words[offset].start(),
+                    start + original_words[offset + count - 1].end()))
+                offset += count
+            for item in context or []:
+                left, right = item["span"]
+                if sum(left < end and begin < right for begin, end in concept_spans) > 1:
+                    raise ValueError("invalid_understanding_response")
         result.update(span=span, candidate=restored)
     return result
 
