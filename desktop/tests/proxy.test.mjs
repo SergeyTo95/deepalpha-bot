@@ -70,3 +70,38 @@ test('closing a local stream aborts the gateway request', async () => {
     assert.equal(signal.aborted, true);
   } finally { await proxy.close(); }
 });
+
+
+test('Flash Agent Core can expose only an explicit browser-tool allowlist', async () => {
+  let seen;
+  const proxy = await startProxy(
+    'https://api.example/desktop-api/v1',
+    async () => ({ origin: 'https://api.example', access_token: 'va_fixture' }),
+    async (_, options) => {
+      seen = JSON.parse(options.body);
+      return new Response('{}', { headers: { 'Content-Type': 'application/json' } });
+    },
+    { allowedToolNames: ['mcp__playwright-mcp__browser_navigate', 'mcp__playwright-mcp__browser_snapshot'] },
+  );
+  const body = {
+    model: 'velia-flash', max_tokens: 1, messages: [{ role: 'user', content: 'Open example.com' }],
+    tools: [
+      { type: 'function', function: { name: 'mcp__playwright-mcp__browser_navigate', parameters: { type: 'object' } } },
+      { type: 'function', function: { name: 'mcp__playwright-mcp__browser_snapshot', parameters: { type: 'object' } } },
+      { type: 'function', function: { name: 'mcp__playwright-mcp__browser_run_code_unsafe', parameters: { type: 'object' } } },
+      { type: 'function', function: { name: 'read', parameters: { type: 'object' } } },
+    ],
+  };
+  try {
+    const response = await fetch(proxy.url + '/chat/completions', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + proxy.key }, body: JSON.stringify(body),
+    });
+    assert.equal(response.status, 200);
+    await response.text();
+    assert.deepEqual(seen.tools.map(tool => tool.function.name), [
+      'mcp__playwright-mcp__browser_navigate',
+      'mcp__playwright-mcp__browser_snapshot',
+    ]);
+    assert.equal(seen.max_tokens, 512);
+  } finally { await proxy.close(); }
+});
