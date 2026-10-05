@@ -22,6 +22,7 @@ from services.velia_admin_control_service import (
     set_user_vip_status,
     user_detail,
     velyon_memory_health,
+    velyon_core_snapshot,
 )
 from services.velia_admin_security_service import (
     ADMIN_CSRF_COOKIE,
@@ -306,7 +307,7 @@ async def admin_dashboard(request: web.Request) -> web.Response:
     denied = await _guard(request)
     if denied:
         return denied
-    data = await asyncio.to_thread(overview_snapshot)
+    data = await asyncio.to_thread(velyon_core_snapshot)
     errors = data.get("recent_errors") or []
     memory = data.get("velyon_memory") or {}
     deploy = data.get("deploy") or {}
@@ -328,7 +329,7 @@ async def admin_system(request: web.Request) -> web.Response:
     denied = await _guard(request)
     if denied:
         return denied
-    data = await asyncio.to_thread(overview_snapshot)
+    data = await asyncio.to_thread(velyon_core_snapshot)
     memory = data.get("velyon_memory") or {}
     queue = memory.get("queue") or {}
     body = f"""<div class='grid'>
