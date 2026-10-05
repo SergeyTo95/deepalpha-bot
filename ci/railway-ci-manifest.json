@@ -32,6 +32,14 @@
     ],
     "sha256": "790cc04b26950603d2187c89060595ff731adf5cd81996a3ae313feaffba8806"
   },
+  "velia-model-lab.yml": {
+    "group": "backend",
+    "steps": [
+      3,
+      4
+    ],
+    "sha256": "ef084741c1132c4233790648289270270824db6c894dc93e29132475c4d0fc59"
+  },
   "velia-projects-deepalpha.yml": {
     "group": "backend",
     "steps": [

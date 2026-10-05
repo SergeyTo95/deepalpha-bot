@@ -115,3 +115,7 @@ python3 -m pytest -q tests/test_velia_model_lab.py tests/test_velia_flash.py tes
 на обычном PostgreSQL: эмуляторы с одним backend не подтверждают эти свойства.
 Workflow `VELIA Model Lab` использует PostgreSQL 16 и включает такие тесты
 через `VELIA_MODEL_LAB_NATIVE_POSTGRES_TESTS=1`.
+Он также зарегистрирован в обязательном Railway CI как группа `backend`:
+проверяются hash workflow и инвентарь исходников, runner подставляет отдельную
+локальную тестовую базу в `VELIA_MODEL_LAB_TEST_DATABASE_URL`. Проверки нельзя
+обойти добавлением workflow или использованием URL боевой базы.
