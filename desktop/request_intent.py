@@ -103,7 +103,50 @@ class _MergedContextConcepts(ValueError):
         self.quote = quote
 
 
-def context_spans(values, question):
+def _one_edit_apart(left, right):
+    """At most one insertion, deletion or substitution; no dictionary guesses."""
+    if left == right:
+        return True
+    if abs(len(left) - len(right)) > 1:
+        return False
+    for index, (a, b) in enumerate(zip(left, right)):
+        if a != b:
+            if len(left) == len(right):
+                return left[index + 1:] == right[index + 1:]
+            if len(left) < len(right):
+                return left[index:] == right[index + 1:]
+            return left[index + 1:] == right[index:]
+    return True
+
+
+def aligned_context_quote(value, question, restoration):
+    """Recover exact evidence only inside an already validated restoration.
+
+    A generated context label may use the corrected spelling or a one-edit
+    intermediate form. Map it back only when both original and corrected words
+    identify one unique fragment; never change kind/status or invent evidence.
+    """
+    if not restoration or not re.fullmatch(r"[^\W\d_]+(?:\s+[^\W\d_]+)*", value):
+        return None
+    original, corrected = restoration
+    raw_words = [m for m in re.finditer(r"[^\W\d_]+", original) if m.group().casefold() != "и"]
+    changed = [m.group().casefold() for m in re.finditer(r"[^\W\d_]+", corrected) if m.group().casefold() != "и"]
+    words = value.casefold().split()
+    if len(raw_words) != len(changed) or not words or len(words) > len(raw_words):
+        return None
+    matches = []
+    for offset in range(len(raw_words) - len(words) + 1):
+        pairs = zip(words, raw_words[offset:offset + len(words)], changed[offset:offset + len(words)])
+        if all(word in {raw.group().casefold(), target}
+                or (_one_edit_apart(word, raw.group().casefold()) and _one_edit_apart(word, target))
+                for word, raw, target in pairs):
+            matches.append(original[raw_words[offset].start():raw_words[offset + len(words) - 1].end()])
+    if len(matches) != 1 or question.count(matches[0]) != 1:
+        return None
+    return matches[0]
+
+
+def context_spans(values, question, restoration=None):
     """Carry exact evidence positions, never generated diagnoses or stored quotes."""
     if not isinstance(values, list) or len(values) > 6:
         raise ValueError("invalid_understanding_response")
@@ -112,18 +155,21 @@ def context_spans(values, question):
         if (not isinstance(value, dict) or set(value) not in ({"quote", "status"}, {"quote", "kind", "status"})
                 or not isinstance(value["quote"], str)
                 or not 1 <= len(value["quote"].strip()) <= 128
-                or value["quote"] not in question
                 or not isinstance(value["status"], str)
-                or value["status"] not in {"stated", "unspecified"}
-                or value["quote"] in seen):
+                or value["status"] not in {"stated", "unspecified"}):
+            raise ValueError("invalid_understanding_response")
+        quote = value["quote"]
+        if quote not in question:
+            quote = aligned_context_quote(quote, question, restoration)
+        if quote is None or quote in seen:
             raise ValueError("invalid_understanding_response")
         kind = value.get("kind")
         if "kind" in value and (not isinstance(kind, str) or kind not in {"condition", "substance", "device", "software", "measurement", "other"}):
             raise ValueError("invalid_understanding_response")
-        start = question.index(value["quote"])
-        end = start + len(value["quote"])
-        if ((start and question[start - 1].isalnum() and value["quote"][0].isalnum())
-                or (end < len(question) and question[end].isalnum() and value["quote"][-1].isalnum())):
+        start = question.index(quote)
+        end = start + len(quote)
+        if ((start and question[start - 1].isalnum() and quote[0].isalnum())
+                or (end < len(question) and question[end].isalnum() and quote[-1].isalnum())):
             raise ValueError("invalid_understanding_response")
         # A quoted noun immediately following a negation is not a positive
         # fact. Carry the original negation in its exact evidence span.
@@ -136,7 +182,7 @@ def context_spans(values, question):
         if kind is not None:
             item["kind"] = kind
         result.append(item)
-        seen.add(value["quote"])
+        seen.add(quote)
     return result
 
 
@@ -150,7 +196,15 @@ def parse_decision(result, question):
             or args["action"] not in {"direct", "search", "clarify"}):
         raise ValueError("invalid_understanding_response")
     scope = args.get("source_scope", "general")
-    context = context_spans(args["context"], question) if "context" in args else None
+    quote, candidate = args["quote"], args.get("candidate", "")
+    restoration = None
+    if args["action"] != "clarify" and quote and candidate and quote in question:
+        restored = plausible_restoration(quote, candidate)
+        if restored:
+            start = question.index(quote)
+            restoration_content(question, [start, start + len(quote)], restored)
+            restoration = (quote, restored)
+    context = context_spans(args["context"], question, restoration) if "context" in args else None
     if scope not in {"general", "official_health"} or (scope != "general" and args["action"] != "search"):
         raise ValueError("invalid_understanding_response")
     quote, query, candidate = args["quote"], args["query"].strip(), args.get("candidate", "")

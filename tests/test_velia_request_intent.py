@@ -542,3 +542,46 @@ def test_invalid_source_scope_cannot_change_the_retrieval_policy(action, scope):
     with pytest.raises(ValueError):
         parse_decision(decision({"action": action, "quote": "", "candidate": "",
             "query": "weight loss" if action == "search" else "", "source_scope": scope}), "Пример")
+
+
+@pytest.mark.parametrize("context_quote", ["апноэ", "апное"])
+def test_corrected_context_label_maps_to_unique_original_evidence(context_quote):
+    question = "У меня гестамин эпное и астма. Как похудеть?"
+    args = {"action":"search", "quote":"гестамин эпное", "candidate":"гистамин, апноэ",
+        "query":"healthy weight loss", "source_scope":"official_health",
+        "context":[{"quote":"гестамин", "kind":"substance", "status":"stated"},
+            {"quote":context_quote, "kind":"condition", "status":"stated"},
+            {"quote":"астма", "kind":"condition", "status":"stated"}]}
+    result = parse_decision(decision(args), question)
+    assert [(question[row["span"][0]:row["span"][1]], row["kind"], row["status"]) for row in result["context"]] == [
+        ("гестамин", "substance", "unspecified"), ("эпное", "condition", "stated"), ("астма", "condition", "stated")]
+    assert question == "У меня гестамин эпное и астма. Как похудеть?"
+
+
+@pytest.mark.parametrize("question,raw,candidate,label,expected", [
+    ("У меня роутор.", "роутор", "роутер", "роутар", "роутор"),
+    ("У меня нет терменала.", "терменала", "терминала", "терминала", "нет терменала"),
+])
+def test_context_alignment_is_topic_independent_and_preserves_negations(question, raw, candidate, label, expected):
+    args = {"action":"direct", "quote":raw, "candidate":candidate, "query":"",
+        "context":[{"quote":label, "kind":"device", "status":"stated"}]}
+    result = parse_decision(decision(args), question)
+    row = result["context"][0]
+    assert question[row["span"][0]:row["span"][1]] == expected
+    assert row["kind"] == "device" and row["status"] == "stated"
+
+
+@pytest.mark.parametrize("label", ["гистамин апноэ", "грипп", "8081", "app.pz"])
+def test_context_alignment_rejects_merged_unrelated_and_protected_literals(label):
+    question = "У меня гестамин эпное и астма. Сохрани 8080 и app.py."
+    args = {"action":"search", "quote":"гестамин эпное", "candidate":"гистамин, апноэ",
+        "query":"healthy weight loss", "source_scope":"official_health",
+        "context":[{"quote":label, "kind":"condition", "status":"stated"}]}
+    with pytest.raises(ValueError):
+        parse_decision(decision(args), question)
+
+
+def test_context_alignment_rejects_ambiguous_original_evidence():
+    from desktop.request_intent import aligned_context_quote
+    assert aligned_context_quote("роутер", "роутор роутор", ("роутор роутор", "роутер, роутер")) is None
+    assert aligned_context_quote("роутер", "роутор роутор", ("роутор", "роутер")) is None
