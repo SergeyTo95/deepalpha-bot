@@ -97,6 +97,12 @@ TOOL = {"type": "function", "function": {
         "required": ["action", "quote", "candidate", "query", "source_scope", "task_query", "context"], "additionalProperties": False}}}
 
 
+class _MergedContextConcepts(ValueError):
+    def __init__(self, quote):
+        super().__init__("invalid_understanding_response")
+        self.quote = quote
+
+
 def context_spans(values, question):
     """Carry exact evidence positions, never generated diagnoses or stored quotes."""
     if not isinstance(values, list) or len(values) > 6:
@@ -221,7 +227,7 @@ def parse_decision(result, question):
             for item in context or []:
                 left, right = item["span"]
                 if sum(left < end and begin < right for begin, end in concept_spans) > 1:
-                    raise ValueError("invalid_understanding_response")
+                    raise _MergedContextConcepts(question[left:right])
         result.update(span=span, candidate=restored)
     return result
 
@@ -263,18 +269,49 @@ async def understand(messages, *, on_invalid=None):
                 result = json.loads(body)
         try:
             return parse_decision(result, question)
-        except (KeyError, IndexError, TypeError, ValueError):
+        except (KeyError, IndexError, TypeError, ValueError) as error:
+            choices = result.get("choices", []) if isinstance(result, dict) else []
+            choice = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
+            message = choice.get("message") or {}
+            calls = message.get("tool_calls", []) if isinstance(message, dict) else []
+            functions = [call["function"] for call in calls if isinstance(call, dict)
+                and isinstance(call.get("function"), dict)] if isinstance(calls, list) else []
             if on_invalid is not None:
-                choices = result.get("choices", []) if isinstance(result, dict) else []
-                choice = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
-                message = choice.get("message") or {}
-                calls = message.get("tool_calls", []) if isinstance(message, dict) else []
-                functions = [call["function"] for call in calls if isinstance(call, dict)
-                    and isinstance(call.get("function"), dict)] if isinstance(calls, list) else []
                 on_invalid({"attempt": attempt + 1, "calls": [{"name": function.get("name"),
                     "arguments": str(function.get("arguments", ""))[:4096]} for function in functions]})
             if attempt:
                 raise ValueError("invalid_understanding_response") from None
+            repair = {"error": "invalid_understanding_response", "instruction":
+                "Исправь предыдущий вызов understand_request для того же исходного сообщения. "
+                "Все quote должны дословно присутствовать в исходном вопросе. "
+                "Сохрани отрицания, числа и явно сообщённые свойства. Не добавляй диагнозы. "
+                "Используй только поля и типы схемы."}
+            if isinstance(error, _MergedContextConcepts):
+                repair.update(error="context_merges_independent_concepts", merged_quote=error.quote,
+                    instruction="В предыдущем context одна цитата объединяет разные самостоятельные понятия. "
+                    "Раздели merged_quote на отдельные элементы context по понятиям из candidate, "
+                    "а не назначай всей цитате один kind/status. Для каждого отдельно выбери kind "
+                    "по значению исправленного слова. Название вещества — substance/unspecified, "
+                    "состояние — condition со статусом по исходному вопросу. "
+                    "Цитируй оригинальные слова пользователя, без исправлений внутри context.quote. "
+                    "Остальные условия, отрицания, числа, основную задачу и исправление написания сохрани.")
+            if len(functions) == 1 and functions[0].get("name") == "understand_request":
+                arguments = functions[0].get("arguments")
+                try:
+                    decoded = json.loads(arguments) if isinstance(arguments, str) else None
+                except (ValueError, TypeError):
+                    decoded = None
+                if isinstance(decoded, dict):
+                    # Return the rejected call with a concrete tool error.
+                    # Preserve the original question and constant instruction.
+                    call_id = "invalid_understanding_1"
+                    payload["messages"].extend([
+                        {"role": "assistant", "content": None, "tool_calls": [{
+                            "id": call_id, "type": "function", "function": {
+                                "name": "understand_request", "arguments": arguments}}]},
+                        {"role": "tool", "tool_call_id": call_id,
+                            "content": json.dumps(repair, ensure_ascii=False)}])
+                    continue
             payload["messages"][0] = {"role": "system", "content": instruction +
                 "\nПредыдущий план не прошёл строгую проверку формата или цитат. Повтори "
                 "understand_request для того же исходного сообщения, сохрани все его "

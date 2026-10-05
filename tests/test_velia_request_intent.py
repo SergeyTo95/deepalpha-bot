@@ -75,6 +75,46 @@ def test_a_restored_compound_condition_keeps_its_whole_evidence():
     assert result["context"] == [{"span": [7, 22], "status": "stated", "kind": "condition"}]
 
 
+@pytest.mark.parametrize("recover", [True, False])
+def test_merged_concept_repair_sees_the_rejected_call_and_the_exact_error(monkeypatch, tmp_path, recover):
+    async def run():
+        monkeypatch.setenv("VELIA_WEB_GUEST_ENABLED", "true")
+        question = "У меня гестамин эпное и астма. Как похудеть?"
+        bad = {"action": "search", "quote": "гестамин эпное", "candidate": "гистамин, апноэ",
+            "query": "healthy weight loss advice", "source_scope": "official_health",
+            "context": [{"quote": "гестамин эпное", "kind": "condition", "status": "stated"},
+                {"quote": "астма", "kind": "condition", "status": "stated"}]}
+        good = {**bad, "context": [{"quote": "гестамин", "kind": "substance", "status": "unspecified"},
+            {"quote": "эпное", "kind": "condition", "status": "stated"},
+            {"quote": "астма", "kind": "condition", "status": "stated"}]}
+        async with fixture(monkeypatch, with_search=True, guest_store=GuestStore(sqlite_path=tmp_path/"quota.db"),
+                intent_results=[bad, good if recover else bad], review_content="При астме и апноэ начни постепенно [1].",
+                search_response={"results": [{"title": "Weight advice", "url": "https://www.nhs.uk/weight",
+                    "content": "Eat well. Gradual physical activity."}]}) as (server, client, state):
+            cookie, _, _ = await guest(server, client)
+            async with client.post(server.make_url("/web-api/v1/guest/chat/completions"), headers=guest_headers(cookie),
+                    json={"model": "velia-flash", "stream": True, "messages": [{"role": "user", "content": question}]}) as response:
+                assert response.status == (200 if recover else 503)
+                wire = await response.text()
+            assert len(state["intent_payloads"]) == 2
+            first, repaired = state["intent_payloads"]
+            assert repaired["messages"][:-2] == first["messages"]
+            rejected, feedback = repaired["messages"][-2:]
+            call = rejected["tool_calls"][0]
+            assert rejected["role"] == "assistant" and feedback["role"] == "tool"
+            assert feedback["tool_call_id"] == call["id"]
+            assert json.loads(call["function"]["arguments"]) == bad
+            error = json.loads(feedback["content"])
+            assert error["error"] == "context_merges_independent_concepts"
+            assert error["merged_quote"] == "гестамин эпное"
+            assert "substance/unspecified" in error["instruction"]
+            assert len(state["search_queries"]) == len(state["payloads"]) == (1 if recover else 0)
+            assert "merged_context_quote" not in wire and "context_merges_independent_concepts" not in wire
+            async with client.get(server.make_url("/web-api/v1/guest"), headers=guest_headers(cookie)) as response:
+                assert (await response.json())["remaining"] == 29
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("context", [
     [{"quote": "аллергия", "status": "stated"}],
     [{"quote": "гистамин", "status": "stated"}],
@@ -158,7 +198,7 @@ def test_schema_repair_keeps_the_original_question_and_never_searches_an_invalid
                 assert response.status == (200 if recover else 503)
                 await response.read()
             assert len(state["intent_payloads"]) == 2
-            assert all(data["messages"][-1]["content"].split("\n\nСловарные подсказки (не подтверждённые факты):\n", 1)[0] == question for data in state["intent_payloads"])
+            assert all([m for m in data["messages"] if m["role"] == "user"][-1]["content"].split("\n\nСловарные подсказки (не подтверждённые факты):\n", 1)[0] == question for data in state["intent_payloads"])
             assert len(state["search_queries"]) == (1 if recover else 0)
             assert len(state["payloads"]) == (1 if recover else 0)
             async with client.get(server.make_url("/web-api/v1/guest"), headers=guest_headers(cookie)) as response:
