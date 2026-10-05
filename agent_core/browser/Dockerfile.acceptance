@@ -1,0 +1,22 @@
+FROM node:24.19.0-bookworm-slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends git python3 build-essential pkg-config ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY . .
+WORKDIR /src/desktop
+RUN npm ci
+RUN npm run build:harness
+ENV VELIA_AGENT_CORE_BROWSER_RUNTIME=true
+RUN npm run prepare:runtime
+
+FROM python:3.12-slim-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends chromium ca-certificates fonts-liberation && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir aiohttp==3.13.2
+WORKDIR /app
+COPY --from=build /src/desktop/.runtime/package/harness /opt/velia-agent-core/runtime
+COPY --from=build /src/desktop/.runtime/package/node/node /usr/local/bin/node
+COPY velia_desktop_routes.py /app/velia_desktop_routes.py
+COPY desktop/src/config.mjs desktop/src/proxy.mjs /app/desktop/src/
+COPY agent_core/browser /app/agent_core/browser
+ENV PYTHONUNBUFFERED=1 PYTHONPATH=/app VELIA_AGENT_CORE_RUNTIME=/opt/velia-agent-core/runtime VELIA_AGENT_CORE_CHROMIUM=/usr/bin/chromium VELIA_AGENT_CORE_FLASH_CONTEXT_TOKENS=8192
+EXPOSE 8080
+CMD ["python", "-m", "agent_core.browser.health_server"]
