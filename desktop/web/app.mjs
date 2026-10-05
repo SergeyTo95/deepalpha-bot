@@ -378,6 +378,7 @@ function applyProfile(value) {
   profile = value;
   internetAvailable = !!value.web_search;
   $("guest-notice").hidden = true;
+  $("research-link").hidden = false;
   storageKey = "velia-web-chats-v1:" + value.account;
   if (changed) {
     chats = loadChats(browserStorage, storageKey);
@@ -408,6 +409,7 @@ function applyProfile(value) {
 }
 function applyGuest(value) {
   if (profile) return;
+  $("research-link").hidden = true;
   const changed = guest?.account !== value.account || storageKey !== "velia-web-guest-v1:" + value.account;
   guest = value;
   internetAvailable = !!value.web_search;
@@ -684,6 +686,7 @@ $("account").onclick = async () => {
     );
     if (!response.ok) throw new Error();
     profile = null;
+    $("research-link").hidden = true;
     storageKey = null;
     chats = [];
     currentId = null;
