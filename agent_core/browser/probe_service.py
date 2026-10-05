@@ -6,7 +6,7 @@ import os
 import secrets
 from pathlib import Path
 
-from aiohttp import web
+from aiohttp import ClientSession, ClientTimeout, web
 
 from velia_desktop_routes import setup_velia_desktop_routes
 
@@ -26,6 +26,24 @@ async def run_probe():
     os.environ["VELIA_DESKTOP_FLASH_CONTEXT_TOKENS"] = os.getenv(
         "VELIA_AGENT_CORE_FLASH_CONTEXT_TOKENS", "8192"
     )
+
+    # A sleeping Flash worker can take several seconds to wake and load the
+    # model. Warm it explicitly before the real Agent Core turn so scale-to-zero
+    # does not turn a cold start into a false browser-agent failure.
+    async with ClientSession(timeout=ClientTimeout(total=5)) as client:
+        ready = False
+        for attempt in range(60):
+            try:
+                async with client.get(flash_url.rstrip("/") + "/health", allow_redirects=False) as response:
+                    if response.status == 200:
+                        ready = True
+                        print("VELIA_AGENT_CORE_FLASH_READY " + json.dumps({"attempt": attempt + 1}), flush=True)
+                        break
+            except (OSError, asyncio.TimeoutError):
+                pass
+            await asyncio.sleep(2)
+        if not ready:
+            raise RuntimeError("browser_flash_startup_timeout")
 
     fixture_id = "velia-agent-core-browser-probe"
     fixture_token = secrets.token_hex(32)
