@@ -125,6 +125,49 @@ def test_flash_lab_page_has_direct_prompt_field(monkeypatch):
     assert "не читает пользователей DeepAlpha" in body
 
 
+
+def test_completed_research_has_copy_all_control(monkeypatch):
+    run = {
+        "id": "abc",
+        "label": "Bonsai research",
+        "goal": "Проверить улучшение Flash",
+        "kind": "research",
+        "status": "succeeded",
+        "error_code": "",
+        "report": {
+            "summary": "Краткий вывод.",
+            "hypotheses": [{
+                "title": "LoRA",
+                "method": "Проверить адаптер.",
+                "test": "Holdout.",
+                "risk": "Размер.",
+                "source_ids": ["S1"],
+            }],
+            "unknowns": ["Совместимость."],
+            "sources": [{
+                "id": "S1",
+                "title": "Primary source",
+                "url": "https://github.com/PrismML-Eng/Bonsai-demo",
+                "snippet": "Evidence.",
+            }],
+        },
+    }
+    monkeypatch.setattr(lab, "get_run", lambda owner, run_id: run)
+    status, body, _ = _request(
+        monkeypatch,
+        "GET",
+        "/admin/research/abc",
+        cookie="velia_admin_session=valid; velia_admin_csrf=csrf-good",
+    )
+    assert status == 200
+    assert "Скопировать весь отчёт" in body
+    assert "data-copy-target='research-copy-text'" in body
+    assert "Bonsai research" in body
+    assert "Краткий вывод." in body
+    assert "Primary source" in body
+
+
+
 def test_manual_flash_probe_uses_worker_lock_and_returns_diagnostics(monkeypatch):
     monkeypatch.setenv("ADMIN_ID", "123")
     monkeypatch.setenv("VELIA_MODEL_LAB_ENABLED", "true")
