@@ -198,6 +198,26 @@ def test_legacy_developer_admin_pages_are_not_mounted_but_compatibility_patches_
     assert "raw API key" in source
 
 
+def test_velyon_core_admin_is_intelligence_only_surface():
+    from aiohttp import web
+
+    assert admin_routes.VELYON_CORE_ADMIN_ONLY is True
+    paths_in_nav = {path for _, path in admin_routes.SECTIONS}
+    assert "/admin/research" in paths_in_nav
+    assert "/admin/ai" in paths_in_nav
+    assert "/admin/users" not in paths_in_nav
+    assert "/admin/economy" not in paths_in_nav
+    assert "/admin/payments" not in paths_in_nav
+    assert "/admin/factory-pilot" not in paths_in_nav
+
+    app = web.Application()
+    admin_routes.setup_admin_routes(app)
+    mounted = {getattr(route.resource, "canonical", "") for route in app.router.routes()}
+    assert "/admin/research" in mounted
+    assert "/admin/users" not in mounted
+    assert "/admin/users/{user_id}" not in mounted
+
+
 def test_layout_injects_csrf_into_all_post_forms_without_exposing_admin_secret():
     page = admin_routes._layout("Test", "Overview", "csrf-test-value", "<form method='post' action='/admin/x'></form>")
     assert "velia-csrf" in page
