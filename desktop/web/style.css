@@ -255,6 +255,42 @@ span[data-icon] {
   padding-top: 15px;
   margin-top: 18px;
 }
+.research-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 8px 7px;
+  margin: 0 0 12px;
+  border-radius: 10px;
+  color: var(--soft);
+  text-decoration: none;
+}
+.research-link:hover,
+.research-link:focus-visible {
+  background: var(--hover);
+  color: var(--text);
+}
+.research-link[hidden] {
+  display: none;
+}
+.research-link > span:nth-child(2) {
+  flex: 1;
+  font-size: 12px;
+}
+.research-link small {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.research-link .icon {
+  width: 16px;
+  height: 16px;
+}
+.research-link > span:last-child {
+  color: var(--muted);
+}
 .history-note {
   font-size: 10px;
   color: var(--muted);
