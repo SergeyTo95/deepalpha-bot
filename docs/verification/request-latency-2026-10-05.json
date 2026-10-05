@@ -1,0 +1,586 @@
+{
+  "date": "2026-10-05",
+  "scope": "VELIA Flash browser preview PR577; same 27B CPU model and allocation",
+  "code_sha": "f72610e4ce14564b558ea85a408a682b0a04d38d",
+  "gateway_deployment": "4afe9374-98e1-4e92-9765-40696406839e",
+  "worker_sha": "1f1524be9ae0649bfd3cd3086bfd0e1f9777d6f8",
+  "worker_deployment": "8a4497c4-ea0e-44f7-b3fb-4e13777bdd5b",
+  "profile": {
+    "cpu_threads": 8,
+    "batch_tokens": 256,
+    "microbatch_tokens": 128,
+    "prompt_cache_mib": 8192,
+    "context_tokens": 8192,
+    "answer_tokens": 512,
+    "parallel": 1,
+    "cpu_limit": 24,
+    "memory_limit_gib": 24,
+    "serverless": true,
+    "model": "PrismML Ternary-Bonsai-2 27B PQ2_0",
+    "model_revision": "6ed5e12bf84b7a63069882c91dd9e9218647d17b",
+    "model_sha256": "3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1",
+    "runtime_revision": "01ae597e3f7d4742909e1e831abb12fe3d24b2cf"
+  },
+  "checks": {
+    "local": {
+      "tests": 341,
+      "seconds": 5.49,
+      "last_verified": {
+        "tests": 341,
+        "seconds": 5.49,
+        "source": "a723612eecbd8e166a0519629927de679c659fad"
+      },
+      "final_source_verified": false
+    },
+    "build": {
+      "tests": 350,
+      "seconds": 12.4
+    },
+    "diff_check": true
+  },
+  "changes": [
+    "Reuse a stable planner instruction prefix; spelling hints stay in the copied original user message.",
+    "Keep complete source evidence before the editor's changing draft message to enable recurrent-state checkpoint reuse.",
+    "Reject merged independent context concepts; retry once with the rejected tool call and a precise error, preserving the original input.",
+    "Keep medical context, citations and unsupported-personal-advice checks; reject observed new numeric schedules and risk-free assurances.",
+    "Preserve technical names and functions, avoiding corrupted transliteration.",
+    "Retry metadata once after bounded worker-readiness checks; never replay generation requests.",
+    "Skip native rebuilds for worker-only files and documentation while retaining all native source gates.",
+    "Avoid needless editor retries for negated risk guarantees and for a terminal explanation about an unspecified substance after unrelated general advice; keep actual personal-advice and positive-guarantee guards.",
+    "Give the editor its rejected tool call and exact flagged fragments through a correlated tool error while preserving the original draft/evidence checkpoint; keep at most two editor attempts.",
+    "Map corrected context labels back to a unique fragment of the already validated restoration; accept only exact aliases or one-edit intermediate forms close to both raw and corrected words, preserve kind/status/negation, and reject ambiguity, merged concepts and protected literals."
+  ],
+  "button_fixture_source": "https://www.samsung.com/uk/support/mobile-devices/how-do-i-take-a-screenshot-on-my-samsung-galaxy-device/",
+  "fixture_change": "Accept documented Power/Side aliases; require volume down, reject corrupted terms, and reject invented exact models.",
+  "measurement_limits": [
+    "Single sequential fixture run; not a production latency distribution.",
+    "The warm medical fixture reuses exactly the original source snapshot only in the private operator probe; production search stays fresh.",
+    "Cache-only 8-thread run improved ordinary questions but not medical total latency relative to the previous baseline.",
+    "Cached token state does not cache or replay final answers; new output is generated and reviewed.",
+    "Passing these probes is not a clinical certification or a guarantee for every question.",
+    "The 16-thread result is one failed trial, not proof that all hosts or workloads perform worse at 16 threads.",
+    "Current worker was already running during measurement and retained state from preceding failed candidates.",
+    "First medical request includes a fresh source search; warm medical measurement freezes only the exact source snapshot inside the private probe.",
+    "Numbers compare one fixed-fixture pass against the previously qualified cache4GiB profile, not a randomized performance experiment.",
+    "Railway memory metrics do not include every model-mapped page; they do not establish a whole-model memory footprint.",
+    "Earlier candidates were blocked by live gates and are not counted as qualified speed gains."
+  ],
+  "first_medical_preview": {
+    "ok": true,
+    "seconds": 259.37,
+    "intent_seconds": 31.13
+  },
+  "status": "qualified",
+  "gateway_status": "SUCCESS",
+  "live_probe": {
+    "commit": "f72610e4ce14564b558ea85a408a682b0a04d38d",
+    "correlated_tool_result": true,
+    "flash_live_harness": true,
+    "flash_paid_fallback": false,
+    "guest_quota": {
+      "accepted": 30,
+      "atomic_limit": 30,
+      "ok": true,
+      "persistent": true,
+      "rejected": 8
+    },
+    "identity_health": true,
+    "identity_rejects_no_token": true,
+    "live_sse": true,
+    "live_tool_call": true,
+    "model_calls": 2,
+    "ok": true,
+    "owner_pairing_verified": false,
+    "request_intent": {
+      "cases": 14,
+      "interpretation_before_search": true,
+      "live_browser_sse_cases": 9,
+      "ok": true,
+      "paid_fallback": false,
+      "personal_context_grounded": true,
+      "resolved_spelling_answers": true,
+      "substantive_medical_answer": true
+    },
+    "web_search": {
+      "model_calls": 0,
+      "ok": true,
+      "persistent_sources": true,
+      "primary_source": true,
+      "source_count": 3
+    }
+  },
+  "harness": {
+    "ok": true,
+    "rounds": 2,
+    "readTool": true,
+    "persona": true,
+    "declaredTools": 24,
+    "requestCharacters": 23372,
+    "liveModel": true,
+    "ownerPairingVerified": false
+  },
+  "browser_cases": [
+    {
+      "case": "medical_spacing",
+      "ok": true,
+      "decision": "search",
+      "candidate": "гистамин, апноэ",
+      "query": "healthy weight loss advice",
+      "source_scope": "official_health",
+      "context": [
+        {
+          "span": [
+            69,
+            77
+          ],
+          "status": "unspecified",
+          "kind": "substance"
+        },
+        {
+          "span": [
+            78,
+            83
+          ],
+          "status": "stated",
+          "kind": "condition"
+        },
+        {
+          "span": [
+            86,
+            91
+          ],
+          "status": "stated",
+          "kind": "condition"
+        }
+      ],
+      "reply": "Привет! При астме и апноэ «быстро» похудеть безопасно нельзя: цель — постепенное снижение калорийности и умеренная активность, согласованные с врачом.\n\nВ питании уменьшите порции и ограничьте сладкие напитки, сок и выпечку, так как они дают лишние калории . [1]\n\nДля движения начните с коротких прогулок в течение дня, чтобы не перегружать дыхание и сон . [2]\n\nВедите простой дневник питания и активности, чтобы отслеживать прогресс и корректировать план . [3]\n\nНе назначайте себе строгие диеты или интенсивные тренировки без консультации с врачом, особенно при астме и апноэ.",
+      "finish_reason": "stop",
+      "done": true,
+      "sources": [
+        {
+          "title": "8 tips for healthy eating - NHS",
+          "url": "https://www.nhs.uk/live-well/eat-well/how-to-eat-a-balanced-diet/eight-tips-for-healthy-eating"
+        },
+        {
+          "title": "[PDF] Facts About Healthy Weight - nhlbi",
+          "url": "https://www.nhlbi.nih.gov/sites/default/files/publications/06-5830.pdf"
+        },
+        {
+          "title": "Tips for Keeping Weight Off | Healthy Weight and Growth | CDC",
+          "url": "https://www.cdc.gov/healthy-weight-growth/losing-weight/keeping-it-off.html"
+        }
+      ],
+      "seconds": 259.37,
+      "first_text_seconds": 259.37,
+      "intent_seconds": 31.13,
+      "search_seconds": 2.19,
+      "source_snapshot_reused": false
+    },
+    {
+      "case": "device_ambiguity",
+      "ok": true,
+      "decision": "clarify",
+      "candidate": null,
+      "query": null,
+      "source_scope": null,
+      "context": [],
+      "reply": "Уточните, пожалуйста, что вы имеете в виду под «квампер»?",
+      "finish_reason": "stop",
+      "done": true,
+      "sources": [],
+      "seconds": 15.72,
+      "first_text_seconds": 15.72,
+      "intent_seconds": 15.65,
+      "search_seconds": 0,
+      "source_snapshot_reused": false
+    },
+    {
+      "case": "arithmetic_typo",
+      "ok": true,
+      "decision": "direct",
+      "candidate": "умножить",
+      "query": null,
+      "source_scope": null,
+      "context": [],
+      "reply": "391",
+      "finish_reason": "stop",
+      "done": true,
+      "sources": [],
+      "seconds": 20.04,
+      "first_text_seconds": 19.62,
+      "intent_seconds": 17.72,
+      "search_seconds": 0,
+      "source_snapshot_reused": false
+    },
+    {
+      "case": "confirmed_context",
+      "ok": true,
+      "decision": "direct",
+      "candidate": "терминал",
+      "query": null,
+      "source_scope": null,
+      "context": [],
+      "reply": "Нажми Ctrl+Alt+T.",
+      "finish_reason": "stop",
+      "done": true,
+      "sources": [],
+      "seconds": 23.61,
+      "first_text_seconds": 22.5,
+      "intent_seconds": 19.5,
+      "search_seconds": 0,
+      "source_snapshot_reused": false
+    },
+    {
+      "case": "finance_typo",
+      "ok": true,
+      "decision": "direct",
+      "candidate": "между выручкой и прибылью",
+      "query": null,
+      "source_scope": null,
+      "context": [],
+      "reply": "Выручка — это все деньги, полученные от продаж. Прибыль — то, что остаётся после вычета всех расходов.\n\nПример: вы продали 10 кружек по 500 рублей.\n*   **Выручка:** 10 × 500 = 5 000 рублей.\n*   **Расходы:** 3 000 рублей на производство и доставку.\n*   **Прибыль:** 5 000 − 3 000 = 2 000 рублей.",
+      "finish_reason": "stop",
+      "done": true,
+      "sources": [],
+      "seconds": 40.19,
+      "first_text_seconds": 21.72,
+      "intent_seconds": 19.76,
+      "search_seconds": 0,
+      "source_snapshot_reused": false
+    },
+    {
+      "case": "router_typo",
+      "ok": true,
+      "decision": "direct",
+      "candidate": "роутер",
+      "query": null,
+      "source_scope": null,
+      "context": [],
+      "reply": "Отключите питание роутера на 10–15 секунд, затем включите его снова. Дождитесь полного восстановления связи.",
+      "finish_reason": "stop",
+      "done": true,
+      "sources": [],
+      "seconds": 26.19,
+      "first_text_seconds": 21.87,
+      "intent_seconds": 20.09,
+      "search_seconds": 0,
+      "source_snapshot_reused": false
+    },
+    {
+      "case": "literal_constraints",
+      "ok": true,
+      "decision": "direct",
+      "candidate": null,
+      "query": null,
+      "source_scope": null,
+      "context": [],
+      "reply": "print(\"app.py\")",
+      "finish_reason": "stop",
+      "done": true,
+      "sources": [],
+      "seconds": 20.26,
+      "first_text_seconds": 19.55,
+      "intent_seconds": 16.98,
+      "search_seconds": 0,
+      "source_snapshot_reused": false
+    },
+    {
+      "case": "unspecified_device_model",
+      "ok": true,
+      "decision": "direct",
+      "candidate": null,
+      "query": null,
+      "source_scope": null,
+      "context": [
+        {
+          "span": [
+            7,
+            22
+          ],
+          "status": "stated",
+          "kind": "device"
+        },
+        {
+          "span": [
+            24,
+            38
+          ],
+          "status": "unspecified",
+          "kind": "other"
+        }
+      ],
+      "reply": "Удерживайте кнопки **Снижение громкости** и **Боковая (Power)**. Скриншот сохранится в галерею.",
+      "finish_reason": "stop",
+      "done": true,
+      "sources": [],
+      "seconds": 96.23,
+      "first_text_seconds": 96.23,
+      "intent_seconds": 24.31,
+      "search_seconds": 0,
+      "source_snapshot_reused": false
+    },
+    {
+      "case": "medical_spacing_warm",
+      "ok": true,
+      "decision": "search",
+      "candidate": "гистамин, апноэ",
+      "query": "healthy weight loss advice",
+      "source_scope": "official_health",
+      "context": [
+        {
+          "span": [
+            69,
+            77
+          ],
+          "status": "unspecified",
+          "kind": "substance"
+        },
+        {
+          "span": [
+            78,
+            83
+          ],
+          "status": "stated",
+          "kind": "condition"
+        },
+        {
+          "span": [
+            86,
+            91
+          ],
+          "status": "stated",
+          "kind": "condition"
+        }
+      ],
+      "reply": "Привет! При астме и апноэ быстрое похудение требует индивидуального контроля: согласуй с врачом допустимую физическую активность и питание. [1] [2]\n\nДля снижения веса можно сократить порции, выбрать продукты с меньшим содержанием жиров и сахара, а также вести дневник питания и активности. [2] [3]\n\nНе начинай новые препараты или строгие диеты без консультации специалиста.",
+      "finish_reason": "stop",
+      "done": true,
+      "sources": [
+        {
+          "title": "8 tips for healthy eating - NHS",
+          "url": "https://www.nhs.uk/live-well/eat-well/how-to-eat-a-balanced-diet/eight-tips-for-healthy-eating"
+        },
+        {
+          "title": "[PDF] Facts About Healthy Weight - nhlbi",
+          "url": "https://www.nhlbi.nih.gov/sites/default/files/publications/06-5830.pdf"
+        },
+        {
+          "title": "Tips for Keeping Weight Off | Healthy Weight and Growth | CDC",
+          "url": "https://www.cdc.gov/healthy-weight-growth/losing-weight/keeping-it-off.html"
+        }
+      ],
+      "seconds": 159.86,
+      "first_text_seconds": 159.86,
+      "intent_seconds": 33.07,
+      "search_seconds": 0,
+      "source_snapshot_reused": true
+    }
+  ],
+  "comparison": [
+    {
+      "case": "medical_spacing",
+      "before_seconds": 294.01,
+      "after_seconds": 259.37,
+      "first_text_seconds": 259.37,
+      "speedup": 1.13,
+      "reduction_percent": 11.8,
+      "quality_ok": true
+    },
+    {
+      "case": "device_ambiguity",
+      "before_seconds": 20.6,
+      "after_seconds": 15.72,
+      "first_text_seconds": 15.72,
+      "speedup": 1.31,
+      "reduction_percent": 23.7,
+      "quality_ok": true
+    },
+    {
+      "case": "arithmetic_typo",
+      "before_seconds": 25.53,
+      "after_seconds": 20.04,
+      "first_text_seconds": 19.62,
+      "speedup": 1.27,
+      "reduction_percent": 21.5,
+      "quality_ok": true
+    },
+    {
+      "case": "confirmed_context",
+      "before_seconds": 27.81,
+      "after_seconds": 23.61,
+      "first_text_seconds": 22.5,
+      "speedup": 1.18,
+      "reduction_percent": 15.1,
+      "quality_ok": true
+    },
+    {
+      "case": "finance_typo",
+      "before_seconds": 46.37,
+      "after_seconds": 40.19,
+      "first_text_seconds": 21.72,
+      "speedup": 1.15,
+      "reduction_percent": 13.3,
+      "quality_ok": true
+    },
+    {
+      "case": "router_typo",
+      "before_seconds": 32.34,
+      "after_seconds": 26.19,
+      "first_text_seconds": 21.87,
+      "speedup": 1.23,
+      "reduction_percent": 19,
+      "quality_ok": true
+    },
+    {
+      "case": "literal_constraints",
+      "before_seconds": 22.6,
+      "after_seconds": 20.26,
+      "first_text_seconds": 19.55,
+      "speedup": 1.12,
+      "reduction_percent": 10.4,
+      "quality_ok": true
+    },
+    {
+      "case": "unspecified_device_model",
+      "before_seconds": 103.87,
+      "after_seconds": 96.23,
+      "first_text_seconds": 96.23,
+      "speedup": 1.08,
+      "reduction_percent": 7.4,
+      "quality_ok": true
+    },
+    {
+      "case": "medical_spacing_warm",
+      "before_seconds": 239.1,
+      "after_seconds": 159.86,
+      "first_text_seconds": 159.86,
+      "speedup": 1.5,
+      "reduction_percent": 33.1,
+      "quality_ok": true
+    }
+  ],
+  "baseline_provenance": {
+    "source": "ffaf79fefbc4bdea13ba9eb1977d1f656e86ddbd",
+    "gateway_deployment": "c54a7d52-fbef-4762-80a7-d616fae7f29a",
+    "receipt_commit": "dee3fa1563fda3e755b016cdfc9a23ba9720cde1",
+    "receipt_path": "docs/verification/request-latency-2026-10-04.json",
+    "threads": 8,
+    "batch_tokens": 256,
+    "microbatch_tokens": 128,
+    "prompt_cache_mib": 4096
+  },
+  "worker_final_metrics": {
+    "service": {
+      "id": "38695646-9856-4c40-9f49-eddcb2a551b6",
+      "name": "velia-bonsai-acceptance"
+    },
+    "environment": {
+      "id": "ded1ec47-8687-408e-a853-ee5153c998e5",
+      "name": "deepalpha-bot-pr-577"
+    },
+    "metrics": [
+      {
+        "measurement": "CPU_USAGE",
+        "current": 0,
+        "average": 4.485404138292012,
+        "min": 0,
+        "max": 10.175405733333333,
+        "sampleCount": 121
+      },
+      {
+        "measurement": "MEMORY_USAGE_GB",
+        "current": 5.641465856,
+        "average": 3.879277525685952,
+        "min": 0,
+        "max": 5.641465856,
+        "sampleCount": 121
+      },
+      {
+        "measurement": "MEMORY_LIMIT_GB",
+        "current": 24,
+        "average": 23.801652892561982,
+        "min": 0,
+        "max": 24,
+        "sampleCount": 121
+      }
+    ]
+  },
+  "worker_final_deployments": [
+    {
+      "id": "8a4497c4-ea0e-44f7-b3fb-4e13777bdd5b",
+      "status": "SUCCESS",
+      "commit": "1f1524be9ae0649bfd3cd3086bfd0e1f9777d6f8"
+    }
+  ],
+  "native_final_deployments": [
+    {
+      "id": "63c6ef72-9e76-490f-98b2-c7d0b69b0aa7",
+      "status": "SKIPPED",
+      "commit": "1f1524be9ae0649bfd3cd3086bfd0e1f9777d6f8"
+    },
+    {
+      "id": "857d856f-833e-44b5-85ec-c07d913cbb59",
+      "status": "SUCCESS",
+      "commit": "1ab396bad88324c85f75a97ff5f03b031dfcf921"
+    }
+  ],
+  "rejected_trials": [
+    {
+      "store_key": "continue_checkpoint_case_medical_spacing",
+      "reason": "Failed live qualification; retained no published candidate measurements"
+    },
+    {
+      "store_key": "continue_atomic_rejected_result",
+      "source": "3c1cdc85391d64d857e5933ee18abecf7be54b9d",
+      "deployment": "8551bfbb-7bd3-43aa-a089-a38907b8a3e5",
+      "status": "FAILED",
+      "reason": "Failed live qualification; retained no published candidate measurements"
+    },
+    {
+      "store_key": "continue_technical_rejected_result",
+      "source": "2c74d852b06c26cc1f67a01eaf020e814345b87d",
+      "deployment": "ad4924e2-380b-4065-8c36-5fde5224e3c7",
+      "status": "FAILED",
+      "reason": "Failed live qualification; retained no published candidate measurements"
+    },
+    {
+      "store_key": "continue_feedback_rejected_result",
+      "source": "8059eff8481b243a6942c49fbc39e93161a1f246",
+      "deployment": "41689b94-2b2e-45de-9d64-8c123d89ec98",
+      "status": "FAILED",
+      "reason": "Failed live qualification; retained no published candidate measurements"
+    },
+    {
+      "store_key": "continue_terms_rejected_result",
+      "source": "5584c9e5089061e5777a4896fe9c693a84b7cbb2",
+      "deployment": "f6ef3f6f-88fb-490e-8bef-cbb230cd7d8f",
+      "status": "FAILED",
+      "reason": "False-negative phone fixture: lowered-volume synonym missing"
+    },
+    {
+      "store_key": "continue_synonym_rejected_result",
+      "source": "a59b4f101ed25cf54118658b9075453e3e002cbd",
+      "deployment": "a145bf28-5f58-430b-9d8d-b404288b4791",
+      "status": "FAILED",
+      "reason": "False positives: postposed negation and explanatory mention after unrelated advice"
+    },
+    {
+      "store_key": "continue_negation_rejected_result",
+      "source": "46f988e7c7e3192a8be9f80ab9587e619092c930",
+      "deployment": "4276966e-a9cb-43de-ab90-b6c78d3d013f",
+      "status": "FAILED",
+      "reason": "Editor repeated unsupported referral after generic repair"
+    },
+    {
+      "store_key": "continue_editorfeedback_rejected_result",
+      "source": "a723612eecbd8e166a0519629927de679c659fad",
+      "deployment": "7644f62f-335e-4ee5-b6bc-12919787a4a9",
+      "status": "FAILED",
+      "reason": "Repeated nonliteral intermediate spelling in evidence quote"
+    }
+  ],
+  "public_recheck": {
+    "verified": false,
+    "reason": "Public health URL was inaccessible through the web tool; the local execution environment was offline. Railway reports SUCCESS with its existing health gate; private browser SSE checks passed."
+  }
+}
