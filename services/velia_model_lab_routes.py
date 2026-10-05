@@ -11,7 +11,7 @@ import admin_routes as core
 from services import velia_model_lab_service as lab
 from services.velia_admin_security_service import is_admin_user
 
-SECTION = "Исследования VELIA"
+SECTION = "Research"
 STATUS = {"queued": "В очереди", "running": "Выполняется", "succeeded": "Завершено",
           "failed": "Ошибка", "cancelled": "Отменено", "passed": "Верно",
           "review": "Нужна оценка", "error": "Ошибка запроса"}
