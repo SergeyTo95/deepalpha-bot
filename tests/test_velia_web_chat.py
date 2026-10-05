@@ -29,6 +29,7 @@ async def fixture(monkeypatch, **state):
     state["search_payloads"] = []
     state["intent_payloads"] = []
     state["review_payloads"] = []
+    state["agent_calls"] = []
     async def search(request):
         data = await request.json()
         assert data["api_key"] == "fixture-search-key"
@@ -128,6 +129,25 @@ async def fixture(monkeypatch, **state):
         event = {"model":"private-upstream-model", "system_fingerprint":"private-runtime", "choices":[{
             "delta":{"reasoning_content":"private-thought", "content":state.get("model_content", "Привет, я Велия.")}, "finish_reason": state.get("model_finish", "stop")}]}
         return web.Response(text="data: " + json.dumps(event, ensure_ascii=False) + '\n\ndata: [DONE]\n\n', content_type="text/event-stream")
+    async def browser_agent(request):
+        assert request.headers.get("Authorization") == "Bearer fixture-browser-agent-secret-0000000000000000"
+        assert request.headers.get("Cookie") is None
+        data = await request.json()
+        state["agent_calls"].append({
+            "prompt": data.get("prompt"),
+            "user": request.headers.get("X-Velia-User"),
+        })
+        if state.get("agent_status"):
+            return web.json_response({"ok": False, "error": "browser_agent_unavailable"},
+                                     status=state["agent_status"])
+        return web.json_response({
+            "ok": True,
+            "text": state.get("agent_text", "Browser Agent выполнил задачу."),
+            "model": "velia-flash",
+            "session_id": "session-browser-fixture",
+            "tool_count": 2,
+        })
+
     authority = web.Application()
     authority.router.add_get("/mobile-api/v1/health", health)
     authority.router.add_get("/mobile-api/v1/me", me)
@@ -144,15 +164,22 @@ async def fixture(monkeypatch, **state):
     authority.router.add_post("/apply-template", template)
     authority.router.add_post("/tokenize", tokenize)
     authority.router.add_post("/search", search)
+    authority.router.add_post("/v1/run", browser_agent)
     async with TestServer(authority) as source:
         for key, value in {"VELIA_WEB_ENABLED": "true", "VELIA_WEB_ORIGIN": ORIGIN,
             "VELIA_WEB_SESSION_KEY": base64.urlsafe_b64encode(b"t" * 32).decode(),
             "VELIA_DESKTOP_API_ENABLED": "true", "VELIA_DESKTOP_PREVIEW_USER_IDS": "7",
             "KIMI_API_KEY": "fixture-provider-key", "KIMI_BASE_URL": str(source.make_url("/v1")),
             "VELIA_DESKTOP_FLASH_ENABLED": "true", "VELIA_DESKTOP_FLASH_API_KEY": "fixture-provider-key",
-            "VELIA_DESKTOP_FLASH_BASE_URL": str(source.make_url("/")).rstrip("/")}.items():
+            "VELIA_DESKTOP_FLASH_BASE_URL": str(source.make_url("/")).rstrip("/"),
+            "VELIA_BROWSER_AGENT_ENABLED": "true",
+            "VELIA_AGENT_CORE_INTERNAL_KEY": "fixture-browser-agent-secret-0000000000000000"}.items():
             monkeypatch.setenv(key, value)
-        config = GatewayConfig(str(source.make_url("/")).rstrip("/"), "https://deepalpha-ai.com")
+        config = GatewayConfig(
+            str(source.make_url("/")).rstrip("/"),
+            "https://deepalpha-ai.com",
+            agent_origin=str(source.make_url("/")).rstrip("/"),
+        )
         search_service = WebSearch(provider="tavily", api_key="fixture-search-key",
             endpoint=str(source.make_url("/search")), store=state["guest_store"]) if state.get("with_search") else None
         async with TestServer(create_app(config, guest_store=state.get("guest_store"),
@@ -176,7 +203,8 @@ def test_opaque_secure_cookie_and_no_authority_secrets(monkeypatch):
             cookie, result, wire = await login(server, client)
             assert all(value not in json.dumps(result) + wire for value in (TOKEN, REFRESH, "never-return-this", "authority_cookie"))
             assert all(flag in wire for flag in ("HttpOnly", "Secure", "SameSite=Lax", "Path=/"))
-            assert set(result) == {"ok", "account", "name", "models", "credits", "pro_locked_reason", "web_search"}
+            assert set(result) == {"ok", "account", "name", "models", "credits", "pro_locked_reason", "web_search", "browser_agent"}
+            assert result["browser_agent"] is True
             assert result["models"] == ["velia-pro", "velia-flash"]
             async with client.get(server.make_url("/web-api/v1/session"), headers=headers(cookie)) as response:
                 assert response.status == 200
@@ -201,6 +229,61 @@ def test_browser_chat_streams_each_mode_with_server_persona(monkeypatch, model):
             assert payload["model"] == ("velia-flash" if model.endswith("flash") else "kimi-k3")
             assert payload.get("max_tokens", payload.get("max_completion_tokens")) == (512 if model.endswith("flash") else 4096)
             assert "tools" not in payload
+    asyncio.run(run())
+
+
+def test_browser_agent_is_account_only_flash_and_keeps_internal_secret_server_side(monkeypatch):
+    async def run():
+        async with fixture(monkeypatch) as (server, client, state):
+            cookie, profile, _ = await login(server, client)
+            assert profile["browser_agent"] is True
+            async with client.post(
+                    server.make_url("/web-api/v1/agent/browser"),
+                    headers=headers(cookie),
+                    json={"prompt": "Открой example.com и скажи заголовок."}) as response:
+                assert response.status == 200
+                result = await response.json()
+                assert result == {
+                    "ok": True,
+                    "text": "Browser Agent выполнил задачу.",
+                    "model": "velia-flash",
+                    "session_id": "session-browser-fixture",
+                    "tool_count": 2,
+                }
+                wire = json.dumps(result, ensure_ascii=False)
+                assert "fixture-browser-agent-secret" not in wire
+            assert state["agent_calls"] == [{
+                "prompt": "Открой example.com и скажи заголовок.",
+                "user": "7",
+            }]
+            assert state["payloads"] == []
+
+            async with client.post(
+                    server.make_url("/web-api/v1/agent/browser"),
+                    headers=headers(),
+                    json={"prompt": "test"}) as response:
+                assert response.status == 401
+            async with client.post(
+                    server.make_url("/web-api/v1/agent/browser"),
+                    headers=headers(cookie, Origin="https://evil.example"),
+                    json={"prompt": "test"}) as response:
+                assert response.status == 403
+            assert len(state["agent_calls"]) == 1
+    asyncio.run(run())
+
+
+def test_browser_agent_failures_are_sanitized(monkeypatch):
+    async def run():
+        async with fixture(monkeypatch, agent_status=503) as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            async with client.post(
+                    server.make_url("/web-api/v1/agent/browser"),
+                    headers=headers(cookie),
+                    json={"prompt": "Открой сайт"}) as response:
+                assert response.status == 503
+                body = await response.text()
+                assert "browser_agent_unavailable" in body
+                assert "fixture-browser-agent-secret" not in body
     asyncio.run(run())
 
 
