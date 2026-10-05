@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from urllib.parse import quote
 
@@ -209,7 +210,7 @@ async def flash_probe(request):
     <div class='card'><div class='label'>Model</div><p><code>{core._e(result.get('model') or profile.get('model') or 'velia-flash')}</code></p></div>
     <div class='card'><div class='label'>Revision</div><p><code>{core._e(profile.get('revision') or 'не указана')}</code></p></div>
     <div class='card'><div class='label'>Finish</div><p>{core._e(result.get('finish_reason') or '—')}</p></div>
-    <div class='card full'><h2>Usage</h2><pre>{core._e(__import__('json').dumps(usage, ensure_ascii=False, indent=2))}</pre></div>
+    <div class='card full'><h2>Usage</h2><pre>{core._e(json.dumps(usage, ensure_ascii=False, indent=2))}</pre></div>
     <div class='card wide'><h2>Превратить в обучающий пример</h2>
       <p>Если ответ неверный — исправьте поле «Правильный ответ». Если верный — можно оставить его как есть. Только после вашей проверки пример имеет смысл помечать подтверждённым.</p>
       <form method='post' action='/admin/research/examples'>{_csrf(request)}
@@ -220,7 +221,7 @@ async def flash_probe(request):
         <button class='primary'>Сохранить пример</button>
       </form>
     </div>
-    <div class='card wide'><h2>Следующий запрос</h2>{_flash_lab_form(request)}</div>
+    <div class='card wide'><h2>Следующий шаг</h2><div class='lab-actions'><a class='button primary' href='/admin/research'>Новый запрос / исследования</a></div></div>
     </div>"""
     return _page(request, body, "Flash Lab")
 
