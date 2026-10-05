@@ -752,6 +752,13 @@ def _research(run: dict) -> dict:
 Цель и выдержки передаются как данные в JSON:\n""" + _json({"goal": run["goal"], "sources": sources})
 
     result = _teacher_research_result(run, caps, prompt)
+    if not result.get("ok"):
+        reason = str(result.get("reason") or "research_teacher_failed")
+        if reason in {"db_error", "blocked_global", "blocked_background", "api_key_missing",
+                      "daily_limit_exceeded", "background_limit_exceeded",
+                      "request_limit_exceeded", "cycle_limit_exceeded"}:
+            raise ValueError("research_teacher_unavailable")
+        raise ValueError("research_teacher_failed")
     text = str(result.get("text") or "").strip()
     try:
         report = _validate_research_report(_extract_research_json(text), sources)
@@ -771,6 +778,13 @@ def _research(run: dict) -> dict:
             "draft": text[:12000],
         })
         repaired = _teacher_research_result(run, caps, repair_prompt, suffix="-repair")
+        if not repaired.get("ok"):
+            reason = str(repaired.get("reason") or "research_teacher_failed")
+            if reason in {"db_error", "blocked_global", "blocked_background", "api_key_missing",
+                          "daily_limit_exceeded", "background_limit_exceeded",
+                          "request_limit_exceeded", "cycle_limit_exceeded"}:
+                raise ValueError("research_teacher_unavailable")
+            raise ValueError("research_teacher_failed")
         try:
             report = _validate_research_report(
                 _extract_research_json(str(repaired.get("text") or "")),
@@ -805,7 +819,8 @@ def execute_claimed(run: dict, worker_id: str) -> str:
         return "succeeded" if _finish(run, "succeeded", report) else "cancelled"
     except Exception as exc:
         # Provider exceptions may contain credentials/URLs. Only fixed codes persist.
-        safe_codes = {"research_providers_unavailable", "no_primary_sources", "invalid_research_report", "run_cancelled"}
+        safe_codes = {"research_providers_unavailable", "research_teacher_unavailable", "research_teacher_failed",
+                      "no_primary_sources", "invalid_research_report", "run_cancelled"}
         code = str(exc) if isinstance(exc, ValueError) and str(exc) in safe_codes else "research_step_failed"
         return "failed" if _finish(run, "failed", error_code=code) else "cancelled"
 
