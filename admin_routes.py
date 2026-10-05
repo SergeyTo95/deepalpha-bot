@@ -43,6 +43,7 @@ SECTIONS = [
     ("System", "/admin/system"),
     ("Users", "/admin/users"),
     ("AI / Core", "/admin/ai"),
+    ("Исследования VELIA", "/admin/research"),
     ("Errors", "/admin/errors"),
     ("Memory", "/admin/memory"),
     ("Deployments", "/admin/deployments"),
@@ -547,4 +548,6 @@ def setup_admin_routes(app: web.Application) -> None:
     app.router.add_get("/admin/memory", admin_memory)
     app.router.add_get("/admin/deployments", admin_deployments)
     app.router.add_get("/admin/audit", admin_audit)
+    from services.velia_model_lab_routes import setup_model_lab_routes
+    setup_model_lab_routes(app)
     app["velia_control_center_routes_installed"] = True
