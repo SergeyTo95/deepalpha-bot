@@ -22,6 +22,7 @@ const icons = {
   pen: "M16 3l5 5L8 21H3v-5zM14 5l5 5",
   layers: "M12 3L2 8l10 5 10-5zM2 12l10 5 10-5M2 16l10 5 10-5",
   code: "M8 5l-7 7 7 7M16 5l7 7-7 7M14 3l-4 18",
+  browser: "M3 5h18v14H3zM3 9h18M7 7h.01M10 7h.01",
   arrow: "M12 19V5M5 12l7-7 7 7",
   stop: "M5 5h14v14H5z",
   close: "M6 6l12 12M6 18L18 6",
@@ -45,6 +46,7 @@ let profile = null,
   busy = false,
   deleteId = null;
 let model = "velia-flash",
+  agentMode = false,
   theme = "dark",
   toastTimer,
   saveTimer,
@@ -126,6 +128,27 @@ function setModel(value) {
   } catch {}
   closeModels();
 }
+function setAgentMode(value) {
+  const enabled = !!value && !!profile?.browser_agent;
+  if (enabled && model !== "velia-flash") setModel("velia-flash");
+  if (agentMode !== enabled && !busy) {
+    currentId = null;
+    render();
+    save();
+  }
+  agentMode = enabled;
+  const button = $("agent-toggle");
+  button.hidden = !profile?.browser_agent;
+  button.classList.toggle("active", enabled);
+  button.setAttribute("aria-pressed", String(enabled));
+  button.title = enabled
+    ? "Browser Agent включён · VELIA Flash может открывать сайты и выполнять действия"
+    : "VELIA Agent Core · браузерные действия через Flash";
+  button.querySelector("span:last-child").textContent = enabled ? "AGENT ON" : "AGENT";
+  $("model-button").disabled = busy || enabled;
+  try { localStorage.setItem("velia-web-agent", enabled ? "1" : "0"); } catch {}
+}
+
 function sidebar(open) {
   $("sidebar").classList.toggle("open", open);
   $("scrim").hidden = !open;
@@ -200,7 +223,7 @@ function messageNode(message, index) {
     heading.innerHTML = '<img src="/web/favicon.svg" alt="">VELIA';
     const badge = document.createElement("span");
     badge.className = "message-model";
-    badge.textContent = message.model === "velia-flash" ? "FLASH" : "PRO";
+    badge.textContent = message.agent ? "AGENT" : message.model === "velia-flash" ? "FLASH" : "PRO";
     heading.append(badge);
     article.append(heading);
   }
@@ -286,7 +309,8 @@ function setBusy(value) {
   $("send").hidden = value;
   $("stop").hidden = !value;
   $("prompt").disabled = value;
-  $("model-button").disabled = value;
+  $("model-button").disabled = value || agentMode;
+  $("agent-toggle").disabled = value || !profile?.browser_agent;
   $("new-chat").disabled = value;
   $("account").disabled = value;
   $("send").disabled = value || !$("prompt").value.trim();
@@ -378,6 +402,9 @@ function applyProfile(value) {
   profile = value;
   internetAvailable = !!value.web_search;
   $("guest-notice").hidden = true;
+  let restoreAgent = false;
+  try { restoreAgent = localStorage.getItem("velia-web-agent") === "1"; } catch {}
+  setAgentMode(restoreAgent && !!value.browser_agent);
   $("research-link").hidden = false;
   storageKey = "velia-web-chats-v1:" + value.account;
   if (changed) {
@@ -413,6 +440,8 @@ function applyGuest(value) {
   const changed = guest?.account !== value.account || storageKey !== "velia-web-guest-v1:" + value.account;
   guest = value;
   internetAvailable = !!value.web_search;
+  setAgentMode(false);
+  $("agent-toggle").hidden = true;
   storageKey = "velia-web-guest-v1:" + value.account;
   if (changed) {
     chats = loadChats(browserStorage, storageKey);
@@ -442,12 +471,13 @@ async function refreshGuest() {
 }
 async function generate(retry = false) {
   if (busy || !ready) return;
+  if (agentMode && !profile) { openAuth(); return; }
   if (!profile) {
     if (!guest) await refreshGuest();
     if (busy) return;
     if (!guest || guest.remaining <= 0) { openAuth(); return; }
   }
-  if (profile && !profile.models.includes(model)) {
+  if (profile && !agentMode && !profile.models.includes(model)) {
     toast(apiError(profile.pro_locked_reason || "pro_tokens_required"));
     return;
   }
@@ -459,8 +489,9 @@ async function generate(retry = false) {
     chat.messages.pop();
   } else {
     if (!chat) {
-      if (!profile) {
-        chat = {id: crypto.randomUUID(), title: text.replace(/\s+/g, " ").slice(0, 70), updated: Date.now(), messages: []};
+      if (!profile || agentMode) {
+        chat = {id: crypto.randomUUID(), title: text.replace(/\s+/g, " ").slice(0, 70),
+          updated: Date.now(), messages: [], agent: agentMode};
       } else {
       setBusy(true);
       try {
@@ -475,16 +506,17 @@ async function generate(retry = false) {
       chats = chats.slice(0, 100);
       currentId = chat.id;
     }
-    chat.messages.push({ role: "user", content: text, requestId: crypto.randomUUID(), internet: internetAvailable });
+    chat.messages.push({ role: "user", content: text, requestId: crypto.randomUUID(),
+      internet: !agentMode && internetAvailable, agent: agentMode });
     $("prompt").value = "";
     resizePrompt();
   }
-  const selected = model,
+  const selected = agentMode ? "velia-flash" : model,
     user = chat.messages.at(-1),
-    payload = chat.remote ? {content: user.content, model: selected,
+    payload = agentMode ? {prompt: user.content} : chat.remote ? {content: user.content, model: selected,
       idempotency_key: user.requestId || (user.requestId = crypto.randomUUID())} : chatPayload(chat, selected),
-    answer = { role: "assistant", content: "", model: selected, pending: true };
-  if (internetAvailable) payload.web_search = true;
+    answer = { role: "assistant", content: "", model: selected, pending: true, agent: agentMode };
+  if (!agentMode && internetAvailable) payload.web_search = true;
   chat.messages.push(answer);
   chat.updated = Date.now();
   abort = new AbortController();
@@ -492,12 +524,16 @@ async function generate(retry = false) {
   render();
   scrollDown(true);
   save();
-  $("generation-status").textContent = internetAvailable ? "Ищу информацию в интернете…" : "Велия готовит ответ…";
+  $("generation-status").textContent = agentMode
+    ? "VELIA Agent открывает браузер…"
+    : internetAvailable ? "Ищу информацию в интернете…" : "Велия готовит ответ…";
   slowTimer = setTimeout(() => {
     $("generation-status").textContent =
-      selected === "velia-flash"
-        ? "Flash готовит ответ. Первый запрос может занять несколько минут."
-        : "Велия работает над ответом…";
+      agentMode
+        ? "VELIA Agent выполняет задачу в браузере. Сложные действия могут занять несколько минут."
+        : selected === "velia-flash"
+          ? "Flash готовит ответ. Первый запрос может занять несколько минут."
+          : "Велия работает над ответом…";
   }, 20000);
   let paintFrame = null, textPainted = false;
   const article = $("messages").lastElementChild,
@@ -516,6 +552,20 @@ async function generate(retry = false) {
     else if (paintFrame === null) paintFrame = requestAnimationFrame(paint);
   };
   try {
+    if (agentMode) {
+      const response = await request("agent/browser", payload, abort.signal);
+      const data = await response.json();
+      if (!response.ok || data.ok !== true) {
+        const error = new Error(apiError(data.error));
+        error.status = response.status;
+        throw error;
+      }
+      answer.content = data.text || "";
+      answer.finish = "stop";
+      $("generation-status").textContent = "";
+      queuePaint();
+      scheduleSave();
+    } else {
     const response = await request(!profile ? "guest/chat/completions" : chat.remote ? "conversations/" + chat.id + "/messages/stream" : "chat/completions", payload, abort.signal);
     if (!profile && guest && response.headers.has("X-Velia-Guest-Remaining")) {
       guest.remaining = Number(response.headers.get("X-Velia-Guest-Remaining"));
@@ -536,6 +586,7 @@ async function generate(retry = false) {
       scheduleSave();
     });
     answer.finish = result.finish;
+    }
   } catch (error) {
     if (error.name === "AbortError") answer.stopped = true;
     else {
@@ -587,6 +638,12 @@ $("search").oninput = renderHistory;
 $("menu").onclick = () => sidebar(!$("sidebar").classList.contains("open"));
 $("scrim").onclick = () => sidebar(false);
 $("theme").onclick = () => setTheme(theme === "dark" ? "light" : "dark");
+$("agent-toggle").onclick = () => {
+  if (!profile) { openAuth(); return; }
+  if (!profile.browser_agent) { toast("Browser Agent пока недоступен."); return; }
+  setAgentMode(!agentMode);
+  $("prompt").focus();
+};
 $("model-button").onclick = () => {
   const open = $("model-menu").hidden;
   $("model-menu").hidden = !open;
