@@ -63,7 +63,12 @@ def setup_owner_admin_proxy(app: web.Application, *, upstream_origin: str, clien
                 headers = {}
                 for name, value in upstream.headers.items():
                     lower = name.lower()
-                    if lower in _HOP_BY_HOP or lower in {"content-length", "set-cookie", "location"}:
+                    # aiohttp auto-decompresses upstream response bodies by default.
+                    # Never forward the original Content-Encoding for an already
+                    # decompressed body or browsers can render a blank page.
+                    if lower in _HOP_BY_HOP or lower in {
+                        "content-length", "content-encoding", "set-cookie", "location",
+                    }:
                         continue
                     headers[name] = value
                 if upstream.headers.get("Location"):
