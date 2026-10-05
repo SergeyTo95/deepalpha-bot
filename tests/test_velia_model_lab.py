@@ -306,6 +306,34 @@ def test_audit_failure_rolls_back_queue_mutation(database, monkeypatch):
     assert database("SELECT COUNT(*) FROM velia_model_lab_runs")[0][0] == 0
 
 
+def test_teacher_capability_requires_provider_gates_and_can_fallback_to_kimi(monkeypatch):
+    monkeypatch.setenv("VELIA_RESEARCH_CENTER_ENABLED", "true")
+    monkeypatch.setenv("LLM_PROVIDER_RESEARCH", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini")
+    monkeypatch.delenv("GEMINI_ENABLED", raising=False)
+    monkeypatch.delenv("GEMINI_BACKGROUND_ENABLED", raising=False)
+    monkeypatch.setenv("KIMI_API_KEY", "kimi")
+    monkeypatch.setenv("KIMI_ENABLED", "true")
+    monkeypatch.setenv("KIMI_BACKGROUND_ENABLED", "true")
+    caps = lab.capabilities()
+    assert caps["teacher"] is True
+    assert caps["teacher_provider"] == "kimi"
+    monkeypatch.setenv("KIMI_BACKGROUND_ENABLED", "false")
+    caps = lab.capabilities()
+    assert caps["teacher"] is False
+    assert caps["teacher_provider"] == "gemini"
+
+
+def test_gemini_gateway_accepts_research_center_feature(monkeypatch):
+    from services import gemini_gateway
+    monkeypatch.setenv("VELIA_RESEARCH_CENTER_ENABLED", "true")
+    monkeypatch.setenv("GEMINI_ENABLED", "true")
+    monkeypatch.setenv("GEMINI_BACKGROUND_ENABLED", "true")
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    assert gemini_gateway.FEATURE_FLAGS["research_center"] == "VELIA_RESEARCH_CENTER_ENABLED"
+    assert gemini_gateway._precheck("research_center", True) is None
+
+
 def test_research_validates_citations_and_records_no_training(database, monkeypatch):
     from services import llm_service, web_search_service
     monkeypatch.setenv("WEB_SEARCH_PROVIDER", "tavily")
