@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { startProxy } from '../../desktop/src/proxy.mjs';
 import { profilePatch } from '../../desktop/src/config.mjs';
+import { BROWSER_TOOL_ALLOWLIST } from './tool_policy.mjs';
 
 const gateway = new URL(process.argv[2]);
 if (gateway.protocol !== 'http:' || gateway.hostname !== '127.0.0.1' || !gateway.port) {
@@ -46,7 +47,7 @@ const proxy = await startProxy(origin + '/desktop-api/v1', async () => ({ origin
     if (++rounds > 7) throw Error('Browser Agent model-call budget exceeded');
   }
   return fetch(new URL(new URL(url).pathname, gateway), options);
-});
+}, { allowedToolNames: BROWSER_TOOL_ALLOWLIST });
 
 try {
   const credentials = join(temporary, 'credentials.json');
@@ -86,6 +87,7 @@ try {
   });
   assert.equal(code, 0, errors || output || 'Agent Core exited without output');
   assert.ok(browserDeclared, 'Playwright MCP browser tools were not declared to Flash');
+  assert.ok(maxTools <= BROWSER_TOOL_ALLOWLIST.length, 'Browser Agent exposed more tools than the allowlist');
   assert.ok(browserResult, 'Flash never received the real browser result');
   assert.ok(persona, 'VELIA browser persona was not sent');
   assert.ok(output.includes(marker), 'Final answer must contain the browser-read marker');
