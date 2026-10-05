@@ -38,12 +38,16 @@ from services.velia_admin_telegram_auth_service import build_admin_login_url
 
 
 CONTROL_CENTER_AUTH_V2 = True
+# This owner console is intentionally scoped to Velyon Core: observe VELIA,
+# measure quality, run research/benchmarks and inspect the intelligence runtime.
+# Product administration (users, billing/economy, payments, factory pilot) stays
+# outside this surface.
+VELYON_CORE_ADMIN_ONLY = True
 SECTIONS = [
     ("Overview", "/admin"),
-    ("System", "/admin/system"),
-    ("Users", "/admin/users"),
+    ("Research", "/admin/research"),
     ("AI / Core", "/admin/ai"),
-    ("Исследования VELIA", "/admin/research"),
+    ("System", "/admin/system"),
     ("Errors", "/admin/errors"),
     ("Memory", "/admin/memory"),
     ("Deployments", "/admin/deployments"),
@@ -115,7 +119,7 @@ def _current_admin(request: web.Request) -> Optional[Dict[str, Any]]:
 
 async def _guard(request: web.Request):
     if configured_admin_id() <= 0:
-        return web.Response(text="VELIA Control Center is not configured", status=503)
+        return web.Response(text="Velyon Core is not configured", status=503)
     session = await asyncio.to_thread(_current_admin, request)
     if not session:
         if request.method in {"GET", "HEAD"}:
@@ -173,7 +177,7 @@ def _layout(title: str, active: str, key: str, body: str, flash: str = "") -> st
 <meta name='referrer' content='no-referrer'>
 <meta name='color-scheme' content='dark'>
 <meta name='velia-csrf' content='{csrf}'>
-<title>{_e(title)} · VELIA Control Center</title>
+<title>{_e(title)} · Velyon Core</title>
 <style>
 :root{{--bg:#05070b;--panel:#0b0f16;--panel2:#0f1520;--line:#1d2735;--text:#eef2f8;--muted:#8d9bad;--accent:#8a7dff;--accent2:#4fd1c5;--danger:#ff6b7a;--warn:#f6c85f;--good:#57d39b}}
 *{{box-sizing:border-box}}html,body{{margin:0;background:radial-gradient(circle at 90% -10%,#161438 0,transparent 32%),var(--bg);color:var(--text);font:14px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}body{{min-height:100vh}}a{{color:inherit}}button,input,select{{font:inherit}}.shell{{display:grid;grid-template-columns:224px minmax(0,1fr);min-height:100vh}}.side{{position:sticky;top:0;height:100vh;padding:22px 14px;border-right:1px solid var(--line);background:rgba(5,7,11,.84);backdrop-filter:blur(18px)}}.brand{{padding:4px 10px 22px}}.brand b{{font-size:17px;letter-spacing:.03em}}.brand small{{display:block;color:var(--muted);margin-top:3px}}.navs{{display:grid;gap:4px}}.nav{{text-decoration:none;color:#9ba9ba;padding:10px 11px;border-radius:10px}}.nav:hover{{background:#101622;color:#fff}}.nav.active{{background:linear-gradient(90deg,rgba(138,125,255,.19),rgba(79,209,197,.07));color:#fff;border:1px solid rgba(138,125,255,.24)}}.logout{{position:absolute;bottom:18px;left:14px;right:14px}}.main{{min-width:0;padding:28px clamp(16px,3vw,42px) 60px}}.topline{{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;margin-bottom:22px}}h1{{font-size:27px;margin:0;letter-spacing:-.025em}}.subtitle{{color:var(--muted);margin-top:5px}}.pill,.status{{display:inline-flex;gap:7px;align-items:center;border:1px solid var(--line);background:#0c121b;border-radius:999px;padding:5px 9px;color:#b8c4d2;font-size:12px}}.status i{{width:7px;height:7px;border-radius:50%;background:#6f7a87}}.status.good i{{background:var(--good);box-shadow:0 0 10px rgba(87,211,155,.55)}}.status.warn i{{background:var(--warn)}}.status.bad i{{background:var(--danger)}}.grid{{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:12px}}.card{{grid-column:span 3;border:1px solid var(--line);background:linear-gradient(145deg,rgba(15,21,32,.95),rgba(9,13,20,.96));border-radius:15px;padding:16px;min-width:0}}.card.wide{{grid-column:span 6}}.card.full{{grid-column:1/-1}}.label{{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.075em}}.value{{font-size:25px;font-weight:720;margin-top:7px;letter-spacing:-.02em}}.hint{{font-size:12px;color:var(--muted);margin-top:5px}}h2{{font-size:16px;margin:0 0 13px}}.table-wrap{{overflow:auto;border:1px solid var(--line);border-radius:13px}}table{{width:100%;border-collapse:collapse;min-width:720px}}th,td{{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top}}th{{position:sticky;top:0;background:#0b111a;color:#8593a5;font-size:11px;text-transform:uppercase;letter-spacing:.06em}}tr:last-child td{{border-bottom:0}}code{{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#c9c5ff}}.muted{{color:var(--muted)}}.good-text{{color:var(--good)}}.bad-text{{color:var(--danger)}}.flash{{border:1px solid rgba(87,211,155,.3);background:rgba(87,211,155,.08);padding:11px 13px;border-radius:11px;margin-bottom:14px}}form.inline{{display:flex;gap:8px;align-items:end;flex-wrap:wrap}}label{{display:grid;gap:5px;color:#aeb9c8;font-size:12px}}input,select{{border:1px solid #273346;background:#090e16;color:#f0f4fa;border-radius:9px;padding:9px 10px;outline:none}}input:focus,select:focus{{border-color:#685ee8;box-shadow:0 0 0 3px rgba(104,94,232,.12)}}button,.button{{border:1px solid #3a4657;background:#151d29;color:#fff;border-radius:9px;padding:9px 12px;cursor:pointer;text-decoration:none;display:inline-block}}button.primary,.button.primary{{border-color:#6f65e8;background:linear-gradient(135deg,#655bea,#8177f1)}}button.danger{{border-color:#713443;background:#33171f;color:#ffb5bf}}button:hover,.button:hover{{filter:brightness(1.08)}}.action-box{{display:grid;gap:10px;padding:13px;border:1px solid var(--line);border-radius:12px;background:#090e15}}.action-row{{display:flex;gap:8px;flex-wrap:wrap;align-items:end}}.confirm{{display:flex;align-items:center;gap:7px;color:#aeb9c8}}.confirm input{{width:auto}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;color:#c6d0dc;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}}.empty{{padding:18px;color:var(--muted)}}
@@ -183,8 +187,8 @@ def _layout(title: str, active: str, key: str, body: str, flash: str = "") -> st
 </head>
 <body>
 <div class='shell'>
-<aside class='side'><div class='brand'><b>VELIA</b><small>Control Center</small></div><nav class='navs'>{nav}</nav><div class='logout'><form method='post' action='/admin/logout'><button type='submit'>Sign out</button></form></div></aside>
-<main class='main'><div class='topline'><div><h1>{_e(title)}</h1><div class='subtitle'>Internal owner console · live production data only</div></div><span class='pill'>Owner session</span></div>{flash_html}{body}</main>
+<aside class='side'><div class='brand'><b>Velyon Core</b><small>VELIA Intelligence Lab</small></div><nav class='navs'>{nav}</nav><div class='logout'><form method='post' action='/admin/logout'><button type='submit'>Sign out</button></form></div></aside>
+<main class='main'><div class='topline'><div><h1>{_e(title)}</h1><div class='subtitle'>Owner R&D console · наблюдение, исследования и улучшение VELIA</div></div><span class='pill'>Velyon Core owner</span></div>{flash_html}{body}</main>
 </div>
 <script>
 (()=>{{
@@ -205,8 +209,8 @@ def _login_page(error: str = "") -> str:
     link = build_admin_login_url()
     error_html = f"<div class='error'>{_e(error)}</div>" if error else ""
     ready_text = "Owner identity is configured" if admin_ready else "ADMIN_ID is not configured"
-    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta name='referrer' content='no-referrer'><meta name='color-scheme' content='dark'><title>VELIA Control Center</title><style>
-*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;display:grid;place-items:center;padding:18px;background:radial-gradient(circle at 70% 0,#18143a,transparent 35%),#05070b;color:#eef2f8;font:14px/1.5 Inter,system-ui,sans-serif}}.box{{width:min(440px,100%);padding:26px;border:1px solid #222c3a;border-radius:18px;background:rgba(11,15,22,.95);box-shadow:0 25px 80px rgba(0,0,0,.45)}}h1{{font-size:24px;margin:0 0 5px}}p{{color:#94a2b3}}.step{{padding:12px;border:1px solid #202b39;border-radius:12px;margin:11px 0;background:#090e15}}a,button{{display:block;width:100%;text-align:center;border:1px solid #7168e8;background:linear-gradient(135deg,#6258e8,#8278f2);color:#fff;text-decoration:none;padding:11px;border-radius:10px;cursor:pointer;font:inherit}}input{{width:100%;margin:8px 0 10px;border:1px solid #303b4d;background:#060a10;color:#fff;border-radius:10px;padding:12px;font:16px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.09em}}.muted{{color:#8997a8;font-size:12px}}.error{{color:#ff9daa;background:#351820;border:1px solid #67303c;padding:9px 11px;border-radius:9px;margin:12px 0}}</style></head><body><div class='box'><h1>VELIA Control Center</h1><p>Owner-only administrative access. Identity is confirmed by Telegram; the browser never submits a Telegram user ID.</p>{error_html}<div class='step'><b>1. Confirm in Telegram</b><p>Open the production bot and request a one-time 5-minute code.</p><a href='{_e(link)}' rel='noreferrer'>Open Telegram</a></div><div class='step'><b>2. Enter one-time code</b><form method='post' action='/admin/login'><input name='code' inputmode='text' autocomplete='one-time-code' placeholder='XXXX-XXXX-XXXX-XXXX' minlength='16' maxlength='19' required><button type='submit'>Sign in securely</button></form></div><div class='muted'>{_e(ready_text)} · session expires after 8 hours · codes are one-time</div></div></body></html>"""
+    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta name='referrer' content='no-referrer'><meta name='color-scheme' content='dark'><title>Velyon Core</title><style>
+*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;display:grid;place-items:center;padding:18px;background:radial-gradient(circle at 70% 0,#18143a,transparent 35%),#05070b;color:#eef2f8;font:14px/1.5 Inter,system-ui,sans-serif}}.box{{width:min(440px,100%);padding:26px;border:1px solid #222c3a;border-radius:18px;background:rgba(11,15,22,.95);box-shadow:0 25px 80px rgba(0,0,0,.45)}}h1{{font-size:24px;margin:0 0 5px}}p{{color:#94a2b3}}.step{{padding:12px;border:1px solid #202b39;border-radius:12px;margin:11px 0;background:#090e15}}a,button{{display:block;width:100%;text-align:center;border:1px solid #7168e8;background:linear-gradient(135deg,#6258e8,#8278f2);color:#fff;text-decoration:none;padding:11px;border-radius:10px;cursor:pointer;font:inherit}}input{{width:100%;margin:8px 0 10px;border:1px solid #303b4d;background:#060a10;color:#fff;border-radius:10px;padding:12px;font:16px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.09em}}.muted{{color:#8997a8;font-size:12px}}.error{{color:#ff9daa;background:#351820;border:1px solid #67303c;padding:9px 11px;border-radius:9px;margin:12px 0}}</style></head><body><div class='box'><h1>Velyon Core</h1><p>Закрытый центр наблюдения и улучшения интеллекта VELIA. Вход подтверждается через Telegram; браузер не передаёт Telegram ID.</p>{error_html}<div class='step'><b>1. Подтвердить владельца в Telegram</b><p>Откройте бота и запросите одноразовый код Velyon Core на 5 минут.</p><a href='{_e(link)}' rel='noreferrer'>Open Telegram</a></div><div class='step'><b>2. Ввести одноразовый код</b><form method='post' action='/admin/login'><input name='code' inputmode='text' autocomplete='one-time-code' placeholder='XXXX-XXXX-XXXX-XXXX' minlength='16' maxlength='19' required><button type='submit'>Войти в Velyon Core</button></form></div><div class='muted'>{_e(ready_text)} · session expires after 8 hours · codes are one-time</div></div></body></html>"""
 
 
 async def admin_login(request: web.Request) -> web.Response:
@@ -282,21 +286,19 @@ async def admin_logout(request: web.Request) -> web.Response:
 
 
 def _overview_cards(data: Dict[str, Any]) -> str:
-    users = data.get("users") or {}
     ai = data.get("ai") or {}
-    gen = data.get("generations") or {}
-    images = gen.get("images") or {}
-    videos = gen.get("videos") or {}
+    memory = data.get("velyon_memory") or {}
+    core_state = (data.get("velyon_core") or {}).get("status")
     return f"""
 <div class='grid'>
-  <div class='card'><div class='label'>VELIA status</div><div class='value'>{_status(data.get('velia_status'))}</div><div class='hint'>Backend + database observation</div></div>
-  <div class='card'><div class='label'>Users</div><div class='value'>{_metric(users.get('total'))}</div><div class='hint'>Active 24h: {_metric(users.get('active_24h'))}</div></div>
-  <div class='card'><div class='label'>AI requests · 24h</div><div class='value'>{_metric(ai.get('requests_24h') if ai.get('available') else None)}</div><div class='hint'>1h {_metric(ai.get('requests_1h') if ai.get('available') else None)} · 7d {_metric(ai.get('requests_7d') if ai.get('available') else None)}</div></div>
-  <div class='card'><div class='label'>AI est. cost · 24h</div><div class='value'>{'$'+format(float(ai.get('estimated_cost_24h_usd')),'.4f') if ai.get('available') and ai.get('estimated_cost_24h_usd') is not None else 'Unavailable'}</div><div class='hint'>Persisted provider usage only</div></div>
-  <div class='card'><div class='label'>AI latency · 24h</div><div class='value'>{_metric(ai.get('avg_latency_24h_ms') if ai.get('available') else None, suffix=' ms')}</div><div class='hint'>Average persisted provider latency</div></div>
-  <div class='card'><div class='label'>AI error rate · 24h</div><div class='value'>{_metric(ai.get('error_rate_24h') if ai.get('available') else None, suffix='%')}</div><div class='hint'>Unavailable when no requests</div></div>
-  <div class='card'><div class='label'>Images · succeeded 24h</div><div class='value'>{_metric(images.get('succeeded_24h') if images.get('available') else None)}</div><div class='hint'>Queue/failures not persisted yet</div></div>
-  <div class='card'><div class='label'>Videos · succeeded 24h</div><div class='value'>{_metric(videos.get('succeeded_24h') if videos.get('available') else None)}</div><div class='hint'>Queue/failures not persisted yet</div></div>
+  <div class='card'><div class='label'>VELIA</div><div class='value'>{_status(data.get('velia_status'))}</div><div class='hint'>Общее состояние ассистента</div></div>
+  <div class='card'><div class='label'>Velyon Core</div><div class='value'>{_status(core_state)}</div><div class='hint'>Интеллект и исследовательский контур</div></div>
+  <div class='card'><div class='label'>AI requests · 24h</div><div class='value'>{_metric(ai.get('requests_24h') if ai.get('available') else None)}</div><div class='hint'>Только сохранённая телеметрия</div></div>
+  <div class='card'><div class='label'>AI latency · 24h</div><div class='value'>{_metric(ai.get('avg_latency_24h_ms') if ai.get('available') else None, suffix=' ms')}</div><div class='hint'>Средняя задержка провайдеров</div></div>
+  <div class='card'><div class='label'>AI error rate · 24h</div><div class='value'>{_metric(ai.get('error_rate_24h') if ai.get('available') else None, suffix='%')}</div><div class='hint'>Ошибки AI-запросов</div></div>
+  <div class='card'><div class='label'>AI est. cost · 24h</div><div class='value'>{'$'+format(float(ai.get('estimated_cost_24h_usd')),'.4f') if ai.get('available') and ai.get('estimated_cost_24h_usd') is not None else 'Unavailable'}</div><div class='hint'>Оценка по сохранённому usage</div></div>
+  <div class='card'><div class='label'>Velyon Memory</div><div class='value'>{_status(memory.get('status'))}</div><div class='hint'>Память и shadow delivery</div></div>
+  <div class='card'><div class='label'>Research</div><div class='value'><a class='button primary' href='/admin/research'>Открыть</a></div><div class='hint'>Исследования, benchmark и dataset</div></div>
 </div>"""
 
 
@@ -311,15 +313,15 @@ async def admin_dashboard(request: web.Request) -> web.Response:
     error_rows = "".join(
         f"<tr><td>{_e(item.get('timestamp') or 'Unavailable')}</td><td>{_e(item.get('source'))}</td><td><code>{_e(item.get('request_id') or '—')}</code></td><td>{_e(item.get('error') or 'Unavailable')}</td></tr>"
         for item in errors
-    ) or "<tr><td colspan='4' class='muted'>No persisted recent errors found.</td></tr>"
+    ) or "<tr><td colspan='4' class='muted'>Сохранённых ошибок нет.</td></tr>"
     body = _overview_cards(data) + f"""
 <div class='grid' style='margin-top:12px'>
- <div class='card wide'><h2>System health</h2><div class='action-row'><span>Backend {_status((data.get('backend') or {}).get('status'))}</span><span>Database {_status((data.get('database') or {}).get('status'))}</span><span>Velyon Core {_status((data.get('velyon_core') or {}).get('status'))}</span><span>Velyon Memory {_status(memory.get('status'))}</span></div><div class='hint'>DB latency: {_metric((data.get('database') or {}).get('latency_ms'), suffix=' ms')} · Memory latency: {_metric(memory.get('latency_ms'), suffix=' ms')}</div></div>
- <div class='card wide'><h2>Deployment</h2><div><span class='label'>Branch</span><br><code>{_e(deploy.get('deployed_branch') or 'Unavailable')}</code></div><div style='margin-top:9px'><span class='label'>Deployed SHA</span><br><code>{_e(deploy.get('deployed_commit_sha') or 'Unavailable')}</code></div><div class='hint'>Never inferred from GitHub HEAD.</div></div>
- <div class='card full'><h2>Recent persisted errors</h2><div class='table-wrap'><table><thead><tr><th>Time</th><th>Source</th><th>Request ID</th><th>Error</th></tr></thead><tbody>{error_rows}</tbody></table></div></div>
- <div class='card full'><h2>Unavailable telemetry</h2><div class='muted'>HTTP request rate, canonical active-user metric, a unified background-job registry, provider live health, and migration version are intentionally shown as Unavailable until a trustworthy source exists.</div></div>
+ <div class='card full'><h2>Задача Velyon Core</h2><p>Эта панель посвящена только интеллекту VELIA: наблюдаем качество и стабильность, исследуем методы улучшения, запускаем контрольные benchmark, собираем проверенные примеры и сравниваем изменения перед выпуском.</p><p class='hint'>Управление пользователями, балансами, Economy/Payments и прочие продуктовые операции намеренно не входят в Velyon Core.</p><div class='action-row'><a class='button primary' href='/admin/research'>Исследовать и прокачивать VELIA</a><a class='button' href='/admin/ai'>AI / Core</a><a class='button' href='/admin/errors'>Ошибки</a><a class='button' href='/admin/deployments'>Деплои</a></div></div>
+ <div class='card wide'><h2>Состояние ядра</h2><div class='action-row'><span>Backend {_status((data.get('backend') or {}).get('status'))}</span><span>Database {_status((data.get('database') or {}).get('status'))}</span><span>Velyon Core {_status((data.get('velyon_core') or {}).get('status'))}</span><span>Velyon Memory {_status(memory.get('status'))}</span></div><div class='hint'>DB latency: {_metric((data.get('database') or {}).get('latency_ms'), suffix=' ms')} · Memory latency: {_metric(memory.get('latency_ms'), suffix=' ms')}</div></div>
+ <div class='card wide'><h2>Текущий deployment</h2><div><span class='label'>Branch</span><br><code>{_e(deploy.get('deployed_branch') or 'Unavailable')}</code></div><div style='margin-top:9px'><span class='label'>Deployed SHA</span><br><code>{_e(deploy.get('deployed_commit_sha') or 'Unavailable')}</code></div><div class='hint'>Показывается только runtime metadata, без подмены GitHub HEAD.</div></div>
+ <div class='card full'><h2>Последние ошибки VELIA / Core</h2><div class='table-wrap'><table><thead><tr><th>Time</th><th>Source</th><th>Request ID</th><th>Error</th></tr></thead><tbody>{error_rows}</tbody></table></div></div>
 </div>"""
-    return web.Response(text=_layout("Overview", "Overview", _key(request), body), content_type="text/html")
+    return web.Response(text=_layout("Velyon Core", "Overview", _key(request), body), content_type="text/html")
 
 
 async def admin_system(request: web.Request) -> web.Response:
@@ -540,9 +542,6 @@ def setup_admin_routes(app: web.Application) -> None:
     app.router.add_post("/admin/logout", admin_logout)
     app.router.add_get("/admin", admin_dashboard)
     app.router.add_get("/admin/system", admin_system)
-    app.router.add_get("/admin/users", admin_users)
-    app.router.add_get("/admin/users/{user_id}", admin_user_detail)
-    app.router.add_post("/admin/users/{user_id}/actions/{action}", admin_user_action)
     app.router.add_get("/admin/ai", admin_ai)
     app.router.add_get("/admin/errors", admin_errors)
     app.router.add_get("/admin/memory", admin_memory)
