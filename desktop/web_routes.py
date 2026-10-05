@@ -122,7 +122,8 @@ class Session:
 
 
 def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_session,
-                     json_response, handlers, account_balance, authorize_model, upstream_stream, web_search=None):
+                     json_response, handlers, account_balance, authorize_model, upstream_stream,
+                     web_search=None, browser_agent_run=None):
     cipher = Fernet(os.environ["VELIA_WEB_SESSION_KEY"].encode())
     sessions, exchanges, revoked = {}, deque(), {}
     def decode(request):
@@ -210,6 +211,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             credits = None
         return {"ok": True, "account": account, "name": session.name, "credits": credits,
             "web_search": bool(web_search and web_search.available),
+            "browser_agent": browser_agent_run is not None,
             "pro_locked_reason": None if credits and credits > 0 else
                 "pro_tokens_required" if credits is not None else "token_balance_unavailable",
             "models": ([MODEL_ID] if credits and credits > 0 else []) + ([FLASH_ID] if flash_enabled() else [])}
@@ -300,6 +302,30 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             return await handlers["complete"](forwarded)
         except AuthenticationUnavailable:
             return error("authentication_unavailable", 503)
+    async def browser_agent(request):
+        if not same_origin(request):
+            return error("invalid_origin", 403)
+        try:
+            session = await session_for(request)
+            if not session:
+                return error("unauthorized", 401)
+            if browser_agent_run is None:
+                return error("browser_agent_unavailable", 503)
+            try:
+                data = await request.json()
+            except web.HTTPRequestEntityTooLarge:
+                return error("request_too_large", 413)
+            except (ValueError, UnicodeDecodeError):
+                return error("invalid_json", 400)
+            if (not isinstance(data, dict) or set(data) != {"prompt"}
+                    or not isinstance(data.get("prompt"), str)
+                    or not data["prompt"].strip() or len(data["prompt"]) > 8000):
+                return error("invalid_browser_task", 400)
+            status, result = await browser_agent_run(session.user_id, data["prompt"].strip())
+            return json_response(result, status)
+        except AuthenticationUnavailable:
+            return error("authentication_unavailable", 503)
+
     async def asset(request):
         name = request.match_info.get("name", "index.html")
         if name not in {"index.html", "app.mjs", "core.mjs", "style.css", "favicon.svg"}:
@@ -317,6 +343,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     app.router.add_post("/web-api/v1/auth/exchange", login)
     app.router.add_post("/web-api/v1/auth/logout", logout)
     app.router.add_post("/web-api/v1/chat/completions", chat)
+    app.router.add_post("/web-api/v1/agent/browser", browser_agent)
     from desktop.account_routes import setup_account_routes
     setup_account_routes(app, session_for=session_for, same_origin=same_origin, upstream=upstream,
         upstream_stream=upstream_stream, authorize_model=authorize_model, handlers=handlers,
