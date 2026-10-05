@@ -401,6 +401,76 @@ def test_research_validates_citations_and_records_no_training(database, monkeypa
     assert lab.get_run(123, run_id)["error_code"] == "invalid_research_report"
 
 
+
+def test_research_accepts_markdown_json_and_recovers_explicit_citations(database, monkeypatch):
+    from services import llm_service, web_search_service
+    monkeypatch.setenv("WEB_SEARCH_PROVIDER", "tavily")
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "test-search")
+    monkeypatch.setenv("LLM_PROVIDER_RESEARCH", "kimi")
+    monkeypatch.setenv("KIMI_API_KEY", "test-teacher")
+    monkeypatch.setenv("KIMI_ENABLED", "true")
+    monkeypatch.setenv("KIMI_BACKGROUND_ENABLED", "true")
+    monkeypatch.setenv("VELIA_RESEARCH_CENTER_ENABLED", "true")
+    monkeypatch.setattr(web_search_service, "search_web", lambda query, limit: [
+        {"title": "Bonsai", "url": "https://github.com/PrismML-Eng/Bonsai-demo", "snippet": "Untrusted search snippet"}
+    ])
+    draft = {
+        "summary": "Проверить метод.",
+        "hypotheses": [{
+            "title": "LoRA [S1]",
+            "method": "Проверить адаптер по материалу [S1]",
+            "test": "Сравнить на holdout",
+            "risk": "Рост размера",
+        }],
+        "unknowns": "Совместимость формата",
+    }
+    monkeypatch.setattr(llm_service, "_provider_result",
+        lambda *args, **kwargs: {"ok": True, "text": "Результат:\n```json\n" + json.dumps(draft, ensure_ascii=False) + "\n```", "model": "teacher"})
+    run_id = lab.enqueue(123, "research", "Улучшить интеллект компактного Flash", "Markdown research", str(uuid.uuid4()))
+    assert lab.execute_claimed(lab.claim_next("worker"), "worker") == "succeeded"
+    run = lab.get_run(123, run_id)
+    assert run["report"]["hypotheses"][0]["source_ids"] == ["S1"]
+    assert run["report"]["unknowns"] == ["Совместимость формата"]
+
+
+def test_research_uses_one_bounded_repair_for_bad_schema(database, monkeypatch):
+    from services import llm_service, web_search_service
+    monkeypatch.setenv("WEB_SEARCH_PROVIDER", "tavily")
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "test-search")
+    monkeypatch.setenv("LLM_PROVIDER_RESEARCH", "kimi")
+    monkeypatch.setenv("KIMI_API_KEY", "test-teacher")
+    monkeypatch.setenv("KIMI_ENABLED", "true")
+    monkeypatch.setenv("KIMI_BACKGROUND_ENABLED", "true")
+    monkeypatch.setenv("VELIA_RESEARCH_CENTER_ENABLED", "true")
+    monkeypatch.setattr(web_search_service, "search_web", lambda query, limit: [
+        {"title": "Bonsai", "url": "https://github.com/PrismML-Eng/Bonsai-demo", "snippet": "Untrusted search snippet"}
+    ])
+    calls = []
+    repaired = {
+        "summary": "Проверить совместимость.",
+        "hypotheses": [{
+            "title": "LoRA",
+            "method": "Проверить адаптер",
+            "test": "Holdout",
+            "risk": "Размер",
+            "source_ids": ["S1"],
+        }],
+        "unknowns": [],
+    }
+    def provider(*args, **kwargs):
+        calls.append(kwargs.get("request_id"))
+        if len(calls) == 1:
+            return {"ok": True, "text": '{"summary":"сломано"}', "model": "teacher"}
+        return {"ok": True, "text": json.dumps(repaired, ensure_ascii=False), "model": "teacher"}
+    monkeypatch.setattr(llm_service, "_provider_result", provider)
+    run_id = lab.enqueue(123, "research", "Улучшить интеллект компактного Flash", "Repair research", str(uuid.uuid4()))
+    assert lab.execute_claimed(lab.claim_next("worker"), "worker") == "succeeded"
+    run = lab.get_run(123, run_id)
+    assert len(calls) == 2
+    assert calls[1].endswith("-repair")
+    assert run["report"]["summary"] == "Проверить совместимость."
+
+
 native_postgres = pytest.mark.skipif(os.getenv("VELIA_MODEL_LAB_NATIVE_POSTGRES_TESTS") != "1",
     reason="Requires ordinary multi-session PostgreSQL; enabled in model-lab CI")
 
