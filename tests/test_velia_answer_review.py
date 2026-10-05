@@ -95,6 +95,48 @@ def test_coverage_allows_case_endings_for_named_conditions():
         "unsupported_safety_assurances":[]}
 
 
+@pytest.mark.parametrize("recover", [True, False])
+def test_rejected_publication_receives_exact_tool_feedback_without_rewriting_the_original_checkpoint(monkeypatch, tmp_path, recover):
+    async def run():
+        monkeypatch.setenv("VELIA_WEB_GUEST_ENABLED", "true")
+        question = "У меня гестамин эпное и астма. Как похудеть?"
+        bad = "При астме и апноэ начните с питания и прогулок. Ограничения продуктов из-за гистамина согласуйте с врачом."
+        final = "При астме и апноэ начните с регулярного питания и спокойных прогулок."
+        def publication(text):
+            return {"paragraphs":[{"text":text, "source_ids":[1]}]}
+        intent = {"action":"search", "quote":"гестамин эпное", "candidate":"гистамин, апноэ", "query":"weight loss",
+            "source_scope":"official_health", "context":[{"quote":"гестамин", "kind":"substance", "status":"unspecified"},
+                {"quote":"эпное", "kind":"condition", "status":"stated"}, {"quote":"астма", "kind":"condition", "status":"stated"}]}
+        async with fixture(monkeypatch, with_search=True, guest_store=GuestStore(sqlite_path=tmp_path/"quota.db"),
+                intent=intent, search_response={"results":[{"title":"Weight advice", "url":"https://www.nhs.uk/weight", "content":"Eat well. Gradual activity."}]},
+                model_content="PRIVATE_DRAFT", review_tool_args_sequence=[publication(bad), publication(final if recover else bad)]) as (server, client, state):
+            cookie, _, _ = await guest(server, client)
+            async with client.post(server.make_url("/web-api/v1/guest/chat/completions"), headers=guest_headers(cookie),
+                    json={**BODY, "messages":[{"role":"user", "content":question}]}) as response:
+                wire = await response.text()
+                assert response.headers["X-Velia-Guest-Remaining"] == "29"
+            assert len(state["review_payloads"]) == 2
+            before, after = state["review_payloads"]
+            assert after["messages"][:-2] == before["messages"]
+            rejected, feedback = after["messages"][-2:]
+            assert rejected["role"] == "assistant" and feedback["role"] == "tool"
+            call = rejected["tool_calls"][0]
+            assert call["id"] == feedback["tool_call_id"]
+            assert call["function"]["name"] == "publish_reviewed_answer"
+            assert json.loads(call["function"]["arguments"]) == publication(bad)
+            error = json.loads(feedback["content"])
+            assert error["error"] == "answer_rejected"
+            assert error["issues"]["unsupported_context_advice"] == ["гистамин"]
+            assert bad + " [1]" in error["rejected_fragments"]
+            assert "согласовать" in error["issues"]["instruction"]
+            assert len(state["payloads"]) == len(state["intent_payloads"]) == len(state["search_queries"]) == 1
+            assert all(private not in wire for private in (bad, "PRIVATE_DRAFT", "PRIVATE_REVIEW_WRAPPER", "answer_rejected", "invalid_review_1"))
+            assert (final in wire and "[DONE]" in wire) if recover else ('"error"' in wire and "[DONE]" not in wire)
+            async with client.get(server.make_url("/web-api/v1/guest"), headers=guest_headers(cookie)) as response:
+                assert (await response.json())["remaining"] == 29
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("ending,blocked", [
     ("быстро похудеть без риска для здоровья не получится.", False),
     ("похудеть без риска не удастся.", False),

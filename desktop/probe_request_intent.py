@@ -87,7 +87,7 @@ def phone_answer(reply):
     lowered = reply.casefold()
     volume_down = bool(re.search(r"громк\w*\s+(?:вниз|меньш\w*)|(?:уменьш\w*|пониж\w*|снижен\w*)\s+громк\w*|volume\s+down", lowered))
     power_side = (any(term in lowered for term in ("питан", "power", "блокиров"))
-        or bool(re.search(r"\bside\b|\bбоков\w*\s+(?:кноп\w*|клавиш\w*)", lowered)))
+        or bool(re.search(r"\bside\b|\bбоков(?:ая|ую|ой)\b", lowered)))
     corrupted = bool(re.search(r"\b(?:сиде|сторонн\w*)\b", lowered))
     invented = bool(re.search(r"\b(?:galaxy\s+)?[sa]\s?\d{1,3}\b|iphone|айфон|правильно ли", lowered))
     return volume_down and power_side and not corrupted and not invented
