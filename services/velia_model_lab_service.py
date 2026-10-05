@@ -209,14 +209,35 @@ def _profile() -> dict:
             "endpoint_digest": _fingerprint(flash.endpoint())}
 
 
+def _flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _teacher_ready(provider: str) -> bool:
+    if not _flag("VELIA_RESEARCH_CENTER_ENABLED"):
+        return False
+    if provider == "gemini":
+        return bool(os.getenv("GEMINI_API_KEY")) and _flag("GEMINI_ENABLED") and _flag("GEMINI_BACKGROUND_ENABLED")
+    if provider == "kimi":
+        return bool(os.getenv("KIMI_API_KEY")) and _flag("KIMI_ENABLED") and _flag("KIMI_BACKGROUND_ENABLED")
+    return False
+
+
+def _teacher_provider() -> str:
+    preferred = (os.getenv("LLM_PROVIDER_RESEARCH") or os.getenv("LLM_TEXT_PROVIDER")
+                 or os.getenv("LLM_PRIMARY_PROVIDER") or "gemini").strip().lower()
+    order = [preferred] + [provider for provider in ("kimi", "gemini") if provider != preferred]
+    return next((provider for provider in order if _teacher_ready(provider)),
+                preferred if preferred in {"gemini", "kimi"} else "gemini")
+
+
 def capabilities() -> dict:
     from services import velia_flash_service as flash
     provider = os.getenv("WEB_SEARCH_PROVIDER", "").lower()
-    teacher = (os.getenv("LLM_PROVIDER_RESEARCH") or os.getenv("LLM_TEXT_PROVIDER") or os.getenv("LLM_PRIMARY_PROVIDER") or "gemini").lower()
-    key = "GEMINI_API_KEY" if teacher == "gemini" else "KIMI_API_KEY"
+    teacher = _teacher_provider()
     return {"enabled": enabled(), "flash": flash.available(),
             "search": provider in {"tavily", "serper", "bing"} and bool(os.getenv("WEB_SEARCH_API_KEY")),
-            "teacher": teacher in {"gemini", "kimi"} and bool(os.getenv(key)), "teacher_provider": teacher,
+            "teacher": _teacher_ready(teacher), "teacher_provider": teacher,
             "training": False, "profile": _profile()}
 
 
