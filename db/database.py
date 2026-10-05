@@ -5629,6 +5629,11 @@ def reserve_gemini_attempt(request_id, cycle_id=None, job_id=None, feature='', o
     from services.gemini_gateway import env_int
     conn = get_connection(); cur = conn.cursor()
     try:
+        # Preview/worker processes can reach provider code before the full app
+        # database bootstrap has run. Make the quota ledger self-healing so a
+        # missing gemini_call_attempts table cannot block Velyon research with
+        # an opaque db_error.
+        ensure_gemini_lockdown_tables(cur)
         cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("gemini_attempts",))
         daily_limit = env_int("GEMINI_DAILY_HTTP_ATTEMPT_LIMIT", env_int("GEMINI_DAILY_CALL_LIMIT", 0))
         bg_limit = env_int("GEMINI_BACKGROUND_DAILY_HTTP_ATTEMPT_LIMIT", 0)
