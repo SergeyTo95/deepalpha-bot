@@ -15,7 +15,6 @@ from services.velia_admin_control_service import (
     deployment_snapshot,
     list_users,
     memory_queue_snapshot,
-    overview_snapshot,
     recent_errors,
     set_user_banned,
     set_user_token_balance,
