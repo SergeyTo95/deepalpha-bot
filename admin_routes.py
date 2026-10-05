@@ -3,8 +3,10 @@ import html
 import json
 import os
 import uuid
+
+import requests
 from typing import Any, Dict, Iterable, Optional
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit
 
 from aiohttp import web
 
@@ -29,6 +31,7 @@ from services.velia_admin_security_service import (
     ADMIN_SESSION_TTL_SECONDS,
     configured_admin_id,
     consume_admin_login_code,
+    create_admin_session_for_owner,
     get_admin_session,
     record_admin_audit,
     revoke_admin_session,
@@ -213,6 +216,63 @@ def _login_page(error: str = "") -> str:
 *{{box-sizing:border-box}}body{{margin:0;min-height:100vh;display:grid;place-items:center;padding:18px;background:radial-gradient(circle at 70% 0,#18143a,transparent 35%),#05070b;color:#eef2f8;font:14px/1.5 Inter,system-ui,sans-serif}}.box{{width:min(440px,100%);padding:26px;border:1px solid #222c3a;border-radius:18px;background:rgba(11,15,22,.95);box-shadow:0 25px 80px rgba(0,0,0,.45)}}h1{{font-size:24px;margin:0 0 5px}}p{{color:#94a2b3}}.step{{padding:12px;border:1px solid #202b39;border-radius:12px;margin:11px 0;background:#090e15}}a,button{{display:block;width:100%;text-align:center;border:1px solid #7168e8;background:linear-gradient(135deg,#6258e8,#8278f2);color:#fff;text-decoration:none;padding:11px;border-radius:10px;cursor:pointer;font:inherit}}input{{width:100%;margin:8px 0 10px;border:1px solid #303b4d;background:#060a10;color:#fff;border-radius:10px;padding:12px;font:16px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.09em}}.muted{{color:#8997a8;font-size:12px}}.error{{color:#ff9daa;background:#351820;border:1px solid #67303c;padding:9px 11px;border-radius:9px;margin:12px 0}}</style></head><body><div class='box'><h1>Velyon Core</h1><p>Закрытый центр наблюдения и улучшения интеллекта VELIA. Вход подтверждается через Telegram; браузер не передаёт Telegram ID.</p>{error_html}<div class='step'><b>1. Подтвердить владельца в Telegram</b><p>Откройте бота и запросите одноразовый код Velyon Core на 5 минут.</p><a href='{_e(link)}' rel='noreferrer'>Open Telegram</a></div><div class='step'><b>2. Ввести одноразовый код</b><form method='post' action='/admin/login'><input name='code' inputmode='text' autocomplete='one-time-code' placeholder='XXXX-XXXX-XXXX-XXXX' minlength='16' maxlength='19' required><button type='submit'>Войти в Velyon Core</button></form></div><div class='muted'>{_e(ready_text)} · session expires after 8 hours · codes are one-time</div></div></body></html>"""
 
 
+def _admin_code_validator_origin() -> str:
+    value = str(os.getenv("VELIA_ADMIN_CODE_VALIDATOR_ORIGIN", "") or "").strip().rstrip("/")
+    if not value:
+        return ""
+    parsed = urlsplit(value)
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+            or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
+        return ""
+    return value
+
+
+def _validate_owner_code_externally(code: str) -> bool:
+    origin = _admin_code_validator_origin()
+    if not origin:
+        return False
+    try:
+        response = requests.post(
+            origin + "/admin/login",
+            data={"code": str(code or "")},
+            headers={"User-Agent": "Velyon-Core-Owner-Auth/1.0"},
+            timeout=(4, 10),
+            allow_redirects=False,
+        )
+        try:
+            location = str(response.headers.get("Location") or "")
+            cookies = response.headers.get("Set-Cookie", "")
+            return (
+                response.status_code in {302, 303}
+                and location in {"/admin", origin + "/admin"}
+                and "velia_admin_session=" in cookies
+            )
+        finally:
+            response.close()
+    except requests.RequestException:
+        return False
+
+
+def _consume_velyon_login_code(code: str, *, user_agent: str, ip: str) -> Dict[str, Any]:
+    # First keep local OTP behavior for environments where the Telegram bot and
+    # Velyon Core share a database.
+    local = consume_admin_login_code(code, user_agent=user_agent, ip=ip)
+    if local.get("ok") or not _admin_code_validator_origin():
+        return local
+
+    # PR/isolated Velyon environments use their own database, while the real
+    # Telegram bot writes the one-time owner code to production. Validate that
+    # code against the production owner endpoint, then mint only a local Velyon
+    # session. The production session cookie is intentionally discarded.
+    if not _validate_owner_code_externally(code):
+        return local
+    return create_admin_session_for_owner(
+        configured_admin_id(),
+        user_agent=user_agent,
+        ip=ip,
+    )
+
+
 async def admin_login(request: web.Request) -> web.Response:
     existing = await asyncio.to_thread(_current_admin, request)
     if existing:
@@ -224,7 +284,7 @@ async def admin_login(request: web.Request) -> web.Response:
     form = await request.post()
     code = str(form.get("code", "") or "")
     result = await asyncio.to_thread(
-        consume_admin_login_code,
+        _consume_velyon_login_code,
         code,
         user_agent=request.headers.get("User-Agent", ""),
         ip=request.remote or "",
