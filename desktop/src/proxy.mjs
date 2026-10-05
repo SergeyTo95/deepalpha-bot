@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { gatewayURL } from './config.mjs';
 
 /** Keep account tokens in the main process; Harness receives only a loopback key. */
-export async function startProxy(gateway, getSession, fetcher = fetch) {
+export async function startProxy(gateway, getSession, fetcher = fetch, options = {}) {
   const endpoint = gatewayURL(gateway);
   const key = randomBytes(32).toString('hex');
   const authorization = Buffer.from('Bearer ' + key);
@@ -40,16 +40,27 @@ export async function startProxy(gateway, getSession, fetcher = fetch) {
       let body = Buffer.concat(chunks);
       let flash = false;
       try {
-        const payload = JSON.parse(body.toString());
+        let payload = JSON.parse(body.toString());
         flash = payload.model === 'velia-flash';
+        if (flash && Array.isArray(payload.tools) && Array.isArray(options.allowedToolNames)) {
+          const allowed = new Set(options.allowedToolNames);
+          payload = { ...payload, tools: payload.tools.filter(tool => allowed.has(tool?.function?.name)) };
+          if (!payload.tools.length) throw new Error('VELIA Agent Core tool allowlist matched no tools');
+        }
         // pi-ai reserves 4096 tokens above its estimate. The shipped tool set
         // makes that heuristic reduce Flash's 512-token budget to one token.
         // The gateway renders/tokenizes the real prompt and reserves the full
         // answer before inference, so restore the declared budget for this case.
         if (flash && payload.max_tokens === 1 && Array.isArray(payload.tools) && payload.tools.length) {
-          body = Buffer.from(JSON.stringify({ ...payload, max_tokens: 512 }));
+          payload = { ...payload, max_tokens: 512 };
         }
-      } catch { /* Gateway validates JSON. */ }
+        body = Buffer.from(JSON.stringify(payload));
+      } catch (error) {
+        if (error?.message === 'VELIA Agent Core tool allowlist matched no tools') {
+          reply(400, 'tool_allowlist_empty'); return;
+        }
+        /* Gateway validates malformed JSON. */
+      }
       const upstream = await fetcher(endpoint + request.url.slice(3), {
         method: request.method, redirect: 'error',
         headers: { Authorization: 'Bearer ' + session.access_token, 'Content-Type': 'application/json' },
