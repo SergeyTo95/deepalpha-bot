@@ -194,13 +194,16 @@ def _code_answer() -> str:
     return "def larger(a, b):\n    return a if a >= b else b"
 
 
-def build(output: Path) -> dict:
+def build(output: Path, multiplier: int = 2) -> dict:
+    if multiplier < 1:
+        raise ValueError("multiplier must be >= 1")
     languages = list(LANG)
     targets = SOURCE_CATEGORY_TARGETS["velia-owned"]
     rows = []
 
     for category, total in targets.items():
-        allocation = _allocation(total, languages)
+        candidate_total = int(total) * multiplier
+        allocation = _allocation(candidate_total, languages)
         ordinal = 0
         for language in languages:
             for local_index in range(allocation[language]):
@@ -298,9 +301,10 @@ def build(output: Path) -> dict:
                     }
                 )
 
-    expected = sum(targets.values())
+    selection_target = sum(targets.values())
+    expected = selection_target * multiplier
     if len(rows) != expected:
-        raise RuntimeError(f"owned corpus size {len(rows)} != {expected}")
+        raise RuntimeError(f"owned candidate pool size {len(rows)} != {expected}")
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8") as stream:
@@ -310,6 +314,8 @@ def build(output: Path) -> dict:
     report = {
         "ok": True,
         "rows": len(rows),
+        "candidate_multiplier": multiplier,
+        "selection_target_rows": selection_target,
         "languages": {
             language: sum(1 for row in rows if row["language"] == language)
             for language in languages
@@ -327,8 +333,9 @@ def build(output: Path) -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--multiplier", type=int, default=2)
     args = parser.parse_args(argv)
-    report = build(args.output)
+    report = build(args.output, multiplier=args.multiplier)
     return 0 if report["ok"] else 2
 
 
