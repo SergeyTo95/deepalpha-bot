@@ -2,7 +2,7 @@
   "schema_version": 1,
   "model_id": "velia-quantum",
   "display_name": "VELIA Quantum",
-  "stage": "pre-gpu-bundle-validated",
+  "stage": "gpu-run-ready",
   "updated_by": "feature/velia-quantum",
   "completed": {
     "base_model_pinned": true,
@@ -22,7 +22,12 @@
     "development_holdout_splits": true,
     "vision_routing_set_256": true,
     "pre_gpu_training_bundle_validated": true,
-    "railway_pre_gpu_validation": true
+    "railway_pre_gpu_validation": true,
+    "cpu_worker_scaffold": true,
+    "backend_quantum_routing_scaffold": true,
+    "private_preview_allowlist": true,
+    "tq2_q8_ple_preview_pipeline": true,
+    "cpu_endpoint_benchmark": true
   },
   "pending": {
     "release_calibration_dataset": true,
@@ -35,7 +40,12 @@
     "vision_router_preservation_profile": true,
     "mtp_sidecar_artifact": true,
     "vision_sidecar_artifact": true,
-    "release_calibration_artifact": true
+    "release_calibration_artifact": true,
+    "cpu_preview_gguf": true,
+    "railway_cpu_worker_deployment": true,
+    "cpu_runtime_acceptance": true,
+    "gsq_quantum_overlay": true,
+    "android_public_enable": true
   },
   "evidence": {
     "railway_deployment_id": "074fba62-3eec-4d61-ac83-35c95b3e86a5",
