@@ -67,14 +67,17 @@ def main(argv=None) -> int:
     caps = {}
     for source, categories in public_targets.items():
         for category, target in categories.items():
-            per_language = math.ceil(int(target) / len(languages))
-            cap = max(4, math.ceil(per_language * args.oversample))
+            # Keep up to the whole bucket quota *per language*. This is
+            # intentionally generous: some translated sources are highly
+            # uneven by language, and a per-language proportional cap can
+            # manufacture a false shortage even when the source has enough
+            # rows overall. The final composer enforces global language policy.
+            calibration_cap = int(target)
+            eval_cap = max(32, min(64, int(target)))
             for language in languages:
-                # Separate split reservoirs so the 80/10/10 deterministic split
-                # cannot consume the entire cap with calibration rows.
-                caps[(source, category, language, "calibration")] = cap
-                caps[(source, category, language, "development")] = max(2, cap // 4)
-                caps[(source, category, language, "holdout")] = max(2, cap // 4)
+                caps[(source, category, language, "calibration")] = calibration_cap
+                caps[(source, category, language, "development")] = eval_cap
+                caps[(source, category, language, "holdout")] = eval_cap
 
     heaps = {key: [] for key in caps}
     observed = Counter()
