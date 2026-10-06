@@ -65,6 +65,7 @@ def main(argv=None) -> int:
     parser.add_argument("--seq-length", type=int, default=2048)
     parser.add_argument("--steps", type=int, default=300)
     parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--gumbel-samples", type=int, default=4)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-memory-per-gpu", type=int)
     parser.add_argument("--vision-profile", type=Path, required=True,
@@ -196,7 +197,7 @@ def main(argv=None) -> int:
         "--router-spread", "5.0",
         "--per-layer-budget",
         "--antithetic",
-        "--n-gumbel-samples", "4",
+        "--n-gumbel-samples", str(args.gumbel_samples),
         "--seed", str(args.seed),
         "--save-mask", str(mask_path),
         "--save-json", str(report_path),
@@ -216,6 +217,7 @@ def main(argv=None) -> int:
         "seq_length": args.seq_length,
         "steps": args.steps,
         "seed": args.seed,
+        "gumbel_samples": args.gumbel_samples,
         "vision_profile_sha256": _sha256(args.vision_profile),
         "protected_vision_experts_per_layer": protected_count,
         "expert_policy": "48 layers; prune exactly 256 of 512 per layer; keep top-k=10 routing; protect top vision-routing experts",
