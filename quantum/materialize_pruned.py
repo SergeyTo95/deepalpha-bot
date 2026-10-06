@@ -11,7 +11,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-from preflight import validate_config_payload, validate_runtime
+try:
+    from .preflight import validate_config_payload, validate_runtime
+except ImportError:  # direct script execution
+    from preflight import validate_config_payload, validate_runtime
+
 
 PINNED_RCO_REVISION = "9a1e09c07d468109cbe60a1b87d5036034a79d10"
 
@@ -65,10 +69,10 @@ def main(argv=None) -> int:
     ]
     subprocess.run(command, check=True)
 
-    config_path = args.output_dir / "config.json"
-    if not config_path.exists():
+    output_config_path = args.output_dir / "config.json"
+    if not output_config_path.exists():
         raise SystemExit("Materialized checkpoint has no config.json")
-    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config = json.loads(output_config_path.read_text(encoding="utf-8"))
 
     experts = config.get("num_experts", config.get("num_local_experts"))
     top_k = config.get("num_experts_per_tok")
@@ -88,8 +92,7 @@ def main(argv=None) -> int:
         "active_experts_per_token": top_k,
     }
     (args.output_dir / "VELIA_QUANTUM_TEXT_BACKBONE_PRUNED.json").write_text(
-        json.dumps(marker, indent=2) + "
-", encoding="utf-8"
+        json.dumps(marker, indent=2) + "\n", encoding="utf-8"
     )
     print(json.dumps(marker))
     return 0
