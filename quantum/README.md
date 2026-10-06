@@ -16,8 +16,7 @@ External projects may be studied only for implementation ideas and measurements.
 - Base revision: `de4b8e4d43b917e7706784d8bb445c9af86a3540`
 - Expert pruning optimizer: `IST-DASLab/RCO`
 - RCO revision: `9a1e09c07d468109cbe60a1b87d5036034a79d10`
-- Product model id: `velia-quantum`
-
+- Product model id: `velia-quantum`\n- Transformers compatibility pin: `cbde22f4c7b5cd1cef4e63c22c1200890696d522`\n
 The target architecture is 48 MoE layers, 512 routed experts per layer in the
 base, 10 routed experts active per token, and exactly 256 routed experts retained
 per layer after VELIA-specific pruning.
@@ -31,28 +30,34 @@ language, lacks core-language coverage, leaks prompts across holdout/calibration
 splits, or under-represents key VELIA workloads.
 
 The calibration schema requires source and license metadata for every sample.
+`source_manifest.json` separates calibration sources from holdout-only
+benchmarks and explicitly excludes non-commercial sources. `build_public_corpus.py`
+creates the balanced public multilingual component; `merge_calibration.py`
+refuses holdout leakage, unknown provenance, duplicate prompts and source-share
+violations before RCO can consume the corpus.
 
 ## Build stages
 
 1. **Calibration** — assemble a multilingual, multi-capability JSONL and run
-   `validate_calibration.py`.
-2. **Expert selection** — run the pinned original Qwen checkpoint through
+   `validate_calibration.py`. Public Aya/OASST data is only one component;
+   VELIA-owned code/tool/browser/safety/vision coverage is required before pruning.
+2. **Preflight** — Qwen3.8 uses the newer `qwen4_exp` multimodal architecture.
+   Upstream RCO's historical Transformers pin predates it, so Quantum pins a
+   Qwen4Exp-capable Transformers revision and checks the exact 48x512/top-10/PLE
+   topology before a large model is loaded.
+3. **Expert selection** — run the pinned original Qwen checkpoint through
    `run_rco_prune.py`. VELIA replaces only RCO's data loader so answer-token
    KL is optimized on our multilingual distribution. The RCO optimizer itself
    remains pinned upstream.
-3. **Materialize** — `materialize_pruned.py` physically removes the selected
-   50% of experts and fails unless every layer ends with 256 experts and top-k
+4. **Materialize** — `materialize_pruned.py` physically removes the selected\n   50% of experts and fails unless every layer ends with 256 experts and top-k
    remains 10.
-4. **Ternary compression** — target Bonsai-class ternary storage and CPU
-   inference. The reproducible open path is GSQ ternary / mixed precision plus
+5. **Ternary compression** — target Bonsai-class ternary storage and CPU\n   inference. The reproducible open path is GSQ ternary / mixed precision plus
    distillation or QAT as needed. We do **not** claim to possess PrismML's
    unpublished Bonsai-2 training recipe. A quantized candidate is not a VELIA
    release until the quality gates pass.
-5. **Railway CPU acceptance** — benchmark warm decode, 2K TTFT, RSS and quality.
-   `acceptance.py` fails closed if an aggregate metric or any core-language
+6. **Railway CPU acceptance** — benchmark warm decode, 2K TTFT, RSS and quality.\n   `acceptance.py` fails closed if an aggregate metric or any core-language
    retention floor misses the contract in `spec.json`.
-6. **Product routing** — only after acceptance do backend and Android expose
-   `velia-quantum` to users. Flash remains untouched until that point.
+7. **Product routing** — only after acceptance do backend and Android expose\n   `velia-quantum` to users. Flash remains untouched until that point.
 
 ## Calibration record
 
@@ -84,7 +89,17 @@ Validate data:
 python quantum/validate_calibration.py data/quantum.jsonl --stage pruning_search
 ```
 
-Download the exact base snapshot on the GPU training host:
+Install the Quantum GPU environment and run the cheap compatibility check before
+the large model is allocated:
+
+```bash
+pip install -r quantum/requirements-gpu.txt
+python quantum/preflight.py --base-path /data/qwen38-flash-next
+```
+
+Download the exact base snapshot on the GPU training host (the downloader checks
+`config.json` before fetching the full checkpoint):
+
 
 ```bash
 python quantum/download_base.py --local-dir /data/qwen38-flash-next
@@ -109,8 +124,7 @@ python quantum/run_rco_prune.py \
   --steps 300
 ```
 
-Materialize the checkpoint:
-
+Materialize the **text backbone** checkpoint. Vision and MTP stay explicit sidecar artifacts and must pass their own acceptance gates:\n
 ```bash
 python quantum/materialize_pruned.py \
   --rco-root /data/RCO \
