@@ -17,6 +17,7 @@ def test_quantum_worker_is_cpu_only_and_uses_quantum_alias(monkeypatch):
     assert args[args.index("-ngl") + 1] == "0"
     assert args[args.index("-c") + 1] == "16384"
     assert args[args.index("--cache-ram") + 1] == "1024"
+    assert "--metrics" in args
     assert "--no-webui" in args
 
 
