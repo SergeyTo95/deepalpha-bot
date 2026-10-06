@@ -17,6 +17,7 @@ from pathlib import Path
 
 from calibration import load_masked_calibration
 from preflight import validate_config_payload, validate_runtime
+from rco_compat import install_qwen4exp_router_score_adapter
 
 
 PINNED_RCO_REVISION = "9a1e09c07d468109cbe60a1b87d5036034a79d10"
@@ -103,6 +104,7 @@ def main(argv=None) -> int:
     provenance_path = args.output_dir / "quantum-provenance.json"
 
     module = _load_rco_entry(args.rco_root)
+    module = install_qwen4exp_router_score_adapter(module)
 
     def velia_loader(name, n_samples, seq_length, tokenizer, seed=42):
         # RCO passes its --calibration-data value here. Reject any accidental
