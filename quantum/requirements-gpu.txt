@@ -1,0 +1,19 @@
+# VELIA Quantum GPU research environment.
+# RCO itself is pinned separately by run_rco_prune.py.
+#
+# Qwen3.8-Flash-Next declares qwen4_exp, which is newer than the
+# transformers==5.7.0 pin in upstream RCO. Pin a Transformers revision that
+# contains Qwen4ExpForCausalLM + composite-config -> text_config AutoModel
+# compatibility. Do not silently downgrade this pin.
+numpy==2.3.5
+accelerate==1.13.0
+datasets==4.8.5
+tqdm==4.67.3
+compressed-tensors==0.15.0.1
+huggingface_hub>=0.36.0
+safetensors>=0.6.2
+transformers @ git+https://github.com/huggingface/transformers.git@cbde22f4c7b5cd1cef4e63c22c1200890696d522
+
+# Install torch separately for the training host's CUDA runtime.
+# Upstream RCO validated torch 2.11.0+cu126; the Quantum preflight refuses CPU
+# pruning because RCO's optimizer controller is CUDA-bound.
