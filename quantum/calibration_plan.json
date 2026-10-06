@@ -93,8 +93,7 @@
       "knowledge": 0.08,
       "structured_output": 0.05,
       "translation": 0.05,
-      "safety": 0.05,
-      "vision_text": 0.03
+      "safety": 0.05
     },
     "maximum_share_any": 0.25
   },
@@ -112,5 +111,12 @@
   "deduplication": {
     "normalized_text_sha256": true,
     "reject_duplicate_prompt_across_splits": true
+  },
+  "modality_policy": {
+    "text_rco_calibration": "Only text/tool/browser/document traces are used for answer-token KL pruning.",
+    "vision_routing_profile": "Real image/video tokens are profiled on the original multimodal Qwen and protected during expert-mask finalization.",
+    "vision_category_required_in_text_corpus": false,
+    "vision_profile_required_for_pruning": true,
+    "minimum_vision_profile_samples_release_candidate": 256
   }
 }
