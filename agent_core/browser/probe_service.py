@@ -274,16 +274,17 @@ localStorage.setItem("velia_session_probe", "local-proof");
             runtime,
             endpoint,
             root,
-            second["session_id"],
+            None,
             (
+                "Контекст Flash обновлён, но Chromium и текущие вкладки сохранены. "
                 "Проверь только переключение вкладок. Через browser_tabs открой НОВУЮ пустую "
                 "вкладку и сразу через browser_tabs вернись на исходную вкладку "
                 "browser-session-fixture. Не переходи на другие сайты. На исходной вкладке прочитай "
                 "два маркера и ответь только строками COOKIE_RESTORED и LOCAL_STORAGE_RESTORED."
             ),
         )
-        if second["session_id"] != third["session_id"]:
-            raise RuntimeError("browser_agent_session_not_resumed_for_tabs")
+        if second["session_id"] == third["session_id"]:
+            raise RuntimeError("browser_agent_flash_context_not_rolled_over")
         tab_calls = [
             call for call in third.get("tool_calls", [])
             if call.get("tool") == "mcp__playwright-mcp__browser_tabs"
@@ -325,7 +326,9 @@ localStorage.setItem("velia_session_probe", "local-proof");
             "model": "velia-flash",
             "browser": "playwright-mcp-attach",
             "turns": 4,
-            "persistent_agent_session": True,
+            "persistent_browser_session": True,
+            "bounded_model_context": True,
+            "agent_context_rollover": True,
             "browser_process_restarted": True,
             "profile_reused": True,
             "current_page_preserved_after_restart": True,
