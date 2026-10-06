@@ -77,7 +77,7 @@
         "translation",
         "reasoning_math"
       ],
-      "max_share": 0.51,
+      "max_share": 0.52,
       "requirements": [
         "prompts must be multilingual",
         "answers must be generated or curated from the pinned original Qwen base or human-authored",
