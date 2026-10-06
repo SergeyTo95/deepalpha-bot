@@ -301,3 +301,21 @@ def test_quantum_merge_rejects_holdout_source_leak(tmp_path):
     rows, errors = merge_rows([component], manifest)
     assert rows == []
     assert any("holdout source leaked" in error for error in errors)
+
+
+def test_quantum_aya_human_long_prompt_routes_to_documents():
+    row = {
+        "id": "long-doc",
+        "inputs": "A" * 900,
+        "targets": "A concise grounded answer with enough content to be meaningful.",
+        "language_code": "eng",
+    }
+    record = aya_record(
+        row,
+        source_id="aya-human",
+        license_id="Apache-2.0",
+        default_category="general_dialogue",
+        language_field="language_code",
+    )
+    assert record is not None
+    assert record["category"] == "documents_retrieval"
