@@ -14,21 +14,21 @@ from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 
 _COMPACTED_MARKER = "[… VELIA context compacted …]"
-_URL_RE = re.compile(r"https?://\\S+", re.IGNORECASE)
-_NUMBER_RE = re.compile(r"(?<!\\w)[+-]?(?:\\d+[\\d.,:/-]*\\d|\\d)(?:%|\\s?(?:ms|s|sec|mb|gb|kb|ton|usd|eur|rub|byn|uah|kzt))?\\b", re.IGNORECASE)
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+_NUMBER_RE = re.compile(r"(?<!\w)[+-]?(?:\d+[\d.,:/-]*\d|\d)(?:%|\s?(?:ms|s|sec|mb|gb|kb|ton|usd|eur|rub|byn|uah|kzt))?\b", re.IGNORECASE)
 _ANCHOR_RE = re.compile(
     r"(?:"
     r"https?://|"
-    r"\\b(?:error|exception|traceback|failed|failure|warning|port|sha|commit|pr|id|api|url)\\b|"
-    r"\\b(?:must|never|always|exactly|required|keep|preserve|do not|don't)\\b|"
-    r"(?:не\\s+меня|нельзя|обязательно|точно|сохрани|оставь|важно|ошиб|порт|ссылк|коммит)"
+    r"\b(?:error|exception|traceback|failed|failure|warning|port|sha|commit|pr|id|api|url)\b|"
+    r"\b(?:must|never|always|exactly|required|keep|preserve|do not|don't)\b|"
+    r"(?:не\s+меня|нельзя|обязательно|точно|сохрани|оставь|важно|ошиб|порт|ссылк|коммит)"
     r")",
     re.IGNORECASE,
 )
 
 _ENRICHMENT_MARKERS = (
-    "\\n\\nLIVE_WEB_CONTEXT_UNTRUSTED:\\n",
-    "\\n\\nATTACHMENT_DATA_UNTRUSTED:\\n",
+    "\n\nLIVE_WEB_CONTEXT_UNTRUSTED:\n",
+    "\n\nATTACHMENT_DATA_UNTRUSTED:\n",
 )
 
 
@@ -83,13 +83,13 @@ def compact_text(value: Any, max_chars: int) -> str:
         return text
 
     lines = _clean_lines(text)
-    normalized = "\\n".join(lines).strip() or text
+    normalized = "\n".join(lines).strip() or text
     if len(normalized) <= limit:
         return normalized
 
     anchors = _important_lines(lines)
-    anchor_blob = "\\n".join(anchors)
-    marker = "\\n" + _COMPACTED_MARKER + "\\n"
+    anchor_blob = "\n".join(anchors)
+    marker = "\n" + _COMPACTED_MARKER + "\n"
 
     # Allocate most space to the beginning (topic/intent), some to exact anchors,
     # and the remainder to the tail (latest conclusion/error). The newest user
@@ -107,7 +107,7 @@ def compact_text(value: Any, max_chars: int) -> str:
         parts.append(kept_anchors)
     if tail and tail not in head:
         parts.append(tail)
-    result = "\\n".join(part for part in parts if part).strip()
+    result = "\n".join(part for part in parts if part).strip()
     if len(result) <= limit:
         return result
 
