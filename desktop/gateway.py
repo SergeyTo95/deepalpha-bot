@@ -272,6 +272,10 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
                     if response.status in {400, 404, 409}:
                         return response.status, {"ok": False, "error": code}
                     return 503, {"ok": False, "error": "browser_takeover_unavailable"}
+                if action is not None and action.get("action") == "finish":
+                    if result.get("finished") is not True:
+                        return 502, {"ok": False, "error": "browser_takeover_invalid_response"}
+                    return 200, {"ok": True, "finished": True}
                 viewport = result.get("viewport")
                 image = result.get("image")
                 kind = result.get("kind")
