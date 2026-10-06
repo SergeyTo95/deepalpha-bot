@@ -18,7 +18,8 @@
       "allowed_categories": [
         "general_dialogue",
         "knowledge",
-        "translation"
+        "translation",
+        "documents_retrieval"
       ],
       "max_share": 0.35
     },
@@ -74,9 +75,9 @@
         "safety",
         "vision_text",
         "translation",
-        "documents_retrieval"
+        "reasoning_math"
       ],
-      "max_share": 0.5,
+      "max_share": 0.51,
       "requirements": [
         "prompts must be multilingual",
         "answers must be generated or curated from the pinned original Qwen base or human-authored",
