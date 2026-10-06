@@ -14,6 +14,7 @@ try:
     from .merge_calibration import merge_rows
     from .preflight import validate_config_payload
     from .prepare_ple_sidecar import parse_weight_map, validate_config as validate_ple_config
+    from .gsq_preflight import validate_checkpoint as validate_gsq_checkpoint
     from .validate_calibration import validate
 except ImportError:
     from acceptance import evaluate as evaluate_acceptance
@@ -23,6 +24,7 @@ except ImportError:
     from merge_calibration import merge_rows
     from preflight import validate_config_payload
     from prepare_ple_sidecar import parse_weight_map, validate_config as validate_ple_config
+    from gsq_preflight import validate_checkpoint as validate_gsq_checkpoint
     from validate_calibration import validate
 
 
@@ -78,6 +80,22 @@ def run() -> dict:
         },
     }
     _assert(validate_config_payload(expected_config) == [], "Qwen topology preflight failed")
+
+    pruned_quantum_config = {
+        "model_type": "qwen4_exp_text",
+        "num_hidden_layers": 48,
+        "num_experts": 256,
+        "original_num_experts": 512,
+        "num_experts_per_tok": 10,
+        "hidden_size": 2560,
+        "moe_intermediate_size": 640,
+        "hc_count": 4,
+        "ple_layer_ids": [2],
+    }
+    _assert(
+        validate_gsq_checkpoint(pruned_quantum_config) == [],
+        "post-RCO GSQ checkpoint contract failed",
+    )
 
     ple_config = {
         "model_type": "qwen4_exp",
@@ -267,6 +285,7 @@ def run() -> dict:
             "official-qwen-fp8-ple-index",
             "owned-capability-uniqueness",
             "4096-calibration-quota-plan",
+            "post-rco-gsq-contract",
         ],
     }
 
