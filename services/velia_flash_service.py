@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 import requests
 from velia_request_understanding import understanding_instruction, clarification_result, clarification_reply, interpreted_content
+from services.velia_flash_context_engine import compact_history_level
 
 MODEL = "velia-flash"
 PROVIDER = "bonsai"
@@ -238,6 +239,9 @@ def build_prompt(chat_module, user_id, conversation_id):
         from services.velia_attachment_service import attachment_context_sql
         attachment_sql = ", " + attachment_context_sql()
 
+    # Context Engine reads a wider prompt window than the old 12-message slice.
+    # Older turns are compacted before inference; persistent rows stay untouched.
+    history_messages = bounded_int("VELIA_FLASH_HISTORY_MESSAGES", 24, 6, 48)
     conn = chat_module.get_connection()
     cursor = chat_module._dict_cursor(conn)
     try:
@@ -247,8 +251,8 @@ def build_prompt(chat_module, user_id, conversation_id):
               AND deleted_at IS NULL AND role IN ('user', 'assistant')
             ORDER BY created_at DESC,
               CASE WHEN role='user' THEN 0 ELSE 1 END DESC, message_id DESC
-            LIMIT 12
-        """, (int(user_id), str(conversation_id)))
+            LIMIT %s
+        """, (int(user_id), str(conversation_id), history_messages))
         rows = list(reversed(cursor.fetchall() or []))
     finally:
         cursor.close()
@@ -329,6 +333,23 @@ def _generate_once(messages, *, request_id="", on_delta=None):
         for m in messages if m.get("role") in {"user", "assistant"}]
     if not history:
         return error("empty_message", request_id)
+
+    context_engine_enabled = bool(
+        not voice_fast and env_bool("VELIA_FLASH_CONTEXT_ENGINE_ENABLED", True)
+    )
+    context_compaction_level = 0
+    if context_engine_enabled:
+        compacted, context_stats = compact_history_level(history, 1)
+        if context_stats["compacted_messages"] > 0:
+            logger.info(
+                "VELIA_FLASH_CONTEXT_COMPACTED request_id=%s level=1 messages=%s chars_before=%s chars_after=%s",
+                str(request_id)[:80],
+                int(context_stats["compacted_messages"]),
+                int(context_stats["input_chars"]),
+                int(context_stats["output_chars"]),
+            )
+        history = compacted
+        context_compaction_level = 1
     started = time.monotonic()
     session = requests.Session()
     session.trust_env = False
@@ -361,16 +382,34 @@ def _generate_once(messages, *, request_id="", on_delta=None):
                     raise ValueError("flash_invalid_response")
                 if len(tokens) <= input_limit:
                     break
-                if len(history) > 1:
-                    history.pop(0)
-                    while len(history) > 1 and history[0]["role"] != "user":
-                        history.pop(0)
-                    continue
+
+                # First reduce server-added enrichment, then compact older chat
+                # more aggressively. Only after those loss-minimizing steps do
+                # we fall back to dropping the oldest complete turn.
                 if _shrink_latest_live_web_context(
                     history,
                     token_count=len(tokens),
                     input_limit=input_limit,
                 ):
+                    continue
+                if context_engine_enabled and context_compaction_level < 3:
+                    context_compaction_level += 1
+                    history, context_stats = compact_history_level(
+                        history, context_compaction_level
+                    )
+                    logger.info(
+                        "VELIA_FLASH_CONTEXT_COMPACTED request_id=%s level=%s messages=%s chars_before=%s chars_after=%s",
+                        str(request_id)[:80],
+                        int(context_compaction_level),
+                        int(context_stats["compacted_messages"]),
+                        int(context_stats["input_chars"]),
+                        int(context_stats["output_chars"]),
+                    )
+                    continue
+                if len(history) > 1:
+                    history.pop(0)
+                    while len(history) > 1 and history[0]["role"] != "user":
+                        history.pop(0)
                     continue
                 return error("flash_context_too_long", request_id)
             else:
