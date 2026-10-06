@@ -27,7 +27,8 @@ if __name__ == "__main__":
             "-tb", number("VELIA_FLASH_CPU_THREADS", 8, 1, 8),
             "-b", "256", "-ub", "128", "-n", "512", "--jinja",
             "--reasoning", "off", "--reasoning-budget", "0",
-            "--reasoning-format", "deepseek", "--cache-ram", "0",
+            "--reasoning-format", "deepseek", "--cache-ram",
+            number("VELIA_FLASH_PROMPT_CACHE_MIB", 512, 0, 2048),
             "--chat-template-kwargs", '{"enable_thinking": false}',
             "--no-webui"]
     if os.getenv("VELIA_FLASH_REPACK", "false").lower() in {"false", "0", "no"}:
