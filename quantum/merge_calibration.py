@@ -42,12 +42,13 @@ def _prompt_hash(row: dict[str, Any]) -> str:
         for message in row.get("messages") or []
         if message.get("role") == "user"
     ]
-    normalized = " ".join("
-".join(parts).casefold().split())
+    normalized = " ".join("\n".join(parts).casefold().split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def merge_rows(paths: Iterable[Path], manifest: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+def merge_rows(
+    paths: Iterable[Path], manifest: dict[str, Any]
+) -> tuple[list[dict[str, Any]], list[str]]:
     rows = []
     errors = []
     ids = set()
@@ -66,11 +67,15 @@ def merge_rows(paths: Iterable[Path], manifest: dict[str, Any]) -> tuple[list[di
 
                 source = str(row.get("source") or "")
                 if _is_holdout_source(source, manifest):
-                    errors.append(f"{path}:{line_number}: holdout source leaked into calibration: {source}")
+                    errors.append(
+                        f"{path}:{line_number}: holdout source leaked into calibration: {source}"
+                    )
                     continue
                 group = _source_group(source, manifest)
                 if group is None:
-                    errors.append(f"{path}:{line_number}: unregistered calibration source: {source!r}")
+                    errors.append(
+                        f"{path}:{line_number}: unregistered calibration source: {source!r}"
+                    )
                     continue
 
                 sid = str(row.get("id") or "")
@@ -92,17 +97,24 @@ def merge_rows(paths: Iterable[Path], manifest: dict[str, Any]) -> tuple[list[di
     return rows, errors
 
 
-def source_share_errors(rows: list[dict[str, Any]], manifest: dict[str, Any]) -> list[str]:
+def source_share_errors(
+    rows: list[dict[str, Any]], manifest: dict[str, Any]
+) -> list[str]:
     if not rows:
         return ["merged corpus is empty"]
     counts = Counter(row["source_group"] for row in rows)
-    limits = {item["id"]: float(item["max_share"]) for item in manifest["calibration_sources"]}
+    limits = {
+        item["id"]: float(item["max_share"])
+        for item in manifest["calibration_sources"]
+    }
     errors = []
     for source, count in sorted(counts.items()):
         share = count / len(rows)
         limit = limits[source]
         if share > limit + 1e-12:
-            errors.append(f"source {source}: share {share:.3f} exceeds {limit:.3f}")
+            errors.append(
+                f"source {source}: share {share:.3f} exceeds {limit:.3f}"
+            )
     return errors
 
 
@@ -110,9 +122,21 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("components", nargs="+", type=Path)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--manifest", type=Path, default=Path(__file__).with_name("source_manifest.json"))
-    parser.add_argument("--plan", type=Path, default=Path(__file__).with_name("calibration_plan.json"))
-    parser.add_argument("--stage", choices=("smoke", "pruning_search", "release_candidate"), default="pruning_search")
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path(__file__).with_name("source_manifest.json"),
+    )
+    parser.add_argument(
+        "--plan",
+        type=Path,
+        default=Path(__file__).with_name("calibration_plan.json"),
+    )
+    parser.add_argument(
+        "--stage",
+        choices=("smoke", "pruning_search", "release_candidate"),
+        default="pruning_search",
+    )
     parser.add_argument("--report", type=Path)
     args = parser.parse_args(argv)
 
@@ -121,13 +145,20 @@ def main(argv=None) -> int:
     errors.extend(source_share_errors(rows, manifest))
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    rows.sort(key=lambda row: (row.get("language", ""), row.get("category", ""), row.get("id", "")))
+    rows.sort(
+        key=lambda row: (
+            row.get("language", ""),
+            row.get("category", ""),
+            row.get("id", ""),
+        )
+    )
     with args.output.open("w", encoding="utf-8") as stream:
         for row in rows:
             persisted = dict(row)
             persisted.pop("source_group", None)
-            stream.write(json.dumps(persisted, ensure_ascii=False, sort_keys=True) + "
-")
+            stream.write(
+                json.dumps(persisted, ensure_ascii=False, sort_keys=True) + "\n"
+            )
 
     validation = validate(args.output, args.plan, args.stage)
     errors.extend(validation["errors"])
@@ -135,7 +166,9 @@ def main(argv=None) -> int:
         "ok": not errors,
         "stage": args.stage,
         "rows": len(rows),
-        "source_counts": dict(sorted(Counter(row["source_group"] for row in rows).items())),
+        "source_counts": dict(
+            sorted(Counter(row["source_group"] for row in rows).items())
+        ),
         "dataset_validation": validation,
         "errors": errors,
     }
@@ -143,8 +176,7 @@ def main(argv=None) -> int:
     print(rendered)
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(rendered + "
-", encoding="utf-8")
+        args.report.write_text(rendered + "\n", encoding="utf-8")
     return 0 if report["ok"] else 2
 
 
