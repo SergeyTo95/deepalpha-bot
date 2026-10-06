@@ -16,7 +16,9 @@ External projects may be studied only for implementation ideas and measurements.
 - Base revision: `de4b8e4d43b917e7706784d8bb445c9af86a3540`
 - Expert pruning optimizer: `IST-DASLab/RCO`
 - RCO revision: `9a1e09c07d468109cbe60a1b87d5036034a79d10`
-- Product model id: `velia-quantum`\n- Transformers compatibility pin: `cbde22f4c7b5cd1cef4e63c22c1200890696d522`\n
+- Product model id: `velia-quantum`
+- Transformers compatibility pin: `cbde22f4c7b5cd1cef4e63c22c1200890696d522`
+
 The target architecture is 48 MoE layers, 512 routed experts per layer in the
 base, 10 routed experts active per token, and exactly 256 routed experts retained
 per layer after VELIA-specific pruning.
@@ -49,15 +51,19 @@ violations before RCO can consume the corpus.
    `run_rco_prune.py`. VELIA replaces only RCO's data loader so answer-token
    KL is optimized on our multilingual distribution. The RCO optimizer itself
    remains pinned upstream.
-4. **Materialize** — `materialize_pruned.py` physically removes the selected\n   50% of experts and fails unless every layer ends with 256 experts and top-k
+4. **Materialize** — `materialize_pruned.py` physically removes the selected
+   50% of experts and fails unless every layer ends with 256 experts and top-k
    remains 10.
-5. **Ternary compression** — target Bonsai-class ternary storage and CPU\n   inference. The reproducible open path is GSQ ternary / mixed precision plus
+5. **Ternary compression** — target Bonsai-class ternary storage and CPU
+   inference. The reproducible open path is GSQ ternary / mixed precision plus
    distillation or QAT as needed. We do **not** claim to possess PrismML's
    unpublished Bonsai-2 training recipe. A quantized candidate is not a VELIA
    release until the quality gates pass.
-6. **Railway CPU acceptance** — benchmark warm decode, 2K TTFT, RSS and quality.\n   `acceptance.py` fails closed if an aggregate metric or any core-language
+6. **Railway CPU acceptance** — benchmark warm decode, 2K TTFT, RSS and quality.
+   `acceptance.py` fails closed if an aggregate metric or any core-language
    retention floor misses the contract in `spec.json`.
-7. **Product routing** — only after acceptance do backend and Android expose\n   `velia-quantum` to users. Flash remains untouched until that point.
+7. **Product routing** — only after acceptance do backend and Android expose
+   `velia-quantum` to users. Flash remains untouched until that point.
 
 ## Calibration record
 
@@ -124,7 +130,8 @@ python quantum/run_rco_prune.py \
   --steps 300
 ```
 
-Materialize the **text backbone** checkpoint. Vision and MTP stay explicit sidecar artifacts and must pass their own acceptance gates:\n
+Materialize the **text backbone** checkpoint. Vision and MTP stay explicit sidecar artifacts and must pass their own acceptance gates:
+
 ```bash
 python quantum/materialize_pruned.py \
   --rco-root /data/RCO \
