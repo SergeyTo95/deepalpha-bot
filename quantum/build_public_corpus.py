@@ -33,12 +33,12 @@ ISO_TO_VELIA = {
 }
 
 CODE_HINT = re.compile(
-    r"(?:\\b(?:python|javascript|typescript|java|golang|rust|c\\+\\+|sql|"
-    r"function|class|method|code|debug|compile|api)\\b|\\x60{3}|\\bdef\\s+\\w+\\s*\\()",
+    r"(?:\b(?:python|javascript|typescript|java|golang|rust|c\+\+|sql|"
+    r"function|class|method|code|debug|compile|api)\b|\u0060{3}|\bdef\s+\w+\s*\()",
     re.IGNORECASE,
 )
 TRANSLATION_HINT = re.compile(
-    r"(?:\\btranslat(?:e|ion)\\b|\\btranslate\\s+.*\\b(?:to|into)\\b|"
+    r"(?:\btranslat(?:e|ion)\b|\btranslate\s+.*\b(?:to|into)\b|"
     r"перевед|перевод|traduc|tradu[çc]|übersetz|çevir|翻译|翻訳|번역)",
     re.IGNORECASE,
 )
@@ -55,7 +55,7 @@ def normalize_language(value: Any) -> str:
 
 
 def stable_hex(*parts: Any) -> str:
-    blob = "\\x1f".join(str(part) for part in parts).encode("utf-8")
+    blob = chr(31).join(str(part) for part in parts).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
 
 
