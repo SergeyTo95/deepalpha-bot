@@ -4,6 +4,7 @@ on:
     branches: [feature/turbo-short-term-btc]
     paths:
       - 'services/velia_flash_service.py'
+      - 'services/velia_flash_context_engine.py'
       - 'services/velia*chat*'
       - 'services/velia_mobile*'
       - 'velia_mobile_routes.py'
