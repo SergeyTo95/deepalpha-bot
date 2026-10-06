@@ -65,6 +65,35 @@ violations before RCO can consume the corpus.
 7. **Product routing** — only after acceptance do backend and Android expose
    `velia-quantum` to users. Flash remains untouched until that point.
 
+## Validated pre-GPU milestone
+
+Railway preview validation has completed the full reproducible pre-GPU build:
+
+- 4,096 calibration rows.
+- 512 development rows and 512 holdout rows.
+- 20 core languages with 204-205 calibration rows each.
+- Exact capability quotas from `calibration_plan.json`.
+- 256 balanced synthetic vision-routing samples.
+- zero calibration validation errors.
+- calibration SHA-256:
+  `6f48c38f5cf495c6ce75f7e9e5e86152320e993bba2ab454519405ddc51f3872`.
+- validation deployment:
+  `074fba62-3eec-4d61-ac83-35c95b3e86a5` — SUCCESS.
+
+Rebuild the same pre-GPU artifact set with:
+
+```bash
+pip install -r quantum/requirements-corpus.txt
+python quantum/build_training_bundle.py \
+  --output-dir /data/velia-quantum-bundle \
+  --scan-limit 250000 \
+  --eval-per-split 512 \
+  --vision-samples 256
+```
+
+The bundle manifest records file hashes. A rebuilt dataset must pass validation
+before it may be supplied to RCO.
+
 ## Calibration record
 
 Each JSONL line has this shape:
@@ -121,13 +150,20 @@ git -C /data/RCO checkout 9a1e09c07d468109cbe60a1b87d5036034a79d10
 Run the first real 50% expert search:
 
 ```bash
+python quantum/profile_vision_routing.py \
+  --base-path /data/qwen38-flash-next \
+  --manifest /data/velia-quantum-bundle/vision-routing-set/vision_manifest.jsonl \
+  --output /data/velia-quantum-artifacts/vision-routing.pt
+
 python quantum/run_rco_prune.py \
   --rco-root /data/RCO \
   --base-path /data/qwen38-flash-next \
-  --dataset data/quantum.jsonl \
+  --dataset /data/velia-quantum-bundle/velia-quantum-calibration.jsonl \
+  --vision-profile /data/velia-quantum-artifacts/vision-routing.pt \
   --output-dir /data/velia-quantum-rco \
   --samples 4096 \
-  --steps 300
+  --steps 300 \
+  --gumbel-samples 4
 ```
 
 Materialize the **text backbone** checkpoint. Vision and MTP stay explicit sidecar artifacts and must pass their own acceptance gates:
