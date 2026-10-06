@@ -30,7 +30,6 @@ SOURCE_CATEGORY_TARGETS = {
     },
     "aya-collection": {
         "reasoning_math": 650,
-        "documents_retrieval": 350,
         "knowledge": 350,
     },
     "oasst2": {
@@ -38,6 +37,7 @@ SOURCE_CATEGORY_TARGETS = {
     },
     "velia-owned": {
         "coding": 50,
+        "documents_retrieval": 350,
         "tool_use": 450,
         "agentic_browser": 350,
         "structured_output": 220,
