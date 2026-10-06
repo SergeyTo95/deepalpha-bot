@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "product": "VELIA Quantum",
+  "model_id": "velia-quantum",
+  "stage": "post-rco-ternary",
+  "upstream": {
+    "repo": "IST-DASLab/GSQ",
+    "revision": "03fc16484c369e3127225615d5e03e8d3a6043e3"
+  },
+  "input_checkpoint": {
+    "model_type": "qwen4_exp_text",
+    "experts_per_layer": 256,
+    "original_experts_per_layer": 512,
+    "active_experts_per_token": 10,
+    "layers": 48,
+    "hidden_size": 2560,
+    "hc_count": 4,
+    "activation_cache_width": 10240,
+    "moe_intermediate_size": 640,
+    "ple_layer_ids": [
+      2
+    ]
+  },
+  "quantization": {
+    "primary": "ternary",
+    "groupsize": 128,
+    "init_method": "gptq",
+    "gsq_enabled": true,
+    "logits_dtype": "bfloat16",
+    "self_attention": false,
+    "quantize_routed_experts": true,
+    "quantize_shared_expert_initially": false,
+    "quantize_attention_initially": false,
+    "preserve_router_bf16": true,
+    "preserve_hyper_connections_bf16": true,
+    "preserve_ple_sidecar": true,
+    "preserve_mtp_sidecar": true,
+    "fallback": "2bit"
+  },
+  "calibration": {
+    "source": "velia-quantum-rco-calibration-v1",
+    "expected_sha256": "6f48c38f5cf495c6ce75f7e9e5e86152320e993bba2ab454519405ddc51f3872",
+    "train_rows": 4096,
+    "dev_rows": 512,
+    "holdout_rows": 512,
+    "use_same_multilingual_distribution_as_pruning": true
+  },
+  "compatibility": {
+    "stock_gsq_qwen35_wrapper_allowed": false,
+    "reasons": [
+      "Qwen4Exp decoder boundary width is hc_count*hidden_size, not hidden_size.",
+      "Qwen4Exp applies gated hyper-connections around attention and MoE.",
+      "Qwen4Exp has PLE on one-indexed layer 2.",
+      "The upstream model selector does not include qwen4_exp."
+    ],
+    "required_overlay_features": [
+      "qwen4_exp model selector",
+      "10240-wide layer-boundary activation cache",
+      "Qwen4Exp hyper-connection-aware MLP staging",
+      "fused 256-expert sharding",
+      "PLE-aware activation propagation",
+      "VELIA Quantum JSONL dataloader"
+    ]
+  },
+  "acceptance": {
+    "smoke_layers": 2,
+    "smoke_requires_ple_layer": true,
+    "compare_expert_output_mse": true,
+    "full_run_only_after_smoke": true
+  }
+}
