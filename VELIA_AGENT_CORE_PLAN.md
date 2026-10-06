@@ -39,18 +39,21 @@ Requirements:
 
 ## Planned phases
 
-### Phase 1 — Browser proof
-- Build a VELIA Agent Core browser profile.
-- Default/only model: VELIA Flash.
-- Add Playwright MCP Chromium provider.
-- Remove Desktop-only filesystem/terminal/git tools from the browser preset.
-- Run a real Flash + browser-tool acceptance fixture.
+### Phase 1 — Browser proof — COMPLETE
+- VELIA Agent Core browser profile is Flash-only.
+- Playwright MCP Chromium provider is live on Railway.
+- Desktop shell/filesystem/git tools are excluded from the browser path.
+- Live acceptance passed: VELIA Flash -> tool call -> Chromium -> browser result -> Flash final answer.
+- Paid-model fallback is disabled.
 
-### Phase 2 — Hosted Browser Agent
-- Run Agent Core + Chromium as an isolated Railway service.
-- Put it behind VELIA authentication/gateway.
-- Session isolation, quotas, timeouts, browser cleanup, download limits.
-- Web UI branded VELIA, not upstream product branding.
+### Phase 2 — Hosted Browser Agent — IN PROGRESS
+- Isolated Railway Browser Agent service is live.
+- Authenticated VELIA Web route is wired through the gateway to the private Agent Core service.
+- Live Web E2E passed: authenticated Web route -> private Agent Core -> Flash -> Chromium -> answer back.
+- Web UI has an AGENT mode for signed-in preview accounts.
+- Cold-start handling is implemented for the private Browser Agent service.
+- Next: persistent browser sessions, per-user quotas/timeouts, download limits, explicit approval boundaries for destructive/account-sensitive actions, and browser session cleanup/observability.
+- Keep VELIA branding; upstream Harness naming is provenance only.
 
 ### Phase 3 — Android Tool Host
 - Kotlin capability bridge for safe native tools.
