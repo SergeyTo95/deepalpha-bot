@@ -84,7 +84,8 @@
         "agentic_browser",
         "structured_output",
         "safety",
-        "vision_text"
+        "vision_text",
+        "translation"
       ],
       "max_share": 0.45,
       "requirements": [
