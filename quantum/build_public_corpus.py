@@ -71,6 +71,7 @@ def stable_split(sample_id: str) -> str:
 def category_from_aya(row: dict[str, Any], default: str) -> str:
     task = str(row.get("task_type") or "").strip().lower().replace("_", "-")
     prompt = str(row.get("inputs") or "")
+    answer = str(row.get("targets") or "")
     if TRANSLATION_HINT.search(prompt) or task == "translation":
         return "translation"
     if task in {"summarization", "summary"}:
@@ -79,6 +80,12 @@ def category_from_aya(row: dict[str, Any], default: str) -> str:
         return "structured_output"
     if task in {"question-answering", "qa"}:
         return "knowledge"
+    # Aya-human has no task_type metadata. For routing calibration we still
+    # need natural long-context/document activations, so reserve sufficiently
+    # long source passages with a non-trivial answer as documents_retrieval.
+    # This is a routing bucket, not a claim about the dataset's original task.
+    if default == "general_dialogue" and len(prompt) >= 800 and len(answer) >= 40:
+        return "documents_retrieval"
     if default == "reasoning_math":
         return "reasoning_math"
     return default
