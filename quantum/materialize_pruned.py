@@ -62,7 +62,9 @@ def main(argv=None) -> int:
     marker = {
         "product": "VELIA Quantum",
         "model_id": "velia-quantum",
-        "stage": "text-backbone-expert-pruned",\n        "vision_artifact_required": True,\n        "mtp_artifact_required": True,
+        "stage": "text-backbone-expert-pruned",
+        "vision_artifact_required": True,
+        "mtp_artifact_required": True,
         "rco_revision": head,
         "experts_per_layer": experts,
         "active_experts_per_token": top_k,
