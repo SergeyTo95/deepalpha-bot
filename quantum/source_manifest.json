@@ -37,23 +37,11 @@
         {
           "name": "translated_flan_qa",
           "default_category": "knowledge"
-        },
-        {
-          "name": "translated_cnn_dailymail",
-          "default_category": "documents_retrieval"
-        },
-        {
-          "name": "translated_dolly",
-          "default_category": "general_dialogue"
         }
       ],
       "allowed_categories": [
-        "general_dialogue",
         "reasoning_math",
-        "knowledge",
-        "documents_retrieval",
-        "structured_output",
-        "translation"
+        "knowledge"
       ],
       "max_share": 0.5
     },
