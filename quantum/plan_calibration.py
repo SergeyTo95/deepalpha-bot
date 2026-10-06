@@ -26,13 +26,12 @@ CATEGORY_TARGETS = {
 SOURCE_CATEGORY_TARGETS = {
     "aya-human": {
         "general_dialogue": 700,
-        "translation": 30,
+        "translation": 40,
     },
     "aya-collection": {
         "reasoning_math": 650,
         "documents_retrieval": 350,
         "knowledge": 350,
-        "translation": 10,
     },
     "oasst2": {
         "coding": 400,
