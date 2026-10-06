@@ -4,7 +4,7 @@ from pathlib import Path
 from quantum.validate_calibration import validate
 from quantum.acceptance import evaluate as evaluate_acceptance
 from quantum.preflight import validate_config_payload
-
+from quantum.build_public_corpus import aya_record, normalize_language, select_balanced\nfrom quantum.merge_calibration import merge_rows\n
 
 def _plan(tmp_path: Path) -> Path:
     plan = {
@@ -230,3 +230,73 @@ def test_quantum_preflight_rejects_wrong_expert_topology():
     errors = validate_config_payload(payload)
     assert any("num_experts=" in error for error in errors)
     assert any("num_experts_per_tok=" in error for error in errors)
+
+
+def test_quantum_public_corpus_normalizes_languages_and_categories():
+    assert normalize_language("eng") == "en"
+    assert normalize_language("rus") == "ru"
+    assert normalize_language("tr") == "tr"
+    assert normalize_language("unknown-language") == ""
+
+    row = {
+        "id": 7,
+        "inputs": "Translate this sentence into German.",
+        "targets": "Übersetze diesen Satz ins Deutsche.",
+        "language": "eng",
+        "task_type": "generation",
+        "dataset_name": "unit",
+    }
+    record = aya_record(
+        row,
+        source_id="aya-collection:test",
+        license_id="Apache-2.0",
+        default_category="general_dialogue",
+    )
+    assert record is not None
+    assert record["language"] == "en"
+    assert record["category"] == "translation"
+
+
+def test_quantum_public_corpus_selection_is_language_balanced():
+    rows = []
+    for language in ("en", "ru", "tr"):
+        for index in range(10):
+            rows.append({
+                "id": f"{language}-{index}",
+                "language": language,
+                "category": "general_dialogue",
+                "split": "calibration",
+                "source": "aya-human",
+                "license": "Apache-2.0",
+                "messages": [
+                    {"role": "user", "content": f"{language} unique prompt {index}"},
+                    {"role": "assistant", "content": f"answer {index}"},
+                ],
+            })
+    selected = select_balanced(rows, {"en", "ru", "tr"}, 4, 42)
+    counts = {language: 0 for language in ("en", "ru", "tr")}
+    for row in selected:
+        counts[row["language"]] += 1
+    assert counts == {"en": 4, "ru": 4, "tr": 4}
+
+
+def test_quantum_merge_rejects_holdout_source_leak(tmp_path):
+    repo = Path(__file__).resolve().parents[1]
+    manifest = json.loads((repo / "quantum" / "source_manifest.json").read_text(encoding="utf-8"))
+    component = tmp_path / "component.jsonl"
+    row = {
+        "id": "leak-1",
+        "language": "en",
+        "category": "reasoning_math",
+        "split": "calibration",
+        "source": "mgsm",
+        "license": "CC-BY-SA-4.0",
+        "messages": [
+            {"role": "user", "content": "benchmark prompt"},
+            {"role": "assistant", "content": "benchmark answer"},
+        ],
+    }
+    component.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    rows, errors = merge_rows([component], manifest)
+    assert rows == []
+    assert any("holdout source leaked" in error for error in errors)
