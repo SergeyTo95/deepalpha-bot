@@ -98,19 +98,25 @@ def _internal_authorized(request):
     return hmac.compare_digest(header[7:], expected)
 
 
-def _request_user(request):
-    value = request.headers.get("X-Velia-User", "").strip()
-    if not re.fullmatch(r"[1-9][0-9]{0,18}", value):
+def _request_identity(request):
+    user_id = request.headers.get("X-Velia-User", "").strip()
+    conversation = request.headers.get("X-Velia-Session", "").strip() or "default"
+    if not re.fullmatch(r"[1-9][0-9]{0,18}", user_id):
         return None
-    return value
+    if conversation != "default" and not re.fullmatch(
+        r"[A-Za-z0-9_-]{8,128}", conversation
+    ):
+        return None
+    return user_id, conversation
 
 
-def _session_key(user_id):
-    return hashlib.sha256(("velia-browser:" + user_id).encode()).hexdigest()[:32]
+def _session_key(user_id, conversation="default"):
+    material = f"velia-browser:{user_id}:{conversation}"
+    return hashlib.sha256(material.encode()).hexdigest()[:32]
 
 
-def _session_root(user_id):
-    return SESSION_BASE / _session_key(user_id)
+def _session_root(user_id, conversation="default"):
+    return SESSION_BASE / _session_key(user_id, conversation)
 
 
 async def _warm_flash():
@@ -177,8 +183,8 @@ async def _wait_for_debug_port(profile, process):
     raise RuntimeError("browser_debug_port_timeout")
 
 
-async def _new_session(user_id):
-    root = _session_root(user_id)
+async def _new_session(user_id, conversation="default"):
+    root = _session_root(user_id, conversation)
     profile = root / "chromium"
     workspace = root / "workspace"
     dsh_home = root / "dsh-home"
@@ -214,16 +220,16 @@ async def _new_session(user_id):
         await asyncio.to_thread(shutil.rmtree, root, True)
         raise
     return BrowserSession(
-        user_key=_session_key(user_id),
+        user_key=_session_key(user_id, conversation),
         root=root,
         endpoint=f"http://127.0.0.1:{port}",
         browser=process,
     )
 
 
-async def _get_session(user_id):
+async def _get_session(user_id, conversation="default"):
     await _cleanup_expired_sessions()
-    key = _session_key(user_id)
+    key = _session_key(user_id, conversation)
     stale = None
     async with sessions_lock:
         current = sessions.get(key)
@@ -237,7 +243,7 @@ async def _get_session(user_id):
     if stale:
         await _dispose_session(stale)
 
-    created = await _new_session(user_id)
+    created = await _new_session(user_id, conversation)
     async with sessions_lock:
         race = sessions.get(key)
         if race and race.browser.returncode is None:
@@ -271,9 +277,10 @@ async def health(_request):
 async def run_browser_task(request):
     if not _internal_authorized(request):
         return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
-    user_id = _request_user(request)
-    if not user_id:
-        return web.json_response({"ok": False, "error": "invalid_user"}, status=400)
+    identity = _request_identity(request)
+    if not identity:
+        return web.json_response({"ok": False, "error": "invalid_session_identity"}, status=400)
+    user_id, conversation = identity
     if request.content_length is not None and request.content_length > MAX_RUN_BODY:
         return web.json_response({"ok": False, "error": "request_too_large"}, status=413)
 
@@ -303,7 +310,7 @@ async def run_browser_task(request):
     async with run_sem:
         try:
             await _warm_flash()
-            session, reused = await _get_session(user_id)
+            session, reused = await _get_session(user_id, conversation)
             async with session.lock:
                 runtime = os.getenv(
                     "VELIA_AGENT_CORE_RUNTIME", "/opt/velia-agent-core/runtime"

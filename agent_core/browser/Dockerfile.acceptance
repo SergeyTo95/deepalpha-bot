@@ -17,6 +17,7 @@ COPY --from=build /src/desktop/.runtime/package/node/node /usr/local/bin/node
 COPY velia_desktop_routes.py /app/velia_desktop_routes.py
 COPY desktop/src/config.mjs desktop/src/proxy.mjs /app/desktop/src/
 COPY agent_core/browser /app/agent_core/browser
+RUN node --check /app/agent_core/browser/run_task.mjs && python -m py_compile /app/agent_core/browser/health_server.py /app/agent_core/browser/probe_service.py
 ENV PYTHONUNBUFFERED=1 PYTHONPATH=/app VELIA_AGENT_CORE_RUNTIME=/opt/velia-agent-core/runtime VELIA_AGENT_CORE_CHROMIUM=/usr/bin/chromium VELIA_AGENT_CORE_FLASH_CONTEXT_TOKENS=8192
 EXPOSE 8080
 CMD ["python", "-m", "agent_core.browser.health_server"]
