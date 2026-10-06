@@ -398,6 +398,8 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             elif action == "scroll" and set(payload) == {"action", "delta_y"}:
                 delta = payload.get("delta_y")
                 valid = not isinstance(delta, bool) and isinstance(delta, (int, float)) and -2000 <= delta <= 2000
+            elif action == "finish" and set(payload) == {"action"}:
+                valid = True
             if not valid:
                 return error("invalid_takeover_action", 400)
             status, result = await browser_takeover(session.user_id, session_id, payload)
