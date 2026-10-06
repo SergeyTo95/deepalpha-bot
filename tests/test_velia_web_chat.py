@@ -150,6 +150,7 @@ async def fixture(monkeypatch, **state):
 
     authority = web.Application()
     authority.router.add_get("/mobile-api/v1/health", health)
+    authority.router.add_get("/health", health)
     authority.router.add_get("/mobile-api/v1/me", me)
     authority.router.add_get("/mobile-api/v1/economy/me", economy)
     authority.router.add_get("/mobile-api/v1/conversations", conversations)
