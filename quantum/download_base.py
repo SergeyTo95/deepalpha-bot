@@ -16,9 +16,25 @@ def main(argv=None) -> int:
     parser.add_argument("--token")
     args = parser.parse_args(argv)
 
-    from huggingface_hub import snapshot_download
+    from huggingface_hub import hf_hub_download, snapshot_download
+    from preflight import validate_config_payload
 
     args.local_dir.mkdir(parents=True, exist_ok=True)
+
+    # Fetch only the tiny config first. A schema mismatch must fail before the
+    # ~360-GB pinned base snapshot is downloaded.
+    config_file = Path(hf_hub_download(
+        repo_id=BASE_MODEL,
+        filename="config.json",
+        revision=BASE_REVISION,
+        local_dir=str(args.local_dir),
+        token=args.token or None,
+    ))
+    config = json.loads(config_file.read_text(encoding="utf-8"))
+    errors = validate_config_payload(config)
+    if errors:
+        raise SystemExit("Pinned Qwen config failed Quantum preflight: " + "; ".join(errors))
+
     resolved = snapshot_download(
         repo_id=BASE_MODEL,
         revision=BASE_REVISION,
