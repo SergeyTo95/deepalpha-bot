@@ -9,7 +9,11 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
-try:\n    from .validate_calibration import validate\nexcept ImportError:  # direct script execution\n    from validate_calibration import validate\n
+try:
+    from .validate_calibration import validate
+except ImportError:  # direct script execution
+    from validate_calibration import validate
+
 
 def _source_group(source: str, manifest: dict[str, Any]) -> str | None:
     text = str(source or "")
@@ -38,7 +42,8 @@ def _prompt_hash(row: dict[str, Any]) -> str:
         for message in row.get("messages") or []
         if message.get("role") == "user"
     ]
-    normalized = " ".join("\n".join(parts).casefold().split())
+    normalized = " ".join("
+".join(parts).casefold().split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
@@ -121,7 +126,8 @@ def main(argv=None) -> int:
         for row in rows:
             persisted = dict(row)
             persisted.pop("source_group", None)
-            stream.write(json.dumps(persisted, ensure_ascii=False, sort_keys=True) + "\n")
+            stream.write(json.dumps(persisted, ensure_ascii=False, sort_keys=True) + "
+")
 
     validation = validate(args.output, args.plan, args.stage)
     errors.extend(validation["errors"])
@@ -137,7 +143,8 @@ def main(argv=None) -> int:
     print(rendered)
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(rendered + "\n", encoding="utf-8")
+        args.report.write_text(rendered + "
+", encoding="utf-8")
     return 0 if report["ok"] else 2
 
 
