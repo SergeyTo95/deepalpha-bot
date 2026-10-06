@@ -9,8 +9,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
-from validate_calibration import validate
-
+try:\n    from .validate_calibration import validate\nexcept ImportError:  # direct script execution\n    from validate_calibration import validate\n
 
 def _source_group(source: str, manifest: dict[str, Any]) -> str | None:
     text = str(source or "")
