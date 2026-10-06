@@ -206,6 +206,16 @@ def _serialize_conversation(row: Any) -> Dict[str, Any]:
     }
 
 
+def _chat_mode_from_provider(provider: Any, model: Any = "") -> str:
+    normalized_provider = str(provider or "").strip().lower()
+    normalized_model = str(model or "").strip().lower()
+    if normalized_provider == "bonsai" or normalized_model == "velia-flash":
+        return "flash"
+    if normalized_provider == "quantum" or normalized_model == "velia-quantum":
+        return "quantum"
+    return "pro"
+
+
 def _serialize_message(row: Any, *, debug_usage: bool = False) -> Dict[str, Any]:
     result = {
         "id": str(_row_value(row, "message_id", 0, "")),
@@ -215,7 +225,10 @@ def _serialize_message(row: Any, *, debug_usage: bool = False) -> Dict[str, Any]
         "status": str(_row_value(row, "status", 5, "completed")),
         "reply_to_message_id": _row_value(row, "reply_to_message_id", 7),
         "request_id": _row_value(row, "request_id", 8),
-        "chat_mode": "flash" if _row_value(row, "provider", 9) == "bonsai" else "pro",
+        "chat_mode": _chat_mode_from_provider(
+            _row_value(row, "provider", 9),
+            _row_value(row, "model", 10),
+        ),
         "error_code": _row_value(row, "error_code", 18),
         "created_at": _iso(_row_value(row, "created_at", 19)),
         "updated_at": _iso(_row_value(row, "updated_at", 20)),
@@ -441,7 +454,9 @@ def _daily_usage_snapshot(user_id: int) -> Dict[str, Any]:
             SELECT COALESCE(SUM(estimated_cost_usd), 0), COUNT(*)
             FROM velia_messages
             WHERE role='assistant' AND status='completed'
-              AND created_at>=CURRENT_DATE AND provider IS DISTINCT FROM 'bonsai'
+              AND created_at>=CURRENT_DATE
+              AND provider IS DISTINCT FROM 'bonsai'
+              AND provider IS DISTINCT FROM 'quantum'
             """
         )
         global_row = cursor.fetchone() or (0, 0)
@@ -450,7 +465,9 @@ def _daily_usage_snapshot(user_id: int) -> Dict[str, Any]:
             SELECT COALESCE(SUM(estimated_cost_usd), 0), COUNT(*)
             FROM velia_messages
             WHERE user_id=%s AND role='assistant' AND status='completed'
-              AND created_at>=CURRENT_DATE AND provider IS DISTINCT FROM 'bonsai'
+              AND created_at>=CURRENT_DATE
+              AND provider IS DISTINCT FROM 'bonsai'
+              AND provider IS DISTINCT FROM 'quantum'
             """,
             (int(user_id),),
         )
@@ -594,7 +611,10 @@ def _existing_request_result(
         (str(conversation_id), int(user_id), user_message_id),
     )
     assistant_row = cursor.fetchone()
-    existing_mode = "flash" if _row_value(assistant_row, "provider", 9) == "bonsai" else "pro"
+    existing_mode = _chat_mode_from_provider(
+        _row_value(assistant_row, "provider", 9),
+        _row_value(assistant_row, "model", 10),
+    )
     if existing_mode != chat_mode:
         return {"ok": False, "error": "idempotency_mode_mismatch", "duplicate": True}
     return {
