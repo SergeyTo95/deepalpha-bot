@@ -74,6 +74,15 @@ async def run():
     if not agent_origin or not secret:
         raise RuntimeError("browser_agent_configuration_missing")
 
+    async with ClientSession() as health_client:
+        async with health_client.get(
+            agent_origin.rstrip("/") + "/health",
+            allow_redirects=False,
+        ) as response:
+            health = await response.json()
+            if response.status != 200 or health.get("durable_storage") is not True:
+                raise RuntimeError("browser_agent_storage_not_durable")
+
     previous = {
         key: os.environ.get(key)
         for key in (
@@ -166,6 +175,7 @@ async def run():
                         "browser_tool_used_each_turn": True,
                         "persistent_agent_session": True,
                         "server_session_reused": True,
+                        "durable_storage": True,
                         "current_page_preserved": True,
                         "turns": 2,
                         "tool_count": sum(int(turn["tool_count"]) for turn in turns),
