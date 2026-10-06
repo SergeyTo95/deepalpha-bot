@@ -89,7 +89,7 @@ try {
     maxTokens: 128,
     compactionRetries: 1,
     maxOverflowRetries: 1,
-    auto: true,
+    auto: false,
   };
   const compaction = settings.find(row => row.id === 'compaction-basic');
   if (compaction) {
