@@ -123,7 +123,7 @@ class Session:
 
 def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_session,
                      json_response, handlers, account_balance, authorize_model, upstream_stream,
-                     web_search=None, browser_agent_run=None):
+                     web_search=None, browser_agent_run=None, browser_takeover=None):
     cipher = Fernet(os.environ["VELIA_WEB_SESSION_KEY"].encode())
     sessions, exchanges, revoked = {}, deque(), {}
     def decode(request):
@@ -330,6 +330,81 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
         except AuthenticationUnavailable:
             return error("authentication_unavailable", 503)
 
+    async def browser_takeover_state(request):
+        if not same_origin(request):
+            return error("invalid_origin", 403)
+        try:
+            session = await session_for(request)
+            if not session:
+                return error("unauthorized", 401)
+            if browser_takeover is None:
+                return error("browser_takeover_unavailable", 503)
+            try:
+                data = await request.json()
+            except web.HTTPRequestEntityTooLarge:
+                return error("request_too_large", 413)
+            except (ValueError, UnicodeDecodeError):
+                return error("invalid_json", 400)
+            session_id = data.get("session_id") if isinstance(data, dict) else None
+            if (
+                not isinstance(data, dict) or set(data) != {"session_id"}
+                or not isinstance(session_id, str)
+                or not re.fullmatch(r"[0-9A-Fa-f-]{36}", session_id)
+            ):
+                return error("invalid_browser_task", 400)
+            status, result = await browser_takeover(session.user_id, session_id, None)
+            return json_response(result, status)
+        except AuthenticationUnavailable:
+            return error("authentication_unavailable", 503)
+
+    async def browser_takeover_action(request):
+        if not same_origin(request):
+            return error("invalid_origin", 403)
+        try:
+            session = await session_for(request)
+            if not session:
+                return error("unauthorized", 401)
+            if browser_takeover is None:
+                return error("browser_takeover_unavailable", 503)
+            try:
+                data = await request.json()
+            except web.HTTPRequestEntityTooLarge:
+                return error("request_too_large", 413)
+            except (ValueError, UnicodeDecodeError):
+                return error("invalid_json", 400)
+            if not isinstance(data, dict):
+                return error("invalid_takeover_action", 400)
+            session_id = data.get("session_id")
+            action = data.get("action")
+            if (
+                not isinstance(session_id, str)
+                or not re.fullmatch(r"[0-9A-Fa-f-]{36}", session_id)
+            ):
+                return error("invalid_browser_task", 400)
+            payload = {key: value for key, value in data.items() if key != "session_id"}
+            valid = False
+            if action == "click" and set(payload) == {"action", "x", "y"}:
+                valid = all(
+                    not isinstance(payload[key], bool) and isinstance(payload[key], (int, float))
+                    for key in ("x", "y")
+                )
+            elif action == "text" and set(payload) == {"action", "text"}:
+                valid = isinstance(payload.get("text"), str) and 1 <= len(payload["text"]) <= 4096
+            elif action == "key" and set(payload) == {"action", "key"}:
+                valid = payload.get("key") in {
+                    "Enter", "Tab", "Escape", "Backspace",
+                    "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+                }
+            elif action == "scroll" and set(payload) == {"action", "delta_y"}:
+                delta = payload.get("delta_y")
+                valid = not isinstance(delta, bool) and isinstance(delta, (int, float)) and -2000 <= delta <= 2000
+            if not valid:
+                return error("invalid_takeover_action", 400)
+            status, result = await browser_takeover(session.user_id, session_id, payload)
+            return json_response(result, status)
+        except AuthenticationUnavailable:
+            return error("authentication_unavailable", 503)
+
     async def asset(request):
         name = request.match_info.get("name", "index.html")
         if name not in {"index.html", "app.mjs", "core.mjs", "style.css", "favicon.svg"}:
@@ -348,6 +423,8 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     app.router.add_post("/web-api/v1/auth/logout", logout)
     app.router.add_post("/web-api/v1/chat/completions", chat)
     app.router.add_post("/web-api/v1/agent/browser", browser_agent)
+    app.router.add_post("/web-api/v1/agent/browser/takeover", browser_takeover_state)
+    app.router.add_post("/web-api/v1/agent/browser/takeover/action", browser_takeover_action)
     from desktop.account_routes import setup_account_routes
     setup_account_routes(app, session_for=session_for, same_origin=same_origin, upstream=upstream,
         upstream_stream=upstream_stream, authorize_model=authorize_model, handlers=handlers,
