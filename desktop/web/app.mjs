@@ -241,6 +241,19 @@ function messageNode(message, index) {
     const sources = sourceNode(message.search);
     if (sources) article.append(sources);
   }
+  if (message.role === "assistant" && message.userActionRequired) {
+    const state = document.createElement("div");
+    state.className = "message-state";
+    const labels = {
+      credentials: "Нужно действие: введи данные для входа на открытой странице.",
+      otp: "Нужно действие: введи одноразовый код на открытой странице.",
+      passkey: "Нужно действие: подтверди вход через passkey или ключ безопасности.",
+      captcha: "Нужно действие: пройди CAPTCHA на открытой странице.",
+      device_approval: "Нужно действие: подтверди вход на другом устройстве.",
+    };
+    state.textContent = labels[message.userActionRequired] || "Нужно действие пользователя.";
+    article.append(state);
+  }
   if (message.role === "assistant" && !busy) {
     const actions = document.createElement("div");
     actions.className = "message-actions";
@@ -561,6 +574,7 @@ async function generate(retry = false) {
         throw error;
       }
       answer.content = data.text || "";
+      answer.userActionRequired = data.user_action_required || null;
       answer.finish = "stop";
       $("generation-status").textContent = "";
       queuePaint();

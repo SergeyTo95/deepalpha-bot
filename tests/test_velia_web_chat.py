@@ -148,6 +148,7 @@ async def fixture(monkeypatch, **state):
             "session_id": "session-browser-fixture",
             "tool_count": 2,
             "session_reused": True,
+            "user_action_required": state.get("agent_user_action_required"),
         })
 
     authority = web.Application()
@@ -254,6 +255,7 @@ def test_browser_agent_is_account_only_flash_and_keeps_internal_secret_server_si
                     "session_id": "session-browser-fixture",
                     "tool_count": 2,
                     "session_reused": True,
+                    "user_action_required": None,
                 }
                 wire = json.dumps(result, ensure_ascii=False)
                 assert "fixture-browser-agent-secret" not in wire
@@ -275,6 +277,26 @@ def test_browser_agent_is_account_only_flash_and_keeps_internal_secret_server_si
                     json={"prompt": "test", "session_id": "11111111-1111-4111-8111-111111111111"}) as response:
                 assert response.status == 403
             assert len(state["agent_calls"]) == 1
+    asyncio.run(run())
+
+
+def test_browser_agent_forwards_structured_user_action_required(monkeypatch):
+    async def run():
+        async with fixture(
+                monkeypatch,
+                agent_text="Нужен код подтверждения. Введи его на открытой странице.",
+                agent_user_action_required="otp") as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            async with client.post(
+                    server.make_url("/web-api/v1/agent/browser"),
+                    headers=headers(cookie),
+                    json={"prompt": "Войди в аккаунт",
+                          "session_id": "11111111-1111-4111-8111-111111111111"}) as response:
+                assert response.status == 200
+                result = await response.json()
+                assert result["user_action_required"] == "otp"
+                assert "код подтверждения" in result["text"]
+                assert result["session_reused"] is True
     asyncio.run(run())
 
 
