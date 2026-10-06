@@ -4,7 +4,7 @@ import os
 from typing import Any, Callable, Dict, Optional
 
 from aiohttp import web
-from services.velia_flash_service import public_capability, dispatch_send
+from services.velia_model_router import public_capability, dispatch_send
 
 from db.database import get_user, get_subscription_until, is_subscribed
 from services.velia_chat_service import (
@@ -367,16 +367,27 @@ def setup_velia_mobile_routes(
         status = 400
         if error in {"conversation_not_found"}:
             status = 404
-        elif error in {"generation_in_progress"} or result.get("pending"):
+        elif error in {
+            "generation_in_progress",
+            "flash_busy",
+            "quantum_busy",
+            "idempotency_mode_mismatch",
+        } or result.get("pending"):
             status = 409
         elif error.endswith("limit_exceeded"):
             status = 429
-        elif error in {"velia_chat_disabled"}:
+        elif error in {
+            "velia_chat_disabled",
+            "flash_unavailable",
+            "quantum_unavailable",
+        }:
             status = 503
         elif error in {
             "timeout", "connection_error", "rate_limit", "server_error",
             "empty_200", "json_parse_error", "generation_exception",
             "generation_failed",
+            "flash_timeout", "flash_provider_error", "flash_invalid_response",
+            "quantum_timeout", "quantum_provider_error", "quantum_invalid_response",
         }:
             status = 502
         return _json_response(result, status=status)
