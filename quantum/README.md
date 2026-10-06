@@ -176,6 +176,51 @@ python quantum/materialize_pruned.py \
   --output-dir /data/velia-quantum-pruned
 ```
 
+## First private CPU preview
+
+The shortest path to a live Quantum is intentionally separate from the final
+GSQ experiment:
+
+1. RCO creates the physical 256-of-512 expert checkpoint.
+2. `build_cpu_preview.py` converts that checkpoint with the pinned llama.cpp
+   Qwen4Exp converter.
+3. Heavy matrix weights use `TQ2_0`.
+4. The enormous PLE row table uses `Q8_0`, not upstream's default F16 for
+   TQ conversion. Qwen4Exp reads PLE through `GET_ROWS`, which the pinned
+   CPU backend supports for Q8_0.
+5. MTP and vision are excluded from the first text-only preview. They remain
+   separate acceptance items for the later complete release.
+6. The GGUF is mounted from persistent storage at
+   `/model/velia-quantum.gguf`; weights are never baked into the worker image.
+7. Backend access remains private through
+   `VELIA_QUANTUM_PREVIEW_USER_IDS`. Public exposure additionally requires
+   `VELIA_QUANTUM_PUBLIC_ENABLED=true`, which stays false until acceptance.
+
+Build the preview after RCO materialization:
+
+```bash
+git clone https://github.com/ggml-org/llama.cpp.git /data/llama.cpp
+git -C /data/llama.cpp checkout abeada335e2e78bd3fe63febafab7e900ce75810
+
+python quantum/build_cpu_preview.py \
+  --checkpoint /data/velia-quantum-pruned \
+  --llama-root /data/llama.cpp \
+  --output /data/releases/velia-quantum.gguf \
+  --report /data/releases/velia-quantum-preview.json
+```
+
+The resulting size is **not known yet**. Current 70-75 GB figures are only an
+engineering estimate and must not be treated as an artifact measurement.
+
+The first CPU worker is then benchmarked objectively with
+`benchmark_cpu_endpoint.py`: 2K-prompt TTFT and warm output tokens/second are
+fed into the same fail-closed release gates as the Railway RSS measurement.
+
+GSQ ternary remains the preferred later v1 optimization, but it is no longer on
+the critical path to the first private Quantum preview. Stock GSQ's Qwen3.5 MoE
+wrapper must not be used directly for Qwen4Exp because its layerwise activation
+pipeline does not model Qwen4Exp's four hyper-connection streams.
+
 ## Release contract
 
 The initial CPU target is a single Railway replica with at most 24 GB RAM.
