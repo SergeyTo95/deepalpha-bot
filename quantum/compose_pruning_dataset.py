@@ -257,25 +257,8 @@ def compose(
     selected = []
     selected_ids = set()
 
-    # Owned rows are deliberately narrow capability coverage and every one is
-    # required by the source/category plan.
-    for category, quota in SOURCE_CATEGORY_TARGETS["velia-owned"].items():
-        candidates = [
-            row for row in bucket_index[("velia-owned", category)]
-            if row["id"] not in selected_ids
-        ]
-        chosen = _select_bucket(
-            candidates,
-            int(quota),
-            remaining_languages,
-            seed + len(selected),
-        )
-        for row in chosen:
-            selected_ids.add(row["id"])
-        selected.extend(chosen)
-
-    # Public buckets are ordered by scarcity so rare translation/coding
-    # distributions get first claim on their available languages.
+    # Public buckets go first, rarest distributions first, so scarce natural data
+    # gets its language budget before the balanced owned pool fills the remainder.
     public_specs = []
     for source, categories in SOURCE_CATEGORY_TARGETS.items():
         if source == "velia-owned":
@@ -308,6 +291,23 @@ def compose(
         for row in chosen:
             selected_ids.add(row["id"])
         selected.extend(chosen)
+
+    # The balanced owned pool fills the residual language budget after public data.
+    for category, quota in SOURCE_CATEGORY_TARGETS["velia-owned"].items():
+        candidates = [
+            row for row in bucket_index[("velia-owned", category)]
+            if row["id"] not in selected_ids
+        ]
+        chosen = _select_bucket(
+            candidates,
+            int(quota),
+            remaining_languages,
+            seed + len(selected),
+        )
+        for row in chosen:
+            selected_ids.add(row["id"])
+        selected.extend(chosen)
+
 
     if len(selected) != CALIBRATION_TOTAL:
         raise RuntimeError(
