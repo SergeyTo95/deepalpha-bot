@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Iterable
@@ -14,7 +15,6 @@ try:
         CALIBRATION_TOTAL,
         CATEGORY_TARGETS,
         SOURCE_CATEGORY_TARGETS,
-        build_language_targets,
     )
     from .validate_calibration import validate
 except ImportError:
@@ -22,7 +22,6 @@ except ImportError:
         CALIBRATION_TOTAL,
         CATEGORY_TARGETS,
         SOURCE_CATEGORY_TARGETS,
-        build_language_targets,
     )
     from validate_calibration import validate
 
@@ -51,7 +50,7 @@ def _load(paths: Iterable[Path]) -> list[dict]:
     seen_prompts = set()
     for path in paths:
         with path.open("r", encoding="utf-8") as stream:
-            for line_number, raw in enumerate(stream, 1):
+            for raw in stream:
                 if not raw.strip():
                     continue
                 row = json.loads(raw)
@@ -78,6 +77,86 @@ def _load(paths: Iterable[Path]) -> list[dict]:
     return rows
 
 
+def _target_bucket(row: dict) -> bool:
+    source = row["_source_group"]
+    category = row.get("category")
+    return (
+        source in SOURCE_CATEGORY_TARGETS
+        and category in SOURCE_CATEGORY_TARGETS[source]
+    )
+
+
+def _derive_language_targets(
+    candidates: list[dict],
+    core_languages: list[str],
+    plan: dict,
+) -> dict[str, int]:
+    """Derive balanced targets from actual usable capacity.
+
+    Every core language receives the configured floor, no language can exceed
+    the configured ceiling, and EN+RU together stay below their combined cap.
+    Remaining rows are distributed as evenly as real source/category capacity
+    permits.
+    """
+    policy = plan["language_balance"]
+    min_share = float(policy["minimum_core_language_share_each"])
+    max_share = float(policy["maximum_language_share_any"])
+    max_en_ru_share = float(policy["maximum_en_plus_ru_share"])
+
+    floor_count = math.ceil(CALIBRATION_TOTAL * min_share - 1e-12)
+    max_count = math.floor(CALIBRATION_TOTAL * max_share + 1e-12)
+    max_en_ru = math.floor(CALIBRATION_TOTAL * max_en_ru_share + 1e-12)
+
+    capacity = Counter()
+    for row in candidates:
+        if row.get("split") != "calibration" or not _target_bucket(row):
+            continue
+        language = row.get("language")
+        if language in core_languages:
+            capacity[language] += 1
+
+    targets = {}
+    for language in core_languages:
+        available = capacity[language]
+        if available < floor_count:
+            raise RuntimeError(
+                f"language {language}: only {available} usable calibration rows; "
+                f"policy floor requires {floor_count}"
+            )
+        targets[language] = floor_count
+
+    remaining = CALIBRATION_TOTAL - sum(targets.values())
+    while remaining > 0:
+        eligible = []
+        en_ru_total = targets.get("en", 0) + targets.get("ru", 0)
+        for language in core_languages:
+            ceiling = min(max_count, capacity[language])
+            if targets[language] >= ceiling:
+                continue
+            if language in {"en", "ru"} and en_ru_total >= max_en_ru:
+                continue
+            eligible.append(language)
+
+        if not eligible:
+            raise RuntimeError(
+                f"language policy/capacity cannot place final {remaining} rows; "
+                f"targets={targets}; capacity={dict(capacity)}"
+            )
+
+        eligible.sort(
+            key=lambda language: (
+                targets[language],
+                -(min(max_count, capacity[language]) - targets[language]),
+                language,
+            )
+        )
+        language = eligible[0]
+        targets[language] += 1
+        remaining -= 1
+
+    return targets
+
+
 def _select_bucket(
     candidates: list[dict],
     quota: int,
@@ -96,14 +175,15 @@ def _select_bucket(
     while len(selected) < quota:
         options = [
             language
-            for language, rows in by_language.items()
-            if rows and remaining_languages.get(language, 0) > 0
+            for language, bucket_rows in by_language.items()
+            if bucket_rows and remaining_languages.get(language, 0) > 0
         ]
         if not options:
             break
         options.sort(
             key=lambda language: (
                 -remaining_languages[language],
+                -len(by_language[language]),
                 language,
             )
         )
@@ -114,16 +194,33 @@ def _select_bucket(
 
     if len(selected) != quota:
         availability = {
-            language: len(rows)
-            for language, rows in sorted(by_language.items())
-            if rows
+            language: len(bucket_rows)
+            for language, bucket_rows in sorted(by_language.items())
+            if bucket_rows
         }
         raise RuntimeError(
             f"bucket shortage: selected {len(selected)}/{quota}; "
-            f"remaining language capacity={remaining_languages}; "
+            f"remaining language targets={remaining_languages}; "
             f"candidate availability={availability}"
         )
     return selected
+
+
+def _bucket_scarcity(
+    candidates: list[dict],
+    quota: int,
+    remaining_languages: dict[str, int],
+) -> tuple[int, float, int]:
+    usable = [
+        row for row in candidates
+        if remaining_languages.get(str(row.get("language") or ""), 0) > 0
+    ]
+    languages = {
+        str(row.get("language") or "")
+        for row in usable
+    }
+    ratio = len(usable) / max(1, quota)
+    return (len(languages), ratio, len(usable))
 
 
 def compose(
@@ -136,13 +233,21 @@ def compose(
 ) -> dict:
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     core_languages = list(plan["core_languages"])
-    language_targets = build_language_targets(core_languages)
-    remaining_languages = dict(language_targets)
 
     rows = _load(candidate_paths)
     calibration_candidates = [
-        row for row in rows if row.get("split") == "calibration"
+        row for row in rows
+        if row.get("split") == "calibration"
+        and row.get("language") in core_languages
+        and _target_bucket(row)
     ]
+
+    language_targets = _derive_language_targets(
+        calibration_candidates,
+        core_languages,
+        plan,
+    )
+    remaining_languages = dict(language_targets)
 
     bucket_index = defaultdict(list)
     for row in calibration_candidates:
@@ -152,26 +257,57 @@ def compose(
     selected = []
     selected_ids = set()
 
-    # Select the owned rows first because their quotas are capability-critical
-    # and deliberately narrow. Public buckets then fill the remaining language
-    # deficits exactly.
-    source_order = ["velia-owned", "oasst2", "aya-human", "aya-collection"]
-    for source in source_order:
-        categories = SOURCE_CATEGORY_TARGETS.get(source, {})
+    # Owned rows are deliberately narrow capability coverage and every one is
+    # required by the source/category plan.
+    for category, quota in SOURCE_CATEGORY_TARGETS["velia-owned"].items():
+        candidates = [
+            row for row in bucket_index[("velia-owned", category)]
+            if row["id"] not in selected_ids
+        ]
+        chosen = _select_bucket(
+            candidates,
+            int(quota),
+            remaining_languages,
+            seed + len(selected),
+        )
+        for row in chosen:
+            selected_ids.add(row["id"])
+        selected.extend(chosen)
+
+    # Public buckets are ordered by scarcity so rare translation/coding
+    # distributions get first claim on their available languages.
+    public_specs = []
+    for source, categories in SOURCE_CATEGORY_TARGETS.items():
+        if source == "velia-owned":
+            continue
         for category, quota in categories.items():
             candidates = [
                 row for row in bucket_index[(source, category)]
                 if row["id"] not in selected_ids
             ]
-            chosen = _select_bucket(
-                candidates,
-                int(quota),
-                remaining_languages,
-                seed + len(selected),
+            public_specs.append(
+                (
+                    _bucket_scarcity(
+                        candidates, int(quota), remaining_languages
+                    ),
+                    source,
+                    category,
+                    int(quota),
+                    candidates,
+                )
             )
-            for row in chosen:
-                selected_ids.add(row["id"])
-            selected.extend(chosen)
+    public_specs.sort(key=lambda item: item[0])
+
+    for _, source, category, quota, candidates in public_specs:
+        chosen = _select_bucket(
+            candidates,
+            quota,
+            remaining_languages,
+            seed + len(selected),
+        )
+        for row in chosen:
+            selected_ids.add(row["id"])
+        selected.extend(chosen)
 
     if len(selected) != CALIBRATION_TOTAL:
         raise RuntimeError(
@@ -199,11 +335,14 @@ def compose(
                     f"{source}/{category}: {actual} != {expected}"
                 )
 
+    # Evaluation rows are kept separate from pruning. They are selected from
+    # public sources only and never enter the calibration loader.
     eval_candidates = [
         row for row in rows
         if row["id"] not in selected_ids
         and row.get("split") in {"development", "holdout"}
         and row["_source_group"] != "velia-owned"
+        and row.get("language") in core_languages
     ]
     eval_candidates.sort(key=lambda row: _stable_key(seed + 999, row))
 
@@ -221,29 +360,27 @@ def compose(
                 and row.get("language") == language
                 and row["id"] not in selected_ids
             ]
-            need = target_each_language
-            if len(matches) < need:
-                raise RuntimeError(
-                    f"{split}/{language}: need {need} eval rows, got {len(matches)}"
-                )
+            need = min(target_each_language, len(matches))
             for row in matches[:need]:
                 selected_ids.add(row["id"])
                 eval_rows.append(row)
                 per_split_language[split][language] += 1
 
-        remaining = eval_per_split - sum(per_split_language[split].values())
-        if remaining > 0:
+        remaining_eval = eval_per_split - sum(
+            per_split_language[split].values()
+        )
+        if remaining_eval > 0:
             extras = [
                 row for row in eval_candidates
                 if row.get("split") == split
                 and row["id"] not in selected_ids
-                and row.get("language") in core_languages
             ]
-            if len(extras) < remaining:
+            if len(extras) < remaining_eval:
                 raise RuntimeError(
-                    f"{split}: need {remaining} extra eval rows, got {len(extras)}"
+                    f"{split}: need {remaining_eval} extra eval rows, "
+                    f"got {len(extras)}"
                 )
-            for row in extras[:remaining]:
+            for row in extras[:remaining_eval]:
                 selected_ids.add(row["id"])
                 eval_rows.append(row)
                 per_split_language[split][row["language"]] += 1
@@ -268,7 +405,9 @@ def compose(
             )
 
     validation = validate(output, plan_path, "pruning_search")
-    calibration = [row for row in final_rows if row["split"] == "calibration"]
+    calibration = [
+        row for row in final_rows if row["split"] == "calibration"
+    ]
     report = {
         "ok": validation["ok"],
         "dataset_id": "velia-quantum-rco-calibration-v1",
@@ -280,6 +419,7 @@ def compose(
         "holdout_rows": sum(
             1 for row in final_rows if row["split"] == "holdout"
         ),
+        "language_targets": dict(sorted(language_targets.items())),
         "calibration_languages": dict(
             sorted(Counter(row["language"] for row in calibration).items())
         ),
@@ -287,11 +427,17 @@ def compose(
             sorted(Counter(row["category"] for row in calibration).items())
         ),
         "calibration_sources": dict(
-            sorted(Counter(_source_group(row["source"]) for row in calibration).items())
+            sorted(
+                Counter(
+                    _source_group(row["source"]) for row in calibration
+                ).items()
+            )
         ),
         "validation": validation,
     }
-    rendered = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
+    rendered = json.dumps(
+        report, ensure_ascii=False, indent=2, sort_keys=True
+    )
     print(rendered)
     if report_path:
         report_path.parent.mkdir(parents=True, exist_ok=True)
