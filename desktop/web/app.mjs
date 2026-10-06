@@ -433,16 +433,30 @@ async function sendTakeoverAction(action) {
   }
 }
 async function continueAfterTakeover() {
-  if (busy) return;
-  $("takeover-dialog").close();
-  takeoverState = null;
-  if (!agentMode) {
-    toast("Вернись в режим AGENT, чтобы VELIA продолжила с этой страницы.");
-    return;
+  if (busy || takeoverBusy) return;
+  const chat = current();
+  if (!chat) return;
+  takeoverBusy = true;
+  $("takeover-status").textContent = "Передаю управление обратно VELIA…";
+  try {
+    await takeoverRequest("agent/browser/takeover/action", {
+      session_id: chat.id,
+      action: "finish",
+    });
+    $("takeover-dialog").close();
+    takeoverState = null;
+    if (!agentMode) {
+      toast("Вернись в режим AGENT, чтобы VELIA продолжила с этой страницы.");
+      return;
+    }
+    $("prompt").value = "Продолжай с текущей страницы. Я завершил ручной шаг.";
+    resizePrompt();
+    await generate();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    takeoverBusy = false;
   }
-  $("prompt").value = "Продолжай с текущей страницы. Я завершил ручной шаг.";
-  resizePrompt();
-  await generate();
 }
 
 async function openChat(chat) {
