@@ -60,6 +60,7 @@ def worker_args(key_path: Path, model_path: Path) -> list[str]:
         number("VELIA_QUANTUM_PROMPT_CACHE_MIB", 1024, 0, 4096),
         "--chat-template-kwargs",
         '{"enable_thinking": false}',
+        "--metrics",
         "--no-webui",
     ]
 
