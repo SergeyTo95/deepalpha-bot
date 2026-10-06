@@ -52,7 +52,7 @@ Requirements:
 - Live Web E2E passed: authenticated Web route -> private Agent Core -> Flash -> Chromium -> answer back.
 - Web UI has an AGENT mode for signed-in preview accounts.
 - Cold-start handling is implemented for the private Browser Agent service.
-- Persistent Browser Agent sessions are implemented: one isolated Chromium profile + resumed headless Agent session per authenticated account and AGENT conversation. Live two-turn continuation passed on Railway. Idle cleanup now stops Chromium to release RAM without deleting its profile; the DSH session id is persisted alongside the Chromium profile and Chromium is started with last-session restore. Next gate: restart-recovery acceptance, then mount a Railway Volume so cookies/localStorage/session state survive service redeploys.
+- Persistent Browser Agent sessions are implemented: one isolated Chromium profile + resumed headless Agent session per authenticated account and AGENT conversation. Live two-turn continuation passed on Railway. Idle cleanup now stops Chromium to release RAM without deleting its profile; the DSH session id is persisted alongside the Chromium profile and Chromium is started with last-session restore. Restart-recovery acceptance passed. A storage sentinel now verifies whether the same session storage is reused by a replacement container; next gate is Railway Volume reuse across two deployments, then multi-tab and account-sensitive approval boundaries.
 - Keep VELIA branding; upstream Harness naming is provenance only.
 
 ### Phase 3 — Android Tool Host

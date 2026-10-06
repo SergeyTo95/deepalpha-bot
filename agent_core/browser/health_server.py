@@ -75,6 +75,8 @@ class BrowserSession:
 sessions: dict[str, BrowserSession] = {}
 sessions_lock = asyncio.Lock()
 
+storage_reused_at_boot = False
+
 
 def _configure_flash_gateway():
     base = os.getenv("VELIA_AGENT_CORE_FLASH_BASE_URL", "").strip()
@@ -154,6 +156,29 @@ async def _touch_profile(root):
     marker = root / ".last-used"
     await asyncio.to_thread(marker.write_text, str(int(time.time())) + "\n", encoding="utf-8")
     await asyncio.to_thread(os.chmod, marker, 0o600)
+
+
+async def _ensure_storage_sentinel():
+    await asyncio.to_thread(SESSION_BASE.mkdir, parents=True, exist_ok=True, mode=0o700)
+    target = SESSION_BASE / ".storage-sentinel"
+    try:
+        value = (await asyncio.to_thread(target.read_text, encoding="utf-8")).strip()
+    except OSError:
+        value = ""
+    if re.fullmatch(r"[0-9a-f]{32}", value):
+        return True
+    value = secrets.token_hex(16)
+    temporary = SESSION_BASE / f".storage-sentinel.{secrets.token_hex(4)}.tmp"
+    await asyncio.to_thread(temporary.write_text, value + "\n", encoding="utf-8")
+    await asyncio.to_thread(os.chmod, temporary, 0o600)
+    try:
+        await asyncio.to_thread(os.replace, temporary, target)
+    finally:
+        try:
+            await asyncio.to_thread(temporary.unlink, missing_ok=True)
+        except OSError:
+            pass
+    return False
 
 
 async def _warm_flash():
@@ -336,6 +361,7 @@ async def health(_request):
         "session_idle_seconds": SESSION_IDLE_SECONDS,
         "profile_retention_seconds": PROFILE_RETENTION_SECONDS,
         "durable_storage": not str(SESSION_BASE).startswith("/tmp/"),
+        "storage_reused_at_boot": storage_reused_at_boot,
         "public_agent": False,
         "run_api_configured": bool(os.getenv("VELIA_AGENT_CORE_INTERNAL_KEY", "").strip()),
         "revision": os.getenv("RAILWAY_GIT_COMMIT_SHA", ""),
@@ -477,7 +503,16 @@ async def run_browser_task(request):
 
 
 async def session_lifecycle(_app):
-    await asyncio.to_thread(SESSION_BASE.mkdir, parents=True, exist_ok=True, mode=0o700)
+    global storage_reused_at_boot
+    storage_reused_at_boot = await _ensure_storage_sentinel()
+    print(
+        "VELIA_AGENT_CORE_STORAGE_READY "
+        + json.dumps({
+            "durable_storage": not str(SESSION_BASE).startswith("/tmp/"),
+            "reused": storage_reused_at_boot,
+        }, sort_keys=True),
+        flush=True,
+    )
     yield
     async with sessions_lock:
         remaining = list(sessions.values())

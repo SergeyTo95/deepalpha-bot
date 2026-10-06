@@ -148,3 +148,13 @@ async def test_idle_dispose_keeps_browser_profile(monkeypatch, tmp_path):
     assert root.exists()
     assert cookie_marker.read_text(encoding="utf-8") == "keep"
     assert (root / ".last-used").exists()
+
+
+@pytest.mark.asyncio
+async def test_storage_sentinel_proves_directory_reuse(monkeypatch, tmp_path):
+    monkeypatch.setattr(browser, "SESSION_BASE", tmp_path / "sessions")
+    assert await browser._ensure_storage_sentinel() is False
+    sentinel = browser.SESSION_BASE / ".storage-sentinel"
+    first = sentinel.read_text(encoding="utf-8")
+    assert await browser._ensure_storage_sentinel() is True
+    assert sentinel.read_text(encoding="utf-8") == first
