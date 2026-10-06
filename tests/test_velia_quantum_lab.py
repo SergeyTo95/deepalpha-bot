@@ -3,6 +3,7 @@ from pathlib import Path
 
 from quantum.validate_calibration import validate
 from quantum.acceptance import evaluate as evaluate_acceptance
+from quantum.preflight import validate_config_payload
 
 
 def _plan(tmp_path: Path) -> Path:
@@ -191,3 +192,41 @@ def test_quantum_acceptance_rejects_slow_or_oversized_candidate():
     assert any("rss_gb" in error for error in report["errors"])
     assert any("warm output" in error for error in report["errors"])
     assert any("TTFT" in error for error in report["errors"])
+
+
+def test_quantum_preflight_accepts_expected_qwen4exp_shape():
+    payload = {
+        "model_type": "qwen4_exp",
+        "architectures": ["Qwen4ExpForConditionalGeneration"],
+        "text_config": {
+            "model_type": "qwen4_exp_text",
+            "num_hidden_layers": 48,
+            "num_experts": 512,
+            "num_experts_per_tok": 10,
+            "hidden_size": 2560,
+            "moe_intermediate_size": 640,
+            "ple_layer_ids": [0, 1],
+            "split_ngram_parts": 128,
+        },
+    }
+    assert validate_config_payload(payload) == []
+
+
+def test_quantum_preflight_rejects_wrong_expert_topology():
+    payload = {
+        "model_type": "qwen4_exp",
+        "architectures": ["Qwen4ExpForConditionalGeneration"],
+        "text_config": {
+            "model_type": "qwen4_exp_text",
+            "num_hidden_layers": 48,
+            "num_experts": 256,
+            "num_experts_per_tok": 5,
+            "hidden_size": 2560,
+            "moe_intermediate_size": 640,
+            "ple_layer_ids": [0],
+            "split_ngram_parts": 128,
+        },
+    }
+    errors = validate_config_payload(payload)
+    assert any("num_experts=" in error for error in errors)
+    assert any("num_experts_per_tok=" in error for error in errors)
