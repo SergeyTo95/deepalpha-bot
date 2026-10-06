@@ -11,12 +11,14 @@ try:
     from .build_public_corpus import aya_record, normalize_language, select_balanced
     from .merge_calibration import merge_rows
     from .preflight import validate_config_payload
+    from .prepare_ple_sidecar import parse_weight_map, validate_config as validate_ple_config
     from .validate_calibration import validate
 except ImportError:
     from acceptance import evaluate as evaluate_acceptance
     from build_public_corpus import aya_record, normalize_language, select_balanced
     from merge_calibration import merge_rows
     from preflight import validate_config_payload
+    from prepare_ple_sidecar import parse_weight_map, validate_config as validate_ple_config
     from validate_calibration import validate
 
 
@@ -72,6 +74,38 @@ def run() -> dict:
         },
     }
     _assert(validate_config_payload(expected_config) == [], "Qwen topology preflight failed")
+
+    ple_config = {
+        "model_type": "qwen4_exp",
+        "text_config": {
+            "split_ngram_parts": 128,
+            "ngram_size": 3,
+            "heads_per_ngram": 8,
+            "ple_embed_dim": 2560,
+            "ple_embedding_dtype": "float8_e4m3fn",
+        },
+    }
+    _assert(validate_ple_config(ple_config) == [], "Qwen FP8 PLE config failed")
+    synthetic_index = {
+        "weight_map": {
+            **{
+                f"model.language_model.layers.1.ple.ple_embedding.ngram_embedding.shard_{part}.weight":
+                f"model-{part // 4 + 5:05d}-of-00131.safetensors"
+                for part in range(128)
+            },
+            "model.language_model.layers.1.ple.ple_embedding.ngram_heads_offsets":
+                "model-00003-of-00131.safetensors",
+            "model.language_model.layers.1.ple.ple_embedding.ngram_heads_vocab_sizes":
+                "model-00003-of-00131.safetensors",
+        }
+    }
+    parsed_ple = parse_weight_map(synthetic_index)
+    _assert(len(parsed_ple["parts"]) == 128, "PLE index must contain 128 parts")
+    _assert(parsed_ple["total_rows"] == 320001536, "PLE row count mismatch")
+    _assert(
+        parsed_ple["expected_payload_bytes"] == 51200245760,
+        "PLE payload size mismatch",
+    )
 
     translation = aya_record(
         {
@@ -204,6 +238,7 @@ def run() -> dict:
             "calibration-split-validation",
             "holdout-isolation",
             "quality-runtime-gate",
+            "official-qwen-fp8-ple-index",
         ],
     }
 
