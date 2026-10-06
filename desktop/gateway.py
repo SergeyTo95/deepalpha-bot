@@ -22,6 +22,7 @@ from desktop.admin_proxy import setup_owner_admin_proxy
 MAX_AUTH_BODY = 16 * 1024
 MAX_AUTH_RESPONSE = 64 * 1024
 MAX_AGENT_RESPONSE = 1024 * 1024
+MAX_TAKEOVER_RESPONSE = 5 * 1024 * 1024
 CLIENT = web.AppKey("identity_client", ClientSession)
 READY = web.AppKey("identity_ready", bool)
 ACCESS = re.compile(r"va_[A-Za-z0-9_-]{16,256}\Z")
@@ -233,6 +234,67 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
         except (ClientError, TimeoutError, OSError):
             return 503, {"ok": False, "error": "browser_agent_unavailable"}
 
+    async def browser_takeover(user_id, session_id, action=None):
+        if os.getenv("VELIA_BROWSER_AGENT_ENABLED", "").lower() not in {"true", "1", "yes", "on"}:
+            return 503, {"ok": False, "error": "browser_agent_disabled"}
+        secret = str(os.getenv("VELIA_AGENT_CORE_INTERNAL_KEY", "") or "").strip()
+        if not config.agent_origin or not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", secret):
+            return 503, {"ok": False, "error": "browser_agent_unavailable"}
+        if not isinstance(session_id, str) or not re.fullmatch(r"[0-9A-Fa-f-]{36}", session_id):
+            return 400, {"ok": False, "error": "invalid_browser_task"}
+        headers = {
+            "Authorization": "Bearer " + secret,
+            "User-Agent": "VELIA-Web-Browser-Takeover/0.1",
+            "X-Velia-User": str(user_id),
+            "X-Velia-Session": session_id,
+        }
+        path = "/v1/takeover/action" if action is not None else "/v1/takeover/state"
+        method = "POST" if action is not None else "GET"
+        try:
+            async with app[CLIENT].request(
+                    method,
+                    config.agent_origin + path,
+                    json=action if action is not None else None,
+                    headers=headers,
+                    allow_redirects=False,
+                    timeout=ClientTimeout(total=15, sock_read=12)) as response:
+                body = bytearray()
+                async for chunk in response.content.iter_chunked(65536):
+                    body.extend(chunk)
+                    if len(body) > MAX_TAKEOVER_RESPONSE:
+                        return 502, {"ok": False, "error": "browser_takeover_invalid_response"}
+                try:
+                    result = json.loads(body)
+                except (ValueError, UnicodeDecodeError):
+                    return 502, {"ok": False, "error": "browser_takeover_invalid_response"}
+                if response.status != 200 or not isinstance(result, dict) or result.get("ok") is not True:
+                    code = str(result.get("error") or "browser_takeover_unavailable") if isinstance(result, dict) else "browser_takeover_unavailable"
+                    if response.status in {400, 404, 409}:
+                        return response.status, {"ok": False, "error": code}
+                    return 503, {"ok": False, "error": "browser_takeover_unavailable"}
+                viewport = result.get("viewport")
+                image = result.get("image")
+                kind = result.get("kind")
+                if (
+                    kind not in {"credentials", "otp", "passkey", "captcha", "device_approval"}
+                    or not isinstance(image, str) or not image or len(image) > 4 * 1024 * 1024
+                    or not isinstance(viewport, dict)
+                    or type(viewport.get("width")) is not int or type(viewport.get("height")) is not int
+                    or not 1 <= viewport["width"] <= 10000 or not 1 <= viewport["height"] <= 10000
+                ):
+                    return 502, {"ok": False, "error": "browser_takeover_invalid_response"}
+                return 200, {
+                    "ok": True,
+                    "kind": kind,
+                    "expires_in": max(0, min(600, int(result.get("expires_in") or 0))),
+                    "image": image,
+                    "viewport": viewport,
+                    "url": str(result.get("url") or "")[:4096],
+                    "title": str(result.get("title") or "")[:1024],
+                }
+        except (ClientError, TimeoutError, OSError):
+            return 503, {"ok": False, "error": "browser_takeover_unavailable"}
+
     async def lifecycle(application):
         async with ClientSession(timeout=ClientTimeout(total=15, sock_read=10),
                                  connector=TCPConnector(limit=16), cookie_jar=DummyCookieJar()) as client:
@@ -330,7 +392,8 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
         setup_web_routes(app, origin=origin, upstream=upstream, authenticate=authenticate,
             allowed=allowed, valid_session=valid_session, json_response=json_response, handlers=handlers,
             account_balance=account_balance, authorize_model=authorize_model, upstream_stream=upstream_stream,
-            web_search=web_search, browser_agent_run=browser_agent_run if agent_available else None)
+            web_search=web_search, browser_agent_run=browser_agent_run if agent_available else None,
+            browser_takeover=browser_takeover if agent_available else None)
         if os.getenv("VELIA_WEB_GUEST_ENABLED") == "true":
             from desktop.guest_routes import setup_guest_routes
             setup_guest_routes(app, origin=origin, handlers=handlers, json_response=json_response,
