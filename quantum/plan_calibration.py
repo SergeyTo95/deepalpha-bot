@@ -26,10 +26,11 @@ CATEGORY_TARGETS = {
 SOURCE_CATEGORY_TARGETS = {
     "aya-human": {
         "general_dialogue": 700,
+        "documents_retrieval": 350,
         "translation": 40,
     },
     "aya-collection": {
-        "reasoning_math": 650,
+        "reasoning_math": 200,
         "knowledge": 350,
     },
     "oasst2": {
@@ -37,7 +38,7 @@ SOURCE_CATEGORY_TARGETS = {
     },
     "velia-owned": {
         "coding": 50,
-        "documents_retrieval": 350,
+        "reasoning_math": 450,
         "tool_use": 450,
         "agentic_browser": 350,
         "structured_output": 220,
