@@ -87,8 +87,8 @@ class BrowserSession:
     browser: asyncio.subprocess.Process
     agent_session_id: str | None = None
     agent_context_turns: int = 0
-    takeover_active: bool = False
-    takeover_last_used: float = 0.0
+    takeover_kind: str | None = None
+    takeover_expires_at: float = 0.0
     last_used: float = field(default_factory=time.monotonic)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -151,6 +151,51 @@ def _session_root(user_id, conversation="default"):
 
 def _agent_session_path(root):
     return root / "agent-session-id"
+
+
+def _takeover_state_path(root):
+    return root / "takeover-state.json"
+
+
+async def _read_takeover_state(root):
+    try:
+        payload = json.loads(await asyncio.to_thread(
+            _takeover_state_path(root).read_text, encoding="utf-8"
+        ))
+    except (OSError, ValueError):
+        return None, 0.0
+    kind = payload.get("kind") if isinstance(payload, dict) else None
+    expires_at = payload.get("expires_at") if isinstance(payload, dict) else None
+    if (
+        kind in {"credentials", "otp", "passkey", "captcha", "device_approval"}
+        and type(expires_at) in {int, float}
+        and float(expires_at) > time.time()
+    ):
+        return kind, float(expires_at)
+    try:
+        await asyncio.to_thread(_takeover_state_path(root).unlink, missing_ok=True)
+    except OSError:
+        pass
+    return None, 0.0
+
+
+async def _write_takeover_state(root, kind, expires_at):
+    target = _takeover_state_path(root)
+    temporary = root / f".takeover-state.{secrets.token_hex(4)}.tmp"
+    payload = json.dumps(
+        {"kind": kind, "expires_at": float(expires_at)},
+        separators=(",", ":"),
+    )
+    await asyncio.to_thread(temporary.write_text, payload, encoding="utf-8")
+    await asyncio.to_thread(os.chmod, temporary, 0o600)
+    await asyncio.to_thread(os.replace, temporary, target)
+
+
+async def _clear_takeover_state(root):
+    try:
+        await asyncio.to_thread(_takeover_state_path(root).unlink, missing_ok=True)
+    except OSError:
+        pass
 
 
 async def _read_agent_session_id(root):
@@ -327,6 +372,7 @@ async def _new_session(user_id, conversation="default"):
             pass
 
     agent_session_id = await _read_agent_session_id(root)
+    takeover_kind, takeover_expires_at = await _read_takeover_state(root)
     await _touch_profile(root)
     chromium = os.getenv("VELIA_AGENT_CORE_CHROMIUM", "/usr/bin/chromium")
     process = await asyncio.create_subprocess_exec(
@@ -363,6 +409,8 @@ async def _new_session(user_id, conversation="default"):
         endpoint=endpoint,
         browser=process,
         agent_session_id=agent_session_id,
+        takeover_kind=takeover_kind,
+        takeover_expires_at=takeover_expires_at,
     )
 
 
@@ -458,12 +506,13 @@ async def run_browser_task(request):
             await _warm_flash()
             session, reused = await _get_session(user_id, conversation)
             async with session.lock:
-                now = time.monotonic()
-                if session.takeover_active and now - session.takeover_last_used >= TAKEOVER_IDLE_SECONDS:
-                    session.takeover_active = False
-                if session.takeover_active:
+                if session.takeover_kind and session.takeover_expires_at <= time.time():
+                    session.takeover_kind = None
+                    session.takeover_expires_at = 0.0
+                    await _clear_takeover_state(session.root)
+                if session.takeover_kind:
                     return web.json_response(
-                        {"ok": False, "error": "browser_takeover_active"}, status=409
+                        {"ok": False, "error": "browser_takeover_required"}, status=409
                     )
                 runtime = os.getenv(
                     "VELIA_AGENT_CORE_RUNTIME", "/opt/velia-agent-core/runtime"
@@ -527,6 +576,17 @@ async def run_browser_task(request):
                 session.agent_session_id = session_id
                 session.agent_context_turns += 1
                 await _write_agent_session_id(session.root, session_id)
+                handoff_kind = result.get("user_action_required")
+                if handoff_kind in {"credentials", "otp", "passkey", "captcha", "device_approval"}:
+                    session.takeover_kind = handoff_kind
+                    session.takeover_expires_at = time.time() + TAKEOVER_IDLE_SECONDS
+                    await _write_takeover_state(
+                        session.root, session.takeover_kind, session.takeover_expires_at
+                    )
+                else:
+                    session.takeover_kind = None
+                    session.takeover_expires_at = 0.0
+                    await _clear_takeover_state(session.root)
                 await _touch_profile(session.root)
                 await _snapshot_session_cookies(session)
                 session.last_used = time.monotonic()
@@ -571,15 +631,57 @@ async def run_browser_task(request):
             raise
 
 
-async def browser_takeover(request):
+async def _takeover_session(request):
     if not _internal_authorized(request):
-        return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+        return None, web.json_response({"ok": False, "error": "unauthorized"}, status=401)
     identity = _request_identity(request)
     if not identity:
-        return web.json_response({"ok": False, "error": "invalid_session_identity"}, status=400)
+        return None, web.json_response({"ok": False, "error": "invalid_session_identity"}, status=400)
     user_id, conversation = identity
-    if request.content_length is not None and request.content_length > MAX_RUN_BODY:
-        return web.json_response({"ok": False, "error": "request_too_large"}, status=413)
+    try:
+        session, _reused = await _get_session(user_id, conversation)
+    except (OSError, RuntimeError):
+        return None, web.json_response(
+            {"ok": False, "error": "browser_takeover_unavailable"}, status=503
+        )
+    if session.takeover_kind and session.takeover_expires_at <= time.time():
+        session.takeover_kind = None
+        session.takeover_expires_at = 0.0
+        await _clear_takeover_state(session.root)
+    if not session.takeover_kind:
+        return None, web.json_response(
+            {"ok": False, "error": "browser_takeover_not_required"}, status=409
+        )
+    return session, None
+
+
+async def browser_takeover_state(request):
+    session, failure = await _takeover_session(request)
+    if failure is not None:
+        return failure
+    async with session.lock:
+        try:
+            state = await capture_takeover_state(session.endpoint)
+        except (OSError, RuntimeError, asyncio.TimeoutError):
+            return web.json_response(
+                {"ok": False, "error": "browser_takeover_unavailable"}, status=503
+            )
+        session.last_used = time.monotonic()
+        return web.json_response({
+            "ok": True,
+            "kind": session.takeover_kind,
+            "expires_in": max(0, min(TAKEOVER_IDLE_SECONDS, int(session.takeover_expires_at - time.time()))),
+            "image": state["image"],
+            "viewport": {"width": state["width"], "height": state["height"]},
+            "url": state["url"],
+            "title": state["title"],
+        }, headers={"Cache-Control": "no-store"})
+
+
+async def browser_takeover_action(request):
+    session, failure = await _takeover_session(request)
+    if failure is not None:
+        return failure
     try:
         payload = await request.json()
     except web.HTTPRequestEntityTooLarge:
@@ -589,72 +691,71 @@ async def browser_takeover(request):
     if not isinstance(payload, dict):
         return web.json_response({"ok": False, "error": "invalid_takeover_action"}, status=400)
     action = payload.get("action")
-    allowed_fields = {
-        "start": {"action"},
-        "snapshot": {"action"},
+    valid_fields = {
         "click": {"action", "x", "y"},
-        "type": {"action", "text"},
+        "text": {"action", "text"},
         "key": {"action", "key"},
         "scroll": {"action", "delta_y"},
         "finish": {"action"},
     }
-    if action not in allowed_fields or set(payload) != allowed_fields[action]:
+    if action not in valid_fields or set(payload) != valid_fields[action]:
         return web.json_response({"ok": False, "error": "invalid_takeover_action"}, status=400)
-    try:
-        session, _reused = await _get_session(user_id, conversation)
-        async with session.lock:
-            now = time.monotonic()
-            if session.takeover_active and now - session.takeover_last_used >= TAKEOVER_IDLE_SECONDS:
-                session.takeover_active = False
-            if action == "start":
-                session.takeover_active = True
-            elif action != "finish" and not session.takeover_active:
-                return web.json_response({"ok": False, "error": "takeover_not_active"}, status=409)
 
+    async with session.lock:
+        try:
             if action == "click":
                 x, y = payload.get("x"), payload.get("y")
-                if type(x) not in {int, float} or type(y) not in {int, float}:
-                    return web.json_response({"ok": False, "error": "invalid_takeover_action"}, status=400)
+                if (
+                    isinstance(x, bool) or isinstance(y, bool)
+                    or not isinstance(x, (int, float)) or not isinstance(y, (int, float))
+                ):
+                    raise ValueError
                 await takeover_click(session.endpoint, x, y)
-            elif action == "type":
+            elif action == "text":
                 text = payload.get("text")
-                if not isinstance(text, str) or not text or len(text) > 4096:
-                    return web.json_response({"ok": False, "error": "invalid_takeover_action"}, status=400)
+                if not isinstance(text, str) or not 1 <= len(text) <= 4096:
+                    raise ValueError
                 await takeover_insert_text(session.endpoint, text)
             elif action == "key":
-                key = payload.get("key")
-                if not isinstance(key, str):
-                    return web.json_response({"ok": False, "error": "invalid_takeover_action"}, status=400)
-                try:
-                    await takeover_press_key(session.endpoint, key)
-                except ValueError:
-                    return web.json_response({"ok": False, "error": "invalid_takeover_action"}, status=400)
+                await takeover_press_key(session.endpoint, payload.get("key"))
             elif action == "scroll":
-                delta_y = payload.get("delta_y")
-                if type(delta_y) not in {int, float}:
-                    return web.json_response({"ok": False, "error": "invalid_takeover_action"}, status=400)
-                await takeover_scroll(session.endpoint, delta_y)
+                delta = payload.get("delta_y")
+                if isinstance(delta, bool) or not isinstance(delta, (int, float)):
+                    raise ValueError
+                await takeover_scroll(session.endpoint, delta)
             elif action == "finish":
-                session.takeover_active = False
-                session.takeover_last_used = 0.0
+                session.takeover_kind = None
+                session.takeover_expires_at = 0.0
+                await _clear_takeover_state(session.root)
                 await _snapshot_session_cookies(session)
                 await _touch_profile(session.root)
+                session.last_used = time.monotonic()
                 return web.json_response(
-                    {"ok": True, "takeover_active": False},
+                    {"ok": True, "finished": True},
                     headers={"Cache-Control": "no-store"},
                 )
-
-            session.takeover_last_used = now
-            session.last_used = now
-            state = await capture_takeover_state(session.endpoint)
+        except ValueError:
+            return web.json_response({"ok": False, "error": "invalid_takeover_action"}, status=400)
+        except (OSError, RuntimeError, asyncio.TimeoutError):
             return web.json_response(
-                {"ok": True, "takeover_active": True, **state},
-                headers={"Cache-Control": "no-store"},
+                {"ok": False, "error": "browser_takeover_unavailable"}, status=503
             )
-    except (OSError, RuntimeError, asyncio.TimeoutError):
-        return web.json_response(
-            {"ok": False, "error": "browser_takeover_unavailable"}, status=503
+
+        session.takeover_expires_at = time.time() + TAKEOVER_IDLE_SECONDS
+        await _write_takeover_state(
+            session.root, session.takeover_kind, session.takeover_expires_at
         )
+        session.last_used = time.monotonic()
+        state = await capture_takeover_state(session.endpoint)
+        return web.json_response({
+            "ok": True,
+            "kind": session.takeover_kind,
+            "expires_in": TAKEOVER_IDLE_SECONDS,
+            "image": state["image"],
+            "viewport": {"width": state["width"], "height": state["height"]},
+            "url": state["url"],
+            "title": state["title"],
+        }, headers={"Cache-Control": "no-store"})
 
 
 async def session_lifecycle(_app):
@@ -681,7 +782,8 @@ app = web.Application(client_max_size=MAX_RUN_BODY)
 app.cleanup_ctx.append(session_lifecycle)
 app.router.add_get("/health", health)
 app.router.add_post("/v1/run", run_browser_task)
-app.router.add_post("/v1/takeover", browser_takeover)
+app.router.add_get("/v1/takeover/state", browser_takeover_state)
+app.router.add_post("/v1/takeover/action", browser_takeover_action)
 # Private loopback model route used only by the child Agent Core process. It is
 # still token-authenticated, and the random token never leaves this container.
 setup_velia_desktop_routes(app, authenticate)
