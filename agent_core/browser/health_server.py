@@ -72,6 +72,7 @@ class BrowserSession:
     endpoint: str
     browser: asyncio.subprocess.Process
     agent_session_id: str | None = None
+    agent_context_turns: int = 0
     last_used: float = field(default_factory=time.monotonic)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -444,6 +445,14 @@ async def run_browser_task(request):
                 )
                 script = Path(__file__).with_name("run_task.mjs")
                 port = int(os.getenv("PORT", "8080"))
+                if session.agent_context_turns >= 2:
+                    session.agent_session_id = None
+                    session.agent_context_turns = 0
+                    print(
+                        "VELIA_AGENT_CORE_CONTEXT_ROLLOVER "
+                        + json.dumps({"reason": "flash_8k_budget"}, sort_keys=True),
+                        flush=True,
+                    )
                 child = await asyncio.create_subprocess_exec(
                     "node",
                     str(script),
@@ -491,6 +500,7 @@ async def run_browser_task(request):
                         status=502,
                     )
                 session.agent_session_id = session_id
+                session.agent_context_turns += 1
                 await _write_agent_session_id(session.root, session_id)
                 await _touch_profile(session.root)
                 await _snapshot_session_cookies(session)
