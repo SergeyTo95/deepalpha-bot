@@ -63,8 +63,11 @@ def _load(paths: Iterable[Path]) -> list[dict]:
                     for message in messages
                     if message.get("role") == "user"
                 )
+                normalized_prompt = " ".join(prompt.casefold().split())
+                if len(normalized_prompt) < 8:
+                    continue
                 digest = hashlib.sha256(
-                    " ".join(prompt.casefold().split()).encode("utf-8")
+                    normalized_prompt.encode("utf-8")
                 ).hexdigest()
                 if digest in seen_prompts:
                     continue
