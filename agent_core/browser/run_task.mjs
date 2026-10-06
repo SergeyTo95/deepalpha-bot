@@ -1,6 +1,6 @@
-/** Execute one private VELIA Agent Core browser task with VELIA Flash only. */
+/** Execute one private VELIA Agent Core browser turn with VELIA Flash only. */
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
@@ -14,7 +14,17 @@ if (gateway.protocol !== 'http:' || gateway.hostname !== '127.0.0.1' || !gateway
 }
 const token = process.argv[3];
 const runtime = resolve(process.argv[4]);
-const chromium = resolve(process.argv[5] || '/usr/bin/chromium');
+const browserEndpoint = new URL(process.argv[5]);
+if (browserEndpoint.protocol !== 'http:' || browserEndpoint.hostname !== '127.0.0.1'
+    || !browserEndpoint.port || browserEndpoint.username || browserEndpoint.password
+    || browserEndpoint.search || browserEndpoint.hash) {
+  throw new Error('VELIA Agent Core browser endpoint must be loopback');
+}
+const sessionRoot = resolve(process.argv[6]);
+const previousSessionId = process.argv[7] === '-' ? null : process.argv[7];
+if (previousSessionId && !/^[A-Za-z0-9._:-]{1,160}$/.test(previousSessionId)) {
+  throw new Error('browser_agent_invalid_session_id');
+}
 const maxPromptBytes = 12 * 1024;
 
 let input = '';
@@ -25,7 +35,13 @@ for await (const chunk of process.stdin) {
 const prompt = input.trim();
 if (!prompt) throw new Error('browser_agent_prompt_required');
 
-const temporary = await mkdtemp(join(tmpdir(), 'velia-agent-core-run-'));
+await mkdir(sessionRoot, { recursive: true, mode: 0o700 });
+const dshHome = join(sessionRoot, 'dsh-home');
+const workspace = join(sessionRoot, 'workspace');
+await mkdir(dshHome, { recursive: true, mode: 0o700 });
+await mkdir(workspace, { recursive: true, mode: 0o700 });
+
+const temporary = await mkdtemp(join(tmpdir(), 'velia-agent-core-turn-'));
 const origin = 'https://velia-agent-core.internal.invalid';
 let child;
 let declaredTools = 0;
@@ -48,8 +64,8 @@ try {
   provider.models = provider.models.filter(model => model.id === 'velia-flash');
   settings.find(row => row.id === 'agent-default-model').config.model = 'velia-flash';
   settings.find(row => row.id === 'system-prompt').config = {
-    personaPrefix: 'Ты Велия (VELIA), браузерный ИИ-агент. Говори о себе в женском роде. Выполняй веб-задачи через доступные браузерные инструменты. Не утверждай, что действие выполнено, пока инструмент не подтвердил результат. Не проси пользователя выполнять браузерные шаги, которые можешь выполнить сама.',
-    personaSuffix: 'This is a hosted browser-only agent session. Local shell and host filesystem access are unavailable.',
+    personaPrefix: 'Ты Велия (VELIA), браузерный ИИ-агент. Говори о себе в женском роде. Выполняй веб-задачи через доступные браузерные инструменты. Продолжай работу в уже открытом браузере и учитывай его текущее состояние. Не утверждай, что действие выполнено, пока инструмент не подтвердил результат. Не проси пользователя выполнять браузерные шаги, которые можешь выполнить сама.',
+    personaSuffix: 'This is a hosted browser-only agent session. The attached Chromium belongs to this VELIA session. Local shell and host filesystem access are unavailable.',
   };
   for (const id of [
     'tool-bash', 'tool-pwsh', 'tool-fs', 'tool-fs-search', 'tool-jobs',
@@ -60,19 +76,22 @@ try {
   settings.push({ insert: [
     { id: 'velia-browser-use', name: '@deepseek-ai/dsh-browser-use' },
     { id: 'velia-browser-provider', name: '@deepseek-ai/dsh-experimental-browser-use-playwright-mcp',
-      config: { mode: 'launch', headless: true, executablePath: chromium, toolCallTimeoutMs: 45000 } },
+      config: { mode: 'attach', endpoint: browserEndpoint.href.replace(/\/$/, ''), toolCallTimeoutMs: 45000 } },
   ] });
   await writeFile(patchPath, JSON.stringify(settings), { mode: 0o600 });
 
-  child = spawn(process.execPath, [
+  const args = [
     join(runtime, 'lib', 'bin.js'), '--profile', 'headless', '--patch', patchPath, '--json',
-  ], {
-    cwd: temporary,
+  ];
+  if (previousSessionId) args.push('--session-id', previousSessionId);
+
+  child = spawn(process.execPath, args, {
+    cwd: workspace,
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
       PATH: process.env.PATH,
       LANG: 'C.UTF-8',
-      DSH_HOME: join(temporary, 'home'),
+      DSH_HOME: dshHome,
       DSH_PERMISSION_MODE: 'read-only',
     },
   });
@@ -99,12 +118,13 @@ try {
   const events = stdout.split('\n').filter(Boolean).map(line => {
     try { return JSON.parse(line); } catch { return null; }
   }).filter(Boolean);
-  const session = events.find(event => event.type === 'session')?.sessionId || null;
+  const reportedSession = events.find(event => event.type === 'session')?.sessionId || null;
+  const session = reportedSession || previousSessionId;
   const final = [...events].reverse().find(event => event.type === 'final');
   const toolCalls = events.filter(event => event.type === 'tool_call');
   declaredTools = new Set(toolCalls.map(event => event.tool)).size;
 
-  if (code !== 0 || !final || typeof final.text !== 'string') {
+  if (code !== 0 || !final || typeof final.text !== 'string' || !session) {
     const projected = events.find(event => event.type === 'error')?.message;
     throw new Error(projected || stderr.trim().slice(-2000) || 'browser_agent_failed');
   }

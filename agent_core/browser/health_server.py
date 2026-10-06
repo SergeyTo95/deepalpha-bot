@@ -1,14 +1,21 @@
-"""Private VELIA Agent Core Browser service.
+"""Private persistent VELIA Agent Core Browser service.
 
 The public Railway surface exposes health only. Browser tasks require a separate
 internal bearer key and run through VELIA Flash with no paid-model fallback.
+Each authenticated VELIA account receives one isolated long-lived Chromium and
+one persisted headless Agent session until its idle TTL expires.
 """
 import asyncio
+from dataclasses import dataclass, field
+import hashlib
 import hmac
 import json
 import os
-import secrets
 from pathlib import Path
+import re
+import secrets
+import shutil
+import time
 
 from aiohttp import ClientSession, ClientTimeout, web
 
@@ -18,10 +25,48 @@ MAX_RUN_BODY = 16 * 1024
 MAX_PROMPT_CHARS = 8000
 RUN_TIMEOUT_SECONDS = 450
 RUN_CONCURRENCY = 1
+DEFAULT_SESSION_IDLE_SECONDS = 3600
+DEFAULT_MAX_SESSIONS = 4
 
 fixture_id = "velia-agent-core-browser-service"
 fixture_token = secrets.token_hex(32)
 run_sem = asyncio.Semaphore(RUN_CONCURRENCY)
+
+
+def _bounded_int(name, default, minimum, maximum):
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+SESSION_IDLE_SECONDS = _bounded_int(
+    "VELIA_AGENT_CORE_SESSION_IDLE_SECONDS", DEFAULT_SESSION_IDLE_SECONDS, 300, 86400
+)
+MAX_SESSIONS = _bounded_int(
+    "VELIA_AGENT_CORE_MAX_SESSIONS", DEFAULT_MAX_SESSIONS, 1, 16
+)
+SESSION_BASE = Path(
+    os.getenv("VELIA_AGENT_CORE_SESSION_ROOT", "/tmp/velia-agent-core-sessions")
+).resolve()
+if not SESSION_BASE.is_absolute():
+    raise RuntimeError("browser_session_root_must_be_absolute")
+
+
+@dataclass
+class BrowserSession:
+    user_key: str
+    root: Path
+    endpoint: str
+    browser: asyncio.subprocess.Process
+    agent_session_id: str | None = None
+    last_used: float = field(default_factory=time.monotonic)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+sessions: dict[str, BrowserSession] = {}
+sessions_lock = asyncio.Lock()
 
 
 def _configure_flash_gateway():
@@ -50,8 +95,22 @@ def _internal_authorized(request):
     header = request.headers.get("Authorization", "")
     if not expected or not header.startswith("Bearer "):
         return False
-    supplied = header[7:]
-    return hmac.compare_digest(supplied, expected)
+    return hmac.compare_digest(header[7:], expected)
+
+
+def _request_user(request):
+    value = request.headers.get("X-Velia-User", "").strip()
+    if not re.fullmatch(r"[1-9][0-9]{0,18}", value):
+        return None
+    return value
+
+
+def _session_key(user_id):
+    return hashlib.sha256(("velia-browser:" + user_id).encode()).hexdigest()[:32]
+
+
+def _session_root(user_id):
+    return SESSION_BASE / _session_key(user_id)
 
 
 async def _warm_flash():
@@ -61,7 +120,10 @@ async def _warm_flash():
     async with ClientSession(timeout=timeout) as client:
         for _ in range(60):
             try:
-                async with client.get(FLASH_BASE_URL.rstrip("/") + "/health", allow_redirects=False) as response:
+                async with client.get(
+                    FLASH_BASE_URL.rstrip("/") + "/health",
+                    allow_redirects=False,
+                ) as response:
                     if response.status == 200:
                         return
             except (OSError, asyncio.TimeoutError):
@@ -70,12 +132,136 @@ async def _warm_flash():
     raise RuntimeError("browser_flash_startup_timeout")
 
 
+async def _stop_process(process):
+    if process.returncode is not None:
+        return
+    process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=5)
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.wait()
+
+
+async def _dispose_session(session):
+    await _stop_process(session.browser)
+    await asyncio.to_thread(shutil.rmtree, session.root, True)
+
+
+async def _cleanup_expired_sessions():
+    now = time.monotonic()
+    expired = []
+    async with sessions_lock:
+        for key, session in list(sessions.items()):
+            if session.lock.locked():
+                continue
+            if now - session.last_used >= SESSION_IDLE_SECONDS:
+                expired.append(sessions.pop(key))
+    for session in expired:
+        await _dispose_session(session)
+
+
+async def _wait_for_debug_port(profile, process):
+    marker = profile / "DevToolsActivePort"
+    for _ in range(100):
+        if process.returncode is not None:
+            raise RuntimeError("browser_process_exited")
+        try:
+            lines = (await asyncio.to_thread(marker.read_text, encoding="utf-8")).splitlines()
+            port = int(lines[0])
+            if 1 <= port <= 65535:
+                return port
+        except (FileNotFoundError, ValueError, IndexError, OSError):
+            pass
+        await asyncio.sleep(0.1)
+    raise RuntimeError("browser_debug_port_timeout")
+
+
+async def _new_session(user_id):
+    root = _session_root(user_id)
+    profile = root / "chromium"
+    workspace = root / "workspace"
+    dsh_home = root / "dsh-home"
+    await asyncio.to_thread(root.mkdir, parents=True, exist_ok=True, mode=0o700)
+    await asyncio.to_thread(profile.mkdir, parents=True, exist_ok=True, mode=0o700)
+    await asyncio.to_thread(workspace.mkdir, parents=True, exist_ok=True, mode=0o700)
+    await asyncio.to_thread(dsh_home.mkdir, parents=True, exist_ok=True, mode=0o700)
+    try:
+        await asyncio.to_thread((profile / "DevToolsActivePort").unlink, missing_ok=True)
+    except OSError:
+        pass
+
+    chromium = os.getenv("VELIA_AGENT_CORE_CHROMIUM", "/usr/bin/chromium")
+    process = await asyncio.create_subprocess_exec(
+        chromium,
+        "--headless=new",
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--remote-debugging-address=127.0.0.1",
+        "--remote-debugging-port=0",
+        f"--user-data-dir={profile}",
+        "about:blank",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        port = await _wait_for_debug_port(profile, process)
+    except Exception:
+        await _stop_process(process)
+        await asyncio.to_thread(shutil.rmtree, root, True)
+        raise
+    return BrowserSession(
+        user_key=_session_key(user_id),
+        root=root,
+        endpoint=f"http://127.0.0.1:{port}",
+        browser=process,
+    )
+
+
+async def _get_session(user_id):
+    await _cleanup_expired_sessions()
+    key = _session_key(user_id)
+    stale = None
+    async with sessions_lock:
+        current = sessions.get(key)
+        if current and current.browser.returncode is None:
+            current.last_used = time.monotonic()
+            return current, True
+        if current:
+            stale = sessions.pop(key)
+        if len(sessions) >= MAX_SESSIONS:
+            raise RuntimeError("browser_session_capacity")
+    if stale:
+        await _dispose_session(stale)
+
+    created = await _new_session(user_id)
+    async with sessions_lock:
+        race = sessions.get(key)
+        if race and race.browser.returncode is None:
+            winner = race
+        else:
+            sessions[key] = created
+            winner = created
+    if winner is not created:
+        await _dispose_session(created)
+        winner.last_used = time.monotonic()
+        return winner, True
+    return created, False
+
+
 async def health(_request):
+    await _cleanup_expired_sessions()
     return web.json_response({
         "ok": True,
         "service": "velia-agent-core-browser",
         "model": "velia-flash",
-        "browser": "playwright-mcp",
+        "browser": "playwright-mcp-attach",
+        "persistent_sessions": True,
+        "active_sessions": len(sessions),
+        "session_idle_seconds": SESSION_IDLE_SECONDS,
         "public_agent": False,
         "run_api_configured": bool(os.getenv("VELIA_AGENT_CORE_INTERNAL_KEY", "").strip()),
         "revision": os.getenv("RAILWAY_GIT_COMMIT_SHA", ""),
@@ -85,6 +271,9 @@ async def health(_request):
 async def run_browser_task(request):
     if not _internal_authorized(request):
         return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+    user_id = _request_user(request)
+    if not user_id:
+        return web.json_response({"ok": False, "error": "invalid_user"}, status=400)
     if request.content_length is not None and request.content_length > MAX_RUN_BODY:
         return web.json_response({"ok": False, "error": "request_too_large"}, status=413)
 
@@ -98,7 +287,13 @@ async def run_browser_task(request):
     except (ValueError, UnicodeDecodeError):
         return web.json_response({"ok": False, "error": "invalid_json"}, status=400)
     prompt = payload.get("prompt") if isinstance(payload, dict) else None
-    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > MAX_PROMPT_CHARS:
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"prompt"}
+        or not isinstance(prompt, str)
+        or not prompt.strip()
+        or len(prompt) > MAX_PROMPT_CHARS
+    ):
         return web.json_response({"ok": False, "error": "invalid_prompt"}, status=400)
 
     if run_sem.locked():
@@ -108,52 +303,95 @@ async def run_browser_task(request):
     async with run_sem:
         try:
             await _warm_flash()
-            runtime = os.getenv("VELIA_AGENT_CORE_RUNTIME", "/opt/velia-agent-core/runtime")
-            chromium = os.getenv("VELIA_AGENT_CORE_CHROMIUM", "/usr/bin/chromium")
-            script = Path(__file__).with_name("run_task.mjs")
-            port = int(os.getenv("PORT", "8080"))
-            child = await asyncio.create_subprocess_exec(
-                "node",
-                str(script),
-                f"http://127.0.0.1:{port}",
-                fixture_token,
-                runtime,
-                chromium,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env={"PATH": os.environ.get("PATH", ""), "LANG": "C.UTF-8"},
-            )
-            stdout, stderr = await asyncio.wait_for(
-                child.communicate(prompt.encode("utf-8")),
-                timeout=RUN_TIMEOUT_SECONDS,
-            )
-            if child.returncode != 0:
-                message = stderr.decode(errors="replace")[-2000:]
-                print("VELIA_AGENT_CORE_BROWSER_RUN_FAILED returncode="
-                      f"{child.returncode} detail={message!r}", flush=True)
-                return web.json_response({"ok": False, "error": "browser_agent_failed"}, status=502)
-            try:
-                result = json.loads(stdout)
-            except (ValueError, UnicodeDecodeError):
-                return web.json_response({"ok": False, "error": "browser_agent_invalid_result"}, status=502)
-            if result.get("ok") is not True or result.get("model") != "velia-flash":
-                return web.json_response({"ok": False, "error": "browser_agent_invalid_result"}, status=502)
-            print("VELIA_AGENT_CORE_BROWSER_RUN_OK "
-                  + json.dumps({
-                      "tool_count": result.get("tool_count", 0),
-                      "distinct_tools": result.get("distinct_tools", 0),
-                      "answer_chars": len(result.get("text") or ""),
-                  }, sort_keys=True), flush=True)
-            return web.json_response(result, headers={"Cache-Control": "no-store"})
+            session, reused = await _get_session(user_id)
+            async with session.lock:
+                runtime = os.getenv(
+                    "VELIA_AGENT_CORE_RUNTIME", "/opt/velia-agent-core/runtime"
+                )
+                script = Path(__file__).with_name("run_task.mjs")
+                port = int(os.getenv("PORT", "8080"))
+                child = await asyncio.create_subprocess_exec(
+                    "node",
+                    str(script),
+                    f"http://127.0.0.1:{port}",
+                    fixture_token,
+                    runtime,
+                    session.endpoint,
+                    str(session.root),
+                    session.agent_session_id or "-",
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env={"PATH": os.environ.get("PATH", ""), "LANG": "C.UTF-8"},
+                )
+                stdout, stderr = await asyncio.wait_for(
+                    child.communicate(prompt.strip().encode("utf-8")),
+                    timeout=RUN_TIMEOUT_SECONDS,
+                )
+                if child.returncode != 0:
+                    message = stderr.decode(errors="replace")[-2000:]
+                    print(
+                        "VELIA_AGENT_CORE_BROWSER_RUN_FAILED returncode="
+                        f"{child.returncode} detail={message!r}",
+                        flush=True,
+                    )
+                    return web.json_response(
+                        {"ok": False, "error": "browser_agent_failed"}, status=502
+                    )
+                try:
+                    result = json.loads(stdout)
+                except (ValueError, UnicodeDecodeError):
+                    return web.json_response(
+                        {"ok": False, "error": "browser_agent_invalid_result"},
+                        status=502,
+                    )
+                session_id = result.get("session_id")
+                if (
+                    result.get("ok") is not True
+                    or result.get("model") != "velia-flash"
+                    or not isinstance(session_id, str)
+                    or not re.fullmatch(r"[A-Za-z0-9._:-]{1,160}", session_id)
+                ):
+                    return web.json_response(
+                        {"ok": False, "error": "browser_agent_invalid_result"},
+                        status=502,
+                    )
+                session.agent_session_id = session_id
+                session.last_used = time.monotonic()
+                result["persistent"] = True
+                result["session_reused"] = reused
+                print(
+                    "VELIA_AGENT_CORE_BROWSER_RUN_OK "
+                    + json.dumps(
+                        {
+                            "session_reused": reused,
+                            "active_sessions": len(sessions),
+                            "tool_count": result.get("tool_count", 0),
+                            "distinct_tools": result.get("distinct_tools", 0),
+                            "answer_chars": len(result.get("text") or ""),
+                        },
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
+                return web.json_response(
+                    result, headers={"Cache-Control": "no-store"}
+                )
         except asyncio.TimeoutError:
             if child and child.returncode is None:
                 child.kill()
                 await child.wait()
-            return web.json_response({"ok": False, "error": "browser_agent_timeout"}, status=504)
+            return web.json_response(
+                {"ok": False, "error": "browser_agent_timeout"}, status=504
+            )
         except (OSError, RuntimeError) as exc:
-            print(f"VELIA_AGENT_CORE_BROWSER_RUN_ERROR code={str(exc)[:120]!r}", flush=True)
-            return web.json_response({"ok": False, "error": "browser_agent_unavailable"}, status=503)
+            print(
+                f"VELIA_AGENT_CORE_BROWSER_RUN_ERROR code={str(exc)[:120]!r}",
+                flush=True,
+            )
+            return web.json_response(
+                {"ok": False, "error": "browser_agent_unavailable"}, status=503
+            )
         except asyncio.CancelledError:
             if child and child.returncode is None:
                 child.kill()
@@ -161,7 +399,18 @@ async def run_browser_task(request):
             raise
 
 
+async def session_lifecycle(_app):
+    await asyncio.to_thread(SESSION_BASE.mkdir, parents=True, exist_ok=True, mode=0o700)
+    yield
+    async with sessions_lock:
+        remaining = list(sessions.values())
+        sessions.clear()
+    for session in remaining:
+        await _dispose_session(session)
+
+
 app = web.Application(client_max_size=MAX_RUN_BODY)
+app.cleanup_ctx.append(session_lifecycle)
 app.router.add_get("/health", health)
 app.router.add_post("/v1/run", run_browser_task)
 # Private loopback model route used only by the child Agent Core process. It is
