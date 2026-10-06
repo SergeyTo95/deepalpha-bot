@@ -1216,3 +1216,102 @@ dialog::backdrop {
 .message-sources > span { flex-basis: 100%; color: var(--muted); }
 .message-sources a { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; overflow-wrap: anywhere; max-width: 100%; }
 .message-sources a:hover { text-decoration: underline; }
+
+.takeover-dialog {
+  width: min(980px, calc(100vw - 28px));
+  max-height: calc(100dvh - 28px);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 18px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+.takeover-dialog::backdrop { background: #000a; }
+.takeover-header,
+.takeover-footer,
+.takeover-secret-row,
+.takeover-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.takeover-header { justify-content: space-between; }
+.takeover-header h2 { margin: 5px 0 0; font-size: 20px; }
+.takeover-meta {
+  display: grid;
+  gap: 4px;
+  margin: 14px 0 10px;
+}
+.takeover-meta span {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.takeover-screen {
+  display: block;
+  width: 100%;
+  max-height: 60dvh;
+  padding: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #000;
+  cursor: crosshair;
+}
+.takeover-screen img {
+  display: block;
+  width: 100%;
+  height: auto;
+  user-select: none;
+}
+.takeover-secret-row { margin-top: 12px; }
+.takeover-secret-row input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 10px;
+  padding: 11px 12px;
+}
+.takeover-secret-row button,
+.takeover-controls button {
+  border: 1px solid var(--border);
+  background: var(--hover);
+  border-radius: 9px;
+  padding: 10px 12px;
+  white-space: nowrap;
+}
+.takeover-controls {
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.takeover-footer {
+  justify-content: space-between;
+  margin-top: 14px;
+  gap: 16px;
+}
+.takeover-footer > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.takeover-footer .auth-submit {
+  width: auto;
+  margin: 0;
+  padding: 11px 16px;
+}
+@media (max-width: 680px) {
+  .takeover-dialog {
+    width: calc(100vw - 12px);
+    max-height: calc(100dvh - 12px);
+    padding: 12px;
+    border-radius: 14px;
+  }
+  .takeover-screen { max-height: 52dvh; }
+  .takeover-secret-row,
+  .takeover-footer { align-items: stretch; flex-direction: column; }
+  .takeover-secret-row button,
+  .takeover-footer .auth-submit { width: 100%; }
+}
