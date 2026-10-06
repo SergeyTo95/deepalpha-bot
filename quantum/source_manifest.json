@@ -86,7 +86,7 @@
         "safety",
         "vision_text"
       ],
-      "max_share": 0.3,
+      "max_share": 0.45,
       "requirements": [
         "prompts must be multilingual",
         "answers must be generated or curated from the pinned original Qwen base or human-authored",
