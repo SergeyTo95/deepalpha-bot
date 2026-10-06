@@ -40,7 +40,8 @@ async def _active_page(ws):
             {
                 "expression": (
                     "({url:location.href,title:document.title,"
-                    "visibility:document.visibilityState,width:innerWidth,height:innerHeight})"
+                    "visibility:document.visibilityState,focused:document.hasFocus(),"
+                    "width:innerWidth,height:innerHeight})"
                 ),
                 "returnByValue": True,
             },
@@ -49,9 +50,8 @@ async def _active_page(ws):
         request_id += 1
         value = ((info.get("result") or {}).get("value") or {})
         row = (session_id, value, request_id)
-        if fallback is None:
-            fallback = row
-        if value.get("visibility") == "visible":
+        fallback = row
+        if value.get("focused") is True:
             return row
     if fallback is None:
         raise RuntimeError("browser_takeover_page_unavailable")
