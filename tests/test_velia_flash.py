@@ -7,6 +7,7 @@ import pytest
 import requests
 
 from services import velia_flash_service as flash
+from services import velia_flash_context_engine as context_engine
 from services import velia_chat_service as chat
 from services import velia_attachment_chat_runtime_patch as attachment
 from services import velia_chat_streaming_runtime_patch as streaming
@@ -610,3 +611,89 @@ def test_voice_fast_path_is_short_and_feminine(enabled, monkeypatch):
     assert "'поняла'" in system
     assert "1 to 2 short spoken sentences" in system
     assert "Never use a numbered clarification questionnaire" in system
+
+
+def test_context_engine_preserves_latest_user_and_compacts_old_turns():
+    important = (
+        "Старая задача по backend.\n"
+        + ("обычный лог " * 80)
+        + "\nВажно: не меняй порт 8080 и URL https://example.test/api/v1.\n"
+        + ("хвост " * 80)
+    )
+    latest = "Теперь проверь только последний шаг и ничего не меняй."
+    messages = [
+        {"role": "user", "content": important},
+        {"role": "assistant", "content": "Подробный ответ " + ("данные " * 120)},
+        {"role": "user", "content": "Промежуточный вопрос"},
+        {"role": "assistant", "content": "Промежуточный ответ"},
+        {"role": "user", "content": latest},
+    ]
+
+    compacted, stats = context_engine.compact_history(
+        messages,
+        preserve_recent=2,
+        old_message_chars=240,
+        old_total_chars=720,
+    )
+
+    assert len(compacted) == len(messages)
+    assert compacted[-1]["content"] == latest
+    assert stats["output_chars"] < stats["input_chars"]
+    assert stats["compacted_messages"] >= 2
+    assert "8080" in compacted[0]["content"]
+    assert "https://example.test/api/v1" in compacted[0]["content"]
+
+
+def test_context_engine_reduces_old_attachment_payload_without_touching_recent():
+    marker = "\n\nATTACHMENT_DATA_UNTRUSTED:\n"
+    old = "Что на файле?" + marker + ("row=42 repeated payload\n" * 120)
+    recent = "Используй именно число 42 из предыдущего файла."
+    messages = [
+        {"role": "user", "content": old},
+        {"role": "assistant", "content": "В файле было число 42."},
+        {"role": "user", "content": recent},
+    ]
+
+    compacted, stats = context_engine.compact_history(
+        messages,
+        preserve_recent=1,
+        old_message_chars=220,
+        old_total_chars=440,
+    )
+
+    assert marker in compacted[0]["content"]
+    assert len(compacted[0]["content"]) < len(old)
+    assert compacted[-1]["content"] == recent
+    assert stats["output_chars"] < stats["input_chars"]
+
+
+def test_native_flash_context_engine_keeps_more_turns_but_sends_less_text(enabled, monkeypatch):
+    session = Session()
+    monkeypatch.setattr(flash.requests, "Session", lambda: session)
+    messages = []
+    for index in range(5):
+        messages.append({
+            "role": "user",
+            "content": f"старый вопрос {index}: " + ("данные " * 120),
+        })
+        messages.append({
+            "role": "assistant",
+            "content": f"старый ответ {index}: " + ("подробности " * 120),
+        })
+    latest = "Финальный вопрос должен остаться без изменений."
+    messages.append({"role": "user", "content": latest})
+
+    result = flash.generate(messages)
+    assert result["ok"]
+
+    payload = session.calls[-1][1]["json"]
+    sent_history = payload["messages"][1:]
+    assert len(sent_history) == len(messages)
+    assert sent_history[-1]["content"] == latest
+    assert any(
+        "VELIA context compacted" in item["content"]
+        for item in sent_history[:-6]
+    )
+    assert sum(len(item["content"]) for item in sent_history) < sum(
+        len(item["content"]) for item in messages
+    )
