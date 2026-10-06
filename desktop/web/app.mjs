@@ -513,7 +513,7 @@ async function generate(retry = false) {
   }
   const selected = agentMode ? "velia-flash" : model,
     user = chat.messages.at(-1),
-    payload = agentMode ? {prompt: user.content} : chat.remote ? {content: user.content, model: selected,
+    payload = agentMode ? {prompt: user.content, session_id: chat.id} : chat.remote ? {content: user.content, model: selected,
       idempotency_key: user.requestId || (user.requestId = crypto.randomUUID())} : chatPayload(chat, selected),
     answer = { role: "assistant", content: "", model: selected, pending: true, agent: agentMode };
   if (!agentMode && internetAvailable) payload.web_search = true;

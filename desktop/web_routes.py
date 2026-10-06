@@ -317,11 +317,15 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
                 return error("request_too_large", 413)
             except (ValueError, UnicodeDecodeError):
                 return error("invalid_json", 400)
-            if (not isinstance(data, dict) or set(data) != {"prompt"}
+            if (not isinstance(data, dict) or set(data) != {"prompt", "session_id"}
                     or not isinstance(data.get("prompt"), str)
-                    or not data["prompt"].strip() or len(data["prompt"]) > 8000):
+                    or not data["prompt"].strip() or len(data["prompt"]) > 8000
+                    or not isinstance(data.get("session_id"), str)
+                    or not re.fullmatch(r"[0-9A-Fa-f-]{36}", data["session_id"])):
                 return error("invalid_browser_task", 400)
-            status, result = await browser_agent_run(session.user_id, data["prompt"].strip())
+            status, result = await browser_agent_run(
+                session.user_id, data["session_id"], data["prompt"].strip()
+            )
             return json_response(result, status)
         except AuthenticationUnavailable:
             return error("authentication_unavailable", 503)

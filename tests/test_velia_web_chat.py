@@ -136,6 +136,7 @@ async def fixture(monkeypatch, **state):
         state["agent_calls"].append({
             "prompt": data.get("prompt"),
             "user": request.headers.get("X-Velia-User"),
+            "session": request.headers.get("X-Velia-Session"),
         })
         if state.get("agent_status"):
             return web.json_response({"ok": False, "error": "browser_agent_unavailable"},
@@ -241,7 +242,8 @@ def test_browser_agent_is_account_only_flash_and_keeps_internal_secret_server_si
             async with client.post(
                     server.make_url("/web-api/v1/agent/browser"),
                     headers=headers(cookie),
-                    json={"prompt": "Открой example.com и скажи заголовок."}) as response:
+                    json={"prompt": "Открой example.com и скажи заголовок.",
+                          "session_id": "11111111-1111-4111-8111-111111111111"}) as response:
                 assert response.status == 200
                 result = await response.json()
                 assert result == {
@@ -256,18 +258,19 @@ def test_browser_agent_is_account_only_flash_and_keeps_internal_secret_server_si
             assert state["agent_calls"] == [{
                 "prompt": "Открой example.com и скажи заголовок.",
                 "user": "7",
+                "session": "11111111-1111-4111-8111-111111111111",
             }]
             assert state["payloads"] == []
 
             async with client.post(
                     server.make_url("/web-api/v1/agent/browser"),
                     headers=headers(),
-                    json={"prompt": "test"}) as response:
+                    json={"prompt": "test", "session_id": "11111111-1111-4111-8111-111111111111"}) as response:
                 assert response.status == 401
             async with client.post(
                     server.make_url("/web-api/v1/agent/browser"),
                     headers=headers(cookie, Origin="https://evil.example"),
-                    json={"prompt": "test"}) as response:
+                    json={"prompt": "test", "session_id": "11111111-1111-4111-8111-111111111111"}) as response:
                 assert response.status == 403
             assert len(state["agent_calls"]) == 1
     asyncio.run(run())
@@ -280,7 +283,7 @@ def test_browser_agent_failures_are_sanitized(monkeypatch):
             async with client.post(
                     server.make_url("/web-api/v1/agent/browser"),
                     headers=headers(cookie),
-                    json={"prompt": "Открой сайт"}) as response:
+                    json={"prompt": "Открой сайт", "session_id": "11111111-1111-4111-8111-111111111111"}) as response:
                 assert response.status == 503
                 body = await response.text()
                 assert "browser_agent_unavailable" in body

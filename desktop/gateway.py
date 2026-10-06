@@ -157,16 +157,19 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
             async for chunk in response.content.iter_chunked(65536):
                 yield chunk
 
-    async def browser_agent_run(user_id, prompt):
+    async def browser_agent_run(user_id, session_id, prompt):
         if os.getenv("VELIA_BROWSER_AGENT_ENABLED", "").lower() not in {"true", "1", "yes", "on"}:
             return 503, {"ok": False, "error": "browser_agent_disabled"}
         secret = str(os.getenv("VELIA_AGENT_CORE_INTERNAL_KEY", "") or "").strip()
         if not config.agent_origin or not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", secret):
             return 503, {"ok": False, "error": "browser_agent_unavailable"}
+        if not isinstance(session_id, str) or not re.fullmatch(r"[0-9A-Fa-f-]{36}", session_id):
+            return 400, {"ok": False, "error": "invalid_browser_task"}
         headers = {
             "Authorization": "Bearer " + secret,
-            "User-Agent": "VELIA-Web-Browser-Agent/0.1",
+            "User-Agent": "VELIA-Web-Browser-Agent/0.2",
             "X-Velia-User": str(user_id),
+            "X-Velia-Session": session_id,
         }
         # Railway can wake a private service on the first connection. Do not
         # fail the user's task during that short cold-start window.
