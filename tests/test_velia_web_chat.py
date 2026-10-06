@@ -147,6 +147,7 @@ async def fixture(monkeypatch, **state):
             "model": "velia-flash",
             "session_id": "session-browser-fixture",
             "tool_count": 2,
+            "session_reused": True,
         })
 
     authority = web.Application()
@@ -252,6 +253,7 @@ def test_browser_agent_is_account_only_flash_and_keeps_internal_secret_server_si
                     "model": "velia-flash",
                     "session_id": "session-browser-fixture",
                     "tool_count": 2,
+                    "session_reused": True,
                 }
                 wire = json.dumps(result, ensure_ascii=False)
                 assert "fixture-browser-agent-secret" not in wire

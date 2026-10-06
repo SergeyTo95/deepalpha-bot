@@ -213,6 +213,7 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
                         "model": "velia-flash",
                         "session_id": str(result.get("session_id") or "")[:160],
                         "tool_count": int(result.get("tool_count") or 0),
+                        "session_reused": result.get("session_reused") is True,
                     }
                 code = str(result.get("error") or "browser_agent_failed")
                 if response.status == 429:
