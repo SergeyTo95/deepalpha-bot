@@ -78,6 +78,30 @@ def available() -> bool:
     )
 
 
+def _preview_user_ids() -> set[int]:
+    result: set[int] = set()
+    raw = str(os.getenv("VELIA_QUANTUM_PREVIEW_USER_IDS", "") or "")
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            result.add(int(item))
+        except ValueError:
+            continue
+    return result
+
+
+def user_allowed(user_id: int | None) -> bool:
+    if not available():
+        return False
+    if env_bool("VELIA_QUANTUM_PUBLIC_ENABLED", False):
+        return True
+    if user_id is None:
+        return False
+    return int(user_id) in _preview_user_ids()
+
+
 def attachments_available() -> bool:
     return bool(
         env_bool("VELIA_QUANTUM_ATTACHMENTS_ENABLED", False)
@@ -99,8 +123,8 @@ def web_search_available() -> bool:
     )
 
 
-def public_capability() -> dict:
-    is_available = bool(available())
+def public_capability(user_id: int | None = None) -> dict:
+    is_available = bool(user_allowed(user_id))
     return {
         "chat_quantum": is_available,
         "chat_quantum_status": "ready" if is_available else "development",
@@ -737,7 +761,7 @@ def dispatch_send(
     del voice_turn  # Quantum currently uses the same balanced profile for voice.
     if chat_mode != "quantum":
         return {"ok": False, "error": "invalid_chat_mode"}
-    if not available():
+    if not user_allowed(int(user_id)):
         return {"ok": False, "error": "quantum_unavailable"}
 
     from services import velia_chat_service as chat
