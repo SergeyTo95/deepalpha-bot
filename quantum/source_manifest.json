@@ -26,7 +26,7 @@
       "id": "aya-collection",
       "provider": "huggingface",
       "dataset": "CohereLabs/aya_collection",
-      "revision": "a3af2fd",
+      "revision": "0906907",
       "license": "Apache-2.0",
       "split": "train",
       "configs": [
@@ -35,7 +35,7 @@
           "default_category": "reasoning_math"
         },
         {
-          "name": "translated_nqopen",
+          "name": "translated_flan_qa",
           "default_category": "knowledge"
         },
         {
@@ -61,7 +61,7 @@
       "id": "oasst2",
       "provider": "huggingface",
       "dataset": "OpenAssistant/oasst2",
-      "revision": "179dd21fc55192153d94adb0e0ce8f69e222bf75",
+      "revision": "179dd21",
       "license": "Apache-2.0",
       "split": "train",
       "role": "multilingual-dialogue-and-code",
