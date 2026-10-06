@@ -6,6 +6,7 @@ adapter uses encrypted, HttpOnly cookies; authority cookies are ignored.
 Only a fixed identity authority receives account tokens; model keys stay here.
 """
 from collections import deque
+import asyncio
 from dataclasses import dataclass
 import json
 import os
@@ -167,6 +168,23 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
             "User-Agent": "VELIA-Web-Browser-Agent/0.1",
             "X-Velia-User": str(user_id),
         }
+        # Railway can wake a private service on the first connection. Do not
+        # fail the user's task during that short cold-start window.
+        ready = False
+        for _ in range(30):
+            try:
+                async with app[CLIENT].get(
+                        config.agent_origin + "/health",
+                        allow_redirects=False,
+                        timeout=ClientTimeout(total=3, sock_read=2)) as health:
+                    if health.status == 200:
+                        ready = True
+                        break
+            except (ClientError, TimeoutError, OSError):
+                pass
+            await asyncio.sleep(1)
+        if not ready:
+            return 503, {"ok": False, "error": "browser_agent_unavailable"}
         try:
             async with app[CLIENT].post(
                     config.agent_origin + "/v1/run",
