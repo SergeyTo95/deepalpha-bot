@@ -203,7 +203,7 @@ def run() -> dict:
         owned_path = temp_path / "owned.jsonl"
         owned_report = build_owned_corpus(owned_path)
         _assert(owned_report["ok"], "owned capability corpus failed")
-        _assert(owned_report["rows"] == 2076, "owned corpus size mismatch")
+        _assert(owned_report["rows"] == 2116, "owned corpus size mismatch")
         owned_prompts = []
         with owned_path.open("r", encoding="utf-8") as stream:
             for raw in stream:
