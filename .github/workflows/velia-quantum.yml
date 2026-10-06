@@ -1,0 +1,27 @@
+name: VELIA Quantum
+
+on:
+  pull_request:
+    paths:
+      - 'quantum/**'
+      - 'tests/test_velia_quantum_lab.py'
+      - '.github/workflows/velia-quantum.yml'
+  push:
+    branches:
+      - 'feature/velia-quantum'
+    paths:
+      - 'quantum/**'
+      - 'tests/test_velia_quantum_lab.py'
+      - '.github/workflows/velia-quantum.yml'
+
+jobs:
+  quantum-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install pytest
+      - run: python -m pytest -q tests/test_velia_quantum_lab.py
