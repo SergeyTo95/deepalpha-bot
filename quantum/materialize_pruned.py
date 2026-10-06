@@ -6,8 +6,7 @@ import argparse
 import json
 import subprocess
 import sys
-from pathlib import Path
-
+from pathlib import Path\n\nfrom preflight import validate_config_payload, validate_runtime\n
 PINNED_RCO_REVISION = "9a1e09c07d468109cbe60a1b87d5036034a79d10"
 
 
@@ -34,6 +33,19 @@ def main(argv=None) -> int:
         raise SystemExit("Base checkpoint is missing")
     if not args.prune_mask.exists():
         raise SystemExit("Prune mask is missing")
+
+    config_path = args.base_path / "config.json"
+    if not config_path.exists():
+        raise SystemExit("Base checkpoint has no config.json")
+    config_errors = validate_config_payload(
+        json.loads(config_path.read_text(encoding="utf-8"))
+    )
+    runtime_errors = validate_runtime()
+    if config_errors or runtime_errors:
+        raise SystemExit(
+            "Quantum materialization preflight failed: "
+            + "; ".join(config_errors + runtime_errors)
+        )
 
     args.output_dir.parent.mkdir(parents=True, exist_ok=True)
     command = [
