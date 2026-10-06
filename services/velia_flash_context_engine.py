@@ -89,14 +89,20 @@ def compact_text(value: Any, max_chars: int) -> str:
 
     anchors = _important_lines(lines)
     anchor_blob = "\n".join(anchors)
-    marker = "\n" + _COMPACTED_MARKER + "\n"
 
-    # Allocate most space to the beginning (topic/intent), some to exact anchors,
-    # and the remainder to the tail (latest conclusion/error). The newest user
-    # request is never passed through this function by compact_history().
+    # Allocate a strict fixed-size envelope. Anchors are placed before the tail
+    # so exact URLs/numbers/constraints survive even when the envelope is tight.
+    marker_cost = len(_COMPACTED_MARKER) + 3
     anchor_budget = min(len(anchor_blob), max(0, limit // 3))
-    head_budget = max(48, int(limit * 0.45))
-    tail_budget = max(32, limit - head_budget - anchor_budget - len(marker) - 4)
+    tail_budget = min(len(normalized), max(24, limit // 5))
+    head_budget = max(24, limit - marker_cost - anchor_budget - tail_budget - 3)
+    overflow = head_budget + marker_cost + anchor_budget + tail_budget + 3 - limit
+    if overflow > 0:
+        reduce_tail = min(overflow, max(0, tail_budget - 16))
+        tail_budget -= reduce_tail
+        overflow -= reduce_tail
+    if overflow > 0:
+        anchor_budget = max(0, anchor_budget - overflow)
 
     head = normalized[:head_budget].rstrip()
     tail = normalized[-tail_budget:].lstrip() if tail_budget else ""
@@ -108,17 +114,19 @@ def compact_text(value: Any, max_chars: int) -> str:
     if tail and tail not in head:
         parts.append(tail)
     result = "\n".join(part for part in parts if part).strip()
-    if len(result) <= limit:
-        return result
 
-    # Final deterministic bound. Keep the marker and tail visible.
-    suffix_budget = max(24, min(len(tail), limit // 4))
-    prefix_budget = max(1, limit - suffix_budget - len(marker))
-    return (
-        normalized[:prefix_budget].rstrip()
-        + marker
-        + normalized[-suffix_budget:].lstrip()
-    )[:limit]
+    if len(result) > limit:
+        # Trim only the low-value head first. Keep marker + anchors + tail.
+        excess = len(result) - limit
+        if excess < len(head):
+            head = head[: max(1, len(head) - excess)].rstrip()
+            parts = [head, _COMPACTED_MARKER]
+            if kept_anchors and kept_anchors not in head and kept_anchors not in tail:
+                parts.append(kept_anchors)
+            if tail and tail not in head:
+                parts.append(tail)
+            result = "\n".join(part for part in parts if part).strip()
+    return result[:limit]
 
 
 def _compact_enrichment(content: str, payload_chars: int) -> str:
