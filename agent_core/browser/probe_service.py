@@ -29,6 +29,41 @@ async def _wait_for_debug_port(profile, process):
     raise RuntimeError("browser_debug_port_timeout")
 
 
+async def _launch_browser(chromium, profile):
+    for stale_name in ("DevToolsActivePort", "SingletonLock", "SingletonSocket", "SingletonCookie"):
+        try:
+            (profile / stale_name).unlink(missing_ok=True)
+        except OSError:
+            pass
+    process = await asyncio.create_subprocess_exec(
+        chromium,
+        "--headless=new",
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--restore-last-session",
+        "--remote-debugging-address=127.0.0.1",
+        "--remote-debugging-port=0",
+        f"--user-data-dir={profile}",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    debug_port = await _wait_for_debug_port(profile, process)
+    return process, f"http://127.0.0.1:{debug_port}"
+
+
+async def _stop_browser(process):
+    if process and process.returncode is None:
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+
+
 async def _run_turn(script, gateway, token, runtime, endpoint, root, session_id, prompt):
     child = await asyncio.create_subprocess_exec(
         "node",
@@ -125,23 +160,7 @@ async def run_probe():
         chromium = os.getenv("VELIA_AGENT_CORE_CHROMIUM", "/usr/bin/chromium")
         profile = root / "chromium"
         profile.mkdir(parents=True, mode=0o700)
-        browser = await asyncio.create_subprocess_exec(
-            chromium,
-            "--headless=new",
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--remote-debugging-address=127.0.0.1",
-            "--remote-debugging-port=0",
-            f"--user-data-dir={profile}",
-            "about:blank",
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        debug_port = await _wait_for_debug_port(profile, browser)
-        endpoint = f"http://127.0.0.1:{debug_port}"
+        browser, endpoint = await _launch_browser(chromium, profile)
         script = Path(__file__).with_name("run_task.mjs")
 
         first = await _run_turn(
@@ -157,6 +176,11 @@ async def run_probe():
                 "Ответь одной короткой фразой по-русски. Обязательно используй браузерный инструмент."
             ),
         )
+        await _stop_browser(browser)
+        browser = None
+        await asyncio.sleep(0.5)
+        browser, endpoint = await _launch_browser(chromium, profile)
+
         second = await _run_turn(
             script,
             gateway,
@@ -166,16 +190,22 @@ async def run_probe():
             root,
             first["session_id"],
             (
-                "Продолжи в уже открытом браузере. Никуда больше не переходи. "
-                "Через браузерный инструмент проверь текущую вкладку и назови точный URL "
-                "и заголовок страницы одной короткой фразой."
+                "Chromium только что был перезапущен. Продолжи в восстановленной вкладке. "
+                "Никуда не переходи и не открывай новый сайт. Через браузерный инструмент "
+                "проверь текущую вкладку и назови точный URL и заголовок страницы одной "
+                "короткой фразой."
             ),
         )
 
         if first["session_id"] != second["session_id"]:
-            raise RuntimeError("browser_agent_session_not_resumed")
+            raise RuntimeError("browser_agent_session_not_resumed_after_restart")
         if "example.com" not in str(second["text"]).lower():
-            raise RuntimeError("browser_agent_current_page_not_preserved")
+            raise RuntimeError("browser_agent_current_page_not_restored")
+        if any(
+            call.get("tool") == "mcp__playwright-mcp__browser_navigate"
+            for call in second.get("tool_calls", [])
+        ):
+            raise RuntimeError("browser_agent_restored_page_via_navigation")
 
         receipt = {
             "ok": True,
@@ -183,7 +213,9 @@ async def run_probe():
             "browser": "playwright-mcp-attach",
             "turns": 2,
             "persistent_agent_session": True,
-            "current_page_preserved": True,
+            "browser_process_restarted": True,
+            "profile_reused": True,
+            "current_page_preserved_after_restart": True,
             "browser_tool_used_each_turn": True,
             "tool_count": int(first["tool_count"]) + int(second["tool_count"]),
             "paid_fallback": False,
@@ -194,13 +226,7 @@ async def run_probe():
         )
         return receipt
     finally:
-        if browser and browser.returncode is None:
-            browser.terminate()
-            try:
-                await asyncio.wait_for(browser.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                browser.kill()
-                await browser.wait()
+        await _stop_browser(browser)
         await runner.cleanup()
         await asyncio.to_thread(shutil.rmtree, root, True)
         if previous_allowlist is None:

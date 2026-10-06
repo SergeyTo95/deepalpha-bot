@@ -26,6 +26,7 @@ MAX_PROMPT_CHARS = 8000
 RUN_TIMEOUT_SECONDS = 450
 RUN_CONCURRENCY = 1
 DEFAULT_SESSION_IDLE_SECONDS = 3600
+DEFAULT_PROFILE_RETENTION_SECONDS = 30 * 24 * 3600
 DEFAULT_MAX_SESSIONS = 4
 
 fixture_id = "velia-agent-core-browser-service"
@@ -46,6 +47,12 @@ SESSION_IDLE_SECONDS = _bounded_int(
 )
 MAX_SESSIONS = _bounded_int(
     "VELIA_AGENT_CORE_MAX_SESSIONS", DEFAULT_MAX_SESSIONS, 1, 16
+)
+PROFILE_RETENTION_SECONDS = _bounded_int(
+    "VELIA_AGENT_CORE_PROFILE_RETENTION_SECONDS",
+    DEFAULT_PROFILE_RETENTION_SECONDS,
+    3600,
+    180 * 24 * 3600,
 )
 SESSION_BASE = Path(
     os.getenv("VELIA_AGENT_CORE_SESSION_ROOT", "/tmp/velia-agent-core-sessions")
@@ -119,6 +126,36 @@ def _session_root(user_id, conversation="default"):
     return SESSION_BASE / _session_key(user_id, conversation)
 
 
+def _agent_session_path(root):
+    return root / "agent-session-id"
+
+
+async def _read_agent_session_id(root):
+    try:
+        value = (await asyncio.to_thread(
+            _agent_session_path(root).read_text, encoding="utf-8"
+        )).strip()
+    except OSError:
+        return None
+    if re.fullmatch(r"[A-Za-z0-9._:-]{1,160}", value):
+        return value
+    return None
+
+
+async def _write_agent_session_id(root, session_id):
+    target = _agent_session_path(root)
+    temporary = root / f".agent-session-id.{secrets.token_hex(4)}.tmp"
+    await asyncio.to_thread(temporary.write_text, session_id + "\n", encoding="utf-8")
+    await asyncio.to_thread(os.chmod, temporary, 0o600)
+    await asyncio.to_thread(os.replace, temporary, target)
+
+
+async def _touch_profile(root):
+    marker = root / ".last-used"
+    await asyncio.to_thread(marker.write_text, str(int(time.time())) + "\n", encoding="utf-8")
+    await asyncio.to_thread(os.chmod, marker, 0o600)
+
+
 async def _warm_flash():
     if not FLASH_BASE_URL or not FLASH_API_KEY:
         raise RuntimeError("browser_flash_configuration_missing")
@@ -149,9 +186,12 @@ async def _stop_process(process):
         await process.wait()
 
 
-async def _dispose_session(session):
+async def _dispose_session(session, purge=False):
     await _stop_process(session.browser)
-    await asyncio.to_thread(shutil.rmtree, session.root, True)
+    if purge:
+        await asyncio.to_thread(shutil.rmtree, session.root, True)
+    else:
+        await _touch_profile(session.root)
 
 
 async def _cleanup_expired_sessions():
@@ -165,6 +205,28 @@ async def _cleanup_expired_sessions():
                 expired.append(sessions.pop(key))
     for session in expired:
         await _dispose_session(session)
+
+
+async def _cleanup_retained_profiles():
+    cutoff = time.time() - PROFILE_RETENTION_SECONDS
+    async with sessions_lock:
+        active = set(sessions)
+    try:
+        children = await asyncio.to_thread(lambda: list(SESSION_BASE.iterdir()))
+    except OSError:
+        return
+    for root in children:
+        if not root.is_dir() or not re.fullmatch(r"[0-9a-f]{32}", root.name):
+            continue
+        if root.name in active:
+            continue
+        marker = root / ".last-used"
+        try:
+            stat = await asyncio.to_thread(marker.stat if marker.exists() else root.stat)
+        except OSError:
+            continue
+        if stat.st_mtime < cutoff:
+            await asyncio.to_thread(shutil.rmtree, root, True)
 
 
 async def _wait_for_debug_port(profile, process):
@@ -192,11 +254,14 @@ async def _new_session(user_id, conversation="default"):
     await asyncio.to_thread(profile.mkdir, parents=True, exist_ok=True, mode=0o700)
     await asyncio.to_thread(workspace.mkdir, parents=True, exist_ok=True, mode=0o700)
     await asyncio.to_thread(dsh_home.mkdir, parents=True, exist_ok=True, mode=0o700)
-    try:
-        await asyncio.to_thread((profile / "DevToolsActivePort").unlink, missing_ok=True)
-    except OSError:
-        pass
+    for stale_name in ("DevToolsActivePort", "SingletonLock", "SingletonSocket", "SingletonCookie"):
+        try:
+            await asyncio.to_thread((profile / stale_name).unlink, missing_ok=True)
+        except OSError:
+            pass
 
+    agent_session_id = await _read_agent_session_id(root)
+    await _touch_profile(root)
     chromium = os.getenv("VELIA_AGENT_CORE_CHROMIUM", "/usr/bin/chromium")
     process = await asyncio.create_subprocess_exec(
         chromium,
@@ -205,10 +270,10 @@ async def _new_session(user_id, conversation="default"):
         "--disable-dev-shm-usage",
         "--no-first-run",
         "--no-default-browser-check",
+        "--restore-last-session",
         "--remote-debugging-address=127.0.0.1",
         "--remote-debugging-port=0",
         f"--user-data-dir={profile}",
-        "about:blank",
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
@@ -217,18 +282,19 @@ async def _new_session(user_id, conversation="default"):
         port = await _wait_for_debug_port(profile, process)
     except Exception:
         await _stop_process(process)
-        await asyncio.to_thread(shutil.rmtree, root, True)
         raise
     return BrowserSession(
         user_key=_session_key(user_id, conversation),
         root=root,
         endpoint=f"http://127.0.0.1:{port}",
         browser=process,
+        agent_session_id=agent_session_id,
     )
 
 
 async def _get_session(user_id, conversation="default"):
     await _cleanup_expired_sessions()
+    await _cleanup_retained_profiles()
     key = _session_key(user_id, conversation)
     stale = None
     async with sessions_lock:
@@ -268,6 +334,8 @@ async def health(_request):
         "persistent_sessions": True,
         "active_sessions": len(sessions),
         "session_idle_seconds": SESSION_IDLE_SECONDS,
+        "profile_retention_seconds": PROFILE_RETENTION_SECONDS,
+        "durable_storage": not str(SESSION_BASE).startswith("/tmp/"),
         "public_agent": False,
         "run_api_configured": bool(os.getenv("VELIA_AGENT_CORE_INTERNAL_KEY", "").strip()),
         "revision": os.getenv("RAILWAY_GIT_COMMIT_SHA", ""),
@@ -364,6 +432,8 @@ async def run_browser_task(request):
                         status=502,
                     )
                 session.agent_session_id = session_id
+                await _write_agent_session_id(session.root, session_id)
+                await _touch_profile(session.root)
                 session.last_used = time.monotonic()
                 result["persistent"] = True
                 result["session_reused"] = reused
@@ -414,6 +484,7 @@ async def session_lifecycle(_app):
         sessions.clear()
     for session in remaining:
         await _dispose_session(session)
+    await _cleanup_retained_profiles()
 
 
 app = web.Application(client_max_size=MAX_RUN_BODY)

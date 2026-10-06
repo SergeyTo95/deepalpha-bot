@@ -91,6 +91,60 @@ async def test_chromium_launch_uses_loopback_ephemeral_debug_port(monkeypatch, t
     args, kwargs = calls[0]
     assert "--remote-debugging-address=127.0.0.1" in args
     assert "--remote-debugging-port=0" in args
+    assert "--restore-last-session" in args
+    assert "about:blank" not in args
     assert any(str(item).startswith("--user-data-dir=") for item in args)
     assert session.endpoint == "http://127.0.0.1:9333"
     assert kwargs["stdout"] is asyncio.subprocess.DEVNULL
+
+
+@pytest.mark.asyncio
+async def test_agent_session_id_survives_browser_process_restart(monkeypatch, tmp_path):
+    browser.sessions.clear()
+    monkeypatch.setattr(browser, "SESSION_BASE", tmp_path)
+    root = browser._session_root("7", "chat-one")
+    root.mkdir(parents=True)
+    await browser._write_agent_session_id(root, "session.persisted-1")
+
+    calls = []
+
+    class Process:
+        returncode = None
+
+    async def create(*args, **kwargs):
+        calls.append((args, kwargs))
+        return Process()
+
+    async def debug_port(profile, process):
+        return 9444
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
+    monkeypatch.setattr(browser, "_wait_for_debug_port", debug_port)
+
+    session = await browser._new_session("7", "chat-one")
+    assert session.agent_session_id == "session.persisted-1"
+    assert session.root == root
+    assert "--restore-last-session" in calls[0][0]
+
+
+@pytest.mark.asyncio
+async def test_idle_dispose_keeps_browser_profile(monkeypatch, tmp_path):
+    root = tmp_path / "profile"
+    root.mkdir()
+    cookie_marker = root / "chromium-cookie-marker"
+    cookie_marker.write_text("keep", encoding="utf-8")
+
+    class Process:
+        returncode = 0
+
+    session = browser.BrowserSession(
+        user_key="abc",
+        root=root,
+        endpoint="http://127.0.0.1:9222",
+        browser=Process(),
+        agent_session_id="session.persisted-1",
+    )
+    await browser._dispose_session(session)
+    assert root.exists()
+    assert cookie_marker.read_text(encoding="utf-8") == "keep"
+    assert (root / ".last-used").exists()
