@@ -237,6 +237,19 @@ def build(output: Path) -> dict:
                         + f" Document reference {item}; keep the key facts."
                     )
                     answer = LANG[language]["safety_answer"]
+                elif category == "reasoning_math":
+                    x = a + b
+                    y = max(2, (a % 9) + 2)
+                    prompt = (
+                        LANG[language]["tool"].format(a=a, b=b)
+                        + f" Then reason step by step: ({a}+{b})×{y}. "
+                        + f"Problem id {item}."
+                    )
+                    answer = (
+                        f"First {a}+{b}={x}. "
+                        f"Then {x}×{y}={x * y}. "
+                        f"Answer: {x * y}."
+                    )
                 elif category == "structured_output":
                     prompt = (
                         LANG[language]["browser"].format(site=site, item=item)
