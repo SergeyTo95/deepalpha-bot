@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "commercial_training_requires_permissive_license": true,
+    "holdout_sources_must_never_enter_calibration": true,
+    "source_revision_required": true,
+    "generated_samples_require_generator_provenance": true
+  },
+  "calibration_sources": [
+    {
+      "id": "aya-human",
+      "provider": "huggingface",
+      "dataset": "CohereLabs/aya_dataset",
+      "revision": "f9ea045",
+      "license": "Apache-2.0",
+      "split": "train",
+      "role": "multilingual-human-instruction",
+      "allowed_categories": [
+        "general_dialogue",
+        "knowledge",
+        "translation"
+      ],
+      "max_share": 0.35
+    },
+    {
+      "id": "aya-collection",
+      "provider": "huggingface",
+      "dataset": "CohereLabs/aya_collection",
+      "revision": "a3af2fd",
+      "license": "Apache-2.0",
+      "split": "train",
+      "configs": [
+        {
+          "name": "translated_flan_cot",
+          "default_category": "reasoning_math"
+        },
+        {
+          "name": "translated_nqopen",
+          "default_category": "knowledge"
+        },
+        {
+          "name": "translated_cnn_dailymail",
+          "default_category": "documents_retrieval"
+        },
+        {
+          "name": "translated_dolly",
+          "default_category": "general_dialogue"
+        }
+      ],
+      "allowed_categories": [
+        "general_dialogue",
+        "reasoning_math",
+        "knowledge",
+        "documents_retrieval",
+        "structured_output",
+        "translation"
+      ],
+      "max_share": 0.5
+    },
+    {
+      "id": "oasst2",
+      "provider": "huggingface",
+      "dataset": "OpenAssistant/oasst2",
+      "revision": "179dd21fc55192153d94adb0e0ce8f69e222bf75",
+      "license": "Apache-2.0",
+      "split": "train",
+      "role": "multilingual-dialogue-and-code",
+      "allowed_categories": [
+        "general_dialogue",
+        "coding"
+      ],
+      "max_share": 0.1
+    },
+    {
+      "id": "velia-owned",
+      "provider": "local",
+      "dataset": "VELIA-owned generated/curated calibration",
+      "revision": "dataset-sha256",
+      "license": "VELIA-owned",
+      "role": "capability-coverage",
+      "allowed_categories": [
+        "coding",
+        "tool_use",
+        "agentic_browser",
+        "structured_output",
+        "safety",
+        "vision_text"
+      ],
+      "max_share": 0.3,
+      "requirements": [
+        "prompts must be multilingual",
+        "answers must be generated or curated from the pinned original Qwen base or human-authored",
+        "every row must record generator/model revision or author provenance",
+        "no holdout benchmark questions may be copied into this source"
+      ]
+    }
+  ],
+  "holdout_only_sources": [
+    {
+      "id": "mgsm",
+      "dataset": "juletxara/mgsm",
+      "revision": "d40160b310046775b3d8842ebbf04066c6650cc7",
+      "license": "CC-BY-SA-4.0",
+      "purpose": "multilingual_reasoning"
+    },
+    {
+      "id": "humanevalpack",
+      "dataset": "bigcode/humanevalpack",
+      "revision": "9a41762",
+      "license": "MIT",
+      "purpose": "coding"
+    },
+    {
+      "id": "bfcl",
+      "dataset": "gorilla-llm/Berkeley-Function-Calling-Leaderboard",
+      "revision": "61fc060",
+      "license": "Apache-2.0",
+      "purpose": "tool_calling"
+    }
+  ],
+  "excluded_sources": [
+    {
+      "id": "bactrian-x",
+      "dataset": "MBZUAI/Bactrian-X",
+      "license": "CC-BY-NC-4.0",
+      "reason": "non-commercial restriction is incompatible with the Quantum product training corpus"
+    }
+  ]
+}
