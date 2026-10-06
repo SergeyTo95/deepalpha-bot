@@ -2,7 +2,7 @@
   "schema_version": 1,
   "model_id": "velia-quantum",
   "display_name": "VELIA Quantum",
-  "stage": "foundation",
+  "stage": "corpus-and-preflight",
   "updated_by": "feature/velia-quantum",
   "completed": {
     "base_model_pinned": true,
@@ -10,7 +10,12 @@
     "calibration_validator": true,
     "answer_masked_rco_adapter": true,
     "uniform_256_expert_materializer": true,
-    "quality_runtime_acceptance_gate": true
+    "quality_runtime_acceptance_gate": true,
+    "qwen4exp_preflight": true,
+    "qwen4exp_transformers_pin": true,
+    "public_source_license_policy": true,
+    "balanced_public_corpus_builder": true,
+    "calibration_provenance_merge_gate": true
   },
   "pending": {
     "release_calibration_dataset": true,
@@ -19,6 +24,10 @@
     "ternary_compression": true,
     "distillation_or_qat_if_needed": true,
     "railway_cpu_worker": true,
-    "product_routing": true
+    "product_routing": true,
+    "velia_owned_capability_corpus": true,
+    "vision_router_preservation_profile": true,
+    "mtp_sidecar_artifact": true,
+    "vision_sidecar_artifact": true
   }
 }
