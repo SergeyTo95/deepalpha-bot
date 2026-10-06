@@ -16,6 +16,13 @@ from agent_core.browser.state_store import (
     restore_session_cookies,
     save_session_cookies,
 )
+from agent_core.browser.takeover import (
+    capture_takeover_state,
+    takeover_click,
+    takeover_insert_text,
+    takeover_press_key,
+    takeover_scroll,
+)
 
 
 async def _wait_for_debug_port(profile, process):
@@ -321,6 +328,23 @@ localStorage.setItem("velia_session_probe", "local-proof");
         ):
             raise RuntimeError("browser_agent_typed_fake_otp")
 
+        takeover_before = await capture_takeover_state(endpoint)
+        if (
+            "/otp-fixture" not in takeover_before["url"]
+            or "VELIA OTP Fixture" not in takeover_before["title"]
+            or len(takeover_before["image"]) < 100
+            or takeover_before["width"] < 1
+            or takeover_before["height"] < 1
+        ):
+            raise RuntimeError("browser_agent_takeover_capture_invalid")
+        await takeover_press_key(endpoint, "Tab")
+        await takeover_insert_text(endpoint, "654321")
+        await takeover_scroll(endpoint, 120)
+        await takeover_click(endpoint, 4, 4)
+        takeover_after = await capture_takeover_state(endpoint)
+        if "/otp-fixture" not in takeover_after["url"]:
+            raise RuntimeError("browser_agent_takeover_lost_page")
+
         receipt = {
             "ok": True,
             "model": "velia-flash",
@@ -342,6 +366,11 @@ localStorage.setItem("velia_session_probe", "local-proof");
             "tabs_tool_used": True,
             "login_handoff_otp": True,
             "handoff_did_not_type_secret": True,
+            "manual_takeover_capture": True,
+            "manual_takeover_keyboard": True,
+            "manual_takeover_text": True,
+            "manual_takeover_scroll": True,
+            "manual_takeover_click": True,
             "browser_tool_used_each_turn": True,
             "tool_count": int(first["tool_count"]) + int(second["tool_count"]) + int(third["tool_count"]) + int(fourth["tool_count"]),
             "paid_fallback": False,
