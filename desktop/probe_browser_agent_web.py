@@ -152,6 +152,8 @@ async def run():
 
                     if turns[0]["session_id"] != turns[1]["session_id"]:
                         raise RuntimeError("browser_agent_web_session_not_resumed")
+                    if turns[1].get("session_reused") is not True:
+                        raise RuntimeError("browser_agent_web_server_session_not_reused")
                     second_text = str(turns[1]["text"]).lower()
                     if "example.com" not in second_text:
                         raise RuntimeError("browser_agent_web_page_not_preserved")
@@ -163,6 +165,7 @@ async def run():
                         "private_agent_route": True,
                         "browser_tool_used_each_turn": True,
                         "persistent_agent_session": True,
+                        "server_session_reused": True,
                         "current_page_preserved": True,
                         "turns": 2,
                         "tool_count": sum(int(turn["tool_count"]) for turn in turns),
