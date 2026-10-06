@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Materialize the RCO mask into a physically-pruned VELIA Quantum checkpoint."""
+"""Materialize the RCO mask into the pruned VELIA Quantum text backbone.\n\nVision and MTP remain separate deployment artifacts and are never silently dropped.\n"""
 from __future__ import annotations
 
 import argparse
@@ -62,12 +62,12 @@ def main(argv=None) -> int:
     marker = {
         "product": "VELIA Quantum",
         "model_id": "velia-quantum",
-        "stage": "expert-pruned",
+        "stage": "text-backbone-expert-pruned",\n        "vision_artifact_required": True,\n        "mtp_artifact_required": True,
         "rco_revision": head,
         "experts_per_layer": experts,
         "active_experts_per_token": top_k,
     }
-    (args.output_dir / "VELIA_QUANTUM_PRUNED.json").write_text(
+    (args.output_dir / "VELIA_QUANTUM_TEXT_BACKBONE_PRUNED.json").write_text(
         json.dumps(marker, indent=2) + "\n", encoding="utf-8"
     )
     print(json.dumps(marker))
