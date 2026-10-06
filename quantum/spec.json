@@ -19,7 +19,8 @@
     "expert_intermediate_size": 640,
     "hidden_size": 2560,
     "ngram_parameters_billion": 51,
-    "mtp_parameters_billion": 4
+    "mtp_parameters_billion": 4,
+    "license": "Qwen Community License 1.0"
   },
   "compression": {
     "expert_selection": {
@@ -38,8 +39,21 @@
       "requires_quality_gate": true
     },
     "ngram": {
-      "resident_policy": "disk",
-      "keep_original_table": true
+      "resident_policy": "disk-sidecar",
+      "source_model": "Qwen/Qwen3.8-Flash-Next-FP8",
+      "source_revision": "236dfdf285828023ca3bcd3f37366c58a3469b13",
+      "source_owner": "Qwen",
+      "source_license": "Qwen Community License 1.0",
+      "format": "float8_e4m3fn",
+      "rows": 320001536,
+      "row_dimension": 160,
+      "parts": 128,
+      "expected_payload_bytes": 51200245760,
+      "derive_from_same_qwen_family": true,
+      "load_full_table_into_ram": false,
+      "prefetch_before_ple_layer": true,
+      "row_cache_mib_initial": 64,
+      "acceptance_required": true
     },
     "mtp": {
       "preserve": true,
