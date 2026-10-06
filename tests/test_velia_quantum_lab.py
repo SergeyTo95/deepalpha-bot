@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from quantum.validate_calibration import validate
+from quantum.acceptance import evaluate as evaluate_acceptance
 
 
 def _plan(tmp_path: Path) -> Path:
@@ -124,3 +125,69 @@ def test_quantum_spec_is_cpu_railway_and_not_flash():
     assert spec["runtime_target"]["platform"] == "Railway"
     assert spec["runtime_target"]["accelerator"] == "cpu"
     assert spec["safety"]["do_not_replace_flash_before_acceptance"] is True
+
+
+def test_quantum_acceptance_requires_every_language_and_cpu_runtime():
+    repo = Path(__file__).resolve().parents[1]
+    spec = json.loads((repo / "quantum" / "spec.json").read_text(encoding="utf-8"))
+    languages = {lang: 0.80 for lang in json.loads(
+        (repo / "quantum" / "calibration_plan.json").read_text(encoding="utf-8")
+    )["core_languages"]}
+    benchmark = {
+        "core_languages": list(languages),
+        "base": {
+            "overall": 0.80,
+            "tool_call": 0.80,
+            "coding": 0.80,
+            "reasoning": 0.80,
+            "vision": 0.80,
+            "languages": languages,
+        },
+        "candidate": {
+            "overall": 0.78,
+            "tool_call": 0.78,
+            "coding": 0.76,
+            "reasoning": 0.76,
+            "vision": 0.75,
+            "languages": {lang: 0.76 for lang in languages},
+        },
+    }
+    runtime = {
+        "rss_gb": 19.0,
+        "warm_output_tokens_per_second": 12.0,
+        "ttft_seconds_2k": 5.0,
+    }
+    report = evaluate_acceptance(spec, benchmark, runtime)
+    assert report["ok"] is True
+
+    benchmark["candidate"]["languages"]["tr"] = 0.60
+    report = evaluate_acceptance(spec, benchmark, runtime)
+    assert report["ok"] is False
+    assert any("language tr" in error for error in report["errors"])
+
+
+def test_quantum_acceptance_rejects_slow_or_oversized_candidate():
+    repo = Path(__file__).resolve().parents[1]
+    spec = json.loads((repo / "quantum" / "spec.json").read_text(encoding="utf-8"))
+    base_languages = {"en": 1.0}
+    benchmark = {
+        "core_languages": ["en"],
+        "base": {
+            "overall": 1.0, "tool_call": 1.0, "coding": 1.0,
+            "reasoning": 1.0, "vision": 1.0, "languages": base_languages,
+        },
+        "candidate": {
+            "overall": 1.0, "tool_call": 1.0, "coding": 1.0,
+            "reasoning": 1.0, "vision": 1.0, "languages": {"en": 1.0},
+        },
+    }
+    runtime = {
+        "rss_gb": 22.0,
+        "warm_output_tokens_per_second": 8.0,
+        "ttft_seconds_2k": 8.0,
+    }
+    report = evaluate_acceptance(spec, benchmark, runtime)
+    assert report["ok"] is False
+    assert any("rss_gb" in error for error in report["errors"])
+    assert any("warm output" in error for error in report["errors"])
+    assert any("TTFT" in error for error in report["errors"])
