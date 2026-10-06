@@ -144,7 +144,33 @@ async def run_probe():
     async def authenticate(token):
         return {"user_id": fixture_id} if hmac.compare_digest(token, fixture_token) else None
 
+    async def browser_session_fixture(request):
+        cookie_restored = request.cookies.get("velia_session_probe") == "cookie-proof"
+        cookie_marker = "COOKIE_RESTORED" if cookie_restored else "COOKIE_INITIALIZED"
+        html = f"""<!doctype html>
+<html><head><title>VELIA Browser Session Fixture</title></head>
+<body>
+<div id="cookie">{cookie_marker}</div>
+<div id="local">LOCAL_STORAGE_CHECKING</div>
+<script>
+const restored = localStorage.getItem("velia_session_probe") === "local-proof";
+document.getElementById("local").textContent =
+  restored ? "LOCAL_STORAGE_RESTORED" : "LOCAL_STORAGE_INITIALIZED";
+localStorage.setItem("velia_session_probe", "local-proof");
+</script>
+</body></html>"""
+        response = web.Response(text=html, content_type="text/html")
+        if not cookie_restored:
+            response.set_cookie(
+                "velia_session_probe",
+                "cookie-proof",
+                httponly=True,
+                samesite="Lax",
+            )
+        return response
+
     app = web.Application()
+    app.router.add_get("/browser-session-fixture", browser_session_fixture)
     setup_velia_desktop_routes(app, authenticate)
     runner = web.AppRunner(app, access_log=None, handler_cancellation=True)
     browser = None
@@ -172,8 +198,9 @@ async def run_probe():
             root,
             None,
             (
-                "Открой https://example.com. Прочитай заголовок страницы и первый абзац. "
-                "Ответь одной короткой фразой по-русски. Обязательно используй браузерный инструмент."
+                f"Открой {gateway}/browser-session-fixture. Через браузерный инструмент "
+                "прочитай два маркера на странице. Ответь ими дословно. Это тест сохранения "
+                "cookie и localStorage браузерного профиля."
             ),
         )
         await _stop_browser(browser)
@@ -192,15 +219,17 @@ async def run_probe():
             (
                 "Chromium только что был перезапущен. Продолжи в восстановленной вкладке. "
                 "Никуда не переходи и не открывай новый сайт. Через браузерный инструмент "
-                "проверь текущую вкладку и назови точный URL и заголовок страницы одной "
-                "короткой фразой."
+                "прочитай два маркера на текущей странице и скопируй их дословно в ответ."
             ),
         )
 
         if first["session_id"] != second["session_id"]:
             raise RuntimeError("browser_agent_session_not_resumed_after_restart")
-        if "example.com" not in str(second["text"]).lower():
-            raise RuntimeError("browser_agent_current_page_not_restored")
+        second_text = str(second["text"])
+        if "COOKIE_RESTORED" not in second_text:
+            raise RuntimeError("browser_agent_cookie_not_restored")
+        if "LOCAL_STORAGE_RESTORED" not in second_text:
+            raise RuntimeError("browser_agent_local_storage_not_restored")
         if any(
             call.get("tool") == "mcp__playwright-mcp__browser_navigate"
             for call in second.get("tool_calls", [])
@@ -216,6 +245,8 @@ async def run_probe():
             "browser_process_restarted": True,
             "profile_reused": True,
             "current_page_preserved_after_restart": True,
+            "cookie_restored_after_restart": True,
+            "local_storage_restored_after_restart": True,
             "browser_tool_used_each_turn": True,
             "tool_count": int(first["tool_count"]) + int(second["tool_count"]),
             "paid_fallback": False,
