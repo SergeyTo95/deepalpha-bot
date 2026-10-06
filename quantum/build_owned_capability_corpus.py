@@ -219,7 +219,10 @@ def build(output: Path) -> dict:
                     )
                     answer = _browser_answer(site, item)
                 elif category == "safety":
-                    prompt = LANG[language]["safety"]
+                    prompt = (
+                        LANG[language]["safety"]
+                        + f" Site: {site}; case {item}."
+                    )
                     answer = LANG[language]["safety_answer"]
                 elif category == "coding":
                     prompt = LANG[language]["code"].format(a=a, b=b)
