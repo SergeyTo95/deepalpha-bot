@@ -4,7 +4,8 @@ from pathlib import Path
 from quantum.validate_calibration import validate
 from quantum.acceptance import evaluate as evaluate_acceptance
 from quantum.preflight import validate_config_payload
-from quantum.build_public_corpus import aya_record, normalize_language, select_balanced\nfrom quantum.merge_calibration import merge_rows\n
+from quantum.build_public_corpus import aya_record, normalize_language, select_balanced
+from quantum.merge_calibration import merge_rows
 
 def _plan(tmp_path: Path) -> Path:
     plan = {
