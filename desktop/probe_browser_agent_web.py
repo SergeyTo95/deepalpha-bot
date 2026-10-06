@@ -1,4 +1,4 @@
-"""One-shot live acceptance for VELIA Web -> Agent Core -> Flash -> Chromium.
+"""Two-turn live acceptance for VELIA Web -> Agent Core -> Flash -> Chromium.
 
 This starts a loopback-only synthetic identity authority and a loopback copy of
 the gateway, then sends an authenticated Web Browser Agent request to the real
@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 import json
 import os
 import secrets
+import uuid
 
 from aiohttp import ClientSession, DummyCookieJar, web
 from aiohttp.test_utils import TestServer
@@ -115,39 +116,65 @@ async def run():
                         cookie = response.cookies[COOKIE].value
 
                     headers["Cookie"] = COOKIE + "=" + cookie
-                    prompt = (
-                        "Открой https://example.com. Прочитай заголовок страницы и первый абзац. "
-                        "Ответь одной короткой фразой по-русски. Не отвечай по памяти: обязательно "
-                        "используй браузерный инструмент."
+                    agent_chat_id = str(uuid.uuid4())
+                    prompts = [
+                        (
+                            "Открой https://example.com. Прочитай заголовок страницы и первый абзац. "
+                            "Ответь одной короткой фразой по-русски. Не отвечай по памяти: обязательно "
+                            "используй браузерный инструмент."
+                        ),
+                        (
+                            "Продолжи в уже открытом браузере. Никуда больше не переходи и не открывай "
+                            "новый сайт. Через браузерный инструмент проверь текущую вкладку и назови "
+                            "точный URL и заголовок страницы одной короткой фразой."
+                        ),
+                    ]
+                    turns = []
+                    for index, prompt in enumerate(prompts, start=1):
+                        async with client.post(
+                            gateway.make_url("/web-api/v1/agent/browser"),
+                            headers=headers,
+                            json={"prompt": prompt, "session_id": agent_chat_id},
+                        ) as response:
+                            body = await response.json()
+                            if response.status != 200:
+                                raise RuntimeError(
+                                    f"browser_agent_web_turn_{index}_status_{response.status}"
+                                )
+                            if (body.get("ok") is not True or body.get("model") != "velia-flash"
+                                    or int(body.get("tool_count") or 0) < 1
+                                    or not str(body.get("text") or "").strip()
+                                    or not str(body.get("session_id") or "").strip()):
+                                raise RuntimeError(
+                                    f"browser_agent_web_turn_{index}_result_invalid"
+                                )
+                            turns.append(body)
+
+                    if turns[0]["session_id"] != turns[1]["session_id"]:
+                        raise RuntimeError("browser_agent_web_session_not_resumed")
+                    second_text = str(turns[1]["text"]).lower()
+                    if "example.com" not in second_text:
+                        raise RuntimeError("browser_agent_web_page_not_preserved")
+
+                    receipt = {
+                        "ok": True,
+                        "model": "velia-flash",
+                        "authenticated_web_route": True,
+                        "private_agent_route": True,
+                        "browser_tool_used_each_turn": True,
+                        "persistent_agent_session": True,
+                        "current_page_preserved": True,
+                        "turns": 2,
+                        "tool_count": sum(int(turn["tool_count"]) for turn in turns),
+                        "answer_chars": sum(len(str(turn["text"])) for turn in turns),
+                        "paid_fallback": False,
+                    }
+                    print(
+                        "VELIA_WEB_BROWSER_AGENT_ACCEPTED "
+                        + json.dumps(receipt, sort_keys=True),
+                        flush=True,
                     )
-                    async with client.post(
-                        gateway.make_url("/web-api/v1/agent/browser"),
-                        headers=headers,
-                        json={"prompt": prompt},
-                    ) as response:
-                        body = await response.json()
-                        if response.status != 200:
-                            raise RuntimeError("browser_agent_web_status_" + str(response.status))
-                        if (body.get("ok") is not True or body.get("model") != "velia-flash"
-                                or int(body.get("tool_count") or 0) < 1
-                                or not str(body.get("text") or "").strip()):
-                            raise RuntimeError("browser_agent_web_result_invalid")
-                        receipt = {
-                            "ok": True,
-                            "model": "velia-flash",
-                            "authenticated_web_route": True,
-                            "private_agent_route": True,
-                            "browser_tool_used": True,
-                            "tool_count": int(body["tool_count"]),
-                            "answer_chars": len(body["text"]),
-                            "paid_fallback": False,
-                        }
-                        print(
-                            "VELIA_WEB_BROWSER_AGENT_ACCEPTED "
-                            + json.dumps(receipt, sort_keys=True),
-                            flush=True,
-                        )
-                        return receipt
+                    return receipt
     finally:
         for key, value in previous.items():
             if value is None:
