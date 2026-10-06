@@ -6,6 +6,7 @@ from quantum.acceptance import evaluate as evaluate_acceptance
 from quantum.preflight import validate_config_payload
 from quantum.build_public_corpus import aya_record, normalize_language, select_balanced
 from quantum.merge_calibration import merge_rows
+from quantum.patch_llama_ple_q8 import INSERT, MARKER, NEEDLE
 
 def _plan(tmp_path: Path) -> Path:
     plan = {
@@ -319,3 +320,13 @@ def test_quantum_aya_human_long_prompt_routes_to_documents():
     )
     assert record is not None
     assert record["category"] == "documents_retrieval"
+
+
+def test_quantum_ple_q8_overlay_targets_only_ple_before_upstream_tq_policy():
+    upstream = "prefix\n" + NEEDLE + "suffix\n"
+    patched = upstream.replace(NEEDLE, INSERT + NEEDLE, 1)
+    assert patched.count(MARKER) == 1
+    assert "PER_LAYER_TOKEN_EMBD" in INSERT
+    assert "GGMLQuantizationType.Q8_0" in INSERT
+    assert "MOSTLY_TQ2_0" in INSERT
+    assert patched.index(MARKER) < patched.index(NEEDLE)
