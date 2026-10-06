@@ -85,9 +85,10 @@
         "structured_output",
         "safety",
         "vision_text",
-        "translation"
+        "translation",
+        "documents_retrieval"
       ],
-      "max_share": 0.45,
+      "max_share": 0.5,
       "requirements": [
         "prompts must be multilingual",
         "answers must be generated or curated from the pinned original Qwen base or human-authored",
