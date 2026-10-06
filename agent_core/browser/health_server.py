@@ -20,6 +20,10 @@ import time
 from aiohttp import ClientSession, ClientTimeout, web
 
 from velia_desktop_routes import setup_velia_desktop_routes
+from agent_core.browser.state_store import (
+    restore_session_cookies,
+    save_session_cookies,
+)
 
 MAX_RUN_BODY = 16 * 1024
 MAX_PROMPT_CHARS = 8000
@@ -211,7 +215,27 @@ async def _stop_process(process):
         await process.wait()
 
 
+async def _snapshot_session_cookies(session):
+    if session.browser.returncode is not None:
+        return 0
+    try:
+        count = await save_session_cookies(session.endpoint, session.root)
+        print(
+            "VELIA_AGENT_CORE_COOKIE_SNAPSHOT "
+            + json.dumps({"count": count}, sort_keys=True),
+            flush=True,
+        )
+        return count
+    except (OSError, RuntimeError, asyncio.TimeoutError) as exc:
+        print(
+            f"VELIA_AGENT_CORE_COOKIE_SNAPSHOT_FAILED detail={str(exc)[:160]!r}",
+            flush=True,
+        )
+        return 0
+
+
 async def _dispose_session(session, purge=False):
+    await _snapshot_session_cookies(session)
     await _stop_process(session.browser)
     if purge:
         await asyncio.to_thread(shutil.rmtree, session.root, True)
@@ -305,13 +329,21 @@ async def _new_session(user_id, conversation="default"):
     )
     try:
         port = await _wait_for_debug_port(profile, process)
+        endpoint = f"http://127.0.0.1:{port}"
+        restored_cookies = await restore_session_cookies(endpoint, root)
+        if restored_cookies:
+            print(
+                "VELIA_AGENT_CORE_COOKIE_RESTORED "
+                + json.dumps({"count": restored_cookies}, sort_keys=True),
+                flush=True,
+            )
     except Exception:
         await _stop_process(process)
         raise
     return BrowserSession(
         user_key=_session_key(user_id, conversation),
         root=root,
-        endpoint=f"http://127.0.0.1:{port}",
+        endpoint=endpoint,
         browser=process,
         agent_session_id=agent_session_id,
     )
@@ -362,6 +394,7 @@ async def health(_request):
         "profile_retention_seconds": PROFILE_RETENTION_SECONDS,
         "durable_storage": not str(SESSION_BASE).startswith("/tmp/"),
         "storage_reused_at_boot": storage_reused_at_boot,
+        "session_cookie_snapshot": True,
         "public_agent": False,
         "run_api_configured": bool(os.getenv("VELIA_AGENT_CORE_INTERNAL_KEY", "").strip()),
         "revision": os.getenv("RAILWAY_GIT_COMMIT_SHA", ""),
@@ -460,6 +493,7 @@ async def run_browser_task(request):
                 session.agent_session_id = session_id
                 await _write_agent_session_id(session.root, session_id)
                 await _touch_profile(session.root)
+                await _snapshot_session_cookies(session)
                 session.last_used = time.monotonic()
                 result["persistent"] = True
                 result["session_reused"] = reused

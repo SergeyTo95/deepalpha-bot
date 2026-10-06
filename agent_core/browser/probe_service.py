@@ -11,6 +11,11 @@ import tempfile
 from aiohttp import ClientSession, ClientTimeout, web
 
 from velia_desktop_routes import setup_velia_desktop_routes
+from agent_core.browser.state_store import (
+    reload_http_pages,
+    restore_session_cookies,
+    save_session_cookies,
+)
 
 
 async def _wait_for_debug_port(profile, process):
@@ -206,10 +211,19 @@ localStorage.setItem("velia_session_probe", "local-proof");
         if "LOCAL_STORAGE_INITIALIZED" not in first_text:
             raise RuntimeError("browser_agent_local_storage_fixture_not_initialized")
 
+        saved_session_cookies = await save_session_cookies(endpoint, root)
+        if saved_session_cookies < 1:
+            raise RuntimeError("browser_agent_session_cookie_not_snapshotted")
         await _stop_browser(browser)
         browser = None
         await asyncio.sleep(0.5)
         browser, endpoint = await _launch_browser(chromium, profile)
+        restored_session_cookies = await restore_session_cookies(endpoint, root)
+        if restored_session_cookies < 1:
+            raise RuntimeError("browser_agent_session_cookie_not_restored")
+        reloaded_pages = await reload_http_pages(endpoint)
+        if reloaded_pages < 1:
+            raise RuntimeError("browser_agent_restored_page_not_reloaded_for_probe")
 
         second = await _run_turn(
             script,
@@ -248,6 +262,8 @@ localStorage.setItem("velia_session_probe", "local-proof");
             "browser_process_restarted": True,
             "profile_reused": True,
             "current_page_preserved_after_restart": True,
+            "session_cookie_snapshot_saved": True,
+            "session_cookie_snapshot_restored": True,
             "cookie_initialized_before_restart": True,
             "local_storage_initialized_before_restart": True,
             "cookie_restored_after_restart": True,

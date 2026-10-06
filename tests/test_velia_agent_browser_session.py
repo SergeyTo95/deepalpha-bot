@@ -158,3 +158,40 @@ async def test_storage_sentinel_proves_directory_reuse(monkeypatch, tmp_path):
     first = sentinel.read_text(encoding="utf-8")
     assert await browser._ensure_storage_sentinel() is True
     assert sentinel.read_text(encoding="utf-8") == first
+
+
+def test_session_cookie_params_keep_only_session_cookies():
+    from agent_core.browser.state_store import _session_cookie_params
+
+    rows = _session_cookie_params([
+        {
+            "name": "sid",
+            "value": "secret",
+            "domain": ".example.test",
+            "path": "/",
+            "secure": True,
+            "httpOnly": True,
+            "sameSite": "Lax",
+            "session": True,
+            "expires": -1,
+            "size": 9,
+        },
+        {
+            "name": "persistent",
+            "value": "skip",
+            "domain": ".example.test",
+            "path": "/",
+            "session": False,
+            "expires": 1999999999,
+        },
+    ])
+    assert rows == [{
+        "name": "sid",
+        "value": "secret",
+        "domain": ".example.test",
+        "path": "/",
+        "secure": True,
+        "httpOnly": True,
+        "sameSite": "Lax",
+    }]
+    assert "expires" not in rows[0]
