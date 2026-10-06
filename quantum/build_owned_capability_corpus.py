@@ -227,6 +227,36 @@ def build(output: Path) -> dict:
                 elif category == "coding":
                     prompt = LANG[language]["code"].format(a=a, b=b)
                     answer = _code_answer()
+                elif category == "structured_output":
+                    prompt = (
+                        LANG[language]["browser"].format(site=site, item=item)
+                        + " Return JSON only with fields item and status."
+                    )
+                    answer = json.dumps(
+                        {"item": item, "status": "ok"},
+                        separators=(",", ":"),
+                    )
+                elif category == "translation":
+                    source_text = (
+                        LANG[language]["safety"]
+                        + f" Reference {item}."
+                    )
+                    if language == "en":
+                        prompt = (
+                            f'Translate this English text into Spanish: "{source_text}"'
+                        )
+                        answer = (
+                            LANG["es"]["safety"]
+                            + f" Reference {item}."
+                        )
+                    else:
+                        prompt = (
+                            f'Translate this {language} text into English: "{source_text}"'
+                        )
+                        answer = (
+                            LANG["en"]["safety"]
+                            + f" Reference {item}."
+                        )
                 else:
                     raise AssertionError(f"unsupported owned category {category}")
 
