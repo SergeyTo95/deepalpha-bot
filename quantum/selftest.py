@@ -9,6 +9,8 @@ from pathlib import Path
 try:
     from .acceptance import evaluate as evaluate_acceptance
     from .build_public_corpus import aya_record, normalize_language, select_balanced
+    from .build_owned_capability_corpus import build as build_owned_corpus
+    from .plan_calibration import build_plan as build_calibration_plan
     from .merge_calibration import merge_rows
     from .preflight import validate_config_payload
     from .prepare_ple_sidecar import parse_weight_map, validate_config as validate_ple_config
@@ -16,6 +18,8 @@ try:
 except ImportError:
     from acceptance import evaluate as evaluate_acceptance
     from build_public_corpus import aya_record, normalize_language, select_balanced
+    from build_owned_capability_corpus import build as build_owned_corpus
+    from plan_calibration import build_plan as build_calibration_plan
     from merge_calibration import merge_rows
     from preflight import validate_config_payload
     from prepare_ple_sidecar import parse_weight_map, validate_config as validate_ple_config
@@ -196,6 +200,27 @@ def run() -> dict:
             "holdout leak was not reported",
         )
 
+        owned_path = temp_path / "owned.jsonl"
+        owned_report = build_owned_corpus(owned_path)
+        _assert(owned_report["ok"], "owned capability corpus failed")
+        _assert(owned_report["rows"] == 1206, "owned corpus size mismatch")
+        owned_prompts = []
+        with owned_path.open("r", encoding="utf-8") as stream:
+            for raw in stream:
+                row = json.loads(raw)
+                owned_prompts.append(row["messages"][0]["content"])
+        _assert(
+            len(set(owned_prompts)) == len(owned_prompts),
+            "owned capability prompts must be globally unique",
+        )
+
+        calibration_plan = build_calibration_plan(ROOT)
+        _assert(calibration_plan["ok"], "4096 calibration quota plan failed")
+        _assert(
+            calibration_plan["calibration_samples"] == 4096,
+            "Quantum pruning plan must contain exactly 4096 calibration rows",
+        )
+
     base_languages = {language: 0.80 for language in plan["core_languages"]}
     candidate_languages = {language: 0.76 for language in plan["core_languages"]}
     benchmark = {
@@ -239,6 +264,8 @@ def run() -> dict:
             "holdout-isolation",
             "quality-runtime-gate",
             "official-qwen-fp8-ple-index",
+            "owned-capability-uniqueness",
+            "4096-calibration-quota-plan",
         ],
     }
 
