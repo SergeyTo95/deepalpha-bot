@@ -232,7 +232,7 @@ def setup_velia_mobile_routes(
                 },
                 "features": {
                     "chat": is_velia_chat_enabled_for_user(user_id),
-                    **public_capability(),
+                    **public_capability(user_id),
                     "debug_usage": is_debug_usage_enabled_for_user(user_id),
                 },
             }
