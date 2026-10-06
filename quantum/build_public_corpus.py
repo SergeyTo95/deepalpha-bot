@@ -208,7 +208,7 @@ def _iter_public_records(manifest: dict[str, Any], scan_limit: int) -> Iterator[
         split=aya_human["split"],
         revision=aya_human["revision"],
         streaming=True,
-    )
+    ).shuffle(seed=41, buffer_size=50_000)
     for index, row in enumerate(dataset):
         if index >= scan_limit:
             break
