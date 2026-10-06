@@ -14,10 +14,10 @@ from services import velia_quantum_service as quantum
 VALID_CHAT_MODES = {"pro", "flash", "quantum"}
 
 
-def public_capability() -> Dict[str, Any]:
+def public_capability(user_id: int | None = None) -> Dict[str, Any]:
     result: Dict[str, Any] = {}
     result.update(flash.public_capability())
-    result.update(quantum.public_capability())
+    result.update(quantum.public_capability(user_id))
     return result
 
 
