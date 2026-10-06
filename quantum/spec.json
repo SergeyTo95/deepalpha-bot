@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "product": {
+    "display_name": "VELIA Quantum",
+    "model_id": "velia-quantum",
+    "tier": "balanced",
+    "status": "research"
+  },
+  "base": {
+    "model": "Qwen/Qwen3.8-Flash-Next",
+    "revision": "de4b8e4d43b917e7706784d8bb445c9af86a3540",
+    "architecture": "qwen4_exp",
+    "language_parameters_billion": 125,
+    "active_parameters_billion": 6,
+    "layers": 48,
+    "routed_experts_per_layer": 512,
+    "active_routed_experts_per_token": 10,
+    "shared_experts_per_token": 1,
+    "expert_intermediate_size": 640,
+    "hidden_size": 2560,
+    "ngram_parameters_billion": 51,
+    "mtp_parameters_billion": 4
+  },
+  "compression": {
+    "expert_selection": {
+      "method": "RCO",
+      "upstream": "IST-DASLab/RCO",
+      "upstream_revision": "9a1e09c07d468109cbe60a1b87d5036034a79d10",
+      "keep_experts_per_layer": 256,
+      "prune_fraction": 0.5,
+      "preserve_top_k": 10,
+      "profile": "velia-multilingual-general"
+    },
+    "weight_compression": {
+      "primary_experiment": "GSQ ternary",
+      "fallback_experiment": "GSQ mixed precision 2-3 bit",
+      "target_transformer_bpw_max": 2.2,
+      "requires_quality_gate": true
+    },
+    "ngram": {
+      "resident_policy": "disk",
+      "keep_original_table": true
+    },
+    "mtp": {
+      "preserve": true,
+      "acceptance_required": true
+    },
+    "vision": {
+      "preserve": true,
+      "acceptance_required": true
+    }
+  },
+  "runtime_target": {
+    "platform": "Railway",
+    "accelerator": "cpu",
+    "gpu_required": false,
+    "replicas": 1,
+    "cpu_limit_vcpu": 24,
+    "memory_limit_gb": 24,
+    "target_rss_gb_max": 20,
+    "target_warm_output_tokens_per_second_min": 10,
+    "target_warm_output_tokens_per_second_good": 15,
+    "target_ttft_seconds_2k_max": 6,
+    "physical_context_tokens_initial": 16384,
+    "prompt_cache_mib": 512,
+    "serverless_candidate": true
+  },
+  "quality_gates": {
+    "overall_retention_vs_base_min": 0.95,
+    "per_core_language_retention_vs_base_min": 0.92,
+    "tool_call_retention_vs_base_min": 0.95,
+    "coding_retention_vs_base_min": 0.93,
+    "reasoning_retention_vs_base_min": 0.93,
+    "vision_retention_vs_base_min": 0.92,
+    "no_core_language_regression_over": 0.08
+  },
+  "safety": {
+    "do_not_replace_flash_before_acceptance": true,
+    "do_not_route_users_to_quantum_before_acceptance": true,
+    "do_not_claim_training_complete_without_artifact": true
+  }
+}
