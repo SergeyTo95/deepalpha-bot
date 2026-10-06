@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
-"""Materialize the RCO mask into the pruned VELIA Quantum text backbone.\n\nVision and MTP remain separate deployment artifacts and are never silently dropped.\n"""
+"""Materialize the RCO mask into the pruned VELIA Quantum text backbone.
+
+Vision and MTP remain separate deployment artifacts and are never silently dropped.
+"""
 from __future__ import annotations
 
 import argparse
 import json
 import subprocess
 import sys
-from pathlib import Path\n\nfrom preflight import validate_config_payload, validate_runtime\n
+from pathlib import Path
+
+from preflight import validate_config_payload, validate_runtime
+
 PINNED_RCO_REVISION = "9a1e09c07d468109cbe60a1b87d5036034a79d10"
 
 
@@ -82,7 +88,8 @@ def main(argv=None) -> int:
         "active_experts_per_token": top_k,
     }
     (args.output_dir / "VELIA_QUANTUM_TEXT_BACKBONE_PRUNED.json").write_text(
-        json.dumps(marker, indent=2) + "\n", encoding="utf-8"
+        json.dumps(marker, indent=2) + "
+", encoding="utf-8"
     )
     print(json.dumps(marker))
     return 0
