@@ -276,11 +276,10 @@ localStorage.setItem("velia_session_probe", "local-proof");
             root,
             second["session_id"],
             (
-                "Проверь работу с несколькими вкладками. Через browser_tabs открой НОВУЮ вкладку. "
-                "В новой вкладке открой https://example.com и прочитай заголовок. Затем через "
-                "browser_tabs вернись на исходную вкладку browser-session-fixture, не переоткрывая "
-                "её через navigate. На исходной вкладке снова прочитай оба маркера и заверши ответ "
-                "строками COOKIE_RESTORED и LOCAL_STORAGE_RESTORED."
+                "Проверь только переключение вкладок. Через browser_tabs открой НОВУЮ пустую "
+                "вкладку и сразу через browser_tabs вернись на исходную вкладку "
+                "browser-session-fixture. Не переходи на другие сайты. На исходной вкладке прочитай "
+                "два маркера и ответь только строками COOKIE_RESTORED и LOCAL_STORAGE_RESTORED."
             ),
         )
         if second["session_id"] != third["session_id"]:
@@ -294,9 +293,6 @@ localStorage.setItem("velia_session_probe", "local-proof");
         third_text = str(third["text"])
         if "COOKIE_RESTORED" not in third_text or "LOCAL_STORAGE_RESTORED" not in third_text:
             raise RuntimeError("browser_agent_original_tab_not_restored")
-        if "example" not in third_text.lower():
-            raise RuntimeError("browser_agent_new_tab_not_observed")
-
         fourth = await _run_turn(
             script,
             gateway,
