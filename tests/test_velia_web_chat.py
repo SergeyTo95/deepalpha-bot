@@ -30,6 +30,7 @@ async def fixture(monkeypatch, **state):
     state["intent_payloads"] = []
     state["review_payloads"] = []
     state["agent_calls"] = []
+    state["takeover_calls"] = []
     async def search(request):
         data = await request.json()
         assert data["api_key"] == "fixture-search-key"
@@ -151,6 +152,37 @@ async def fixture(monkeypatch, **state):
             "user_action_required": state.get("agent_user_action_required"),
         })
 
+    async def browser_takeover_state(request):
+        assert request.headers.get("Authorization") == "Bearer fixture-browser-agent-secret-0000000000000000"
+        assert request.headers.get("Cookie") is None
+        if not state.get("agent_user_action_required"):
+            return web.json_response({"ok": False, "error": "browser_takeover_not_required"}, status=409)
+        return web.json_response({
+            "ok": True,
+            "kind": state["agent_user_action_required"],
+            "expires_in": 540,
+            "image": "a" * 256,
+            "viewport": {"width": 800, "height": 600},
+            "url": "https://example.com/login",
+            "title": "Sign in",
+        })
+
+    async def browser_takeover_action(request):
+        assert request.headers.get("Authorization") == "Bearer fixture-browser-agent-secret-0000000000000000"
+        assert request.headers.get("Cookie") is None
+        state["takeover_calls"].append(await request.json())
+        if not state.get("agent_user_action_required"):
+            return web.json_response({"ok": False, "error": "browser_takeover_not_required"}, status=409)
+        return web.json_response({
+            "ok": True,
+            "kind": state["agent_user_action_required"],
+            "expires_in": 539,
+            "image": "b" * 256,
+            "viewport": {"width": 800, "height": 600},
+            "url": "https://example.com/login",
+            "title": "Sign in",
+        })
+
     authority = web.Application()
     authority.router.add_get("/mobile-api/v1/health", health)
     authority.router.add_get("/health", health)
@@ -169,6 +201,8 @@ async def fixture(monkeypatch, **state):
     authority.router.add_post("/tokenize", tokenize)
     authority.router.add_post("/search", search)
     authority.router.add_post("/v1/run", browser_agent)
+    authority.router.add_get("/v1/takeover/state", browser_takeover_state)
+    authority.router.add_post("/v1/takeover/action", browser_takeover_action)
     async with TestServer(authority) as source:
         for key, value in {"VELIA_WEB_ENABLED": "true", "VELIA_WEB_ORIGIN": ORIGIN,
             "VELIA_WEB_SESSION_KEY": base64.urlsafe_b64encode(b"t" * 32).decode(),
@@ -297,6 +331,50 @@ def test_browser_agent_forwards_structured_user_action_required(monkeypatch):
                 assert result["user_action_required"] == "otp"
                 assert "код подтверждения" in result["text"]
                 assert result["session_reused"] is True
+    asyncio.run(run())
+
+
+def test_browser_takeover_requires_handoff(monkeypatch):
+    async def run():
+        async with fixture(monkeypatch) as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            async with client.post(
+                    server.make_url("/web-api/v1/agent/browser/takeover"),
+                    headers=headers(cookie),
+                    json={"session_id": "11111111-1111-4111-8111-111111111111"}) as response:
+                assert response.status == 409
+                assert (await response.json())["error"] == "browser_takeover_not_required"
+    asyncio.run(run())
+
+
+def test_browser_takeover_state_and_controls_are_account_scoped(monkeypatch):
+    async def run():
+        async with fixture(monkeypatch, agent_user_action_required="otp") as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            session_id = "11111111-1111-4111-8111-111111111111"
+            async with client.post(
+                    server.make_url("/web-api/v1/agent/browser/takeover"),
+                    headers=headers(cookie), json={"session_id": session_id}) as response:
+                assert response.status == 200
+                result = await response.json()
+                assert result["kind"] == "otp"
+                assert result["viewport"] == {"width": 800, "height": 600}
+                assert result["url"] == "https://example.com/login"
+                assert "fixture-browser-agent-secret" not in json.dumps(result)
+            actions = [
+                {"action": "click", "x": 320.5, "y": 210},
+                {"action": "text", "text": "654321"},
+                {"action": "key", "key": "Enter"},
+                {"action": "scroll", "delta_y": 450},
+            ]
+            for action in actions:
+                async with client.post(
+                        server.make_url("/web-api/v1/agent/browser/takeover/action"),
+                        headers=headers(cookie),
+                        json={"session_id": session_id, **action}) as response:
+                    assert response.status == 200
+                    assert (await response.json())["kind"] == "otp"
+            assert state["takeover_calls"] == actions
     asyncio.run(run())
 
 
