@@ -42,7 +42,8 @@ python quantum/run_rco_prune.py \
   --samples "${SAMPLES}" \
   --seq-length "${SEQ}" \
   --steps "${STEPS}" \
-  --batch-size 1
+  --batch-size 1 \
+  --gumbel-samples "${GUMBEL}"
 
 if [[ "${STAGE}" == "search" ]]; then
   python quantum/materialize_pruned.py \
