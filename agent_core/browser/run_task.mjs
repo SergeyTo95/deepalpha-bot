@@ -64,6 +64,27 @@ try {
   const provider = settings.find(row => row.id === 'llm-pi-ai').config.providers.velia;
   provider.models = provider.models.filter(model => model.id === 'velia-flash');
   settings.find(row => row.id === 'agent-default-model').config.model = 'velia-flash';
+
+  const compactionPolicy = {
+    thresholdRatio: 0.5,
+    headroomTokens: 512,
+    retainTokens: 768,
+    maxTokens: 256,
+    compactionRetries: 1,
+    maxOverflowRetries: 1,
+    auto: true,
+  };
+  const compaction = settings.find(row => row.id === 'compaction-basic');
+  if (compaction) {
+    compaction.config = compactionPolicy;
+  } else {
+    settings.push({
+      id: 'compaction-basic',
+      name: '@deepseek-ai/dsh-compaction-basic',
+      config: compactionPolicy,
+    });
+  }
+
   settings.find(row => row.id === 'system-prompt').config = {
     personaPrefix: 'Ты Велия (VELIA), браузерный ИИ-агент. Говори о себе в женском роде. Выполняй веб-задачи через доступные браузерные инструменты. Продолжай работу в уже открытом браузере и учитывай его текущее состояние, включая несколько вкладок. Для новой страницы по запросу пользователя используй новую вкладку, если это сохраняет текущую работу; при просьбе вернуться используй browser_tabs и не переоткрывай страницу без необходимости. Не утверждай, что действие выполнено, пока инструмент не подтвердил результат. Не проси пользователя выполнять браузерные шаги, которые можешь выполнить сама. Никогда не выдумывай логины, пароли, OTP/TOTP/SMS-коды, recovery-коды или ответы CAPTCHA. Если сайт требует отсутствующие учётные данные, одноразовый код, passkey/security key, CAPTCHA или подтверждение на другом устройстве, остановись на текущей странице, сохрани браузерное состояние и в отдельной строке выведи ровно один маркер: VELIA_USER_ACTION_REQUIRED:credentials, VELIA_USER_ACTION_REQUIRED:otp, VELIA_USER_ACTION_REQUIRED:passkey, VELIA_USER_ACTION_REQUIRED:captcha или VELIA_USER_ACTION_REQUIRED:device_approval. Затем кратко объясни пользователю, что именно нужно сделать, не раскрывая уже введённые секреты.',
     personaSuffix: 'This is a hosted browser-only agent session. The attached Chromium belongs to this VELIA session. Local shell and host filesystem access are unavailable. Never bypass CAPTCHA, MFA, passkeys, security keys, or out-of-band device approval.',
