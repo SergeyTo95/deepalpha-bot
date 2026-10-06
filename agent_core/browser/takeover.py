@@ -64,7 +64,7 @@ async def capture_takeover_state(endpoint):
         session_id, info, request_id = await _active_page(ws)
         shot = await _cdp_call(
             ws, request_id, "Page.captureScreenshot",
-            {"format": "png", "fromSurface": True, "captureBeyondViewport": False},
+            {"format": "jpeg", "quality": 72, "fromSurface": True, "captureBeyondViewport": False},
             session_id=session_id,
         )
         image = shot.get("data")
@@ -74,6 +74,7 @@ async def capture_takeover_state(endpoint):
             raise RuntimeError("browser_takeover_capture_failed")
         return {
             "image": image,
+            "mime": "image/jpeg",
             "width": min(width, 10000),
             "height": min(height, 10000),
             "url": str(info.get("url") or "")[:4096],
