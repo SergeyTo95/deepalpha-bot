@@ -283,6 +283,41 @@
         На время Preview доступ открыт твоему аккаунту.
       </p>
     </dialog>
+    <dialog class="takeover-dialog" id="takeover-dialog" aria-labelledby="takeover-title">
+      <div class="takeover-header">
+        <div>
+          <div class="eyebrow">РУЧНОЕ УПРАВЛЕНИЕ · ТОТ ЖЕ БРАУЗЕР</div>
+          <h2 id="takeover-title">Заверши вход</h2>
+        </div>
+        <button class="icon-button" id="takeover-close" aria-label="Закрыть">
+          <span data-icon="close"></span>
+        </button>
+      </div>
+      <div class="takeover-meta">
+        <strong id="takeover-page-title">Страница</strong>
+        <span id="takeover-url"></span>
+      </div>
+      <button type="button" class="takeover-screen" id="takeover-screen-button" aria-label="Нажать на страницу">
+        <img id="takeover-screen" alt="Текущая вкладка браузера VELIA" draggable="false" />
+      </button>
+      <div class="takeover-secret-row">
+        <input id="takeover-text" type="password" autocomplete="off" spellcheck="false"
+          placeholder="Пароль / код — не сохраняется VELIA" maxlength="4096" />
+        <button type="button" id="takeover-type">Ввести</button>
+      </div>
+      <div class="takeover-controls">
+        <button type="button" data-takeover-key="Tab">Tab</button>
+        <button type="button" data-takeover-key="Enter">Enter</button>
+        <button type="button" data-takeover-key="Backspace">⌫</button>
+        <button type="button" id="takeover-up">↑</button>
+        <button type="button" id="takeover-down">↓</button>
+        <button type="button" id="takeover-refresh">Обновить кадр</button>
+      </div>
+      <div class="takeover-footer">
+        <span id="takeover-status">VELIA ждёт твоего действия.</span>
+        <button type="button" class="auth-submit" id="takeover-continue">Продолжить VELIA →</button>
+      </div>
+    </dialog>
     <dialog
       class="confirm-dialog"
       id="confirm-dialog"
