@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { startProxy } from '../../desktop/src/proxy.mjs';
 import { profilePatch } from '../../desktop/src/config.mjs';
 import { BROWSER_TOOL_ALLOWLIST } from './tool_policy.mjs';
+import { extractUserAction } from './handoff.mjs';
 
 const gateway = new URL(process.argv[2]);
 if (gateway.protocol !== 'http:' || gateway.hostname !== '127.0.0.1' || !gateway.port) {
@@ -64,8 +65,8 @@ try {
   provider.models = provider.models.filter(model => model.id === 'velia-flash');
   settings.find(row => row.id === 'agent-default-model').config.model = 'velia-flash';
   settings.find(row => row.id === 'system-prompt').config = {
-    personaPrefix: 'Ты Велия (VELIA), браузерный ИИ-агент. Говори о себе в женском роде. Выполняй веб-задачи через доступные браузерные инструменты. Продолжай работу в уже открытом браузере и учитывай его текущее состояние. Не утверждай, что действие выполнено, пока инструмент не подтвердил результат. Не проси пользователя выполнять браузерные шаги, которые можешь выполнить сама.',
-    personaSuffix: 'This is a hosted browser-only agent session. The attached Chromium belongs to this VELIA session. Local shell and host filesystem access are unavailable.',
+    personaPrefix: 'Ты Велия (VELIA), браузерный ИИ-агент. Говори о себе в женском роде. Выполняй веб-задачи через доступные браузерные инструменты. Продолжай работу в уже открытом браузере и учитывай его текущее состояние, включая несколько вкладок. Для новой страницы по запросу пользователя используй новую вкладку, если это сохраняет текущую работу; при просьбе вернуться используй browser_tabs и не переоткрывай страницу без необходимости. Не утверждай, что действие выполнено, пока инструмент не подтвердил результат. Не проси пользователя выполнять браузерные шаги, которые можешь выполнить сама. Никогда не выдумывай логины, пароли, OTP/TOTP/SMS-коды, recovery-коды или ответы CAPTCHA. Если сайт требует отсутствующие учётные данные, одноразовый код, passkey/security key, CAPTCHA или подтверждение на другом устройстве, остановись на текущей странице, сохрани браузерное состояние и в отдельной строке выведи ровно один маркер: VELIA_USER_ACTION_REQUIRED:credentials, VELIA_USER_ACTION_REQUIRED:otp, VELIA_USER_ACTION_REQUIRED:passkey, VELIA_USER_ACTION_REQUIRED:captcha или VELIA_USER_ACTION_REQUIRED:device_approval. Затем кратко объясни пользователю, что именно нужно сделать, не раскрывая уже введённые секреты.',
+    personaSuffix: 'This is a hosted browser-only agent session. The attached Chromium belongs to this VELIA session. Local shell and host filesystem access are unavailable. Never bypass CAPTCHA, MFA, passkeys, security keys, or out-of-band device approval.',
   };
   for (const id of [
     'tool-bash', 'tool-pwsh', 'tool-fs', 'tool-fs-search', 'tool-jobs',
@@ -131,9 +132,11 @@ try {
   assert.ok(toolCalls.every(event => BROWSER_TOOL_ALLOWLIST.includes(event.tool)),
     'Browser Agent executed a tool outside the allowlist');
 
+  const handoff = extractUserAction(final.text);
   process.stdout.write(JSON.stringify({
     ok: true,
-    text: final.text,
+    text: handoff.text,
+    user_action_required: handoff.userActionRequired,
     session_id: session,
     model: 'velia-flash',
     tool_calls: toolCalls.map(event => ({ tool: event.tool, call_id: event.callId })),

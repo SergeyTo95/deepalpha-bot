@@ -73,3 +73,8 @@ Requirements:
 - No provider/API secret in browser JavaScript.
 - No silent fallback from Flash to a paid model.
 - No claim that a platform capability is verified until its real acceptance gate passes.
+
+
+### Browser tabs and login handoff
+- Browser Agent keeps multiple Chromium tabs inside the same account + AGENT conversation session and uses `browser_tabs` to create/switch tabs without discarding the original page.
+- Login-sensitive challenges are never guessed or bypassed. The Agent emits a structured `user_action_required` kind for credentials, OTP, passkey, CAPTCHA, or device approval while keeping the current browser session alive for continuation.

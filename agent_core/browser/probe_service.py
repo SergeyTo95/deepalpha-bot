@@ -253,11 +253,41 @@ localStorage.setItem("velia_session_probe", "local-proof");
         ):
             raise RuntimeError("browser_agent_restored_page_via_navigation")
 
+        third = await _run_turn(
+            script,
+            gateway,
+            fixture_token,
+            runtime,
+            endpoint,
+            root,
+            second["session_id"],
+            (
+                "Проверь работу с несколькими вкладками. Через browser_tabs открой НОВУЮ вкладку. "
+                "В новой вкладке открой https://example.com и прочитай заголовок. Затем через "
+                "browser_tabs вернись на исходную вкладку browser-session-fixture, не переоткрывая "
+                "её через navigate. На исходной вкладке снова прочитай оба маркера и заверши ответ "
+                "строками COOKIE_RESTORED и LOCAL_STORAGE_RESTORED."
+            ),
+        )
+        if second["session_id"] != third["session_id"]:
+            raise RuntimeError("browser_agent_session_not_resumed_for_tabs")
+        tab_calls = [
+            call for call in third.get("tool_calls", [])
+            if call.get("tool") == "mcp__playwright-mcp__browser_tabs"
+        ]
+        if len(tab_calls) < 2:
+            raise RuntimeError("browser_agent_tabs_tool_not_used_for_roundtrip")
+        third_text = str(third["text"])
+        if "COOKIE_RESTORED" not in third_text or "LOCAL_STORAGE_RESTORED" not in third_text:
+            raise RuntimeError("browser_agent_original_tab_not_restored")
+        if "example" not in third_text.lower():
+            raise RuntimeError("browser_agent_new_tab_not_observed")
+
         receipt = {
             "ok": True,
             "model": "velia-flash",
             "browser": "playwright-mcp-attach",
-            "turns": 2,
+            "turns": 3,
             "persistent_agent_session": True,
             "browser_process_restarted": True,
             "profile_reused": True,
@@ -268,8 +298,10 @@ localStorage.setItem("velia_session_probe", "local-proof");
             "local_storage_initialized_before_restart": True,
             "cookie_restored_after_restart": True,
             "local_storage_restored_after_restart": True,
+            "multi_tab_roundtrip": True,
+            "tabs_tool_used": True,
             "browser_tool_used_each_turn": True,
-            "tool_count": int(first["tool_count"]) + int(second["tool_count"]),
+            "tool_count": int(first["tool_count"]) + int(second["tool_count"]) + int(third["tool_count"]),
             "paid_fallback": False,
         }
         print(
