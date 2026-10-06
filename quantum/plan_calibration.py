@@ -25,17 +25,14 @@ CATEGORY_TARGETS = {
 
 SOURCE_CATEGORY_TARGETS = {
     "aya-human": {
-        "general_dialogue": 500,
-        "knowledge": 200,
-        "translation": 200,
+        "general_dialogue": 700,
+        "translation": 30,
     },
     "aya-collection": {
-        "general_dialogue": 200,
         "reasoning_math": 650,
         "documents_retrieval": 350,
-        "knowledge": 150,
-        "structured_output": 220,
-        "translation": 20,
+        "knowledge": 350,
+        "translation": 10,
     },
     "oasst2": {
         "coding": 400,
@@ -44,6 +41,8 @@ SOURCE_CATEGORY_TARGETS = {
         "coding": 50,
         "tool_use": 450,
         "agentic_browser": 350,
+        "structured_output": 220,
+        "translation": 180,
         "safety": 356,
     },
 }
