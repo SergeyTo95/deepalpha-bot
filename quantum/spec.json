@@ -4,7 +4,8 @@
     "display_name": "VELIA Quantum",
     "model_id": "velia-quantum",
     "tier": "balanced",
-    "status": "research"
+    "status": "research",
+    "preview_status": "prepared_not_built"
   },
   "base": {
     "model": "Qwen/Qwen3.8-Flash-Next",
@@ -33,10 +34,11 @@
       "profile": "velia-multilingual-general"
     },
     "weight_compression": {
-      "primary_experiment": "GSQ ternary",
+      "primary_experiment": "GSQ ternary v1 after first CPU preview",
       "fallback_experiment": "GSQ mixed precision 2-3 bit",
       "target_transformer_bpw_max": 2.2,
-      "requires_quality_gate": true
+      "requires_quality_gate": true,
+      "first_live_candidate": "RCO + llama.cpp TQ2_0 matrices + Q8_0 PLE"
     },
     "ngram": {
       "resident_policy": "disk-sidecar",
@@ -62,6 +64,18 @@
     "vision": {
       "preserve": true,
       "acceptance_required": true
+    },
+    "preview_release": {
+      "name": "VELIA Quantum Preview",
+      "expert_checkpoint": "RCO 256-of-512 experts per layer",
+      "transformer_outtype": "TQ2_0",
+      "ple_outtype": "Q8_0",
+      "ple_runtime": "mmap row lookup",
+      "mtp_included": false,
+      "vision_included": false,
+      "serving_accelerator": "cpu",
+      "purpose": "Fast private text preview before GSQ v1",
+      "requires_quality_gate": true
     }
   },
   "runtime_target": {
@@ -77,7 +91,14 @@
     "target_ttft_seconds_2k_max": 6,
     "physical_context_tokens_initial": 16384,
     "prompt_cache_mib": 512,
-    "serverless_candidate": true
+    "serverless_candidate": true,
+    "model_storage": {
+      "persistent_volume_required": true,
+      "mount_path": "/model",
+      "model_path": "/model/velia-quantum.gguf",
+      "estimated_preview_size_gb": "unmeasured; engineering estimate 70-75",
+      "do_not_bake_weights_into_container": true
+    }
   },
   "quality_gates": {
     "overall_retention_vs_base_min": 0.95,
@@ -91,6 +112,9 @@
   "safety": {
     "do_not_replace_flash_before_acceptance": true,
     "do_not_route_users_to_quantum_before_acceptance": true,
-    "do_not_claim_training_complete_without_artifact": true
+    "do_not_claim_training_complete_without_artifact": true,
+    "private_preview_before_public_release": true,
+    "preview_access": "VELIA_QUANTUM_PREVIEW_USER_IDS allowlist",
+    "public_switch": "VELIA_QUANTUM_PUBLIC_ENABLED=false until acceptance"
   }
 }
