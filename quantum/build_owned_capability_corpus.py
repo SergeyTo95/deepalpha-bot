@@ -227,6 +227,16 @@ def build(output: Path) -> dict:
                 elif category == "coding":
                     prompt = LANG[language]["code"].format(a=a, b=b)
                     answer = _code_answer()
+                elif category == "documents_retrieval":
+                    prompt = (
+                        LANG[language]["browser"].format(site=site, item=item)
+                        + "\n"
+                        + LANG[language]["safety"]
+                        + "\n"
+                        + LANG[language]["tool"].format(a=a, b=b)
+                        + f" Document reference {item}; keep the key facts."
+                    )
+                    answer = LANG[language]["safety_answer"]
                 elif category == "structured_output":
                     prompt = (
                         LANG[language]["browser"].format(site=site, item=item)
