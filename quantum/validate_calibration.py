@@ -45,10 +45,13 @@ def validate(dataset_path: Path, plan_path: Path, stage: str) -> dict:
     warnings = []
     languages = Counter()
     categories = Counter()
+    calibration_languages = Counter()
+    calibration_categories = Counter()
     splits = Counter()
     prompt_hash_to_split = {}
     ids = set()
     total = 0
+    calibration_total = 0
 
     with dataset_path.open("r", encoding="utf-8") as stream:
         for line_number, raw in enumerate(stream, 1):
@@ -107,55 +110,88 @@ def validate(dataset_path: Path, plan_path: Path, stage: str) -> dict:
             languages[language] += 1
             categories[category] += 1
             splits[split] += 1
+            if split == "calibration":
+                calibration_total += 1
+                calibration_languages[language] += 1
+                calibration_categories[category] += 1
 
-    if total < min_count:
-        errors.append(f"{stage}: requires at least {min_count} samples, got {total}")
+    if calibration_total < min_count:
+        errors.append(
+            f"{stage}: requires at least {min_count} calibration samples, "
+            f"got {calibration_total}"
+        )
 
-    if total:
-        distinct = sum(1 for count in languages.values() if count)
+    if calibration_total:
+        distinct = sum(1 for count in calibration_languages.values() if count)
         min_distinct = int(plan["language_balance"]["minimum_distinct_languages"])
         if distinct < min_distinct:
-            errors.append(f"requires at least {min_distinct} languages, got {distinct}")
+            errors.append(
+                f"calibration requires at least {min_distinct} languages, got {distinct}"
+            )
 
         max_lang = float(plan["language_balance"]["maximum_language_share_any"])
-        for language, count in languages.items():
-            share = count / total
+        for language, count in calibration_languages.items():
+            share = count / calibration_total
             if share > max_lang + 1e-12:
-                errors.append(f"language {language}: share {share:.3f} exceeds {max_lang:.3f}")
+                errors.append(
+                    f"calibration language {language}: share {share:.3f} "
+                    f"exceeds {max_lang:.3f}"
+                )
 
-        combined = (languages["en"] + languages["ru"]) / total
-        max_combined = float(plan["language_balance"]["maximum_en_plus_ru_share"])
+        combined = (
+            calibration_languages["en"] + calibration_languages["ru"]
+        ) / calibration_total
+        max_combined = float(
+            plan["language_balance"]["maximum_en_plus_ru_share"]
+        )
         if combined > max_combined + 1e-12:
-            errors.append(f"en+ru share {combined:.3f} exceeds {max_combined:.3f}")
+            errors.append(
+                f"calibration en+ru share {combined:.3f} "
+                f"exceeds {max_combined:.3f}"
+            )
 
-        core_floor = float(plan["language_balance"]["minimum_core_language_share_each"])
+        core_floor = float(
+            plan["language_balance"]["minimum_core_language_share_each"]
+        )
         for language in sorted(core_languages):
-            share = languages[language] / total
+            share = calibration_languages[language] / calibration_total
             if share + 1e-12 < core_floor:
-                errors.append(f"core language {language}: share {share:.3f} below {core_floor:.3f}")
+                errors.append(
+                    f"calibration core language {language}: share {share:.3f} "
+                    f"below {core_floor:.3f}"
+                )
 
         cat_floor = plan["category_balance"]["minimum_share"]
         max_cat = float(plan["category_balance"]["maximum_share_any"])
         for category, minimum in cat_floor.items():
-            share = categories[category] / total
+            share = calibration_categories[category] / calibration_total
             if share + 1e-12 < float(minimum):
-                errors.append(f"category {category}: share {share:.3f} below {float(minimum):.3f}")
-        for category, count in categories.items():
-            share = count / total
+                errors.append(
+                    f"calibration category {category}: share {share:.3f} "
+                    f"below {float(minimum):.3f}"
+                )
+        for category, count in calibration_categories.items():
+            share = count / calibration_total
             if share > max_cat + 1e-12:
-                errors.append(f"category {category}: share {share:.3f} exceeds {max_cat:.3f}")
+                errors.append(
+                    f"calibration category {category}: share {share:.3f} "
+                    f"exceeds {max_cat:.3f}"
+                )
 
-        if splits["holdout"] == 0:
-            errors.append("holdout split must not be empty")
-        if splits["calibration"] == 0:
-            errors.append("calibration split must not be empty")
+    if splits["holdout"] == 0:
+        errors.append("holdout split must not be empty")
+    if splits["calibration"] == 0:
+        errors.append("calibration split must not be empty")
 
     return {
         "ok": not errors,
         "stage": stage,
         "samples": total,
+        "calibration_samples": calibration_total,
         "languages": dict(sorted(languages.items())),
         "categories": dict(sorted(categories.items())),
+        "calibration_languages": dict(sorted(calibration_languages.items())),
+        "calibration_categories": dict(sorted(calibration_categories.items())),
         "splits": dict(sorted(splits.items())),
         "errors": errors,
         "warnings": warnings,
