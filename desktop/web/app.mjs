@@ -44,7 +44,9 @@ let profile = null,
   storageKey = null,
   abort = null,
   busy = false,
-  deleteId = null;
+  deleteId = null,
+  takeoverState = null,
+  takeoverBusy = false;
 let model = "velia-flash",
   agentMode = false,
   theme = "dark",
@@ -257,6 +259,12 @@ function messageNode(message, index) {
   if (message.role === "assistant" && !busy) {
     const actions = document.createElement("div");
     actions.className = "message-actions";
+    if (message.userActionRequired && index === current().messages.length - 1) {
+      const takeover = document.createElement("button");
+      takeover.innerHTML = icon("browser") + "Открыть ручное управление";
+      takeover.onclick = () => openTakeover(message.userActionRequired);
+      actions.append(takeover);
+    }
     if (message.content) {
       const copy = document.createElement("button");
       copy.innerHTML = icon("copy") + "Копировать";
@@ -353,6 +361,90 @@ async function jsonRequest(path, data) {
   if (!response.ok) throw new Error(apiError(value.error?.message || value.error));
   return value;
 }
+function takeoverLabel(kind) {
+  return {
+    credentials: "Введи данные для входа на открытой странице.",
+    otp: "Введи одноразовый код на открытой странице.",
+    passkey: "Подтверди вход через passkey или ключ безопасности.",
+    captcha: "Пройди CAPTCHA вручную на открытой странице.",
+    device_approval: "Подтверди вход на другом устройстве и вернись сюда.",
+  }[kind] || "Заверши ручной шаг на открытой странице.";
+}
+function paintTakeover(data) {
+  takeoverState = data;
+  $("takeover-title").textContent = takeoverLabel(data.kind);
+  $("takeover-page-title").textContent = data.title || "Текущая вкладка";
+  $("takeover-url").textContent = data.url || "";
+  $("takeover-screen").src = "data:image/png;base64," + data.image;
+  $("takeover-status").textContent =
+    "VELIA на паузе · окно управления ещё " + Math.max(0, Number(data.expires_in || 0)) + " сек.";
+}
+async function takeoverRequest(path, data) {
+  const response = await request(path, data, AbortSignal.timeout(20000));
+  const value = await response.json();
+  if (!response.ok || value.ok !== true) {
+    const error = new Error(apiError(value.error || "browser_takeover_unavailable"));
+    error.status = response.status;
+    throw error;
+  }
+  return value;
+}
+async function refreshTakeover() {
+  const chat = current();
+  if (!chat || takeoverBusy) return;
+  takeoverBusy = true;
+  $("takeover-status").textContent = "Обновляю текущую вкладку…";
+  try {
+    paintTakeover(await takeoverRequest("agent/browser/takeover", {session_id: chat.id}));
+  } catch (error) {
+    if (error.status === 409) $("takeover-dialog").close();
+    toast(error.message);
+  } finally {
+    takeoverBusy = false;
+  }
+}
+async function openTakeover(kind) {
+  const chat = current();
+  if (!chat || busy || !profile) return;
+  takeoverState = {kind};
+  $("takeover-title").textContent = takeoverLabel(kind);
+  $("takeover-page-title").textContent = "Текущая вкладка";
+  $("takeover-url").textContent = "";
+  $("takeover-screen").removeAttribute("src");
+  $("takeover-text").value = "";
+  $("takeover-status").textContent = "Подключаюсь к той же вкладке VELIA…";
+  if (!$("takeover-dialog").open) $("takeover-dialog").showModal();
+  await refreshTakeover();
+}
+async function sendTakeoverAction(action) {
+  const chat = current();
+  if (!chat || takeoverBusy) return;
+  takeoverBusy = true;
+  $("takeover-status").textContent = "Применяю действие…";
+  try {
+    paintTakeover(await takeoverRequest("agent/browser/takeover/action", {
+      session_id: chat.id, ...action,
+    }));
+  } catch (error) {
+    if (error.status === 409) $("takeover-dialog").close();
+    toast(error.message);
+  } finally {
+    takeoverBusy = false;
+  }
+}
+async function continueAfterTakeover() {
+  if (busy) return;
+  $("takeover-dialog").close();
+  takeoverState = null;
+  if (!agentMode) {
+    toast("Вернись в режим AGENT, чтобы VELIA продолжила с этой страницы.");
+    return;
+  }
+  $("prompt").value = "Продолжай с текущей страницы. Я завершил ручной шаг.";
+  resizePrompt();
+  await generate();
+}
+
 async function openChat(chat) {
   if (busy || (!profile && !guest)) return;
   const account = profile?.account;
@@ -701,6 +793,33 @@ for (const suggestion of document.querySelectorAll(".suggestion"))
     resizePrompt();
     $("prompt").focus();
   };
+$("takeover-close").onclick = () => $("takeover-dialog").close();
+$("takeover-refresh").onclick = refreshTakeover;
+$("takeover-type").onclick = async () => {
+  const value = $("takeover-text").value;
+  if (!value) return;
+  $("takeover-text").value = "";
+  await sendTakeoverAction({action: "text", text: value});
+};
+$("takeover-text").onkeydown = (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    $("takeover-type").click();
+  }
+};
+for (const button of document.querySelectorAll("[data-takeover-key]"))
+  button.onclick = () => sendTakeoverAction({action: "key", key: button.dataset.takeoverKey});
+$("takeover-up").onclick = () => sendTakeoverAction({action: "scroll", delta_y: -520});
+$("takeover-down").onclick = () => sendTakeoverAction({action: "scroll", delta_y: 520});
+$("takeover-screen-button").onclick = (e) => {
+  if (!takeoverState?.viewport || takeoverBusy) return;
+  const image = $("takeover-screen"), rect = image.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const x = (e.clientX - rect.left) / rect.width * takeoverState.viewport.width;
+  const y = (e.clientY - rect.top) / rect.height * takeoverState.viewport.height;
+  sendTakeoverAction({action: "click", x, y});
+};
+$("takeover-continue").onclick = continueAfterTakeover;
 $("auth-close").onclick = () => $("auth-dialog").close();
 $("guest-login").onclick = openAuth;
 $("pairing-link").onclick = () => {
