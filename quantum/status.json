@@ -2,7 +2,7 @@
   "schema_version": 1,
   "model_id": "velia-quantum",
   "display_name": "VELIA Quantum",
-  "stage": "corpus-and-preflight",
+  "stage": "pre-gpu-bundle-validated",
   "updated_by": "feature/velia-quantum",
   "completed": {
     "base_model_pinned": true,
@@ -15,7 +15,14 @@
     "qwen4exp_transformers_pin": true,
     "public_source_license_policy": true,
     "balanced_public_corpus_builder": true,
-    "calibration_provenance_merge_gate": true
+    "calibration_provenance_merge_gate": true,
+    "velia_owned_capability_candidate_pool": true,
+    "exact_4096_calibration_dataset": true,
+    "multilingual_20_language_balance": true,
+    "development_holdout_splits": true,
+    "vision_routing_set_256": true,
+    "pre_gpu_training_bundle_validated": true,
+    "railway_pre_gpu_validation": true
   },
   "pending": {
     "release_calibration_dataset": true,
@@ -25,9 +32,20 @@
     "distillation_or_qat_if_needed": true,
     "railway_cpu_worker": true,
     "product_routing": true,
-    "velia_owned_capability_corpus": true,
     "vision_router_preservation_profile": true,
     "mtp_sidecar_artifact": true,
-    "vision_sidecar_artifact": true
+    "vision_sidecar_artifact": true,
+    "release_calibration_artifact": true
+  },
+  "evidence": {
+    "railway_deployment_id": "074fba62-3eec-4d61-ac83-35c95b3e86a5",
+    "railway_status": "SUCCESS",
+    "calibration_sha256": "6f48c38f5cf495c6ce75f7e9e5e86152320e993bba2ab454519405ddc51f3872",
+    "calibration_rows": 4096,
+    "development_rows": 512,
+    "holdout_rows": 512,
+    "core_languages": 20,
+    "vision_routing_samples": 256,
+    "validation_errors": 0
   }
 }
