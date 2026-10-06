@@ -242,6 +242,10 @@ def _iter_public_records(manifest: dict[str, Any], scan_limit: int) -> Iterator[
                 default_category=config["default_category"],
             )
             if item:
+                # Aya Collection configs are pinned by capability. Do not let
+                # generic task_type metadata reclassify, for example,
+                # translated_cnn_dailymail away from documents_retrieval.
+                item["category"] = config["default_category"]
                 yield item
 
     oasst = sources["oasst2"]
