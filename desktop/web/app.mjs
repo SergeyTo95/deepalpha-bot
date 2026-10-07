@@ -84,7 +84,7 @@ function filePreview(){const target=$("attachment-preview");target.replaceChildr
 function addFiles(files){if(busy)return;if(!profile){openAuth();return;}if(agentMode){toast('Для файлов выключи Agent и открой обычный диалог.');return;}try{const prepared=files.map(prepareFile);if(selectedFiles.length+prepared.length>4)throw new Error('Можно прикрепить до 4 файлов, по 15 МБ каждый.');selectedFiles.push(...prepared.map(file=>({file,key:crypto.randomUUID()})));filePreview();resizePrompt();}catch(e){toast(e.message);}}
 
 const current = () => chats.find((c) => c.id === currentId);
-const voice = setupVoice({busy:()=>busy, toast, send:text=>{$("prompt").value=text;return generate();}});
+const voice = setupVoice({busy:()=>busy, toast, send:text=>{if(agentMode)setAgentMode(false);setModel("velia-flash");$("prompt").value=text;return generate(false, true);}});
 const features = setupFeatures({signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
 const browserStorage = { getItem: (key) => localStorage.getItem(key) };
 function toast(text) {
@@ -618,7 +618,7 @@ async function refreshGuest() {
   })();
   try { await guestLoading; } finally { guestLoading = null; }
 }
-async function generate(retry = false) {
+async function generate(retry = false, voiceTurn = false) {
   if (busy || !ready) return;
   if (agentMode && !profile) { openAuth(); return; }
   if (!profile) {
@@ -673,10 +673,12 @@ async function generate(retry = false) {
     payload = agentMode ? {prompt: user.content, session_id: chat.id} : chat.remote ? {content: user.content, model: selected,
       idempotency_key: user.requestId || (user.requestId = crypto.randomUUID()), ...(user.attachmentIds?.length ? {attachment_ids:user.attachmentIds} : {})} : chatPayload(chat, selected),
     answer = { role: "assistant", content: "", model: selected, pending: true, agent: agentMode };
-  if (!agentMode && internetAvailable) payload.web_search = true;
+  if (voiceTurn) {payload.voice_turn=true;payload.web_search=false;}
+  else if (!agentMode && internetAvailable) payload.web_search = true;
   chat.messages.push(answer);
   chat.updated = Date.now();
   abort = new AbortController();
+  const voiceTimeout=voiceTurn?setTimeout(()=>abort?.abort(),90000):null;
   setBusy(true);
   render();
   scrollDown(true);
@@ -768,6 +770,7 @@ async function generate(retry = false) {
   } finally {
     if (paintFrame !== null) cancelAnimationFrame(paintFrame);
     clearTimeout(slowTimer);
+    clearTimeout(voiceTimeout);
     clearTimeout(saveTimer);
     saveTimer = null;
     answer.pending = false;

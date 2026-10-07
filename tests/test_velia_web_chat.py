@@ -619,3 +619,41 @@ def test_browser_capacity_errors_are_allowlisted(monkeypatch, code, expected):
                 assert response.status == 503
                 assert (await response.json())["error"] == expected
     asyncio.run(run())
+
+
+def test_voice_account_turn_skips_search_and_forwards_fast_path(monkeypatch):
+    class Store:
+        def initialize_search(self): pass
+    async def run():
+        old = str(uuid.uuid4())
+        conversations = {old: {"conversation": {"id": old, "title": "Голос", "user_id": 7}, "messages": []}}
+        async with fixture(monkeypatch, conversations=conversations, with_search=True, guest_store=Store()) as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            data={"model":"velia-flash","content":"Велия привет","idempotency_key":str(uuid.uuid4()),"voice_turn":True}
+            async with client.post(server.make_url("/web-api/v1/conversations/"+old+"/messages/stream"),headers=headers(cookie),json=data) as response:
+                assert response.status == 200
+                assert "Ответ из аккаунта" in await response.text()
+            assert state["search_queries"] == []
+            assert state["agent_calls"] == []
+            assert state["account_calls"][0]["voice_turn"] is True
+            assert len(conversations[old]["messages"]) == 2
+            data["voice_turn"]="true"
+            async with client.post(server.make_url("/web-api/v1/conversations/"+old+"/messages/stream"),headers=headers(cookie),json=data) as response:
+                assert response.status == 400
+    asyncio.run(run())
+
+
+def test_voice_direct_turn_is_bounded_and_never_calls_browser_or_search(monkeypatch):
+    class Store:
+        def initialize_search(self): pass
+    async def run():
+        async with fixture(monkeypatch,with_search=True,guest_store=Store()) as (server,client,state):
+            cookie, _, _ = await login(server,client)
+            async with client.post(server.make_url("/web-api/v1/chat/completions"), headers=headers(cookie),json={
+                    "model":"velia-flash","stream":True,"voice_turn":True,"messages":[{"role":"user","content":"Привет"}]}) as response:
+                assert response.status==200
+                assert "Привет" in await response.text()
+            assert state["search_queries"] == [] and state["agent_calls"] == []
+            assert state["payloads"][0]["max_tokens"] == 128
+            assert state["payloads"][0]["reasoning_effort"] == "none"
+    asyncio.run(run())

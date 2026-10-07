@@ -14,7 +14,7 @@ try{
   window.recognizers=[];window.spoken=[];window.sends=[];
   window.SpeechRecognition=class {constructor(){window.recognizers.push(this);}start(){}abort(){this.onend?.();}};
   window.SpeechSynthesisUtterance=class {constructor(text){this.text=text;}};
-  Object.defineProperty(window,'speechSynthesis',{value:{cancel(){},getVoices(){return [{name:'Тестовый голос',voiceURI:'test',lang:'ru-RU',localService:true}];},addEventListener(){},speak(u){window.spoken.push(u);}}});
+  Object.defineProperty(window,'speechSynthesis',{value:{cancel(){},getVoices(){return [{name:'Тестовый голос',voiceURI:'test',lang:'ru-RU',localService:true}];},addEventListener(){},resume(){},speak(u){if(u.volume===0){window.unlocks=(window.unlocks||0)+1;return;}window.spoken.push(u);}}});
   const {setupVoice}=await import('/voice.mjs');window.voice=setupVoice({busy:()=>false,toast:()=>{},send:async text=>{window.sends.push(text);window.voice.complete('Это ответ. '.repeat(80));}});window.voice.settings(document.querySelector('#settings'));window.voice.open();
  });
  await page.locator('.voice-transcript summary').click();
@@ -37,7 +37,7 @@ try{
  await page.getByRole('button',{name:'Начать',exact:true}).click();await page.evaluate(()=>recognizers.at(-1).onerror({error:'not-allowed'}));
  assert.match(await page.locator('.voice-status').innerText(),/Разреши микрофон/);
  await page.getByRole('button',{name:'Завершить',exact:true}).click();await page.getByLabel('Голос',{exact:true}).selectOption('test');await page.getByLabel('Скорость речи').selectOption('1.2');await page.getByRole('button',{name:'Послушать голос'}).click();
- assert.equal(await page.evaluate(()=>spoken.at(-1).rate),1.2);assert.equal(await page.evaluate(()=>spoken.at(-1).voice.voiceURI),'test');
+ assert.equal(await page.evaluate(()=>spoken.at(-1).rate),1.2*.96);assert.equal(await page.evaluate(()=>spoken.at(-1).voice.voiceURI),'test');
  await page.evaluate(()=>{voice.open();});await page.getByRole('button',{name:'Начать',exact:true}).click();await page.evaluate(()=>{voice.stop();voice.open();});
  // An answer arriving while Android temporarily hides the page must survive.
  await page.evaluate(()=>{
@@ -68,5 +68,10 @@ try{
  await page.evaluate(()=>resolveSend());
  for(const width of [360,393,768,1440]){await page.setViewportSize({width,height:710});const box=await page.locator('.voice-dialog').boundingBox();assert.ok(box.x>=0&&box.x+box.width<=width);}
  await page.setViewportSize({width:393,height:710});await page.screenshot({path:output+'/voice-mobile-compact.png'});
+ await page.locator('.voice-dialog').getByLabel('Профиль голоса').selectOption('Luna');
+ await page.getByRole('button',{name:'Проверить звук',exact:true}).click();
+ assert.equal(await page.evaluate(()=>spoken.at(-1).pitch),1.12);
+ assert.equal(await page.evaluate(()=>localStorage.getItem('velia-voice-profile')),'Luna');
+ assert.ok(await page.evaluate(()=>unlocks>=1));
  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,synthetic:true,checks:['captions','multi-chunk reply','silence retry','stale callback safety','permission error','voice/rate','mobile layout','hidden pending answer survives','pause clears stale progress']}));
 }finally{await browser?.close();server.close();}

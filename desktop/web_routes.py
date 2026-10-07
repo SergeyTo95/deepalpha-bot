@@ -34,8 +34,9 @@ PERSONA = understanding_instruction("Ты Велия (VELIA), персональ
 def prepare_web_payload(request, data, *, search_enabled=False):
     if not request.get(WEB_CHAT):
         return data
-    if (not isinstance(data, dict) or set(data) - {"model", "messages", "stream", "web_search"}
+    if (not isinstance(data, dict) or set(data) - {"model", "messages", "stream", "web_search", "voice_turn"}
             or ("web_search" in data and type(data["web_search"]) is not bool)
+            or ("voice_turn" in data and type(data["voice_turn"]) is not bool)
             or data.get("model") not in {FLASH_ID, MODEL_ID} or data.get("stream") is not True):
         raise ValueError("invalid_messages")
     messages = data.get("messages")
@@ -47,10 +48,11 @@ def prepare_web_payload(request, data, *, search_enabled=False):
             or messages[-1]["role"] != "user"):
         raise ValueError("invalid_messages")
     request[WEB_MODEL] = data["model"]
-    request[SEARCH] = search_enabled or bool(data.get("web_search"))
-    return {**{key: value for key, value in data.items() if key != "web_search"},
-            "messages": [{"role": "system", "content": PERSONA}] + messages,
-            "max_tokens": 512 if data["model"] == FLASH_ID else 4096}
+    voice_turn = bool(data.get("voice_turn"))
+    request[SEARCH] = not voice_turn and (search_enabled or bool(data.get("web_search")))
+    return {**{key: value for key, value in data.items() if key not in {"web_search", "voice_turn"}},
+            "messages": [{"role": "system", "content": PERSONA + (" Это голосовой разговор. Ответь естественно, 1–2 законченными короткими фразами. Без Markdown. У тебя нет свежих веб-источников для этой реплики." if voice_turn else "")}] + messages,
+            "max_tokens": 128 if voice_turn else 512 if data["model"] == FLASH_ID else 4096}
 
 
 async def public_web_stream(request, source):

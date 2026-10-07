@@ -164,8 +164,9 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
 
     async def send(request):
         data = await read_body(request)
-        if (set(data) - {"web_search", "attachment_ids"} != {"content", "model", "idempotency_key"}
+        if (set(data) - {"web_search", "attachment_ids", "voice_turn"} != {"content", "model", "idempotency_key"}
                 or ("web_search" in data and type(data["web_search"]) is not bool)
+                or ("voice_turn" in data and type(data["voice_turn"]) is not bool)
                 or data.get("model") not in {FLASH_ID, MODEL_ID}
                 or not isinstance(data.get("content"), str) or not data["content"].strip()
                 or len(data["content"]) > 12000 or not REQUEST_ID.fullmatch(str(data.get("idempotency_key", "")))):
@@ -186,7 +187,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
         source = stream = None
         try:
             content, result = data["content"], None
-            if (web_search and web_search.available) or data.get("web_search"):
+            if not data.get("voice_turn") and ((web_search and web_search.available) or data.get("web_search")):
                 if web_search is None:
                     raise SearchUnavailable()
                 status, previous = await relay(request, "GET", "/messages?limit=20")
@@ -201,7 +202,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
                     messages=[{"role": m["role"], "content": m.get("content") or ""} for m in history])
             source = upstream_stream("/mobile-api/v1/conversations/" + request.match_info["conversation_id"] + "/messages/stream",
                 token=session.access, data={"content": content, "chat_mode": "flash" if data["model"] == FLASH_ID else "pro",
-                    "idempotency_key": data["idempotency_key"], **({"attachment_ids": attachments} if attachments else {})})
+                    "idempotency_key": data["idempotency_key"], **({"voice_turn": True} if data.get("voice_turn") else {}), **({"attachment_ids": attachments} if attachments else {})})
             stream = account_events(source, data["model"])
             first = await anext(stream)
             await response.prepare(request)
