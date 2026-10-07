@@ -411,7 +411,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
 
     async def asset(request):
         name = request.match_info.get("name", "index.html")
-        if name not in {"index.html", "app.mjs", "core.mjs", "features.mjs", "voice.mjs", "files.mjs", "style.css", "favicon.svg"}:
+        if name not in {"index.html", "app.mjs", "core.mjs", "features.mjs", "work.mjs", "voice.mjs", "files.mjs", "style.css", "favicon.svg"}:
             raise web.HTTPNotFound()
         response = web.FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
         response.headers.update({"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
@@ -429,6 +429,10 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     app.router.add_post("/web-api/v1/agent/browser", browser_agent)
     app.router.add_post("/web-api/v1/agent/browser/takeover", browser_takeover_state)
     app.router.add_post("/web-api/v1/agent/browser/takeover/action", browser_takeover_action)
+    from desktop.work_routes import setup_work_routes
+    setup_work_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response,
+        upstream=upstream, upstream_stream=upstream_stream, authenticate=authenticate, allowed=allowed,
+        handlers=handlers, web_search=web_search)
     from desktop.voice_routes import setup_voice_routes
     setup_voice_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response)
     from desktop.account_routes import setup_account_routes
