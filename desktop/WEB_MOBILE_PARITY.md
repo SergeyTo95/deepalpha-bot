@@ -1,0 +1,44 @@
+# Browser/mobile feature audit — 2026-10-07
+
+Compared the Android `develop` API and screens with the deployed gateway branch
+`ci/velia-desktop-gateway-railway`. The Android default `main` is only a README;
+the comparison therefore uses the actual app branch.
+
+| Area | Browser implementation |
+| --- | --- |
+| Model picker | Flash and existing balance-gated PRO; disabled Quantum with «Скоро · в разработке». Quantum is not an inference ID. |
+| Chat | Existing account history and streaming; attachments, rename, pin, public snapshot link, copy and read aloud. |
+| Studio | Image provider capabilities, Image 2 when enabled, references, transparency, video durations from status, image-to-video, music/lyrics, sessions, results and downloads. |
+| Projects | Passport creation/edit with expected revision, project resource creation and listing. |
+| Research | Missions, literature, synthesis, bounded autonomy, reports, sources, claims, evidence and alerts. |
+| Medical | Contrast/abdomen confirmations, cases, DICOM ZIP/NIfTI, resumable 8 MiB chunks with SHA-256, completion, result refresh and research creation. |
+| Agents | Capability selection, agent creation/list/delete, child conversation creation. |
+| Autopilot | Repository selection, bounded missions, activate/pause, enqueue/cancel tasks, run history and CI/review/merge-policy reads. |
+| Account | Shared personalization, plugin switches, credits and usage. |
+| Voice | User-started browser recognition, language/voice settings, voice dialog and answer playback; answers remain in chat. |
+
+Native offline voice packs, Android Bluetooth/device control, Android background
+services and Google Play billing do not transfer to browser APIs. Browser voice
+support depends on the browser/device. Physical microphone, acoustic quality and
+actual GPU image/video/music/CT inference were not exercised by synthetic QA.
+
+## Security and validation
+
+- Every feature request resolves the existing encrypted, HttpOnly Web session
+  and rechecks the account against the identity authority.
+- Mutations require same-origin headers; the relay accepts only enumerated
+  mobile paths/methods. It cannot relay auth/admin or arbitrary URLs.
+- Signed media paths are constrained, with matching account IDs; redirects,
+  authority cookies and provider credentials are not forwarded to clients.
+- Uploads are bounded, JSON endpoints retain their existing limits, and
+  idempotency keys are carried to the authority.
+- Gateway build suite: 362 Python tests passed. Core browser tests: 10 passed.
+- `desktop/scripts/smoke-web-features.mjs`: real Chromium, synthetic feature
+  responses; ten sections, disabled Quantum, Image 2 payload, 15-second video
+  payload, canonical autopilot mission IDs, desktop/mobile layouts and no JS
+  exceptions. This proves adapter/UI behavior, not live media inference.
+- The older `smoke-web-chat.mjs` fixture does not implement the current
+  request-intent JSON response and times out expecting sources on its guest
+  greeting. That fixture failure is not counted as passing acceptance.
+
+The changes target only the separate browser gateway deployment branch.

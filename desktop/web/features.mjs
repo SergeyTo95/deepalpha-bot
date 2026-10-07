@@ -1,0 +1,181 @@
+import {renderMarkdown} from './core.mjs';
+
+export const SECTIONS = Object.freeze([
+  ['studio', 'Studio'], ['projects', 'Проекты'], ['research', 'Исследования'],
+  ['medical', 'Медицинский центр'], ['agents', 'Мои агенты'],
+  ['autopilot', 'Автопилот'], ['profile', 'Персонализация'],
+  ['plugins', 'Плагины'], ['balance', 'Баланс и использование'], ['voice', 'Голос'],
+]);
+export function mediaPath(value) {
+  try {
+    const u = new URL(value, location.origin);
+    // Only existing signed mobile media routes, never a model supplied host.
+    const match = u.pathname.match(/^\/api\/mobile\/(images|videos|music)\/([A-Za-z0-9_-]+)\/content$/);
+    const ref = u.pathname.match(/^\/api\/mobile\/studio\/assets\/([A-Za-z0-9_-]+)\/content$/);
+    if (!match && !ref) return null;
+    if ([...u.searchParams.keys()].some(k => !['user_id', 'expires', 'signature'].includes(k))) return null;
+    return '/web-api/v1/features/' + (match ? 'media/' + match[1] + '/' + match[2] : 'studio-assets/' + ref[1]) + '/content' + u.search;
+  } catch { return null; }
+}
+export async function featureRequest(path, {method = 'GET', data, file, digest, key, signal} = {}) {
+  const headers = method === 'GET' ? {} : {'X-Velia-Request': '1'};
+  let body;
+  if (file) {
+    if (method === 'PUT') {body = file; headers['Content-Type'] = 'application/octet-stream'; headers['X-Velia-Chunk-SHA256'] = digest;}
+    else {body = new FormData(); body.append('file', file);}
+  } else if (method !== 'GET') {headers['Content-Type'] = 'application/json'; body = JSON.stringify(data || {});}
+  if (key) headers['Idempotency-Key'] = key;
+  const response = await fetch('/web-api/v1/features/' + path, {method, headers, body, credentials: 'same-origin', signal});
+  const result = await response.json();
+  if (!response.ok || result.ok === false) {
+    const error = new Error(response.status === 401 ? 'Войди в VELIA, чтобы продолжить.' :
+      response.status === 503 ? 'Этот раздел сейчас недоступен. Повтори позже.' :
+      response.status === 402 ? 'Недостаточно токенов на балансе.' : 'Не удалось выполнить действие: ' + (result.error || response.status));
+    error.code = result.error; throw error;
+  }
+  return result;
+}
+const node = (tag, text, cls) => {const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n;};
+const button = (text, action) => {const b = node('button', text); b.type = 'button'; b.onclick = action; return b;};
+const labels = {goal:'Цель', title:'Название', name:'Имя', description:'Описание', instructions:'Инструкции', audience:'Аудитория', style:'Стиль', constraints:'Ограничения', status:'Статус', domain:'Направление', content:'Содержание', summary:'Результат', conclusion:'Вывод', text:'Текст', created_at:'Создано', updated_at:'Обновлено', preferred_name:'Как обращаться', about_me:'О себе', credits:'Токены', user_messages:'Сообщения сегодня', user_cost_usd:'Расход сегодня, $', enabled:'Включено', available:'Доступно', revision:'Версия', query:'Поисковый запрос', kind:'Тип', prompt:'Описание', duration_seconds:'Длительность, сек.', error_code:'Ошибка', rationale:'Обоснование'};
+const hiddenKeys = new Set(['id','user_id','project_id','session_id','generation_id','client_request_id','signature','provider','model','input_sha256','worker_status']);
+function display(value, depth = 0) {
+  const box = node('div', undefined, 'feature-detail');
+  if (depth > 5 || value == null) return box;
+  if (typeof value !== 'object') {box.textContent = typeof value === 'boolean' ? value ? 'Да' : 'Нет' : String(value); return box;}
+  for (const [k, v] of Object.entries(value)) {
+    if (hiddenKeys.has(k) || (k.endsWith('_url') && k!=='source_url') || k.endsWith('_hash') || v == null || v === '') continue;
+    const row = node('div', undefined, 'feature-field');
+    if (!Array.isArray(value)) row.append(node('strong', labels[k] || k.replaceAll('_',' ')));
+    if(['url','source_url'].includes(k) && typeof v === 'string'){try{const u=new URL(v);if(['https:','http:'].includes(u.protocol)&&!u.username&&!u.password){const a=node('a',v);a.href=u.href;a.target='_blank';a.rel='noopener noreferrer';row.append(a);box.append(row);continue;}}catch{}}
+    if (typeof v === 'string' && v.length > 100) {const t = node('div'); t.innerHTML = renderMarkdown(v); row.append(t);}
+    else row.append(display(v, depth + 1));
+    box.append(row);
+  }
+  return box;
+}
+
+export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings, openConversation}) {
+  const root = document.getElementById('feature-view'), nav = document.getElementById('feature-nav');
+  let epoch = 0, section = null, controller = null;
+  const close = () => {epoch++; controller?.abort(); root.replaceChildren(); root.hidden = true; section = null; document.getElementById('conversation-scroll').hidden = false; document.querySelector('.composer-area').hidden = false;};
+  const call = (p, o = {}) => featureRequest(p, {...o, signal: controller?.signal});
+  const run = async (b, fn) => {const ticket = epoch; b.disabled = true; try {await fn();} catch (e) {if (e.name !== 'AbortError' && ticket === epoch) toast(e.message);} finally {if (ticket === epoch) b.disabled = false;}};
+  function form(fields, label, submit, initial = {}) {
+    const f = node('form', undefined, 'feature-form'), controls = {};
+    for (const spec of fields) {
+      const [key, title, type = 'text', options] = spec, l = node('label', title);
+      const input = node(type === 'textarea' ? 'textarea' : ['select','multi'].includes(type) ? 'select' : 'input');
+      if(type === 'multi') input.multiple = true;
+      if (!['textarea','select','multi'].includes(type)) input.type = type;
+      if (options) for (const [value, text] of options) {const o = node('option', text); o.value = value; input.append(o);}
+      if (type === 'checkbox') input.checked = !!initial[key]; else if(initial[key] !== undefined || !['select','multi'].includes(type)) input.value = initial[key] ?? '';
+      input.name = key; input.maxLength = type === 'textarea' ? 8000 : 200; input.required = !['checkbox','file','multi'].includes(type) && !['description','about_me','audience','style','constraints','lyrics'].includes(key);
+      if (type === 'file') input.accept = '.zip,.nii,.gz';
+      controls[key] = input; l.append(input); f.append(l);
+    }
+    const b = node('button', label); b.type = 'submit'; f.append(b);
+    f.onsubmit = e => {e.preventDefault(); run(b, async () => {
+      const data = Object.fromEntries(Object.entries(controls).map(([k,c]) => [k, c.multiple ? [...c.selectedOptions].map(o=>o.value) : c.type === 'checkbox' ? c.checked : c.type === 'file' ? c.files[0] : c.type === 'number' ? Number(c.value) : c.value]));
+      await submit(data); toast('Сохранено');
+    });}; return f;
+  }
+  function actions(parent, items) {
+    const bar = node('div', undefined, 'feature-actions');
+    for (const [title, fn] of items) {const b = button(title, () => run(b, fn)); bar.append(b);} parent.append(bar);
+  }
+  async function collection(path, key, target, detail, offset = 0) {
+    const ticket = epoch, result = await call(path + (path.includes('?') ? '&' : '?') + 'offset=' + offset);
+    if (ticket !== epoch) return;
+    if (!offset) target.replaceChildren();
+    const values = result[key] || [];
+    if (!values.length && !offset) target.append(node('p', 'Пока здесь ничего нет.'));
+    for (const item of values) {
+      item.id ||= item.mission_id || item.task_id || item.run_id;
+      const card = node('article', undefined, 'feature-card');
+      const title = item.passport?.title || item.title || item.name || item.goal || item.instruction || 'Открыть';
+      card.append(node('h3', title));
+      if (item.status) card.append(node('small', item.status));
+      if (detail) actions(card, [['Открыть', () => detail(item, card)]]); else card.append(display(item));
+      target.append(card);
+    }
+    if (result.next_offset != null) {const more = button('Показать ещё', () => run(more, async () => {more.remove(); await collection(path,key,target,detail,result.next_offset);})); target.append(more);}
+  }
+  async function open(name) {
+    if (isBusy()) {toast('Дождись завершения ответа.'); return;}
+    if (!signedIn() && name !== 'voice') {openAuth(); return;}
+    close(); section = name; controller = new AbortController(); const ticket = epoch;
+    root.hidden = false; document.getElementById('conversation-scroll').hidden = true; document.querySelector('.composer-area').hidden = true;
+    document.getElementById('sidebar').classList.remove('open'); document.getElementById('scrim').hidden = true;
+    const head = node('div', undefined, 'feature-header'); head.append(node('h1', SECTIONS.find(s=>s[0]===name)?.[1] || 'VELIA'), button('К диалогу', close)); root.append(head);
+    const body = node('div'); root.append(body); body.append(node('p','Загрузка…'));
+    try {
+      if (name === 'voice') {body.replaceChildren(); voiceSettings(body); return;}
+      if (name === 'profile') {
+        const r = await call('profile'); if (ticket !== epoch) return; body.replaceChildren(form([['preferred_name','Как обращаться'],['about_me','О себе','textarea']], 'Сохранить', d=>call('profile',{method:'PATCH',data:d}), r.profile));
+      } else if (name === 'plugins') {
+        const r = await call('plugins'); if (ticket !== epoch) return; body.replaceChildren();
+        const names = {weather:'Погода',web_search:'Поиск в интернете',research:'Исследования',image_generation:'Изображения',file_analyst:'Анализ файлов',deepalpha_markets:'DeepAlpha'};
+        for (const [key,v] of Object.entries(r.plugins || {})) {const l=node('label',names[key] || key,'feature-toggle'), c=node('input'); c.type='checkbox'; c.checked=v.enabled; c.disabled=!v.available; c.onchange=()=>run(c,async()=>{try{await call('plugins',{method:'PATCH',data:{plugins:{[key]:c.checked}}});}catch(e){c.checked=!c.checked;throw e;}}); l.append(c); if(!v.available) l.append(node('small','Сейчас недоступно')); body.append(l);}
+      } else if (name === 'balance') {
+        const results = await Promise.all([call('economy/me'),call('usage')]); if(ticket!==epoch)return; body.replaceChildren(...results.map(r=>display(r.account||r.usage||r)));
+      } else if (name === 'studio') await studio(body);
+      else if (name === 'research') {
+        body.replaceChildren(form([['goal','Что исследовать','textarea']], 'Создать исследование', async d=>{await call('research/missions',{method:'POST',data:d,key:crypto.randomUUID()}); await refresh();}));
+        const list=node('div');body.append(list);
+        const detail=async (m,card)=>{
+          const r=await call('research/missions/'+m.id);card.replaceChildren(node('h3',m.goal),display(r.mission));
+          const out=node('div');card.append(out);
+          actions(card,[['Найти литературу',async()=>{const r=await call(`research/missions/${m.id}/literature`,{method:'POST',data:{query:m.goal,max_results:12}});out.replaceChildren(display(r.literature));}],['Синтез',async()=>{const r=await call(`research/missions/${m.id}/synthesize`,{method:'POST',data:{max_sources:12}});out.replaceChildren(display(r.synthesis));}],['Сформировать отчёт',async()=>{const r=await call(`research/missions/${m.id}/reports`,{method:'POST'});out.replaceChildren(display(r.report));}],['Запустить авто',async()=>{const r=await call(`research/missions/${m.id}/runs`,{method:'POST',data:{max_iterations:2}});out.replaceChildren(display(r.run));}],...['sources','evidence-claims','claims','reports','scientific-alerts'].map((k,i)=>[['Источники','Доказательства','Утверждения','Отчёты','Уведомления'][i],async()=>{const r=await call(`research/missions/${m.id}/${k}`);out.replaceChildren(display(r[k==='scientific-alerts'?'alerts':k.replaceAll('-','_')]));}])]);
+        };
+        const refresh=()=>collection('research/missions','missions',list,detail); await refresh();
+      } else if (name === 'projects') {
+        const fields=['title','goal','audience','style','constraints'].map(k=>[k,labels[k],k==='title'?'text':'textarea']);
+        body.replaceChildren(form(fields,'Создать проект',async d=>{await call('projects',{method:'POST',data:{passport:d},key:crypto.randomUUID()});await refresh();}));
+        const list=node('div');body.append(list);
+        const detail=async(p,card)=>{const r=await call('projects/'+p.id);card.replaceChildren(form(fields,'Сохранить изменения',async d=>{await call('projects/'+p.id,{method:'PATCH',data:{passport:d,expected_revision:r.project.revision}});await detail(p,card);},r.project.passport));const resources=node('div');card.append(form([['kind','Тип','select',[['chat','Диалог'],['deepalpha','DeepAlpha'],['image','Изображения'],['video','Видео'],['music','Музыка']]],['title','Название'],['query','Запрос','textarea']],'Добавить ресурс',async d=>{await call('project-resources',{method:'POST',data:{...d,project_id:p.id},key:crypto.randomUUID()});await collection('project-resources?project_id='+encodeURIComponent(p.id),'resources',resources);}));card.append(resources);await collection('project-resources?project_id='+encodeURIComponent(p.id),'resources',resources);};
+        const refresh=()=>collection('projects','projects',list,detail);await refresh();
+      } else if (name === 'agents') {
+        const capabilities = await call('agents/capabilities'); if(ticket!==epoch)return;
+        body.replaceChildren(form([['name','Название'],['description','Описание','textarea'],['instructions','Инструкции','textarea'],['capability_ids','Возможности агента','multi',(capabilities.capabilities||[]).map(c=>[c.id,c.name])]], 'Создать агента',async d=>{await call('agents',{method:'POST',data:{...d,can_create_chats:true}});await refresh();}));
+        const list=node('div');body.append(list);
+        const refresh=()=>collection('agents','agents',list,async(a,card)=>{card.append(display(a));actions(card,[['Новый диалог',async()=>{const r=await call(`agents/${a.id}/conversations`,{method:'POST',data:{title:a.name}});close();await openConversation(r.conversation);}],['Удалить',async()=>{if(!confirm('Удалить этого агента?'))return;await call('agents/'+a.id,{method:'DELETE'});await refresh();}]]);});await refresh();
+      } else if (name === 'medical') {
+        body.replaceChildren(node('p','КТ брюшной полости с контрастом. Результат анализа обсуди с врачом.'));
+        body.append(form([['title','Название исследования'],['contrast_enhanced_confirmed','Подтверждаю наличие контраста','checkbox'],['abdomen_confirmed','Подтверждаю КТ брюшной полости','checkbox']], 'Создать исследование',async d=>{await call('medical/cases',{method:'POST',data:{...d,modality:'ct',study_kind:'contrast_abdomen'}});await refresh();}));
+        const list=node('div');body.append(list);
+        const detail=async(c,card)=>{const r=await call('medical/cases/'+c.id);card.replaceChildren(node('h3',c.title),display(r.case));
+          card.append(form([['study','DICOM ZIP или NIfTI','file']],'Загрузить КТ',async d=>{const file=d.study;if(!file)throw new Error('Выбери файл КТ.');const format=/\.zip$/i.test(file.name)?'dicom_zip':/\.gz$/i.test(file.name)?'nifti_gz':'nifti';const start=await call(`medical/cases/${c.id}/study/begin`,{method:'POST',data:{format,total_bytes:file.size}});let offset=start.upload.received_bytes,index=start.upload.next_chunk;const progress=node('p');card.append(progress);while(offset<file.size){const chunk=file.slice(offset,offset+8*1024*1024);const bytes=await chunk.arrayBuffer();const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(x=>x.toString(16).padStart(2,'0')).join('');await call(`medical/cases/${c.id}/study/chunks/${index}`,{method:'PUT',file:chunk,digest:hash});offset+=chunk.size;index++;progress.textContent=Math.round(100*offset/file.size)+'%';}await call(`medical/cases/${c.id}/study/complete`,{method:'POST'});await detail(c,card);}));
+          actions(card,[['Обновить результат',()=>detail(c,card)],['Создать исследование по результату',async()=>{const v=await call(`medical/cases/${c.id}/research`,{method:'POST'});card.append(display(v.case));}]]);
+        };
+        const refresh=()=>collection('medical/cases','cases',list,detail);await refresh();
+      } else if (name === 'autopilot') {
+        const projects=await call('developer/projects'); if(ticket!==epoch)return;body.replaceChildren();
+        body.append(form([['project_id','Проект','select',(projects.projects||[]).map(p=>[p.id,p.name||p.title||p.repository_full_name||p.id])],['name','Название'],['allowed_paths','Разрешённые пути, по одному на строку','textarea'],['max_steps','Максимум шагов','number'],['max_files','Максимум файлов','number']],'Создать миссию',async d=>{await call('developer/autopilot/missions',{method:'POST',data:{...d,allowed_paths:d.allowed_paths.split('\n').map(x=>x.trim()).filter(Boolean),blocked_paths:[]}});await refresh();},{max_steps:5,max_files:5}));
+        const list=node('div');body.append(list);
+        const refresh=()=>collection('developer/autopilot/missions','missions',list,async(m,card)=>{card.append(display(m));actions(card,[['Активировать',async()=>{await call(`developer/autopilot/missions/${m.id}/activate`,{method:'POST'});await refresh();}],['Приостановить',async()=>{await call(`developer/autopilot/missions/${m.id}/pause`,{method:'POST'});await refresh();}]]);card.append(form([['instruction','Задача','textarea']],'Добавить задачу',async d=>{await call(`developer/autopilot/missions/${m.id}/tasks`,{method:'POST',data:{...d,priority:0,client_request_id:crypto.randomUUID()}});}));const tasks=node('div'),runs=node('div');card.append(tasks,runs);actions(card,[['История запусков',()=>collection(`developer/autopilot/missions/${m.id}/runs`,'runs',runs,async(r,rc)=>{const out=node('div');rc.append(out);actions(rc,['ci','reviews','merge-policy'].map((k,i)=>[['Проверки CI','Ревью','Условия мержа'][i],async()=>{const v=await call(`developer/autopilot/runs/${r.id}/${k}`);out.replaceChildren(display(v));}]));})]]);await collection(`developer/autopilot/missions/${m.id}/tasks`,'tasks',tasks,async(t,tc)=>{tc.append(display(t));actions(tc,[['Отменить задачу',async()=>{await call(`developer/autopilot/tasks/${t.id}/cancel`,{method:'POST'});tc.append(node('p','Задача отменена'));}]]);});});await refresh();
+      }
+    } catch(e) {if(e.name!=='AbortError'&&ticket===epoch)body.replaceChildren(node('p',e.message),button('Повторить',()=>open(name)));}
+  }
+  async function studio(body) {
+    const ticket=epoch,status=await call('studio/status');if(ticket!==epoch)return;if(status.enabled===false)throw new Error('Studio сейчас отключена.');
+    body.replaceChildren();let list=node('div');const options=node('div'),messages=node('div');let currentSession=null,mode='image',references=[],generationKey=null;
+    const modes=node('div',undefined,'feature-actions');body.append(modes,options,list,messages);
+    const refresh=()=>collection('studio/sessions?mode='+mode,'sessions',list,select);
+    async function select(s){currentSession=s;references=[];generationKey=null;await turns();}
+    async function turns(){if(!currentSession)return;const selectedId=currentSession.id;const r=await call(`studio/sessions/${selectedId}/messages`);if(ticket!==epoch||currentSession?.id!==selectedId)return;messages.replaceChildren(node('h2',currentSession.title||'Studio'));for(const m of r.messages||[]){const card=node('article',undefined,'feature-card');card.append(node('p',m.content||m.status||''));const media=m.generation?.media,path=mediaPath(media?.content_url);if(path){const el=node(m.generation.type==='image'?'img':m.generation.type==='video'?'video':'audio');el.src=path;el.controls=true;el.alt=media.prompt||'Результат Studio';card.append(el);if(m.generation.type==='image'&&media.id)actions(card,[['Оживить изображение',async()=>{mode='video';configure();const r=await call('studio/sessions',{method:'POST',data:{mode:'video',title:'Видео из изображения'}});currentSession=r.session;references=[media.id];toast('Изображение добавлено. Опиши движение и нажми «Создать».');}]]);const a=node('a','Скачать');a.href=path;a.download='VELIA-'+media.id;card.append(a);}if(m.generation?.progress_percent)card.append(node('p',m.generation.progress_percent+'%'));messages.append(card);}}
+    function configure(){const nextList=node('div');list.replaceWith(nextList);list=nextList;options.replaceChildren();currentSession=null;references=[];messages.replaceChildren();
+      const cap=status[mode]||{};const fields=[['prompt','Что создать','textarea']];
+      if(mode==='image'){const providers=(cap.providers||[]).filter(p=>p.enabled!==false).map(p=>[p.id||p.provider,p.display_name||p.label||p.name||p.id]);fields.push(['image_provider','Модель изображения','select',providers.length?providers:[['velia_image','Velia Image']]],['transparent_background','Прозрачный фон','checkbox']);}
+      if(mode==='video'||mode==='music')fields.push(['duration_seconds','Длительность','select',(cap.duration_options_seconds||[mode==='video'?5:30]).map(v=>[String(v),v+' сек.'])]);
+      if(mode==='music')fields.push(['lyrics_mode','Режим музыки','select',[['auto','Авто'],['custom','Свой текст'],['instrumental','Без вокала']]],['lyrics','Текст песни','textarea']);
+      options.append(form(fields,'Создать',async d=>{if(!currentSession){const r=await call('studio/sessions',{method:'POST',data:{mode,title:d.prompt.slice(0,80)}});currentSession=r.session;}generationKey ||= crypto.randomUUID();await call(`studio/sessions/${currentSession.id}/generate`,{method:'POST',data:{...d,duration_seconds:Number(d.duration_seconds||5),reference_asset_ids:references,idempotency_key:generationKey},key:generationKey});generationKey=null;await turns();await refresh();}));
+      if(mode!=='music'){const l=node('label','Добавить референсы JPEG / PNG / WebP'),upload=node('input');upload.type='file';upload.accept='image/jpeg,image/png,image/webp';upload.multiple=mode==='image';l.append(upload);options.append(l);upload.onchange=()=>run(upload,async()=>{if(!currentSession){const r=await call('studio/sessions',{method:'POST',data:{mode,title:'Studio'}});currentSession=r.session;}for(const f of upload.files){const r=await call(`studio/sessions/${currentSession.id}/assets`,{method:'POST',file:f});references.push(r.asset.id);}toast('Референсов: '+references.length);});}
+      actions(options,[['Новая сессия',async()=>{currentSession=null;references=[];generationKey=null;messages.replaceChildren();}],['Обновить результат',turns],['Обновить историю',refresh]]);
+    }
+    for(const [key,title] of [['image','Изображения'],['video','Видео'],['music','Музыка']]){const b=button(title,()=>run(b,async()=>{mode=key;configure();await refresh();}));if(status[key]?.enabled===false)b.disabled=true;modes.append(b);}
+    configure();await refresh();
+  }
+  for (const [key,title] of SECTIONS) nav.append(button(title,()=>open(key)));
+  return {close,open};
+}

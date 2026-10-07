@@ -103,23 +103,72 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
             yield
         app.cleanup_ctx.append(search_lifecycle)
 
-    async def upstream(method, path, *, token=None, data=None):
+    async def upstream(method, path, *, token=None, data=None, idempotency_key=None):
         headers = {"User-Agent": "VELIA-Desktop-Gateway/0.2"}
         if token:
             headers["Authorization"] = "Bearer " + token
+        if idempotency_key:
+            headers['Idempotency-Key'] = idempotency_key
         try:
             async with app[CLIENT].request(method, config.auth_origin + path, headers=headers,
-                    json=data, allow_redirects=False) as response:
+                    json=data, allow_redirects=False,
+                    timeout=ClientTimeout(total=360, sock_read=300) if any(x in path for x in ('/generate', '/literature', '/synthesize', '/runs', '/research')) else ClientTimeout(total=25)) as response:
                 body = bytearray()
                 async for chunk in response.content.iter_chunked(8192):
                     body.extend(chunk)
-                    limit = 2 * 1024 * 1024 if path.startswith("/mobile-api/v1/conversations") else MAX_AUTH_RESPONSE
+                    limit = MAX_AUTH_RESPONSE if path.startswith('/mobile-api/v1/auth/') else 2 * 1024 * 1024
                     if len(body) > limit:
                         raise AuthenticationUnavailable()
                 result = json.loads(body)
-                if not isinstance(result, dict) or response.status not in {200, 201, 400, 401, 402, 403, 404, 409, 429, 502, 503}:
+                if not isinstance(result, dict) or response.status not in {200, 201, 202, 400, 401, 402, 403, 404, 409, 411, 413, 415, 422, 429, 500, 502, 503, 504}:
                     raise AuthenticationUnavailable()
                 return response.status, result
+        except (ClientError, TimeoutError, ValueError, OSError) as exc:
+            raise AuthenticationUnavailable() from exc
+
+    async def binary_upstream(request, path, token):
+        headers = {'Authorization': 'Bearer ' + token}
+        if request.headers.get('Idempotency-Key'):
+            key = request.headers['Idempotency-Key']
+            if not re.fullmatch(r'[A-Za-z0-9:_-]{8,128}', key):
+                return json_response({'ok': False, 'error': 'invalid_request'}, 400)
+            headers['Idempotency-Key'] = key
+        body = None
+        if request.method != 'GET':
+            body = bytearray()
+            async for chunk in request.content.iter_chunked(65536):
+                body.extend(chunk)
+                if len(body) > 16 * 1024 * 1024:
+                    raise web.HTTPRequestEntityTooLarge(max_size=16 * 1024 * 1024, actual_size=len(body))
+            headers['Content-Type'] = request.headers.get('Content-Type', 'application/octet-stream')
+            if request.method == 'PUT':
+                digest = request.headers.get('X-Velia-Chunk-SHA256', '')
+                if not re.fullmatch('[a-f0-9]{64}', digest):
+                    return json_response({'ok': False, 'error': 'invalid_medical_chunk_hash'}, 400)
+                headers['X-Velia-Chunk-SHA256'] = digest
+        try:
+            async with app[CLIENT].request(request.method, config.auth_origin + path,
+                    headers=headers, data=body, allow_redirects=False,
+                    timeout=ClientTimeout(total=180, sock_read=120)) as response:
+                if request.method != 'GET' or response.status != 200:
+                    raw = await response.content.read(65537)
+                    if len(raw) > 65536 or response.status not in {200, 201, 202, 400, 401, 403, 404, 409, 411, 413, 415, 422, 429, 500, 502, 503}:
+                        raise AuthenticationUnavailable()
+                    from desktop.feature_routes import safe_result
+                    return json_response(safe_result(json.loads(raw)), response.status)
+                mime = response.headers.get('Content-Type', '').split(';')[0]
+                if mime not in {'image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'audio/wav', 'audio/mpeg', 'audio/ogg', 'audio/x-wav'}:
+                    raise AuthenticationUnavailable()
+                output = web.StreamResponse(headers={'Content-Type': mime, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff'})
+                await output.prepare(request)
+                total = 0
+                async for chunk in response.content.iter_chunked(65536):
+                    total += len(chunk)
+                    if total > 128 * 1024 * 1024:
+                        raise AuthenticationUnavailable()
+                    await output.write(chunk)
+                await output.write_eof()
+                return output
         except (ClientError, TimeoutError, ValueError, OSError) as exc:
             raise AuthenticationUnavailable() from exc
 
@@ -397,7 +446,7 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
             allowed=allowed, valid_session=valid_session, json_response=json_response, handlers=handlers,
             account_balance=account_balance, authorize_model=authorize_model, upstream_stream=upstream_stream,
             web_search=web_search, browser_agent_run=browser_agent_run if agent_available else None,
-            browser_takeover=browser_takeover if agent_available else None)
+            browser_takeover=browser_takeover if agent_available else None, binary_upstream=binary_upstream)
         if os.getenv("VELIA_WEB_GUEST_ENABLED") == "true":
             from desktop.guest_routes import setup_guest_routes
             setup_guest_routes(app, origin=origin, handlers=handlers, json_response=json_response,

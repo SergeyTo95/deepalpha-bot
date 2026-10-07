@@ -7,8 +7,12 @@ import {
   apiError,
   safeSearch,
 } from "./core.mjs";
+import {setupFeatures, featureRequest} from "./features.mjs";
+import {setupVoice} from "./voice.mjs";
 const $ = (id) => document.getElementById(id);
 const icons = {
+  attachment: "M21 11l-8 8a6 6 0 0 1-8-8l9-9a4 4 0 0 1 6 6l-9 9a2 2 0 0 1-3-3l8-8",
+  mic: "M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0zM5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8",
   plus: "M12 5v14M5 12h14",
   search: "M21 21l-5-5M18 10a8 8 0 1 1-16 0a8 8 0 0 1 16 0",
   lock: "M7 10V7a5 5 0 0 1 10 0v3M6 10h12v11H6zM12 14v3",
@@ -34,6 +38,7 @@ const icon = (name) =>
   `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${icons[name] || icons.spark}"/></svg>`;
 for (const el of document.querySelectorAll("[data-icon]"))
   el.innerHTML = icon(el.dataset.icon);
+for(const id of ["velia-flash","velia-quantum","velia-pro"]){const option=document.querySelector(`[data-model="${id}"]`);$("model-menu").append(option);}
 let profile = null,
   guest = null,
   guestLoading = null,
@@ -71,7 +76,12 @@ const request = (path, data, signal) =>
     body: data === undefined ? undefined : JSON.stringify(data),
     signal,
   });
+let selectedFiles = [];
+function clearFiles(){selectedFiles=[];$("attachment-input").value="";$("attachment-preview").replaceChildren();}
+function filePreview(){ $("attachment-preview").replaceChildren();selectedFiles.forEach((item,i)=>{const b=document.createElement("button");b.type="button";b.textContent=item.file.name+" ×";b.onclick=()=>{selectedFiles.splice(i,1);filePreview();};$("attachment-preview").append(b);});}
 const current = () => chats.find((c) => c.id === currentId);
+const voice = setupVoice({busy:()=>busy, toast, send:text=>{$("prompt").value=text;generate();}});
+const features = setupFeatures({signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
 const browserStorage = { getItem: (key) => localStorage.getItem(key) };
 function toast(text) {
   clearTimeout(toastTimer);
@@ -159,7 +169,7 @@ function sidebar(open) {
 function resizePrompt() {
   $("prompt").style.height = "auto";
   $("prompt").style.height = Math.min(180, $("prompt").scrollHeight) + "px";
-  $("send").disabled = !ready || busy || !$("prompt").value.trim();
+  $("send").disabled = !ready || busy || (!$("prompt").value.trim() && !selectedFiles.length);
 }
 function renderHistory() {
   $("history").replaceChildren();
@@ -169,7 +179,7 @@ function renderHistory() {
         (c) =>
           (c.remote || c.messages.length) && c.title.toLocaleLowerCase().includes(filter),
       )
-      .sort((a, b) => b.updated - a.updated);
+      .sort((a, b) => Number(!!b.isPinned) - Number(!!a.isPinned) || b.updated - a.updated);
   if (!items.length) {
     const p = document.createElement("p");
     p.className = "history-empty";
@@ -198,7 +208,7 @@ function renderHistory() {
     row.className = "history-row" + (chat.id === currentId ? " active" : "");
     const open = document.createElement("button");
     open.className = "history-open";
-    open.textContent = chat.title;
+    open.textContent = (chat.isPinned ? "📌 " : "") + chat.title;
     open.title = chat.title;
     open.disabled = busy;
     open.onclick = () => openChat(chat);
@@ -239,6 +249,7 @@ function messageNode(message, index) {
         ? '<div class="thinking" aria-label="Велия готовит ответ"><span></span><span></span><span></span></div>'
         : "";
   article.append(content);
+  if(message.fileNames?.length){const files=document.createElement("small");files.textContent="Файлы: "+message.fileNames.join(", ");article.append(files);}
   if (message.role === "assistant" && message.search) {
     const sources = sourceNode(message.search);
     if (sources) article.append(sources);
@@ -270,6 +281,7 @@ function messageNode(message, index) {
       copy.innerHTML = icon("copy") + "Копировать";
       copy.onclick = () => copyText(message.content);
       actions.append(copy);
+      const speak = document.createElement("button"); speak.textContent = "Озвучить"; speak.onclick = () => voice.speak(message.content); actions.append(speak);
     }
     if (index === current().messages.length - 1) {
       const retry = document.createElement("button");
@@ -330,6 +342,8 @@ function setBusy(value) {
   $("send").hidden = value;
   $("stop").hidden = !value;
   $("prompt").disabled = value;
+  $("attach").disabled = value;
+  $("attachment-input").disabled = value;
   $("model-button").disabled = value || agentMode;
   $("agent-toggle").disabled = value || !profile?.browser_agent;
   $("new-chat").disabled = value;
@@ -340,6 +354,8 @@ function setBusy(value) {
   renderHistory();
 }
 function newChat() {
+  features.close();
+  clearFiles();
   if (busy) return;
   currentId = null;
   $("prompt").value = "";
@@ -460,6 +476,8 @@ async function continueAfterTakeover() {
 }
 
 async function openChat(chat) {
+  features.close();
+  clearFiles();
   if (busy || (!profile && !guest)) return;
   const account = profile?.account;
   currentId = chat.id;
@@ -472,6 +490,7 @@ async function openChat(chat) {
       const previous = chat.messages;
       chat.messages = data.messages.map((m, i) => ({
         role: m.role, content: m.content || "",
+        attachmentIds: previous[i]?.attachmentIds || [], fileNames: previous[i]?.fileNames || [],
         requestId: previous[i]?.role === m.role && previous[i]?.content === m.content ? previous[i]?.requestId : undefined,
         model: m.chat_mode === "flash" ? "velia-flash" : "velia-pro",
         pending: m.status === "pending",
@@ -494,7 +513,7 @@ async function syncHistory() {
     if (profile?.account !== account || busy) return;
     const cached = new Map(chats.map((c) => [c.id, c]));
     const remote = data.conversations.map((c) => ({
-      ...cached.get(c.id), id: c.id, title: c.title || "Новый диалог",
+      ...cached.get(c.id), id: c.id, title: c.title || "Новый диалог", isPinned:!!c.is_pinned,
       updated: Date.parse(c.updated_at || c.created_at) || Date.now(),
       messages: cached.get(c.id)?.messages || [], remote: true,
     }));
@@ -518,6 +537,7 @@ async function copyText(text) {
 }
 function applyProfile(value) {
   const changed = profile?.account !== value.account;
+  if(changed){features.close();voice.stop();clearFiles();}
   profile = value;
   internetAvailable = !!value.web_search;
   $("guest-notice").hidden = true;
@@ -557,6 +577,7 @@ function applyGuest(value) {
   if (profile) return;
   $("research-link").hidden = true;
   const changed = guest?.account !== value.account || storageKey !== "velia-web-guest-v1:" + value.account;
+  if(changed){features.close();voice.stop();clearFiles();}
   guest = value;
   internetAvailable = !!value.web_search;
   setAgentMode(false);
@@ -600,7 +621,7 @@ async function generate(retry = false) {
     toast(apiError(profile.pro_locked_reason || "pro_tokens_required"));
     return;
   }
-  const text = $("prompt").value.trim();
+  const text = $("prompt").value.trim() || (selectedFiles.length ? "Проанализируй прикреплённые файлы." : "");
   if (!retry && !text) return;
   let chat = current();
   if (retry) {
@@ -625,15 +646,23 @@ async function generate(retry = false) {
       chats = chats.slice(0, 100);
       currentId = chat.id;
     }
-    chat.messages.push({ role: "user", content: text, requestId: crypto.randomUUID(),
+    const attachments = [];
+    if (selectedFiles.length) {
+      if (!profile || agentMode || !chat.remote) {toast("Для файлов открой обычный диалог после входа.");return;}
+      setBusy(true);
+      try {for(const item of selectedFiles){const r=await featureRequest(`conversations/${chat.id}/attachments`,{method:"POST",file:item.file,key:item.key});attachments.push(r.attachment.id);}}
+      catch(error){toast(error.message);return;}finally{setBusy(false);}
+    }
+    chat.messages.push({ role: "user", content: text, attachmentIds:attachments, fileNames:selectedFiles.map(x=>x.file.name), requestId: crypto.randomUUID(),
       internet: !agentMode && internetAvailable, agent: agentMode });
+    clearFiles();
     $("prompt").value = "";
     resizePrompt();
   }
   const selected = agentMode ? "velia-flash" : model,
     user = chat.messages.at(-1),
     payload = agentMode ? {prompt: user.content, session_id: chat.id} : chat.remote ? {content: user.content, model: selected,
-      idempotency_key: user.requestId || (user.requestId = crypto.randomUUID())} : chatPayload(chat, selected),
+      idempotency_key: user.requestId || (user.requestId = crypto.randomUUID()), ...(user.attachmentIds?.length ? {attachment_ids:user.attachmentIds} : {})} : chatPayload(chat, selected),
     answer = { role: "assistant", content: "", model: selected, pending: true, agent: agentMode };
   if (!agentMode && internetAvailable) payload.web_search = true;
   chat.messages.push(answer);
@@ -706,8 +735,10 @@ async function generate(retry = false) {
       scheduleSave();
     });
     answer.finish = result.finish;
+    voice.complete(answer.content);
     }
   } catch (error) {
+    voice.failure();
     if (error.name === "AbortError") answer.stopped = true;
     else {
       answer.failed =
@@ -950,3 +981,22 @@ try {
 }
 ready = true;
 resizePrompt();
+
+$("voice-open").onclick=()=>voice.open();
+$("attach").onclick=()=>{if(!profile){openAuth();return;}if(agentMode){toast("Файлы доступны в обычном диалоге.");return;}$("attachment-input").click();};
+$("attachment-input").onchange=()=>{const files=[...$("attachment-input").files];if(files.some(f=>f.size>15*1024*1024)||selectedFiles.length+files.length>8){toast("Максимум 8 файлов, до 15 МБ каждый.");return;}selectedFiles.push(...files.map(file=>({file,key:crypto.randomUUID()})));filePreview();$("send").disabled=busy||!ready;};
+
+$("chat-tools").onclick=()=>{$("chat-tools-menu").hidden=!$("chat-tools-menu").hidden;};
+async function changeChat(action){
+  $("chat-tools-menu").hidden=true;if(busy)return;const chat=current();if(!chat){toast("Сначала открой диалог.");return;}
+  try{
+    if(action==="share"){
+      if(!profile||!chat.remote){await copyText(chat.messages.map(m=>(m.role==="user"?"Вы: ":"VELIA: ")+m.content).join("\n\n"));return;}
+      const r=await featureRequest(`conversations/${chat.id}/share`,{method:"POST"});const u=new URL(r.share.url);if(u.protocol!=="https:")throw new Error("Не удалось получить ссылку.");await copyText(u.href);toast("Ссылка на копию диалога скопирована.");
+    }else{
+      const data=action==="rename"?{title:window.prompt("Название диалога",chat.title)}:{is_pinned:!chat.isPinned};if(data.title===null)return;if(data.title!==undefined&&!data.title.trim())return;
+      if(profile&&chat.remote)await featureRequest(`conversations/${chat.id}`,{method:"PATCH",data});if(data.title!==undefined)chat.title=data.title;else chat.isPinned=data.is_pinned;save();renderHistory();
+    }
+  }catch(e){toast(e.message);}
+}
+$("chat-rename").onclick=()=>changeChat("rename");$("chat-pin").onclick=()=>changeChat("pin");$("chat-share").onclick=()=>changeChat("share");

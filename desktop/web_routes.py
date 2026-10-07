@@ -123,7 +123,7 @@ class Session:
 
 def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_session,
                      json_response, handlers, account_balance, authorize_model, upstream_stream,
-                     web_search=None, browser_agent_run=None, browser_takeover=None):
+                     web_search=None, browser_agent_run=None, browser_takeover=None, binary_upstream=None):
     cipher = Fernet(os.environ["VELIA_WEB_SESSION_KEY"].encode())
     sessions, exchanges, revoked = {}, deque(), {}
     def decode(request):
@@ -409,14 +409,14 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
 
     async def asset(request):
         name = request.match_info.get("name", "index.html")
-        if name not in {"index.html", "app.mjs", "core.mjs", "style.css", "favicon.svg"}:
+        if name not in {"index.html", "app.mjs", "core.mjs", "features.mjs", "voice.mjs", "style.css", "favicon.svg"}:
             raise web.HTTPNotFound()
         response = web.FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
         response.headers.update({"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
             "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; "
-                "img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; "
+                "img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; font-src 'self'; object-src 'none'; "
                 "base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
-            "Permissions-Policy": "camera=(), microphone=(), geolocation=()"})
+            "Permissions-Policy": "camera=(), microphone=(self), geolocation=()"})
         return response
     app.router.add_get("/", asset)
     app.router.add_get("/web/{name}", asset)
@@ -428,6 +428,9 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     app.router.add_post("/web-api/v1/agent/browser/takeover", browser_takeover_state)
     app.router.add_post("/web-api/v1/agent/browser/takeover/action", browser_takeover_action)
     from desktop.account_routes import setup_account_routes
+    from desktop.feature_routes import setup_feature_routes
+    setup_feature_routes(app, session_for=session_for, same_origin=same_origin, upstream=upstream,
+        json_response=json_response, binary_upstream=binary_upstream, origin=origin)
     setup_account_routes(app, session_for=session_for, same_origin=same_origin, upstream=upstream,
         upstream_stream=upstream_stream, authorize_model=authorize_model, handlers=handlers,
         json_response=json_response, web_search=web_search)

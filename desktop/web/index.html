@@ -9,7 +9,7 @@
     <meta name="theme-color" content="#101010" />
     <meta
       name="description"
-      content="VELIA — пространство для идей, текстов и решений. Два режима: Flash и PRO."
+      content="VELIA — пространство для идей, текстов и решений. Flash, PRO и новые возможности."
     />
     <title>VELIA — твой ИИ-ассистент</title>
     <link rel="icon" href="/web/favicon.svg" type="image/svg+xml" />
@@ -44,6 +44,7 @@
             aria-label="Найти диалог"
             autocomplete="off"
         /></label>
+        <nav class="feature-nav" id="feature-nav" aria-label="Возможности VELIA"></nav>
         <div class="history-heading">ТВОИ ДИАЛОГИ</div>
         <nav class="history" id="history" aria-label="История диалогов"></nav>
         <div class="sidebar-bottom">
@@ -78,12 +79,15 @@
             >
           </div>
           <div class="topbar-actions">
+            <button id="chat-tools" class="icon-button" aria-label="Действия с диалогом">⋯</button>
+            <div id="chat-tools-menu" class="chat-tools-menu" hidden><button id="chat-rename" type="button">Переименовать</button><button id="chat-pin" type="button">Закрепить / открепить</button><button id="chat-share" type="button">Поделиться</button></div>
             <span class="web-badge">WEB PREVIEW</span
             ><button id="theme" class="icon-button" aria-label="Светлая тема">
               <span data-icon="sun"></span>
             </button>
           </div>
         </header>
+        <section id="feature-view" class="feature-view" hidden></section>
         <div class="conversation-scroll" id="conversation-scroll">
           <section class="welcome" id="welcome">
             <div class="welcome-symbol">
@@ -154,7 +158,11 @@
               rows="1"
               maxlength="32000"
             ></textarea>
+            <div id="attachment-preview" class="attachment-preview"></div>
             <div class="composer-toolbar">
+              <button type="button" id="attach" class="icon-button" aria-label="Прикрепить файл"><span data-icon="attachment"></span></button>
+              <input type="file" id="attachment-input" multiple hidden accept="image/jpeg,image/png,image/webp,.pdf,.txt,.md,.csv,.json,.docx,.xlsx" />
+              <button type="button" id="voice-open" class="icon-button" aria-label="Голосовой разговор"><span data-icon="mic"></span></button>
               <div class="model-control">
                 <button
                   type="button"
@@ -174,6 +182,7 @@
                   aria-label="Режим Велии"
                   hidden
                 >
+<button type="button" class="model-option" role="option" aria-selected="false" aria-disabled="true" disabled data-model="velia-quantum"><span data-icon="layers"></span><span><strong>VELIA QUANTUM</strong><small>Скоро · в разработке</small></span></button>
                   <button
                     type="button"
                     class="model-option"
