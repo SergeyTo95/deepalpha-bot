@@ -26,7 +26,7 @@ assert count == 26437, count
 archive.unlink()
 PY
 RUN node /opt/velia-qualification/harness/lib/bin.js --version
-COPY desktop/web/core.mjs /opt/velia-web/core.mjs
+COPY desktop/web/*.mjs /opt/velia-web/
 COPY desktop/web/tests /opt/velia-web/tests
 RUN node --test /opt/velia-web/tests/*.test.mjs
 
