@@ -58,7 +58,20 @@ class WorkStore(GuestStore):
     def initialize(self):
         with closing(self.connect()) as conn, closing(conn.cursor()) as cur:
             cur.execute('CREATE TABLE IF NOT EXISTS velia_work_workspace (user_id TEXT PRIMARY KEY, document TEXT NOT NULL)')
+            cur.execute('CREATE TABLE IF NOT EXISTS velia_work_connector (user_id TEXT PRIMARY KEY, encrypted TEXT NOT NULL)')
             conn.commit()
+
+    def connector_transaction(self,user,change):
+        with closing(self.connect()) as conn, closing(conn.cursor()) as cur:
+            try:
+                if self.sqlite_path is not None:cur.execute('BEGIN IMMEDIATE')
+                self.execute(cur,'INSERT INTO velia_work_connector(user_id,encrypted) VALUES (?,?) ON CONFLICT(user_id) DO NOTHING',(str(user),''))
+                self.execute(cur,'SELECT encrypted FROM velia_work_connector WHERE user_id=?'+(' FOR UPDATE' if self.sqlite_path is None else ''),(str(user),))
+                encrypted,result=change(cur.fetchone()[0])
+                self.execute(cur,'UPDATE velia_work_connector SET encrypted=? WHERE user_id=?',(encrypted,str(user)))
+                conn.commit();return result
+            except BaseException:
+                conn.rollback();raise
 
     def transaction(self,user,change=None):
         with closing(self.connect()) as conn, closing(conn.cursor()) as cur:

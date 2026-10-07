@@ -432,7 +432,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     from desktop.work_routes import setup_work_routes
     setup_work_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response,
         upstream=upstream, upstream_stream=upstream_stream, authenticate=authenticate, allowed=allowed,
-        handlers=handlers, web_search=web_search)
+        handlers=handlers, web_search=web_search, origin=origin)
     from desktop.voice_routes import setup_voice_routes
     setup_voice_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response)
     from desktop.account_routes import setup_account_routes

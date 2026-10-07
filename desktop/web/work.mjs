@@ -10,7 +10,8 @@ export async function mountWork(parent, {signal, toast = () => {}} = {}) {
       headers:method === 'GET' ? {} : {'Content-Type':'application/json','X-Velia-Request':'1'},
       body:method === 'GET' ? undefined : JSON.stringify(data || {})});
     const result = await response.json();
-    if(!response.ok || result.ok === false) throw new Error(response.status === 401 ? 'Войди в VELIA, чтобы продолжить.' : 'Действие недоступно: ' + (result.error || response.status));
+    const errors={upwork_discovery_unavailable:'Сервер авторизации Upwork сейчас недоступен. Подключение не создано.',upwork_access_denied:'Upwork не подтвердил доступ. Попробуй подключиться позже.',upwork_connect_rate_limit:'Подожди минуту перед следующей проверкой Upwork.',upwork_reconnect_required:'Требуется повторный вход в Upwork.',upwork_service_unavailable:'Сервис Upwork сейчас недоступен.'};
+    if(!response.ok || result.ok === false) throw new Error(response.status === 401 ? 'Войди в VELIA, чтобы продолжить.' : errors[result.error] || 'Действие недоступно: ' + (result.error || response.status));
     return result;
   }
   const id = () => crypto.randomUUID();
@@ -50,6 +51,18 @@ export async function mountWork(parent, {signal, toast = () => {}} = {}) {
     root.append(node('p','Роли: '+(status.roles || []).map(r=>r.name).join(' · ')));
     if(!status.available) {root.append(action('Обновить',refresh));return;}
     root.append(node('p','Площадки: '+(status.connectors || []).map(c=>c.name+': '+(c.connected?'подключена':'не подключена')).join(' · ')));
+    if(status.upwork_available) {
+      const upwork=(status.connectors || []).find(c=>c.id==='upwork');
+      root.append(node('p','Upwork: вход и разрешение доступа выполняются на сайте площадки. Сейчас подключение проверяет доступ и список инструментов; отправка заявок ещё не включена.'));
+      if(upwork?.connected)root.append(node('p','Доступ проверен · инструментов: '+upwork.tool_count));
+      if(upwork?.connected || upwork?.status==='reconnect_required')root.append(action('Проверить и обновить доступ Upwork',async()=>{await call('upwork/verify','POST',{});await refresh();}));
+      root.append(action(upwork?.connected?'Отключить Upwork':'Подключить Upwork',async()=>{
+        if(upwork?.connected){await call('upwork/disconnect','POST',{});await refresh();return;}
+        const result=await call('upwork/connect','POST',{});const url=new URL(result.authorization_url);
+        if(url.protocol!=='https:' || !(url.hostname==='upwork.com' || url.hostname.endsWith('.upwork.com')))throw new Error('Некорректный адрес авторизации');
+        window.location.assign(url.href);
+      }));
+    }
     root.append(node('p','Кошелёк не подключён. Подтверждённый баланс и доход недоступны.'));
     root.append(action('Обновить',refresh));
     const auto=workspace.autonomy || {enabled:false,query:'',interval_minutes:60,max_jobs_per_day:1};

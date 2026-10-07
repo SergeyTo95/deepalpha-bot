@@ -9,16 +9,19 @@ import json
 from aiohttp import web
 from desktop.work_store import WorkStore, WorkError, ROLES, DEFAULT_AUTONOMY
 from desktop.work_runtime import FlashRoles, run_job
+from desktop.upwork_connector import UpworkConnector
 from velia_desktop_routes import AuthenticationUnavailable
 
 CONNECTORS=[{'id':id,'name':name,'connected':False} for id,name in [('upwork','Upwork'),('laborx','LaborX'),('direct','Прямые заказы')]]
 
 def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstream_stream,authenticate,allowed,handlers,
-                      web_search=None,store=None,generate=None):
+                      web_search=None,store=None,generate=None,origin=None,upwork=None):
     if store is None and os.getenv('VELIA_WORK_ENABLED')=='true':
         dsn=os.getenv('VELIA_WORK_DATABASE_URL') or os.getenv('VELIA_WEB_GUEST_DATABASE_URL')
         if dsn:store=WorkStore(dsn)
-    tasks={};search_rates={};slots=asyncio.Semaphore(4);sessions={};scanning=set()
+    if upwork is None and store and origin and os.getenv('VELIA_WEB_SESSION_KEY'):
+        upwork=UpworkConnector(store,os.environ['VELIA_WEB_SESSION_KEY'],origin)
+    tasks={};search_rates={};slots=asyncio.Semaphore(4);sessions={};scanning=set();connector_slots=asyncio.Semaphore(4)
     generate=generate or FlashRoles(upstream=upstream,upstream_stream=upstream_stream,authenticate=authenticate,allowed=allowed,handlers=handlers)
     async def lifecycle(application):
         if store:await asyncio.to_thread(store.initialize)
@@ -30,6 +33,11 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
         for task in list(tasks.values()):task.cancel()
         await asyncio.gather(*list(tasks.values()),return_exceptions=True)
     app.cleanup_ctx.append(lifecycle)
+    async def callback_headers(request,response):
+        if request.path=='/web-api/v1/work/upwork/callback':
+            response.headers['Cache-Control']='no-store'
+            response.headers['Referrer-Policy']='no-referrer'
+    app.on_response_prepare.append(callback_headers)
 
     @web.middleware
     async def boundary(request,handler):
@@ -53,7 +61,11 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
         except (AuthenticationUnavailable,OSError,TimeoutError):return json_response({'ok':False,'error':'work_service_unavailable'},503)
     app.middlewares.append(boundary)
     async def status(request):
-        return json_response({'ok':True,'available':store is not None,'roles':ROLES,'connectors':CONNECTORS,
+        connectors=[dict(c) for c in CONNECTORS]
+        if upwork:
+            connection=await upwork.status(request[WORK_SESSION].user_id)
+            connectors[0].update(connection)
+        return json_response({'ok':True,'available':store is not None,'roles':ROLES,'connectors':connectors,'upwork_available':upwork is not None,
                              'wallet':{'connected':False},'search_available':bool(web_search and web_search.available),
                              'execution_mode':'text_drafts','model':'velia-flash'})
     async def workspace(request):
@@ -171,6 +183,32 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
             archive.writestr('README.txt','Prepared text artifacts. No code was executed. No marketplace submission or payment is confirmed.')
         return web.Response(body=buffer.getvalue(),content_type='application/zip',headers={
             'Content-Disposition':'attachment; filename="velia-work-'+job['id']+'.zip"','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
+    def require_upwork():
+        if not upwork:raise WorkError('upwork_not_configured',503)
+    async def connect_upwork(request):
+        require_upwork()
+        if request[WORK_BODY]:raise WorkError('invalid_request')
+        if connector_slots.locked():raise WorkError('upwork_connect_rate_limit',429)
+        async with connector_slots:url=await upwork.start(request[WORK_SESSION].user_id)
+        return json_response({'ok':True,'authorization_url':url})
+    async def callback_upwork(request):
+        require_upwork()
+        if request.query.get('error'):raise WorkError('upwork_authorization_declined')
+        if connector_slots.locked():raise WorkError('upwork_connect_rate_limit',429)
+        async with connector_slots:
+            await upwork.callback_exchange(request[WORK_SESSION].user_id,request.query.get('state'),request.query.get('code'),request.query.get('iss'))
+        return web.Response(status=303,headers={'Location':'/','Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
+    async def disconnect_upwork(request):
+        require_upwork()
+        if request[WORK_BODY]:raise WorkError('invalid_request')
+        await asyncio.to_thread(upwork.vault.disconnect,request[WORK_SESSION].user_id)
+        return json_response({'ok':True,'connected':False})
+    async def verify_upwork(request):
+        require_upwork()
+        if request[WORK_BODY]:raise WorkError('invalid_request')
+        if connector_slots.locked():raise WorkError('upwork_connect_rate_limit',429)
+        async with connector_slots:result=await upwork.verify(request[WORK_SESSION].user_id)
+        return json_response({'ok':True,**result})
     app.router.add_get('/web-api/v1/work/status',status)
     app.router.add_get('/web-api/v1/work/workspace',workspace)
     app.router.add_put('/web-api/v1/work/mandate',policy)
@@ -183,6 +221,10 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
     app.router.add_put('/web-api/v1/work/autonomy',autonomy)
     app.router.add_post('/web-api/v1/work/scan',scan_now)
     app.router.add_get('/web-api/v1/work/jobs/{job_id}/artifacts',artifacts)
+    app.router.add_post('/web-api/v1/work/upwork/connect',connect_upwork)
+    app.router.add_get('/web-api/v1/work/upwork/callback',callback_upwork)
+    app.router.add_post('/web-api/v1/work/upwork/disconnect',disconnect_upwork)
+    app.router.add_post('/web-api/v1/work/upwork/verify',verify_upwork)
 
 WORK_SESSION=web.RequestKey('velia_work_session',object)
 WORK_BODY=web.RequestKey('velia_work_body',dict)
