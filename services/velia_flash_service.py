@@ -7,6 +7,7 @@ import os
 import time
 import logging
 import threading
+from contextlib import contextmanager
 from urllib.parse import urlsplit
 
 import requests
@@ -17,6 +18,30 @@ MODEL = "velia-flash"
 PROVIDER = "bonsai"
 logger = logging.getLogger(__name__)
 _VOICE_CONTEXT = threading.local()
+
+
+@contextmanager
+def _request_context(user_id, voice_turn):
+    """Bind personalization to this request, including nested calls and failures."""
+    from services.velia_user_profile_service import account_identity_context, get_user_profile_context
+    missing = object()
+    previous = {key: getattr(_VOICE_CONTEXT, key, missing) for key in ("enabled", "user_context")}
+    try:
+        try:
+            context = get_user_profile_context(int(user_id))
+        except Exception as exc:
+            logger.warning("VELIA_FLASH_PROFILE_SKIPPED error=%s", type(exc).__name__)
+            context = account_identity_context(int(user_id))
+        _VOICE_CONTEXT.enabled = bool(voice_turn)
+        _VOICE_CONTEXT.user_context = context
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is missing:
+                if hasattr(_VOICE_CONTEXT, key):
+                    delattr(_VOICE_CONTEXT, key)
+            else:
+                setattr(_VOICE_CONTEXT, key, value)
 
 
 def env_bool(name, default=False):
@@ -329,6 +354,9 @@ def _generate_once(messages, *, request_id="", on_delta=None):
             if voice_fast else ""
         )
     )}
+    user_context = getattr(_VOICE_CONTEXT, "user_context", "")
+    if user_context:
+        system["content"] += "\n\n" + user_context
     history = [{**m, "content": interpreted_content(m.get("content"))} if m.get("role") == "user" else dict(m)
         for m in messages if m.get("role") in {"user", "assistant"}]
     if not history:
@@ -592,19 +620,9 @@ def dispatch_send(sender, user_id, conversation_id, content, *, chat_mode="pro",
         global_lock = bool(_first_value(cursor.fetchone()))
         if not global_lock:
             return {"ok": False, "error": "flash_busy"}
-        previous_voice = getattr(_VOICE_CONTEXT, "enabled", None)
-        _VOICE_CONTEXT.enabled = bool(voice_turn)
-        try:
+        with _request_context(user_id, voice_turn):
             return core(user_id, conversation_id, content, chat_mode="flash",
                         on_delta=on_delta, on_reset=on_reset, **kwargs)
-        finally:
-            if previous_voice is None:
-                try:
-                    delattr(_VOICE_CONTEXT, "enabled")
-                except AttributeError:
-                    pass
-            else:
-                _VOICE_CONTEXT.enabled = previous_voice
     finally:
         conn.rollback()
         if global_lock:

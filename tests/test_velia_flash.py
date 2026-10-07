@@ -80,6 +80,35 @@ class Session:
         pass
 
 
+def test_flash_profile_survives_voice_history_and_does_not_leak(enabled, monkeypatch):
+    from services import velia_user_profile_service as profiles
+    monkeypatch.setenv("VELIA_VOICE_FAST_PATH_ENABLED", "true")
+    monkeypatch.setattr(profiles, "get_user_profile_context", lambda uid: f"USER_PROFILE_JSON=profile-{uid}")
+    session = Session()
+    monkeypatch.setattr(flash.requests, "Session", lambda: session)
+    with flash._request_context(7, True):
+        assert flash.generate([{"role": "user", "content": "Спасибо"}])["ok"]
+        payload = next(kwargs["json"] for url, kwargs in session.calls if url.endswith("/v1/chat/completions"))
+        assert "profile-7" in payload["messages"][0]["content"]
+        assert "profile-7" not in payload["messages"][1]["content"]
+        with pytest.raises(RuntimeError), flash._request_context(8, False):
+            assert flash._VOICE_CONTEXT.user_context.endswith("profile-8")
+            raise RuntimeError("test")
+        assert flash._VOICE_CONTEXT.user_context.endswith("profile-7")
+    assert not hasattr(flash._VOICE_CONTEXT, "user_context")
+    assert not hasattr(flash._VOICE_CONTEXT, "enabled")
+
+
+def test_flash_profile_failure_preserves_verified_identity(monkeypatch):
+    from services import velia_user_profile_service as profiles
+    monkeypatch.setenv("ADMIN_ID", "7")
+    def unavailable(uid):
+        raise RuntimeError("private profile text must not be logged")
+    monkeypatch.setattr(profiles, "get_user_profile_context", unavailable)
+    with flash._request_context(7, True):
+        assert '"project_owner":true' in flash._VOICE_CONTEXT.user_context
+
+
 def test_real_template_budget_and_free_result(enabled, monkeypatch):
     session = Session()
     monkeypatch.setattr(flash.requests, "Session", lambda: session)
