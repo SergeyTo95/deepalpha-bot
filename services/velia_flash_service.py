@@ -28,7 +28,9 @@ def _request_context(user_id, voice_turn):
     previous = {key: getattr(_VOICE_CONTEXT, key, missing) for key in ("enabled", "user_context")}
     try:
         try:
-            context = get_user_profile_context(int(user_id))
+            # Flash has a small context window; keep personalization separate
+            # from history and bound it before the voice path skips tokenization.
+            context = get_user_profile_context(int(user_id), max_about_chars=400)
         except Exception as exc:
             logger.warning("VELIA_FLASH_PROFILE_SKIPPED error=%s", type(exc).__name__)
             context = account_identity_context(int(user_id))

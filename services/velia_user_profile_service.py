@@ -190,8 +190,11 @@ def format_user_profile_context(profile: Dict[str, Any]) -> str:
     )
 
 
-def get_user_profile_context(user_id: int) -> str:
-    profile_context = format_user_profile_context(get_user_profile(user_id))
+def get_user_profile_context(user_id: int, *, max_about_chars: int | None = None) -> str:
+    profile = get_user_profile(user_id)
+    if max_about_chars is not None:
+        profile = {**profile, "about_me": str(profile.get("about_me") or "")[:max(0, int(max_about_chars))]}
+    profile_context = format_user_profile_context(profile)
     return "\n".join(part for part in (account_identity_context(user_id), profile_context) if part)
 
 

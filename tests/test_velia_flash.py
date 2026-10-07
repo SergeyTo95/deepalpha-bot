@@ -83,7 +83,7 @@ class Session:
 def test_flash_profile_survives_voice_history_and_does_not_leak(enabled, monkeypatch):
     from services import velia_user_profile_service as profiles
     monkeypatch.setenv("VELIA_VOICE_FAST_PATH_ENABLED", "true")
-    monkeypatch.setattr(profiles, "get_user_profile_context", lambda uid: f"USER_PROFILE_JSON=profile-{uid}")
+    monkeypatch.setattr(profiles, "get_user_profile_context", lambda uid, **kwargs: f"USER_PROFILE_JSON=profile-{uid}")
     session = Session()
     monkeypatch.setattr(flash.requests, "Session", lambda: session)
     with flash._request_context(7, True):
@@ -102,7 +102,7 @@ def test_flash_profile_survives_voice_history_and_does_not_leak(enabled, monkeyp
 def test_flash_profile_failure_preserves_verified_identity(monkeypatch):
     from services import velia_user_profile_service as profiles
     monkeypatch.setenv("ADMIN_ID", "7")
-    def unavailable(uid):
+    def unavailable(uid, **kwargs):
         raise RuntimeError("private profile text must not be logged")
     monkeypatch.setattr(profiles, "get_user_profile_context", unavailable)
     with flash._request_context(7, True):
