@@ -8,6 +8,7 @@ import {
   safeSearch,
 } from "./core.mjs";
 import {setupFeatures, featureRequest} from "./features.mjs";
+import {prepareFile, fileSize, setupFileTools} from "./files.mjs";
 import {setupVoice} from "./voice.mjs";
 const $ = (id) => document.getElementById(id);
 const icons = {
@@ -77,11 +78,14 @@ const request = (path, data, signal) =>
     signal,
   });
 let selectedFiles = [];
+const fileTools=setupFileTools({toast});
 function clearFiles(){selectedFiles=[];$("attachment-input").value="";$("attachment-preview").replaceChildren();}
-function filePreview(){ $("attachment-preview").replaceChildren();selectedFiles.forEach((item,i)=>{const b=document.createElement("button");b.type="button";b.textContent=item.file.name+" ×";b.onclick=()=>{selectedFiles.splice(i,1);filePreview();};$("attachment-preview").append(b);});}
+function filePreview(){const target=$("attachment-preview");target.replaceChildren();selectedFiles.forEach((item,i)=>{const chip=document.createElement('div');chip.className='file-chip';const view=document.createElement('button');view.type='button';view.textContent=item.file.name+' · '+fileSize(item.file.size);view.onclick=()=>fileTools.previewFile(item.file).catch(()=>toast('Не удалось открыть файл.'));const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label','Удалить '+item.file.name);remove.onclick=()=>{selectedFiles.splice(i,1);filePreview();resizePrompt();};chip.append(view,remove);target.append(chip);});if(selectedFiles.length){const bar=document.createElement('div');bar.className='file-shortcuts';for(const [title,prompt] of [['Пересказать','Кратко перескажи содержание прикреплённых файлов.'],['Извлечь текст','Извлеки текст из прикреплённых файлов. Отметь неразборчивые места.'],['Проверить ошибки','Проверь прикреплённые файлы на ошибки и несоответствия.']]){const b=document.createElement('button');b.type='button';b.textContent=title;b.onclick=()=>{$('prompt').value=prompt;resizePrompt();$('prompt').focus();};bar.append(b);}target.append(bar);}}
+function addFiles(files){if(busy)return;if(!profile){openAuth();return;}if(agentMode){toast('Для файлов выключи Agent и открой обычный диалог.');return;}try{const prepared=files.map(prepareFile);if(selectedFiles.length+prepared.length>4)throw new Error('Можно прикрепить до 4 файлов, по 15 МБ каждый.');selectedFiles.push(...prepared.map(file=>({file,key:crypto.randomUUID()})));filePreview();resizePrompt();}catch(e){toast(e.message);}}
+
 const current = () => chats.find((c) => c.id === currentId);
 const voice = setupVoice({busy:()=>busy, toast, send:text=>{$("prompt").value=text;generate();}});
-const features = setupFeatures({signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
+const features = setupFeatures({signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
 const browserStorage = { getItem: (key) => localStorage.getItem(key) };
 function toast(text) {
   clearTimeout(toastTimer);
@@ -251,7 +255,7 @@ function messageNode(message, index) {
         ? '<div class="thinking" aria-label="Велия готовит ответ"><span></span><span></span><span></span></div>'
         : "";
   article.append(content);
-  if(message.fileNames?.length){const files=document.createElement("small");files.textContent="Файлы: "+message.fileNames.join(", ");article.append(files);}
+  if(message.fileNames?.length){const files=document.createElement('div');files.className='message-files';message.fileNames.forEach((name,i)=>{const id=message.attachmentIds?.[i],available=!!fileTools.get(id),item=document.createElement(available?'button':'span');item.textContent=name;if(available){item.type='button';item.onclick=()=>{const original=fileTools.get(id);if(original)fileTools.previewFile(original).catch(()=>toast('Не удалось открыть файл.'));else toast('Оригинал больше не доступен в этой сессии. Прикрепи файл заново.');};}else item.title='Оригинал недоступен для просмотра в этой сессии.';files.append(item);});article.append(files);}
   if (message.role === "assistant" && message.search) {
     const sources = sourceNode(message.search);
     if (sources) article.append(sources);
@@ -284,6 +288,7 @@ function messageNode(message, index) {
       copy.onclick = () => copyText(message.content);
       actions.append(copy);
       const speak = document.createElement("button"); speak.textContent = "Озвучить"; speak.onclick = () => voice.speak(message.content); actions.append(speak);
+      const save=document.createElement("button");save.textContent="Сохранить .md";save.onclick=()=>fileTools.downloadText(message.content,"VELIA-answer.md");actions.append(save);
     }
     if (index === current().messages.length - 1) {
       const retry = document.createElement("button");
@@ -492,7 +497,7 @@ async function openChat(chat) {
       const previous = chat.messages;
       chat.messages = data.messages.map((m, i) => ({
         role: m.role, content: m.content || "",
-        attachmentIds: previous[i]?.attachmentIds || [], fileNames: previous[i]?.fileNames || [],
+        attachmentIds: m.attachments?.map(a=>a.id) || previous[i]?.attachmentIds || [], fileNames: m.attachments?.map(a=>a.name).filter(Boolean) || previous[i]?.fileNames || [],
         requestId: previous[i]?.role === m.role && previous[i]?.content === m.content ? previous[i]?.requestId : undefined,
         model: m.chat_mode === "flash" ? "velia-flash" : "velia-pro",
         pending: m.status === "pending",
@@ -539,7 +544,7 @@ async function copyText(text) {
 }
 function applyProfile(value) {
   const changed = profile?.account !== value.account;
-  if(changed){features.close();voice.stop();clearFiles();}
+  if(changed){features.close();voice.stop();clearFiles();fileTools.clear();}
   profile = value;
   internetAvailable = !!value.web_search;
   $("guest-notice").hidden = true;
@@ -579,7 +584,7 @@ function applyGuest(value) {
   if (profile) return;
   $("research-link").hidden = true;
   const changed = guest?.account !== value.account || storageKey !== "velia-web-guest-v1:" + value.account;
-  if(changed){features.close();voice.stop();clearFiles();}
+  if(changed){features.close();voice.stop();clearFiles();fileTools.clear();}
   guest = value;
   internetAvailable = !!value.web_search;
   setAgentMode(false);
@@ -652,7 +657,7 @@ async function generate(retry = false) {
     if (selectedFiles.length) {
       if (!profile || agentMode || !chat.remote) {toast("Для файлов открой обычный диалог после входа.");return;}
       setBusy(true);
-      try {for(const item of selectedFiles){const r=await featureRequest(`conversations/${chat.id}/attachments`,{method:"POST",file:item.file,key:item.key});attachments.push(r.attachment.id);}}
+      try {for(const item of selectedFiles){const r=await featureRequest(`conversations/${chat.id}/attachments`,{method:"POST",file:item.file,key:item.key});attachments.push(r.attachment.id);fileTools.remember(r.attachment.id,item.file);}}
       catch(error){toast(error.message);return;}finally{setBusy(false);}
     }
     chat.messages.push({ role: "user", content: text, attachmentIds:attachments, fileNames:selectedFiles.map(x=>x.file.name), requestId: crypto.randomUUID(),
@@ -794,6 +799,7 @@ $("theme").onclick = () => setTheme(theme === "dark" ? "light" : "dark");
 $("agent-toggle").onclick = () => {
   if (!profile) { openAuth(); return; }
   if (!profile.browser_agent) { toast("Browser Agent пока недоступен."); return; }
+  if(!agentMode&&selectedFiles.length){toast('Сначала отправь или убери прикреплённые файлы.');return;}
   setAgentMode(!agentMode);
   $("prompt").focus();
 };
@@ -922,6 +928,7 @@ $("account").onclick = async () => {
       AbortSignal.timeout(20000),
     );
     if (!response.ok) throw new Error();
+    features.close();voice.stop();clearFiles();fileTools.clear();
     profile = null;
     $("research-link").hidden = true;
     storageKey = null;
@@ -986,7 +993,12 @@ resizePrompt();
 
 $("voice-open").onclick=()=>voice.open();
 $("attach").onclick=()=>{if(!profile){openAuth();return;}if(agentMode){toast("Файлы доступны в обычном диалоге.");return;}$("attachment-input").click();};
-$("attachment-input").onchange=()=>{const files=[...$("attachment-input").files];if(files.some(f=>f.size>15*1024*1024)||selectedFiles.length+files.length>8){toast("Максимум 8 файлов, до 15 МБ каждый.");return;}selectedFiles.push(...files.map(file=>({file,key:crypto.randomUUID()})));filePreview();$("send").disabled=busy||!ready;};
+$("attachment-input").onchange=()=>{addFiles([...$("attachment-input").files]);$("attachment-input").value='';};
+$('composer').addEventListener('dragover',e=>{if([...e.dataTransfer.types].includes('Files')){e.preventDefault();$('composer').classList.add('file-drag');}});
+$('composer').addEventListener('dragleave',()=>$('composer').classList.remove('file-drag'));
+$('composer').addEventListener('drop',e=>{if(e.dataTransfer.files.length){e.preventDefault();$('composer').classList.remove('file-drag');addFiles([...e.dataTransfer.files]);}});
+$('prompt').addEventListener('paste',e=>{const files=[...e.clipboardData.files];if(files.length){e.preventDefault();addFiles(files);}});
+
 
 $("chat-tools").onclick=()=>{$("chat-tools-menu").hidden=!$("chat-tools-menu").hidden;};
 async function changeChat(action){
@@ -1004,3 +1016,5 @@ async function changeChat(action){
 $("chat-rename").onclick=()=>changeChat("rename");$("chat-pin").onclick=()=>changeChat("pin");$("chat-share").onclick=()=>changeChat("share");
 
 $("chat-schedule").onclick=()=>{const chat=chats.find(c=>c.id===currentId),last=chat?.messages.findLast(m=>m.role==='user');$("chat-tools-menu").hidden=true;features.open('autopilot',{instruction:last?.content?.slice(0,200)||''});};
+
+$('chat-export').onclick=()=>{const chat=current();$('chat-tools-menu').hidden=true;if(!chat?.messages.length){toast('Сначала открой диалог с сообщениями.');return;}fileTools.downloadText('# '+chat.title+'\n\n'+chat.messages.map(m=>(m.role==='user'?'## Вы':'## VELIA')+'\n\n'+m.content+(m.fileNames?.length?'\n\nФайлы: '+m.fileNames.join(', '):'')).join('\n\n---\n\n'),'VELIA-chat.md');};

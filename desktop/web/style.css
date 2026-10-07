@@ -1402,3 +1402,22 @@ dialog::backdrop {
 
 .feature-form label[hidden] { display: none; }
 .feature-help { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+.file-dialog { width: min(960px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); padding: 22px; border: 1px solid var(--border); border-radius: 18px; background: var(--rail); color: var(--text); }
+.file-dialog::backdrop { background: #000b; }
+.file-view-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; }
+.file-view-header h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: 18px; }
+.file-dialog button, .file-dialog a { min-height: 44px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; color: var(--text); background: var(--surface); font: inherit; font-size: 13px; cursor: pointer; text-decoration: none; }
+.file-view-body { overflow: auto; max-height: 65dvh; }
+.file-view-body p { color: var(--soft); font-size: 13px; line-height: 1.6; }
+.file-view-body img { display: block; max-width: 100%; max-height: 58dvh; margin: auto; object-fit: contain; }
+.file-view-body img.zoomed { width: 200%; max-width: none; max-height: none; }
+.file-view-body pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; padding: 16px; background: var(--bg); border-radius: 10px; }
+.file-chip { display: flex; max-width: 100%; }
+.attachment-preview .file-chip button { padding: 9px 10px; min-height: 40px; overflow-wrap: anywhere; text-align: left; }
+.file-shortcuts { display: flex; flex-wrap: wrap; gap: 6px; flex-basis: 100%; margin: 4px 0 8px; }
+.attachment-preview .file-shortcuts button { min-height: 36px; }
+.message-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.message-files button, .message-files span { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--soft); font: inherit; font-size: 12px; overflow-wrap: anywhere; max-width: 100%; }
+.message-files button { cursor: pointer; }
+.file-drag { outline: 2px dashed var(--soft); outline-offset: 3px; }
+@media(max-width:520px) { .file-dialog { padding: 16px; } .file-view-header { align-items: flex-start; } .file-view-header button { flex-shrink: 0; } }

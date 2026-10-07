@@ -54,3 +54,11 @@ Short-screen regression checks cover 393 px width with 640/710/844 px height, mo
 Autopilot now separates scheduled task templates from GitHub development missions. Authenticated schedule routes are explicitly allowlisted in the gateway. The UI checks scheduler and Agent Core availability before offering creation, starts schedules paused, supports daily/weekly/hourly intervals with an IANA timezone, displays the latest job result and explicit approval/run controls. Only server-advertised built-in task tools and connected calendar reads are offered. Chat text may prefill a task draft; it is not a replay of an arbitrary browser instruction. No server worker flags are enabled by this change, and background browser automation or notifications are not implemented.
 
 Validation: 45 focused Python tests, 10 Node tests, and synthetic Chromium checks for weekly payloads, enable/pause, disabled scheduler, approval-before-run, GitHub mission compatibility and mobile layouts. This does not qualify actual production scheduled execution.
+
+## File and answer utilities
+
+Added a local image viewer with zoom, bounded plain-text preview/copy, native PDF open/download, and a clear DOCX preview limitation. Studio image results use the same viewer. Files may be selected, dropped or pasted; selection enforces four files and 15 MiB each. MD/CSV/JSON normalize to the backend-supported text/plain MIME without changing bytes; XLSX/SVG are rejected. Quick attachment prompts fill the composer without sending automatically. Answers and conversations can be downloaded as Markdown.
+
+Original attachment previews are session-memory only (12 files / 60 MiB bounded cache), cleared on account changes/logout; object URLs are revoked when viewers close. Restored history receives allowlisted attachment metadata, never original bytes, extracted text, private URLs or credentials. Originals cannot be reopened after reload unless reselected. DOCX analysis and image understanding continue through the existing backend; this change does not qualify real model inference, PDF OCR or GPU media generation.
+
+Verification: 36 focused server tests, 13 Node tests and synthetic Chromium checks for escaped text previews, image zoom, PDF links, file limits, unsupported formats, Studio viewer and answer/chat downloads.

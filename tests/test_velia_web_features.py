@@ -43,3 +43,9 @@ def test_feature_relay_checks_origin_identity_ownership_and_passes_idempotency()
             assert (await client.get(str(server.make_url('/web-api/v1/features/media/images/id/content?user_id=8')),headers=headers)).status==403
             assert (await client.get(str(server.make_url('/web-api/v1/features/auth/refresh')),headers=headers)).status==404
     asyncio.run(scenario())
+
+def test_history_attachment_metadata_does_not_expose_originals_or_credentials():
+    from desktop.account_routes import message
+    item={'id':'11111111-1111-1111-1111-111111111111','name':'photo.jpg','mime_type':'image/jpeg','kind':'image','byte_size':42,'content_bytes':'private','extracted_text':'private','content_url':'https://private','access_token':'secret'}
+    result=message({'role':'user','content':'Фото','attachments':[item,{'id':'invalid','name':'bad'}]})
+    assert result['attachments']==[{key:item[key] for key in ('id','name','mime_type','kind','byte_size')}]

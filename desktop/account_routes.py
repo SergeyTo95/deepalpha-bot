@@ -22,7 +22,20 @@ def conversation(value):
 def message(value):
     if not isinstance(value, dict) or value.get("role") not in {"user", "assistant"}:
         raise ValueError("invalid_account_response")
-    return {key: value.get(key) for key in ("id", "role", "content", "status", "chat_mode", "created_at")}
+    result = {key: value.get(key) for key in ("id", "role", "content", "status", "chat_mode", "created_at")}
+    if isinstance(value.get("attachments"), list):
+        result["attachments"] = []
+        for item in value["attachments"][:4]:
+            if not isinstance(item, dict) or not ID.fullmatch(str(item.get("id", ""))):
+                continue
+            meta = {"id": item["id"], "name": (item["name"] if isinstance(item.get("name"), str) else "Файл")[:300]}
+            for key in ("mime_type", "kind"):
+                if isinstance(item.get(key), str):
+                    meta[key] = item[key][:128]
+            if isinstance(item.get("byte_size"), int) and 0 <= item["byte_size"] <= 50*1024*1024:
+                meta["byte_size"] = item["byte_size"]
+            result["attachments"].append(meta)
+    return result
 
 
 async def account_events(source, model):
@@ -158,7 +171,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
                 or len(data["content"]) > 12000 or not REQUEST_ID.fullmatch(str(data.get("idempotency_key", "")))):
             return error("invalid_request", 400)
         attachments = data.get("attachment_ids", [])
-        if not isinstance(attachments, list) or len(attachments) > 8 or any(not isinstance(v, str) or not ID.fullmatch(v) for v in attachments):
+        if not isinstance(attachments, list) or len(attachments) > 4 or any(not isinstance(v, str) or not ID.fullmatch(v) for v in attachments):
             return error("invalid_request", 400)
         if data["model"] == FLASH_ID and not flash_enabled():
             return error("flash_unavailable", 503)
