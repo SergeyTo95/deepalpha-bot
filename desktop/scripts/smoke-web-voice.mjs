@@ -11,7 +11,7 @@ try{
  const page=await browser.newPage({viewport:{width:393,height:710}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto('http://127.0.0.1:'+server.address().port);
  await page.evaluate(async()=>{
-  window.recognizers=[];window.spoken=[];window.sends=[];
+  localStorage.setItem('velia-voice-language','ru-RU');window.recognizers=[];window.spoken=[];window.sends=[];
   window.SpeechRecognition=class {constructor(){window.recognizers.push(this);}start(){}abort(){this.onend?.();}};
   window.SpeechSynthesisUtterance=class {constructor(text){this.text=text;}};
   Object.defineProperty(window,'speechSynthesis',{value:{cancel(){},getVoices(){return [{name:'Тестовый голос',voiceURI:'test',lang:'ru-RU',localService:true}];},addEventListener(){},resume(){},speak(u){if(u.volume===0){window.unlocks=(window.unlocks||0)+1;return;}window.spoken.push(u);}}});
@@ -24,7 +24,7 @@ try{
  await page.evaluate(()=>{const r=recognizers.at(-1);r.onresult({results:[Object.assign([{transcript:'Привет Велия'}],{isFinal:true})]});r.onend();});
  await page.waitForFunction(()=>spoken.length===1);assert.deepEqual(await page.evaluate(()=>sends),['Привет Велия']);
  await page.screenshot({path:output+'/voice-mobile-speaking.png'});
- await page.evaluate(()=>{for(let i=0;i<30;i++){const u=spoken.at(-1);if(u===window.last)break;window.last=u;u.onend();}});
+ await page.evaluate(()=>{for(let i=0;i<100;i++){const u=spoken.at(-1);if(u===window.last)break;window.last=u;u.onend();}});
  await page.waitForFunction(()=>recognizers.length===2);
  assert.ok(await page.evaluate(()=>spoken.length>1&&spoken.every(u=>u.text.length<=240)));
  // A silence timeout resumes listening without generating a message.
@@ -36,8 +36,8 @@ try{
  await page.waitForTimeout(900);assert.equal(await page.evaluate(()=>recognizers.length),3);assert.equal(await page.evaluate(()=>sends.length),1);
  await page.getByRole('button',{name:'Начать',exact:true}).click();await page.evaluate(()=>recognizers.at(-1).onerror({error:'not-allowed'}));
  assert.match(await page.locator('.voice-status').innerText(),/Разреши микрофон/);
- await page.getByRole('button',{name:'Завершить',exact:true}).click();await page.getByLabel('Голос',{exact:true}).selectOption('test');await page.getByLabel('Скорость речи').selectOption('1.2');await page.getByRole('button',{name:'Послушать голос'}).click();
- assert.equal(await page.evaluate(()=>spoken.at(-1).rate),1.2*.96);assert.equal(await page.evaluate(()=>spoken.at(-1).voice.voiceURI),'test');
+ await page.getByRole('button',{name:'Завершить',exact:true}).click();await page.locator('#settings').getByLabel('Голос',{exact:true}).selectOption('test');await page.getByLabel('Скорость речи').selectOption('1.2');await page.getByRole('button',{name:'Послушать голос'}).click();
+ assert.equal(await page.evaluate(()=>spoken.at(-1).rate),1.2);assert.equal(await page.evaluate(()=>spoken.at(-1).voice.voiceURI),'test');
  await page.evaluate(()=>{voice.open();});await page.getByRole('button',{name:'Начать',exact:true}).click();await page.evaluate(()=>{voice.stop();voice.open();});
  // An answer arriving while Android temporarily hides the page must survive.
  await page.evaluate(()=>{
@@ -53,10 +53,10 @@ try{
  await page.getByRole('button',{name:'Начать',exact:true}).click();
  await page.evaluate(()=>{
    const r=recognizers.at(-1);r.onresult({results:[Object.assign([{transcript:'Велия привет'}],{isFinal:true})]});r.onend();
-   hiddenForTest=true;document.dispatchEvent(new Event('visibilitychange'));
-   window.spokenBefore=spoken.length;voice.complete('Привет! Рада тебя слышать.');resolveSend();
+   voice.update('Привет! 😊 ');window.earlySpeech=spoken.at(-1).text;spoken.at(-1).onend();hiddenForTest=true;document.dispatchEvent(new Event('visibilitychange'));
+   window.spokenBefore=spoken.length;voice.complete('Привет! 😊 Рада тебя слышать.');resolveSend();
  });
- assert.equal(await page.evaluate(()=>spoken.length),await page.evaluate(()=>spokenBefore));
+ assert.equal(await page.evaluate(()=>earlySpeech),'Привет!');assert.equal(await page.evaluate(()=>spoken.length),await page.evaluate(()=>spokenBefore));
  await page.evaluate(()=>{hiddenForTest=false;document.dispatchEvent(new Event('visibilitychange'));});
  await page.waitForFunction(()=>spoken.length===spokenBefore+1);
  assert.equal(await page.locator('.voice-dialog').getAttribute('data-phase'),'speaking');
@@ -68,10 +68,10 @@ try{
  await page.evaluate(()=>resolveSend());
  for(const width of [360,393,768,1440]){await page.setViewportSize({width,height:710});const box=await page.locator('.voice-dialog').boundingBox();assert.ok(box.x>=0&&box.x+box.width<=width);}
  await page.setViewportSize({width:393,height:710});await page.screenshot({path:output+'/voice-mobile-compact.png'});
- await page.locator('.voice-dialog').getByLabel('Профиль голоса').selectOption('Luna');
+ await page.locator('.voice-dialog').getByLabel('Голос',{exact:true}).selectOption('test');
  await page.getByRole('button',{name:'Проверить звук',exact:true}).click();
- assert.equal(await page.evaluate(()=>spoken.at(-1).pitch),1.12);
- assert.equal(await page.evaluate(()=>localStorage.getItem('velia-voice-profile')),'Luna');
+ assert.equal(await page.evaluate(()=>spoken.at(-1).voice.voiceURI),'test');
+ assert.equal(await page.evaluate(()=>localStorage.getItem('velia-voice-uri')),'test');
  assert.ok(await page.evaluate(()=>unlocks>=1));
- assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,synthetic:true,checks:['captions','multi-chunk reply','silence retry','stale callback safety','permission error','voice/rate','mobile layout','hidden pending answer survives','pause clears stale progress']}));
+ assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,synthetic:true,checks:['captions','multi-chunk reply','silence retry','stale callback safety','permission error','voice/rate','mobile layout','hidden pending answer survives','pause clears stale progress','first phrase before final reply','emoji removed','stream final does not repeat']}));
 }finally{await browser?.close();server.close();}

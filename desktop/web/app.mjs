@@ -733,6 +733,7 @@ async function generate(retry = false, voiceTurn = false) {
     }
     const result = await readCompletion(response, (content) => {
       answer.content = content;
+      if (voiceTurn) voice.update(content);
       $("generation-status").textContent = "";
       queuePaint();
       scheduleSave();
