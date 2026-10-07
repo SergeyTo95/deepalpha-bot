@@ -84,7 +84,7 @@ function filePreview(){const target=$("attachment-preview");target.replaceChildr
 function addFiles(files){if(busy)return;if(!profile){openAuth();return;}if(agentMode){toast('Для файлов выключи Agent и открой обычный диалог.');return;}try{const prepared=files.map(prepareFile);if(selectedFiles.length+prepared.length>4)throw new Error('Можно прикрепить до 4 файлов, по 15 МБ каждый.');selectedFiles.push(...prepared.map(file=>({file,key:crypto.randomUUID()})));filePreview();resizePrompt();}catch(e){toast(e.message);}}
 
 const current = () => chats.find((c) => c.id === currentId);
-const voice = setupVoice({busy:()=>busy, toast, send:text=>{$("prompt").value=text;generate();}});
+const voice = setupVoice({busy:()=>busy, toast, send:text=>{$("prompt").value=text;return generate();}});
 const features = setupFeatures({signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
 const browserStorage = { getItem: (key) => localStorage.getItem(key) };
 function toast(text) {
@@ -361,6 +361,7 @@ function setBusy(value) {
   renderHistory();
 }
 function newChat() {
+  voice.stop();
   features.close();
   clearFiles();
   if (busy) return;
@@ -483,6 +484,7 @@ async function continueAfterTakeover() {
 }
 
 async function openChat(chat) {
+  voice.stop();
   features.close();
   clearFiles();
   if (busy || (!profile && !guest)) return;
@@ -742,8 +744,8 @@ async function generate(retry = false) {
       scheduleSave();
     });
     answer.finish = result.finish;
-    voice.complete(answer.content);
     }
+    voice.complete(answer.content);
   } catch (error) {
     voice.failure();
     if (error.name === "AbortError") answer.stopped = true;

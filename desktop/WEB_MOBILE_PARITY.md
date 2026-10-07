@@ -62,3 +62,11 @@ Added a local image viewer with zoom, bounded plain-text preview/copy, native PD
 Original attachment previews are session-memory only (12 files / 60 MiB bounded cache), cleared on account changes/logout; object URLs are revoked when viewers close. Restored history receives allowlisted attachment metadata, never original bytes, extracted text, private URLs or credentials. Originals cannot be reopened after reload unless reselected. DOCX analysis and image understanding continue through the existing backend; this change does not qualify real model inference, PDF OCR or GPU media generation.
 
 Verification: 36 focused server tests, 13 Node tests and synthetic Chromium checks for escaped text previews, image zoom, PDF links, file limits, unsupported formats, Studio viewer and answer/chat downloads.
+
+## Browser voice conversation
+
+Rebuilt the native Web Speech conversation loop with interim captions, distinct listening/thinking/speaking states, pause/resume, retry after silence, explicit permission/network/microphone errors and stale-callback guards. Pausing, closing, hiding the page or changing conversations stops microphone and speech. Rejected/no-op chat submissions return an actionable state instead of waiting forever; browser Agent replies now use the same voice completion hook.
+
+Speech output splits long answers into bounded chunks and removes spoken code/URLs/Markdown while preserving the original chat reply. A speech watchdog stops a stalled engine. Settings expose conversation language, available device voices, rate and a sample; voices loaded asynchronously refresh the selector. Responses remain in normal conversation history. Recognition listens between spoken answers, so automatic barge-in/echo cancellation and real-time model audio are not claimed. TTS begins after the full model reply arrives.
+
+Verification: 16 Node checks, focused gateway tests and synthetic Chromium speech lifecycle checks for interim captions, multi-chunk completion, silence retry, stale callbacks after pause, permission denial, selected voice/rate and mobile dialog bounds. Synthetic speech APIs qualify UI/control flow, not real microphone accuracy, actual speech quality or physical-device audio.

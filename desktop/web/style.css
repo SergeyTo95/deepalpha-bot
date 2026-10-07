@@ -1421,3 +1421,16 @@ dialog::backdrop {
 .message-files button { cursor: pointer; }
 .file-drag { outline: 2px dashed var(--soft); outline-offset: 3px; }
 @media(max-width:520px) { .file-dialog { padding: 16px; } .file-view-header { align-items: flex-start; } .file-view-header button { flex-shrink: 0; } }
+
+.voice-dialog { width: min(520px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; box-sizing: border-box; padding: 24px; }
+.voice-orb { width: 88px; height: 88px; border-radius: 50%; display: grid; place-items: center; margin: 24px auto; font-size: 40px; font-weight: 700; border: 1px solid var(--border); background: var(--surface); transition: box-shadow .25s; }
+.voice-dialog[data-phase="listening"] .voice-orb { box-shadow: 0 0 0 10px var(--hover); }
+.voice-dialog[data-phase="speaking"] .voice-orb { box-shadow: 0 0 0 6px var(--border); }
+.voice-status { text-align: center; min-height: 48px; }
+.voice-captions { padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); max-height: 240px; overflow-y: auto; overflow-wrap: anywhere; }
+.voice-captions span { font-size: 12px; color: var(--soft); }
+.voice-captions p { margin: 8px 0 20px; color: var(--text); white-space: pre-wrap; }
+.voice-captions p:last-child { margin-bottom: 0; }
+.voice-controls { display: flex; gap: 12px; margin-top: 16px; }
+.voice-controls button { flex: 1; margin: 0; }
+.voice-hint { font-size: 12px; margin-bottom: 0; }
