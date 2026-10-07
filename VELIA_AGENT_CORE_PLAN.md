@@ -78,3 +78,9 @@ Requirements:
 ### Browser tabs and login handoff
 - Browser Agent keeps multiple Chromium tabs inside the same account + AGENT conversation session and uses `browser_tabs` to create/switch tabs without discarding the original page.
 - Login-sensitive challenges are never guessed or bypassed. The Agent emits a structured `user_action_required` kind for credentials, OTP, passkey, CAPTCHA, or device approval while keeping the current browser session alive for continuation.
+
+### Browser storage safety
+- Hosted profile storage preserves cookies, restored tabs, IndexedDB/Local Storage, downloaded artifacts and current Agent context. Only explicit regenerable Chromium caches, derived Agent attachment cache and old abandoned atomic-write temporary files are swept; active environments and symlinks are excluded.
+- Startup and five-minute maintenance log aggregate freed/retained bytes and free disk capacity without user identifiers. Chromium disk/media caches are capped at 16/8 MiB. Admission reserves 128 MiB of disk and limits each profile to 256 MiB by default; exceeding either stops growth without silently deleting user data. Environment settings can tune these limits.
+- Existing 30-day inactive-profile retention still applies. A finite volume needs monitoring/capacity planning as durable user data grows; cache cleanup is not unlimited storage.
+- Validation: 22 storage/session/Agent tests cover protected artifacts, active environments, symlink isolation, temporary-file age, reserve/profile limits and maintenance/creation locking. Live reclaimed space must be verified in deployment logs.

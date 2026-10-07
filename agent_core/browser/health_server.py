@@ -6,6 +6,7 @@ Each authenticated VELIA account receives one isolated long-lived Chromium and
 one persisted headless Agent session until its idle TTL expires.
 """
 import asyncio
+from agent_core.browser import storage
 from dataclasses import dataclass, field
 import hashlib
 import hmac
@@ -97,6 +98,8 @@ sessions: dict[str, BrowserSession] = {}
 sessions_lock = asyncio.Lock()
 
 storage_reused_at_boot = False
+storage_report = {}
+storage_lock = asyncio.Lock()
 
 
 def _configure_flash_gateway():
@@ -308,14 +311,15 @@ async def _dispose_session(session, purge=False):
 async def _cleanup_expired_sessions():
     now = time.monotonic()
     expired = []
-    async with sessions_lock:
-        for key, session in list(sessions.items()):
-            if session.lock.locked():
-                continue
-            if now - session.last_used >= SESSION_IDLE_SECONDS:
-                expired.append(sessions.pop(key))
-    for session in expired:
-        await _dispose_session(session)
+    async with storage_lock:
+        async with sessions_lock:
+            for key, session in list(sessions.items()):
+                if session.lock.locked():
+                    continue
+                if now - session.last_used >= SESSION_IDLE_SECONDS:
+                    expired.append(sessions.pop(key))
+        for session in expired:
+            await _dispose_session(session)
 
 
 async def _cleanup_retained_profiles():
@@ -338,6 +342,29 @@ async def _cleanup_retained_profiles():
             continue
         if stat.st_mtime < cutoff:
             await asyncio.to_thread(shutil.rmtree, root, True)
+
+
+async def _maintain_storage():
+    global storage_report
+    async with storage_lock:
+        # Session creation and maintenance share this lock so caches are never
+        # removed from a Chromium being started or serving a takeover.
+        async with sessions_lock:
+            storage_report = await asyncio.to_thread(storage.maintain, SESSION_BASE, set(sessions))
+        if storage_report['cache_bytes_removed'] or storage_report['low_space']:
+            print('VELIA_AGENT_CORE_STORAGE_MAINTENANCE ' + json.dumps(storage_report, sort_keys=True), flush=True)
+    return storage_report
+
+
+async def _storage_loop():
+    while True:
+        await asyncio.sleep(300)
+        try:
+            await _cleanup_expired_sessions()
+            await _cleanup_retained_profiles()
+            await _maintain_storage()
+        except OSError as exc:
+            print('VELIA_AGENT_CORE_STORAGE_MAINTENANCE_FAILED errno=' + str(exc.errno), flush=True)
 
 
 async def _wait_for_debug_port(profile, process):
@@ -383,6 +410,9 @@ async def _new_session(user_id, conversation="default"):
         "--no-first-run",
         "--no-default-browser-check",
         "--restore-last-session",
+        "--disk-cache-size=16777216",
+        "--media-cache-size=8388608",
+        "--disable-component-update",
         "--remote-debugging-address=127.0.0.1",
         "--remote-debugging-port=0",
         f"--user-data-dir={profile}",
@@ -417,6 +447,8 @@ async def _new_session(user_id, conversation="default"):
 async def _get_session(user_id, conversation="default"):
     await _cleanup_expired_sessions()
     await _cleanup_retained_profiles()
+    await _maintain_storage()
+    await asyncio.to_thread(storage.ensure_capacity, SESSION_BASE, _session_root(user_id, conversation))
     key = _session_key(user_id, conversation)
     stale = None
     async with sessions_lock:
@@ -431,14 +463,15 @@ async def _get_session(user_id, conversation="default"):
     if stale:
         await _dispose_session(stale)
 
-    created = await _new_session(user_id, conversation)
-    async with sessions_lock:
-        race = sessions.get(key)
-        if race and race.browser.returncode is None:
-            winner = race
-        else:
-            sessions[key] = created
-            winner = created
+    async with storage_lock:
+        created = await _new_session(user_id, conversation)
+        async with sessions_lock:
+            race = sessions.get(key)
+            if race and race.browser.returncode is None:
+                winner = race
+            else:
+                sessions[key] = created
+                winner = created
     if winner is not created:
         await _dispose_session(created)
         winner.last_used = time.monotonic()
@@ -459,6 +492,7 @@ async def health(_request):
         "profile_retention_seconds": PROFILE_RETENTION_SECONDS,
         "durable_storage": not str(SESSION_BASE).startswith("/tmp/"),
         "storage_reused_at_boot": storage_reused_at_boot,
+        "storage": {k: storage_report.get(k) for k in ("free_bytes", "total_bytes", "low_space")},
         "session_cookie_snapshot": True,
         "manual_takeover": True,
         "takeover_idle_seconds": TAKEOVER_IDLE_SECONDS,
@@ -622,7 +656,7 @@ async def run_browser_task(request):
                 flush=True,
             )
             return web.json_response(
-                {"ok": False, "error": "browser_agent_unavailable"}, status=503
+                {"ok": False, "error": str(exc) if str(exc) in {"browser_storage_capacity", "browser_profile_capacity"} else "browser_agent_unavailable"}, status=503
             )
         except asyncio.CancelledError:
             if child and child.returncode is None:
@@ -760,16 +794,24 @@ async def browser_takeover_action(request):
 
 async def session_lifecycle(_app):
     global storage_reused_at_boot
+    await asyncio.to_thread(SESSION_BASE.mkdir, parents=True, exist_ok=True, mode=0o700)
+    await _maintain_storage()
     storage_reused_at_boot = await _ensure_storage_sentinel()
     print(
         "VELIA_AGENT_CORE_STORAGE_READY "
         + json.dumps({
             "durable_storage": not str(SESSION_BASE).startswith("/tmp/"),
             "reused": storage_reused_at_boot,
+            "storage": storage_report,
         }, sort_keys=True),
         flush=True,
     )
-    yield
+    maintenance_task = asyncio.create_task(_storage_loop())
+    try:
+        yield
+    finally:
+        maintenance_task.cancel()
+        await asyncio.gather(maintenance_task, return_exceptions=True)
     async with sessions_lock:
         remaining = list(sessions.values())
         sessions.clear()
