@@ -6,6 +6,11 @@ from desktop.feature_routes import setup_feature_routes, route_allowed, safe_res
 
 def test_feature_paths_are_exact_and_do_not_expose_auth_or_admin():
     assert route_allowed('GET', 'profile')
+    assert route_allowed('GET', 'agent/schedules/status')
+    assert route_allowed('POST', 'agent/schedules/schedule1/enable')
+    assert route_allowed('DELETE', 'agent/schedules/schedule1')
+    assert not route_allowed('POST', 'agent/schedules/schedule1/run')
+    assert not route_allowed('GET', 'agent/schedules/a/b')
     assert route_allowed('POST', 'research/missions/m1/literature')
     assert not route_allowed('POST', 'profile')
     for path in ('auth/refresh', 'admin', 'profile/../auth/refresh', 'https://example.com', 'research/missions/a/b/literature'):

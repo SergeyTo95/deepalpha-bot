@@ -48,3 +48,9 @@ The changes target only the separate browser gateway deployment branch.
 Shared cards, form fields, inline checkbox rows, primary actions, grouped navigation, active section indicators and Studio mode buttons support both themes. The sidebar uses one scroll surface to keep all navigation items reachable without clipping on short phone screens. The model list remains openable with Agent enabled and indicates its Flash requirement. Chromium acceptance covers all ten sections, 360/390/768/1440 px widths, no horizontal overflow, checkbox label clicks and selected navigation state. Feature responses in this UI check are synthetic.
 
 Short-screen regression checks cover 393 px width with 640/710/844 px height, model picker bounds in Agent mode and navigation/history separation. The Agent capability flag is synthetic in this UI check; no agent request is sent.
+
+## Autopilot task center
+
+Autopilot now separates scheduled task templates from GitHub development missions. Authenticated schedule routes are explicitly allowlisted in the gateway. The UI checks scheduler and Agent Core availability before offering creation, starts schedules paused, supports daily/weekly/hourly intervals with an IANA timezone, displays the latest job result and explicit approval/run controls. Only server-advertised built-in task tools and connected calendar reads are offered. Chat text may prefill a task draft; it is not a replay of an arbitrary browser instruction. No server worker flags are enabled by this change, and background browser automation or notifications are not implemented.
+
+Validation: 45 focused Python tests, 10 Node tests, and synthetic Chromium checks for weekly payloads, enable/pause, disabled scheduler, approval-before-run, GitHub mission compatibility and mobile layouts. This does not qualify actual production scheduled execution.

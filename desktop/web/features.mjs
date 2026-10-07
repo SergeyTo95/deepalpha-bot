@@ -37,9 +37,9 @@ export async function featureRequest(path, {method = 'GET', data, file, digest, 
 }
 const node = (tag, text, cls) => {const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n;};
 const button = (text, action) => {const b = node('button', text); b.type = 'button'; b.onclick = action; return b;};
-const labels = {goal:'Цель', title:'Название', name:'Имя', description:'Описание', instructions:'Инструкции', audience:'Аудитория', style:'Стиль', constraints:'Ограничения', status:'Статус', domain:'Направление', content:'Содержание', summary:'Результат', conclusion:'Вывод', text:'Текст', created_at:'Создано', updated_at:'Обновлено', preferred_name:'Как обращаться', about_me:'О себе', credits:'Токены', user_messages:'Сообщения сегодня', user_cost_usd:'Расход сегодня, $', enabled:'Включено', available:'Доступно', revision:'Версия', query:'Поисковый запрос', kind:'Тип', prompt:'Описание', duration_seconds:'Длительность, сек.', error_code:'Ошибка', rationale:'Обоснование'};
-const statuses={draft:'Черновик',planned:'Запланировано',paused:'Приостановлено',active:'Активно',completed:'Завершено',failed:'Ошибка',pending:'Ожидает',running:'Выполняется',queued:'В очереди',ready:'Готово',cancelled:'Отменено'};
-const descriptions = {studio:'Создавай изображения, видео и музыку в одном месте.',projects:'Собирай идеи, задачи и материалы вокруг одной цели.',research:'От вопроса к источникам, выводам и отчёту.',medical:'Загружай исследования и следи за результатами анализа.',agents:'Настраивай помощников под свои задачи.',autopilot:'Управляй миссиями, задачами и проверками проектов.',profile:'Помоги Велии лучше понимать тебя.',plugins:'Выбирай инструменты, которые нужны в работе.',balance:'Следи за доступными токенами и использованием.',voice:'Настрой язык и голос для разговора с Велией.'};
+const labels = {items:'Результаты',notes:'Описание',completed:'Выполнено',start:'Начало',end:'Окончание',goal:'Цель', title:'Название', name:'Имя', description:'Описание', instructions:'Инструкции', audience:'Аудитория', style:'Стиль', constraints:'Ограничения', status:'Статус', domain:'Направление', content:'Содержание', summary:'Результат', conclusion:'Вывод', text:'Текст', created_at:'Создано', updated_at:'Обновлено', preferred_name:'Как обращаться', about_me:'О себе', credits:'Токены', user_messages:'Сообщения сегодня', user_cost_usd:'Расход сегодня, $', enabled:'Включено', available:'Доступно', revision:'Версия', query:'Поисковый запрос', kind:'Тип', prompt:'Описание', duration_seconds:'Длительность, сек.', error_code:'Ошибка', rationale:'Обоснование'};
+const statuses={draft:'Черновик',planned:'Запланировано',paused:'Приостановлено',active:'Активно',completed:'Завершено',failed:'Ошибка',pending:'Ожидает',running:'Выполняется',queued:'В очереди',ready:'Готово',awaiting_approval:'Ожидает подтверждения',cancelled:'Отменено'};
+const descriptions = {studio:'Создавай изображения, видео и музыку в одном месте.',projects:'Собирай идеи, задачи и материалы вокруг одной цели.',research:'От вопроса к источникам, выводам и отчёту.',medical:'Загружай исследования и следи за результатами анализа.',agents:'Настраивай помощников под свои задачи.',autopilot:'Задачи по расписанию, результаты и разработка в одном месте.',profile:'Помоги Велии лучше понимать тебя.',plugins:'Выбирай инструменты, которые нужны в работе.',balance:'Следи за доступными токенами и использованием.',voice:'Настрой язык и голос для разговора с Велией.'};
 const hiddenKeys = new Set(['id','user_id','project_id','session_id','generation_id','client_request_id','signature','provider','model','input_sha256','worker_status']);
 function display(value, depth = 0) {
   const box = node('div', undefined, 'feature-detail');
@@ -73,7 +73,7 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
       if (!['textarea','select','multi'].includes(type)) input.type = type;
       if (options) for (const [value, text] of options) {const o = node('option', text); o.value = value; input.append(o);}
       if (type === 'checkbox') input.checked = !!initial[key]; else if(initial[key] !== undefined || !['select','multi'].includes(type)) input.value = initial[key] ?? '';
-      input.name = key; input.maxLength = type === 'textarea' ? 8000 : 200; input.required = !['checkbox','file','multi'].includes(type) && !['description','about_me','audience','style','constraints','lyrics'].includes(key);
+      input.name = key; input.maxLength = type === 'textarea' ? 8000 : 200; input.required = !['checkbox','file','multi'].includes(type) && !['description','about_me','audience','style','constraints','lyrics','notes'].includes(key);
       if (type === 'file') input.accept = '.zip,.nii,.gz';
       controls[key] = input; if(type==='checkbox') l.prepend(input); else l.append(input); if(type==='multi') l.append(node('small','На компьютере удерживай Ctrl или ⌘, чтобы выбрать несколько.', 'field-hint')); f.append(l);
     }
@@ -104,7 +104,7 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
     }
     if (result.next_offset != null) {const more = button('Показать ещё', () => run(more, async () => {more.remove(); await collection(path,key,target,detail,result.next_offset);})); target.append(more);}
   }
-  async function open(name) {
+  async function open(name, draft = {}) {
     if (isBusy()) {toast('Дождись завершения ответа.'); return;}
     if (!signedIn() && name !== 'voice') {openAuth(); return;}
     close(); section = name; controller = new AbortController(); const ticket = epoch;
@@ -153,12 +153,69 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
         };
         const refresh=()=>collection('medical/cases','cases',list,detail);await refresh();
       } else if (name === 'autopilot') {
-        const projects=await call('developer/projects'); if(ticket!==epoch)return;body.replaceChildren();
-        body.append(form([['project_id','Проект','select',(projects.projects||[]).map(p=>[p.id,p.name||p.title||p.repository_full_name||p.id])],['name','Название'],['allowed_paths','Разрешённые пути, по одному на строку','textarea'],['max_steps','Максимум шагов','number'],['max_files','Максимум файлов','number']],'Создать миссию',async d=>{await call('developer/autopilot/missions',{method:'POST',data:{...d,allowed_paths:d.allowed_paths.split('\n').map(x=>x.trim()).filter(Boolean),blocked_paths:[]}});await refresh();},{max_steps:5,max_files:5}));
-        const list=node('div');body.append(list);
-        const refresh=()=>collection('developer/autopilot/missions','missions',list,async(m,card)=>{card.append(display(m));actions(card,[['Активировать',async()=>{await call(`developer/autopilot/missions/${m.id}/activate`,{method:'POST'});await refresh();}],['Приостановить',async()=>{await call(`developer/autopilot/missions/${m.id}/pause`,{method:'POST'});await refresh();}]]);card.append(form([['instruction','Задача','textarea']],'Добавить задачу',async d=>{await call(`developer/autopilot/missions/${m.id}/tasks`,{method:'POST',data:{...d,priority:0,client_request_id:crypto.randomUUID()}});}));const tasks=node('div'),runs=node('div');card.append(tasks,runs);actions(card,[['История запусков',()=>collection(`developer/autopilot/missions/${m.id}/runs`,'runs',runs,async(r,rc)=>{const out=node('div');rc.append(out);actions(rc,['ci','reviews','merge-policy'].map((k,i)=>[['Проверки CI','Ревью','Условия мержа'][i],async()=>{const v=await call(`developer/autopilot/runs/${r.id}/${k}`);out.replaceChildren(display(v));}]));})]]);await collection(`developer/autopilot/missions/${m.id}/tasks`,'tasks',tasks,async(t,tc)=>{tc.append(display(t));actions(tc,[['Отменить задачу',async()=>{await call(`developer/autopilot/tasks/${t.id}/cancel`,{method:'POST'});tc.append(node('p','Задача отменена'));}]]);});});await refresh();
+        await autopilot(body,draft);
       }
     } catch(e) {if(e.name!=='AbortError'&&ticket===epoch)body.replaceChildren(node('p',e.message),button('Повторить',()=>open(name)));}
+  }
+  async function development(body) {
+    const ticket=epoch;
+    const readiness=await call('developer/autopilot/status');
+    body.replaceChildren(node('p',readiness.worker_ready ? 'Исполнитель разработки готов. Миссии создаются на паузе; результат — черновик PR.' : 'Исполнитель разработки отключён или не готов. Активация миссии не гарантирует запуск.', 'feature-notice'));
+        const projects=await call('developer/projects'); if(ticket!==epoch)return;
+        body.append(form([['project_id','Проект','select',(projects.projects||[]).map(p=>[p.id,p.name||p.title||p.repository_full_name||p.id])],['name','Название'],['allowed_paths','Разрешённые пути, по одному на строку','textarea'],['max_steps','Максимум шагов','number'],['max_files','Максимум файлов','number']],'Создать миссию',async d=>{await call('developer/autopilot/missions',{method:'POST',data:{...d,allowed_paths:d.allowed_paths.split('\n').map(x=>x.trim()).filter(Boolean),blocked_paths:[]}});await refresh();},{max_steps:5,max_files:5}));
+        const list=node('div');body.append(list);
+        const refresh=()=>collection('developer/autopilot/missions','missions',list,async(m,card)=>{card.append(display(m));actions(card,[['Активировать',async()=>{if(!readiness.worker_ready){toast('Исполнитель разработки не готов.');return;}await call(`developer/autopilot/missions/${m.id}/activate`,{method:'POST'});await refresh();}],['Приостановить',async()=>{await call(`developer/autopilot/missions/${m.id}/pause`,{method:'POST'});await refresh();}]]);card.append(form([['instruction','Задача','textarea']],'Добавить задачу',async d=>{await call(`developer/autopilot/missions/${m.id}/tasks`,{method:'POST',data:{...d,priority:0,client_request_id:crypto.randomUUID()}});}));const tasks=node('div'),runs=node('div');card.append(tasks,runs);actions(card,[['История запусков',()=>collection(`developer/autopilot/missions/${m.id}/runs`,'runs',runs,async(r,rc)=>{const out=node('div');rc.append(out);actions(rc,['ci','reviews','merge-policy'].map((k,i)=>[['Проверки CI','Ревью','Условия мержа'][i],async()=>{const v=await call(`developer/autopilot/runs/${r.id}/${k}`);out.replaceChildren(display(v));}]));})]]);await collection(`developer/autopilot/missions/${m.id}/tasks`,'tasks',tasks,async(t,tc)=>{tc.append(display(t));actions(tc,[['Отменить задачу',async()=>{await call(`developer/autopilot/tasks/${t.id}/cancel`,{method:'POST'});tc.append(node('p','Задача отменена'));}]]);});});await refresh();
+    if(!readiness.worker_ready)body.querySelectorAll('button').forEach(b=>{if(b.textContent==='Активировать')b.disabled=true;});
+  }
+  async function autopilot(body,draft) {
+    body.replaceChildren();const tabs=node('div',undefined,'feature-tabs'),panel=node('div');body.append(tabs,panel);
+    let version=0;
+    async function select(key) {
+      const current=++version,ticket=epoch;tabs.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.tab===key)));
+      panel.replaceChildren(node('p','Загрузка…','feature-empty'));
+      // Each tab has its own detached mount, so late responses cannot overwrite another tab.
+      const mount=node('div');
+      try {if(key==='development')await development(mount);else await schedules(mount,draft);}
+      catch(e){if(e.name==='AbortError')return;mount.replaceChildren(node('p',e.message,'feature-notice'),button('Повторить',()=>select(key)));}
+      if(current===version&&ticket===epoch)panel.replaceChildren(mount);
+    }
+    for(const [key,title] of [['schedules','Задачи и расписания'],['development','Разработка']]){const b=button(title,()=>select(key));b.dataset.tab=key;tabs.append(b);}
+    await select('schedules');
+  }
+  async function schedules(body,draft) {
+    const [status,core]=await Promise.all([call('agent/schedules/status'),call('agent/status')]);
+    const ready=!!status.enabled&&!!core.enabled;
+    body.append(node('p',ready ? 'Планировщик включён. Новые расписания создаются на паузе — включи их, когда всё проверишь.' : 'Фоновые задачи сейчас отключены на сервере. Расписание нельзя запустить, пока исполнитель не включён.', 'feature-notice'));
+    body.append(node('p','Выбери конкретное действие. Этот раздел пока не запускает произвольные браузерные поручения и не отправляет уведомления.', 'feature-help'));
+    if(!ready)return;
+    const available=new Set((core.tools||[]).filter(t=>t.enabled!==false).map(t=>t.name));
+    const templates=[['velia.tasks.list','Обзор моих задач'],['velia.tasks.create_draft','Создать черновик задачи']].filter(([key])=>available.has(key));
+    if(available.has('google.calendar.events.list')){const calendar=await call('agent/connectors/google-calendar/status');if(calendar.connected)templates.push(['google.calendar.events.list','События календаря на ближайшие 7 дней']);}
+    const list=node('div');
+    if(templates.length) {
+      const f=form([['instruction','Название задачи'],['template','Что выполнять','select',templates],['notes','Описание черновика','textarea'],['kind','Повторять','select',[['daily','Ежедневно'],['weekly','Еженедельно'],['interval_hours','Через интервал']]],['time','Время','time'],['weekday','День недели','select',['Понедельник','Вторник','Среда','Четверг','Пятница','Суббота','Воскресенье'].map((t,i)=>[String(i),t])],['hours','Интервал, часов','number'],['timezone','Часовой пояс']], 'Создать расписание',async d=>{
+        const schedule=d.kind==='interval_hours'?{kind:d.kind,hours:d.hours}:{kind:d.kind,time:d.time,...(d.kind==='weekly'?{weekdays:[Number(d.weekday)]}:{})};
+        const argumentsFor=d.template==='velia.tasks.create_draft'?{title:d.instruction,notes:d.notes}:d.template==='velia.tasks.list'?{limit:50}:{max_results:20};
+        await call('agent/schedules',{method:'POST',data:{instruction:d.instruction,timezone:d.timezone,schedule,actions:[{tool_name:d.template,arguments:argumentsFor}]}});await refresh();
+      },{instruction:draft.instruction||'',template:draft.instruction?'velia.tasks.create_draft':templates[0][0],time:'09:00',hours:24,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC'});
+      const kind=f.elements.kind,template=f.elements.template;
+      const update=()=>{for(const [key,visible] of [['time',kind.value!=='interval_hours'],['weekday',kind.value==='weekly'],['hours',kind.value==='interval_hours'],['notes',template.value==='velia.tasks.create_draft']]){const input=f.elements[key];input.closest('label').hidden=!visible;input.disabled=!visible;} };
+      f.elements.hours.min=1;f.elements.hours.max=168;kind.onchange=update;template.onchange=update;update();body.append(f);
+    } else body.append(node('p','Нет доступных действий для расписания.','feature-empty'));
+    body.append(list);
+    const when=value=>{if(!value)return '—';const raw=String(value);const date=new Date(/(?:Z|[+-]\d\d:\d\d)$/.test(raw)?raw:raw+'Z');return Number.isNaN(date.valueOf())?'—':date.toLocaleString();};
+    const detail=async(s,card)=>{
+      const r=await call('agent/schedules/'+s.schedule_id),item=r.schedule;card.replaceChildren(node('h3',item.instruction),node('small',item.enabled?'Включено':'На паузе'),node('p',(item.schedule.kind==='interval_hours'?'Каждые '+item.schedule.hours+' ч.':item.schedule.kind==='weekly'?'Еженедельно в '+item.schedule.time:'Ежедневно в '+item.schedule.time)+' · '+item.timezone),node('p','Следующий запуск: '+when(item.next_run_at)),node('p','Последний запуск: '+when(item.last_run_at)));
+      if(item.error_code)card.append(node('p','Последний запуск завершился ошибкой: '+item.error_code,'feature-notice'));
+      actions(card,[[item.enabled?'Приостановить':'Включить',async()=>{await call(`agent/schedules/${s.schedule_id}/${item.enabled?'disable':'enable'}`,{method:'POST'});await refresh();}],['Обновить',()=>detail(s,card)],['Удалить расписание',async()=>{if(!confirm('Удалить расписание?'))return;await call('agent/schedules/'+s.schedule_id,{method:'DELETE'});await refresh();}]]);
+      if(item.last_job_id){const out=node('div');card.append(out);await jobView(item.last_job_id,out);}
+    };
+    async function jobView(id,out){const r=await call('agent/jobs/'+id),job=r.job;out.replaceChildren(node('h4','Последний результат'),node('p',statuses[job.status]||job.status));
+      for(const a of job.actions||[]){const item=node('div',undefined,'feature-card');item.append(display(a.result||a.arguments));if(a.error_code)item.append(node('p',a.error_code,'feature-notice'));if(a.status==='awaiting_approval')actions(item,[['Подтвердить действие',async()=>{await call(`agent/jobs/${id}/actions/${a.action_id}/approve`,{method:'POST'});await jobView(id,out);}],['Отклонить',async()=>{await call(`agent/jobs/${id}/actions/${a.action_id}/reject`,{method:'POST'});await jobView(id,out);}]]);out.append(item);}
+      if(job.status==='planned')actions(out,[['Выполнить подтверждённое',async()=>{await call(`agent/jobs/${id}/run`,{method:'POST'});await jobView(id,out);}]]);
+    }
+    async function refresh(){const r=await call('agent/schedules');list.replaceChildren();if(!r.schedules?.length)list.append(node('div','Расписаний пока нет. Создай первое с помощью формы выше.','feature-empty'));for(const item of r.schedules||[]){const card=node('article',undefined,'feature-card');list.append(card);await detail(item,card);}}
+    await refresh();
   }
   async function studio(body) {
     const ticket=epoch,status=await call('studio/status');if(ticket!==epoch)return;if(status.enabled===false)throw new Error('Studio сейчас отключена.');

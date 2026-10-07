@@ -1002,3 +1002,5 @@ async function changeChat(action){
   }catch(e){toast(e.message);}
 }
 $("chat-rename").onclick=()=>changeChat("rename");$("chat-pin").onclick=()=>changeChat("pin");$("chat-share").onclick=()=>changeChat("share");
+
+$("chat-schedule").onclick=()=>{const chat=chats.find(c=>c.id===currentId),last=chat?.messages.findLast(m=>m.role==='user');$("chat-tools-menu").hidden=true;features.open('autopilot',{instruction:last?.content?.slice(0,200)||''});};

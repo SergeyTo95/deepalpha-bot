@@ -13,6 +13,7 @@ try{
   browser=await chromium.launch({executablePath:process.env.VELIA_CHROMIUM_EXECUTABLE||await bundled.executablePath(),args:bundled.args.filter(a=>!['--disable-web-security','--allow-running-insecure-content'].includes(a)),headless:true});
   const context=await browser.newContext({viewport:{width:1440,height:960}}),page=await context.newPage(),errors=[],calls=[];
   page.on('pageerror',e=>errors.push(e.message));
+  let scheduleItems=[],schedulerEnabled=true,jobStatus='completed';
   const id='11111111-1111-1111-1111-111111111111';
   await context.route('**/web-api/v1/features/**',async route=>{
     const req=route.request(),p=new URL(req.url()).pathname.split('/features/')[1];calls.push({method:req.method(),path:p,body:req.headers()['content-type']?.includes('json')?req.postDataJSON():null});
@@ -26,6 +27,7 @@ try{
       ['research/missions/'+id]:{mission:{id,goal:'Тема исследования',status:'planned'}},
       'medical/cases':{cases:[{id,title:'КТ',status:'draft'}]},['medical/cases/'+id]:{case:{id,title:'КТ',status:'draft'}},
       agents:{agents:[{id,name:'Мой агент'}]},'agents/capabilities':{capabilities:[{id:'research',name:'Исследования'}]},
+      'agent/status':{enabled:true,tools:[{name:'velia.tasks.list',enabled:true},{name:'velia.tasks.create_draft',enabled:true}]},'agent/schedules/status':{enabled:true},'agent/schedules':{schedules:[]},'developer/autopilot/status':{worker_ready:true},
       'developer/projects':{projects:[{id:'repo1',repository_full_name:'owner/repo'}]},
       'developer/autopilot/missions':{missions:[{mission_id:'mission1',name:'Миссия',status:'paused'}]},
       'developer/autopilot/missions/mission1/tasks':{tasks:[]},
@@ -33,6 +35,18 @@ try{
       'studio/sessions':{sessions:[{id,title:'Моя Studio'}]},['studio/sessions/'+id+'/messages']:{messages:[{content:'Готово',generation:{type:'image',media:{id:'image1',content_url:'/api/mobile/images/image1/content?user_id=7&expires=123&signature=abc'}}}]},
     };
     let result=map[p]||{};
+    if(p==='agent/schedules/status')result={enabled:schedulerEnabled};
+    if(p==='agent/schedules'){
+      if(req.method()==='POST'){const d=req.postDataJSON();scheduleItems.push({...d,schedule_id:'schedule1',enabled:false,last_job_id:'job1'});result={schedule:scheduleItems.at(-1)};}
+      else result={schedules:scheduleItems};
+    }
+    if(p==='agent/schedules/schedule1')result={schedule:scheduleItems[0]};
+    if(p==='agent/schedules/schedule1/enable')scheduleItems[0].enabled=true;
+    if(p==='agent/schedules/schedule1/disable')scheduleItems[0].enabled=false;
+    if(p==='agent/jobs/job1/actions/action1/approve')jobStatus='planned';
+    if(p==='agent/jobs/job1/run')jobStatus='completed';
+    if(p==='agent/jobs/job1')result={job:{status:jobStatus,actions:[{action_id:'action1',status:jobStatus==='awaiting_approval'?'awaiting_approval':jobStatus,result:{items:[{title:'Проверить проект'}]}}]}};
+
     if(req.method()==='POST'&&p==='studio/sessions')result={session:{id,title:'Новая Studio'}};
     if(req.method()==='POST'&&p.endsWith('/assets'))result={asset:{id:'ref1'}};
     if(req.method()==='POST'&&p.endsWith('/attachments'))result={attachment:{id}};
@@ -48,15 +62,21 @@ try{
   await open('Studio');await page.locator('[name=image_provider]').selectOption('velia_image_2');await page.locator('[name=prompt]').fill('Прозрачный персонаж');await page.locator('[name=transparent_background]').check();await page.getByRole('button',{name:'Создать',exact:true}).click();await page.locator('.feature-card img').waitFor();assert.equal(calls.findLast(c=>c.path.endsWith('/generate')).body.image_provider,'velia_image_2');await page.screenshot({path:output+'/studio-desktop.png'});
   await page.getByRole('button',{name:'Видео',exact:true}).click();await page.locator('[name=duration_seconds]').selectOption('15');await page.locator('[name=prompt]').fill('Видео');await page.getByRole('button',{name:'Создать',exact:true}).click();await page.waitForTimeout(100);assert.equal(calls.findLast(c=>c.path.endsWith('/generate')).body.duration_seconds,15);
   for(const name of ['Проекты','Исследования','Медицинский центр','Мои агенты','Автопилот','Плагины','Баланс и использование','Голос']){await open(name);await page.waitForTimeout(100);assert.equal(await page.getByText('Загрузка…',{exact:true}).count(),0);}
-  await open('Автопилот');await page.getByRole('button',{name:'Открыть',exact:true}).click();await page.getByRole('button',{name:'Активировать',exact:true}).click();await page.waitForTimeout(100);assert.ok(calls.some(c=>c.path==='developer/autopilot/missions/mission1/activate'));
+  await open('Автопилот');await page.locator('[name=instruction]').fill('Еженедельный обзор');await page.locator('[name=kind]').selectOption('weekly');await page.locator('[name=weekday]').selectOption('4');await page.locator('[name=time]').fill('10:30');await page.getByRole('button',{name:'Создать расписание',exact:true}).click();await page.getByRole('button',{name:'Включить',exact:true}).waitFor();
+  const scheduled=calls.findLast(c=>c.path==='agent/schedules'&&c.method==='POST').body;assert.deepEqual(scheduled.schedule,{kind:'weekly',time:'10:30',weekdays:[4]});assert.equal(scheduled.actions[0].tool_name,'velia.tasks.list');assert.ok(scheduled.timezone);
+  await page.getByRole('button',{name:'Включить',exact:true}).click();await page.getByRole('button',{name:'Приостановить',exact:true}).click();await page.getByText('Проверить проект',{exact:true}).waitFor();await page.screenshot({path:output+'/autopilot-desktop.png'});
+  jobStatus='awaiting_approval';await open('Автопилот');await page.getByRole('button',{name:'Подтвердить действие',exact:true}).waitFor();assert.ok(!calls.some(c=>c.path==='agent/jobs/job1/run'));await page.getByRole('button',{name:'Подтвердить действие',exact:true}).click();await page.getByRole('button',{name:'Выполнить подтверждённое',exact:true}).click();await page.getByText('Завершено',{exact:true}).waitFor();
+  schedulerEnabled=false;await open('Автопилот');await page.getByText('Фоновые задачи сейчас отключены на сервере.',{exact:false}).waitFor();assert.equal(await page.getByRole('button',{name:'Создать расписание',exact:true}).count(),0);schedulerEnabled=true;
+  await open('Автопилот');await page.getByRole('button',{name:'Разработка',exact:true}).click();await page.getByRole('button',{name:'Открыть',exact:true}).click();await page.getByRole('button',{name:'Активировать',exact:true}).click();await page.waitForTimeout(100);assert.ok(calls.some(c=>c.path==='developer/autopilot/missions/mission1/activate'));
   await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'К диалогу',exact:true}).click();await page.locator('#menu').click();await open('Персонализация');await page.waitForTimeout(500);await page.screenshot({path:output+'/profile-mobile.png'});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   for(const width of [360,390,768,1440]) {
     await page.setViewportSize({width,height:960});
-    for(const name of ['Медицинский центр','Проекты','Studio','Плагины','Баланс и использование','Голос']) {
+    for(const name of ['Медицинский центр','Проекты','Studio','Автопилот','Плагины','Баланс и использование','Голос']) {
       if(width<=900)await page.locator('#menu').click();
       await open(name);await page.waitForTimeout(100);
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`${name}: overflow at ${width}`);
       assert.equal(await page.locator('#feature-nav button[aria-current=page]').count(),1);
+      if(name==='Автопилот'&&width===390)await page.screenshot({path:output+'/autopilot-mobile.png'});
       if(name==='Медицинский центр') {
         const label=page.locator('.feature-check').first();const checkbox=label.locator('input');await label.click();assert.equal(await checkbox.isChecked(),true);
         await page.screenshot({path:output+`/medical-${width}.png`});
@@ -85,5 +105,6 @@ try{
     await page.waitForTimeout(250);await page.screenshot({path:output+`/navigation-short-${height}.png`});
     await page.locator('#scrim').click({position:{x:380,y:40}});
   }
+  await page.locator('#menu').click();await page.locator('#history .history-open').first().click();await page.locator('#chat-tools').click();await page.locator('#chat-schedule').click();await page.locator('[name=instruction]').waitFor();assert.equal(await page.locator('[name=instruction]').inputValue(),'Моя прежняя идея');assert.equal(await page.locator('[name=template]').inputValue(),'velia.tasks.create_draft');
   assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,sections:10,quantumDisabled:true,image2:true,video15:true,autopilotId:true,mobile:true,featureCalls:calls.length}));
 }finally{await browser?.close();fixture.kill();}

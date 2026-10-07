@@ -1399,3 +1399,6 @@ dialog::backdrop {
   .composer { position: relative; }
   .model-menu { left: 0; right: 0; bottom: 74px; width: auto; max-height: min(360px, 65dvh); overflow-y: auto; }
 }
+
+.feature-form label[hidden] { display: none; }
+.feature-help { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
