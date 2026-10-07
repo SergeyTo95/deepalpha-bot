@@ -12,7 +12,8 @@ CACHE_PATHS = (
     'chromium/Default/GPUCache', 'chromium/Default/DawnCache',
     'chromium/ShaderCache', 'chromium/GrShaderCache',
     'chromium/GraphiteDawnCache', 'chromium/Crashpad/reports',
-    'chromium/Crash Reports', 'dsh-home/cache',
+    'chromium/Crash Reports', 'chromium/BrowserMetrics',
+    'chromium/BrowserMetrics-spare.pma', 'dsh-home/cache',
 )
 TEMP_NAME = re.compile(r'\.(?:agent-session-id|takeover-state|session-cookies\.json)\.[0-9a-f]+\.tmp')
 
@@ -86,6 +87,8 @@ def maintain(base, active=()):
                 except OSError:
                     report['errors'] += 1
         report['cleaned_profiles'] += int(changed)
+    if shutil.disk_usage(base).free < minimum_free():
+        report['breakdown'] = breakdown(base)
     report['retained_bytes'] = sum(tree_bytes(root) for root in profiles(base))
     after = shutil.disk_usage(base)
     report.update(free_bytes=after.free, total_bytes=after.total,
@@ -113,3 +116,19 @@ def ensure_capacity(base, root=None):
             limit = 256
         if tree_bytes(root) > max(64, min(4096, limit)) * 1024 * 1024:
             raise RuntimeError('browser_profile_capacity')
+
+
+def breakdown(base):
+    """Aggregate service-directory sizes, never user IDs or file contents."""
+    from collections import defaultdict
+    totals = defaultdict(int)
+    for root in profiles(base):
+        for category in ('chromium', 'chromium/Default', 'dsh-home'):
+            parent = _safe_target(root, category)
+            if parent is None or not parent.is_dir():
+                continue
+            for child in parent.iterdir():
+                if child.is_symlink():
+                    continue
+                totals[category + '/' + child.name] += tree_bytes(child) if child.is_dir() else child.stat().st_size
+    return dict(sorted(totals.items(), key=lambda item: -item[1])[:20])

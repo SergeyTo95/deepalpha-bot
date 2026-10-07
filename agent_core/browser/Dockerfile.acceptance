@@ -1,7 +1,7 @@
 FROM node:24.19.0-bookworm-slim AS build
 RUN apt-get update && apt-get install -y --no-install-recommends git python3 build-essential pkg-config ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-COPY . .
+COPY desktop /src/desktop
 WORKDIR /src/desktop
 RUN npm ci
 RUN npm run build:harness
