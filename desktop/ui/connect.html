@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+<title>VELIA Desktop</title><link rel="stylesheet" href="connect.css"></head>
+<body><main><div class="mark">V</div><p class="label">VELIA DESKTOP</p><h1>Велия на вашем компьютере</h1>
+<p class="intro">Подключите аккаунт, чтобы работать с файлами, кодом и задачами в выбранной папке.</p>
+<button id="open" type="button" class="secondary">Получить код подключения</button>
+<p class="hint">Войдите в аккаунт Велии в браузере и скопируйте код подключения.</p>
+<form id="connect"><label for="code">Код подключения</label><input id="code" name="code" placeholder="ABCD-EFGH-JKLM-NPQR" maxlength="24" autocomplete="off" spellcheck="false" required autofocus>
+<button id="submit" type="submit">Подключить Велию</button></form><p id="status" role="status" aria-live="polite"></p>
+<small>Файлы и команды обрабатываются на вашем компьютере. Запросы разрешений на действия Велии появятся в чате.</small>
+</main><script src="connect.js"></script></body></html>

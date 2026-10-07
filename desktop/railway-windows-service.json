@@ -1,0 +1,17 @@
+{
+  "name": "velia-desktop-windows-build",
+  "source": {
+    "repo": "SergeyTo95/deepalpha-bot",
+    "branch": "ci/velia-desktop-windows-railway",
+    "checkSuites": false
+  },
+  "settings": {
+    "dockerfilePath": "desktop/Dockerfile.railway-windows",
+    "startCommand": "python /usr/local/bin/serve-velia-artifacts.py",
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 60,
+    "restartPolicyType": "NEVER",
+    "sleepApplication": true,
+    "watchPatterns": ["desktop/src/**", "desktop/scripts/**", "desktop/ui/**", "desktop/tests/**", "desktop/package*.json", "desktop/Dockerfile.railway-windows", "Dockerfile"]
+  }
+}

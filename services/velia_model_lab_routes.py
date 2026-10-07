@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from urllib.parse import quote
 
@@ -11,15 +12,17 @@ import admin_routes as core
 from services import velia_model_lab_service as lab
 from services.velia_admin_security_service import is_admin_user
 
-SECTION = "Исследования VELIA"
+SECTION = "Research"
 STATUS = {"queued": "В очереди", "running": "Выполняется", "succeeded": "Завершено",
           "failed": "Ошибка", "cancelled": "Отменено", "passed": "Верно",
           "review": "Нужна оценка", "error": "Ошибка запроса"}
 ERRORS = {"model_configuration_changed": "Конфигурация Flash изменилась во время проверки. Запустите новый прогон.",
           "flash_unavailable": "Flash сейчас недоступен.", "worker_lease_expired": "Рабочий процесс не восстановил задание после двух попыток.",
           "research_providers_unavailable": "Поиск или исследовательская модель не подключены.",
+          "research_teacher_unavailable": "Исследовательская модель не смогла начать запрос из-за конфигурации или служебного хранилища.",
+          "research_teacher_failed": "Исследовательская модель не смогла завершить запрос.",
           "no_primary_sources": "Поиск не вернул подходящих первичных источников.",
-          "invalid_research_report": "Модель вернула отчёт с некорректной структурой или ссылками.",
+          "invalid_research_report": "Модель ответила, но даже после одного автоматического исправления структура отчёта или ссылки остались некорректными.",
           "research_step_failed": "Не удалось выполнить запрос. Проверьте доступность сервисов и повторите запуск.",
           "owner_changed": "Владелец панели изменился.", "run_cancelled": "Задание отменено."}
 
@@ -61,6 +64,17 @@ def _redirect(message="", run_id=""):
     return web.HTTPSeeOther(url + ("?notice=" + quote(message, safe="") if message else ""))
 
 
+def _flash_lab_form(request, prompt=""):
+    return f"""<div class='card full'><h2>Flash Lab · прямой запрос</h2>
+    <p>Отправьте любой запрос прямо в текущую VELIA Flash и посмотрите фактический ответ, задержку, токены и ревизию модели. Это отдельная лабораторная сессия: она не читает пользователей DeepAlpha, их чаты или историю.</p>
+    <form method='post' action='/admin/research/flash'>{_csrf(request)}
+      <label>Запрос для Flash<textarea name='prompt' minlength='1' maxlength='6000' required placeholder='Например: объясни разницу между корреляцией и причинностью простыми словами'>{core._e(prompt)}</textarea></label>
+      <div class='lab-actions'><button class='primary'>Отправить в Flash</button></div>
+    </form>
+    <p class='hint'>Запрос идёт в текущий production-профиль Flash с тем же системным поведением, но без пользовательского диалога и без записи в историю VELIA. Если Flash занят живым запросом, лаборатория не перебивает пользователя.</p>
+    </div>"""
+
+
 async def index(request):
     denied = await _authorize(request)
     if denied is not None:
@@ -85,10 +99,11 @@ async def index(request):
     <div class='card'><div class='label'>Веб-поиск</div><p>{state(caps['search'])}</p></div>
     <div class='card'><div class='label'>Исследовательская модель</div><p>{state(caps['teacher'])}</p><div class='hint'>{core._e(caps['teacher_provider'])}</div></div>
     <div class='card'><div class='label'>Рабочий процесс</div><p>{'Работает' if worker.get('alive') else 'Ожидается'}</p><div class='hint'>{core._e(worker.get('seen_at') or 'Нет сигнала')}</div></div>
+    {_flash_lab_form(request)}
     <div class='card wide'><h2>Исследовать метод улучшения</h2><form method='post' action='/admin/research/runs'>{csrf}<input type='hidden' name='kind' value='research'><input type='hidden' name='request_id' value='{uuid.uuid4()}'>
     <label>Название<input name='label' maxlength='120' required value='Улучшение Flash через веса Bonsai'></label>
     <label>Цель<textarea name='goal' minlength='8' maxlength='2000' required>Улучшить правильность ответов, понимание опечаток и контекста Flash, сохранив компактность Bonsai. Проверить LoRA и дистилляцию; выяснить совместимость с текущим форматом весов и стоимость по RAM и размеру.</textarea></label>
-    <p class='hint'>По нажатию: до 2 поисковых запросов и 1 запроса исследовательской модели. Её провайдер может списать оплату по своему тарифу. Выдержки поиска требуют проверки полных источников.</p><button class='primary'{research_disabled}>Начать исследование</button></form></div>
+    <p class='hint'>По нажатию: до 2 поисковых запросов и обычно 1 запрос исследовательской модели. Если модель вернёт полезный отчёт в неверном JSON-формате, Velyon Core делает один ограниченный repair-повтор. Выдержки поиска требуют проверки полных источников.</p><button class='primary'{research_disabled}>Начать исследование</button></form></div>
     <div class='card wide'><h2>Проверить интеллект Flash</h2><form method='post' action='/admin/research/runs'>{csrf}<input type='hidden' name='kind' value='benchmark'><input type='hidden' name='request_id' value='{uuid.uuid4()}'>
     <label>Название запуска<input name='label' maxlength='120' required value='Flash: исходная проверка'></label>
     <label>Что проверяем<textarea name='goal' minlength='8' maxlength='2000' required>Зафиксировать исходное качество Flash перед экспериментами с весами.</textarea></label>
@@ -101,6 +116,48 @@ async def index(request):
     <p class='hint'>Контрольные задачи попадают в следующие проверки, но не в выгрузку обучения. Не добавляйте в обучение их переформулировки. Встроенные задачи защищены от прямого копирования.</p></div>
     <div class='card wide'><h2>Данные для обучения</h2><p>JSONL содержит только подтверждённые примеры с назначением «Для обучения». У контрольных данных назначение сохраняется.</p><a class='button' href='/admin/research/dataset.jsonl'>Скачать набор JSONL</a><p class='hint'>Выгрузка не запускает обучение. Для Bonsai отдельно нужно подтвердить совместимость адаптера и измерить размер итоговой модели.</p><h2>Последние примеры</h2>{examples}</div></div>"""
     return _page(request, body)
+
+
+def _research_copy_text(run: dict) -> str:
+    report = run.get("report") or {}
+    lines = [
+        str(run.get("label") or "Исследование Velyon Core"),
+        "",
+        str(run.get("goal") or ""),
+        "",
+    ]
+    summary = str(report.get("summary") or "").strip()
+    if summary:
+        lines.extend(["Гипотезы улучшения", summary, ""])
+    for hypothesis in report.get("hypotheses", []) or []:
+        lines.extend([
+            str(hypothesis.get("title") or ""),
+            str(hypothesis.get("method") or ""),
+            "",
+            "Проверка: " + str(hypothesis.get("test") or ""),
+            "",
+            "Риск: " + str(hypothesis.get("risk") or ""),
+            "",
+            "Источники: " + ", ".join(str(v) for v in (hypothesis.get("source_ids") or [])),
+            "",
+        ])
+    unknowns = report.get("unknowns") or []
+    if unknowns:
+        lines.append("Что ещё выяснить")
+        lines.extend(str(value) for value in unknowns)
+        lines.append("")
+    sources = report.get("sources") or []
+    if sources:
+        lines.append("Источники")
+        for source in sources:
+            lines.append(f"{source.get('id','')}: {source.get('title') or source.get('url') or ''}")
+            if source.get("url"):
+                lines.append(str(source.get("url")))
+            if source.get("snippet"):
+                lines.append(str(source.get("snippet")))
+            lines.append("")
+    return "\n".join(lines).strip()
+
 
 
 async def detail(request):
@@ -118,6 +175,13 @@ async def detail(request):
     body += "<div class='lab-actions'><a class='button' href='/admin/research'>Все исследования</a><a class='button' href=''>Обновить</a>"
     if run["status"] in {"running", "queued"}:
         body += f"<form method='post' action='/admin/research/{core._e(run['id'])}/cancel'>{csrf}<button>Отменить задание</button></form>"
+    elif run["status"] == "failed":
+        body += f"""<form method='post' action='/admin/research/runs'>{csrf}
+        <input type='hidden' name='kind' value='{core._e(run["kind"])}'>
+        <input type='hidden' name='label' value='{core._e(run["label"])}'>
+        <input type='hidden' name='goal' value='{core._e(run["goal"])}'>
+        <input type='hidden' name='request_id' value='{uuid.uuid4()}'>
+        <button class='primary'>Повторить исследование</button></form>"""
     body += "</div><p class='hint'>После отмены текущий сетевой запрос может ещё завершаться; его результат не сохранится.</p></div>"
     if run["kind"] == "benchmark":
         metrics = run["metrics"]
@@ -151,7 +215,14 @@ async def detail(request):
             body += "</div>"
         body += "</div>"
     elif report.get("summary"):
-        body += f"<div class='card full'><h2>Гипотезы улучшения</h2><p>{core._e(report['summary'])}</p><p class='hint'>План создан по поисковым выдержкам. Совместимость методов нужно подтвердить по полным материалам; обучение не проводилось.</p>"
+        copy_text = _research_copy_text(run)
+        body += f"""<div class='card full'>
+        <div class='lab-actions' style='margin-bottom:12px'>
+          <button type='button' class='primary' data-copy-target='research-copy-text'>Скопировать весь отчёт</button>
+          <span class='hint' data-copy-status='research-copy-text'></span>
+        </div>
+        <textarea id='research-copy-text' aria-hidden='true' tabindex='-1' style='position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden'>{core._e(copy_text)}</textarea>
+        <h2>Гипотезы улучшения</h2><p>{core._e(report['summary'])}</p><p class='hint'>План создан по поисковым выдержкам. Совместимость методов нужно подтвердить по полным материалам; обучение не проводилось.</p>"""
         for h in report.get("hypotheses", []):
             body += f"<div class='lab-result'><h3>{core._e(h['title'])}</h3><p>{core._e(h['method'])}</p><p><strong>Проверка:</strong> {core._e(h['test'])}</p><p><strong>Риск:</strong> {core._e(h['risk'])}</p><p class='hint'>Источники: {core._e(', '.join(h['source_ids']))}</p></div>"
         body += "<h3>Что ещё выяснить</h3><ul>" + "".join(f"<li>{core._e(v)}</li>" for v in report.get("unknowns", [])) + "</ul><h3>Источники</h3><ul>"
@@ -160,6 +231,57 @@ async def detail(request):
                 body += f"<li>{core._e(source['id'])}: <a href='{core._e(source['url'])}' rel='noopener noreferrer' target='_blank'>{core._e(source['title'] or source['url'])}</a><p class='hint'>{core._e(source['snippet'])}</p></li>"
         body += "</ul></div>"
     return _page(request, body + "</div>", run["label"])
+
+
+async def flash_probe(request):
+    denied = await _authorize(request)
+    if denied is not None:
+        return denied
+    form = await request.post()
+    prompt = str(form.get("prompt", "") or "").strip()
+    try:
+        result = await asyncio.to_thread(lab.manual_flash_probe, _owner(request), prompt)
+    except ValueError as exc:
+        return _page(request, _flash_lab_form(request, prompt) +
+            f"<div class='flash'>{core._e(str(exc))}</div>", "Flash Lab", status=400)
+
+    if not result.get("ok"):
+        errors = {
+            "flash_busy": "Flash сейчас занят живым запросом пользователя. Лаборатория не стала его перебивать.",
+            "flash_unavailable": "Flash сейчас не подключён или недоступен.",
+            "flash_timeout": "Flash не успел ответить за лимит времени.",
+            "flash_provider_error": "Worker Flash вернул ошибку.",
+            "flash_invalid_response": "Flash вернул некорректный ответ.",
+            "flash_context_too_long": "Запрос не помещается в текущий контекст Flash.",
+        }
+        message = errors.get(result.get("error"), "Не удалось получить ответ Flash.")
+        body = _flash_lab_form(request, prompt) + f"<div class='flash'>{core._e(message)}</div>"
+        return _page(request, body, "Flash Lab", status=503 if result.get("error") != "flash_busy" else 409)
+
+    usage = result.get("usage") or {}
+    profile = result.get("profile") or {}
+    text = str(result.get("text") or "")
+    body = f"""<div class='grid'>
+    <div class='card full'><h2>Запрос</h2><pre>{core._e(prompt)}</pre></div>
+    <div class='card full'><h2>Ответ Flash</h2><pre>{core._e(text)}</pre></div>
+    <div class='card'><div class='label'>Latency</div><div class='value'>{core._e(round(result.get('latency_ms',0)/1000,2))} s</div></div>
+    <div class='card'><div class='label'>Model</div><p><code>{core._e(result.get('model') or profile.get('model') or 'velia-flash')}</code></p></div>
+    <div class='card'><div class='label'>Revision</div><p><code>{core._e(profile.get('revision') or 'не указана')}</code></p></div>
+    <div class='card'><div class='label'>Finish</div><p>{core._e(result.get('finish_reason') or '—')}</p></div>
+    <div class='card full'><h2>Usage</h2><pre>{core._e(json.dumps(usage, ensure_ascii=False, indent=2))}</pre></div>
+    <div class='card wide'><h2>Превратить в обучающий пример</h2>
+      <p>Если ответ неверный — исправьте поле «Правильный ответ». Если верный — можно оставить его как есть. Только после вашей проверки пример имеет смысл помечать подтверждённым.</p>
+      <form method='post' action='/admin/research/examples'>{_csrf(request)}
+        <label>Вопрос<textarea name='prompt' maxlength='6000' required>{core._e(prompt)}</textarea></label>
+        <label>Правильный ответ / критерии<textarea name='target' maxlength='6000' required>{core._e(text)}</textarea></label>
+        <label>Назначение<select name='split'><option value='train'>Для обучения</option><option value='holdout'>Для независимой проверки</option></select></label>
+        <label class='confirm'><input type='checkbox' name='approved' value='1'> Я проверил вопрос и правильный ответ</label>
+        <button class='primary'>Сохранить пример</button>
+      </form>
+    </div>
+    <div class='card wide'><h2>Следующий шаг</h2><div class='lab-actions'><a class='button primary' href='/admin/research'>Новый запрос / исследования</a></div></div>
+    </div>"""
+    return _page(request, body, "Flash Lab")
 
 
 async def create_run(request):
@@ -230,6 +352,7 @@ async def dataset(request):
 def setup_model_lab_routes(app):
     app.cleanup_ctx.append(lab.worker_context)
     app.router.add_get("/admin/research", index)
+    app.router.add_post("/admin/research/flash", flash_probe)
     app.router.add_post("/admin/research/runs", create_run)
     app.router.add_post("/admin/research/examples", create_example)
     app.router.add_get("/admin/research/dataset.jsonl", dataset)

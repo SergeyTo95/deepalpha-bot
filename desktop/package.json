@@ -1,0 +1,45 @@
+{
+  "name": "velia-desktop",
+  "version": "0.2.0",
+  "description": "VELIA Desktop developer preview",
+  "author": "VELIA",
+  "private": true,
+  "type": "module",
+  "main": "src/main.mjs",
+  "scripts": {
+    "prepare:harness": "node scripts/prepare-harness.mjs",
+    "build:harness": "node scripts/prepare-harness.mjs --build",
+    "start": "electron .",
+    "connect": "electron .",
+    "prepare:runtime": "node scripts/prepare-runtime.mjs",
+    "package:windows:railway": "node scripts/package-windows-railway.mjs",
+    "package:preview": "npm run prepare:runtime && electron-builder --publish never",
+    "qualify:ui": "electron tests/electron-smoke.mjs",
+    "qualify:runtime": "node scripts/smoke-harness.mjs",
+    "qualify:web": "node scripts/smoke-web.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "electron": "44.0.0",
+    "electron-builder": "26.15.3",
+    "pnpm": "11.7.0"
+  },
+  "build": {
+    "appId": "com.velia.desktop.preview",
+    "productName": "VELIA Desktop Preview",
+    "asar": true,
+    "npmRebuild": false,
+    "afterPack": "scripts/after-pack.cjs",
+    "files": ["src/**", "ui/**", "package.json"],
+    "extraResources": [
+      { "from": ".runtime/package/node", "to": "node" },
+      { "from": ".runtime/package/notices", "to": "notices" }
+    ],
+    "directories": { "output": "dist" },
+    "artifactName": "VELIA-Desktop-${version}-${os}-${arch}.${ext}",
+    "win": { "target": [{ "target": "nsis", "arch": ["x64"] }] },
+    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true },
+    "mac": { "target": ["dmg", "zip"],
+      "category": "public.app-category.productivity", "identity": null }
+  }
+}

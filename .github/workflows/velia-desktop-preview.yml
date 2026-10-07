@@ -1,0 +1,99 @@
+name: VELIA Desktop preview
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['feature/velia-desktop-harness']
+    paths:
+      - 'desktop/**'
+      - 'velia_desktop_routes.py'
+      - 'tests/test_velia_desktop_gateway.py'
+      - '.github/workflows/velia-desktop-preview.yml'
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - 'velia_desktop_routes.py'
+      - 'tests/test_velia_desktop_gateway.py'
+      - '.github/workflows/velia-desktop-preview.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: velia-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  adapter-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pytest aiohttp
+      - run: python -m pytest tests/test_velia_desktop_gateway.py -q
+      - run: npm test
+        working-directory: desktop
+      - run: node --check src/main.mjs
+        working-directory: desktop
+
+  installers:
+    if: github.event_name != 'pull_request'
+    needs: adapter-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            platform: windows-x64
+            target: --win
+          - runner: macos-15
+            platform: macos-arm64
+            target: --mac
+          - runner: macos-15-intel
+            platform: macos-x64
+            target: --mac
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 50
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      VELIA_QUALIFICATION_SCREENSHOT: ${{ github.workspace }}/desktop/dist/onboarding.png
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+        working-directory: desktop
+      - run: npm test
+        working-directory: desktop
+      - run: npm run build:harness
+        working-directory: desktop
+      - run: node -e "require('node:fs').mkdirSync('dist', {recursive:true})"
+        working-directory: desktop
+      - run: npm run qualify:ui
+        working-directory: desktop
+      - run: npm run prepare:runtime
+        working-directory: desktop
+      - run: npm run qualify:runtime
+        working-directory: desktop
+      - run: npm run qualify:web
+        working-directory: desktop
+      - run: npx electron-builder --publish never ${{ matrix.target }}
+        working-directory: desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: velia-desktop-preview-${{ matrix.platform }}-${{ github.sha }}
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/*.dmg
+            desktop/dist/*.zip
+            desktop/dist/onboarding.png
+          if-no-files-found: error
+          retention-days: 14

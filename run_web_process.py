@@ -113,15 +113,16 @@ def main() -> None:
 
     install_http_security(deepalpha_web.app, admin_routes_module)
     install_velia_admin_observability(admin_routes_module)
-    if not any(path == "/admin/factory-pilot" for _, path in admin_routes_module.SECTIONS):
-        admin_routes_module.SECTIONS.append(("Factory Pilot", "/admin/factory-pilot"))
-    setup_factory_pilot_admin_routes(
-        deepalpha_web.app,
-        guard=admin_routes_module._guard,
-        layout=admin_routes_module._layout,
-        key=admin_routes_module._key,
-        request_id=admin_routes_module._request_id,
-    )
+    if not bool(getattr(admin_routes_module, "VELYON_CORE_ADMIN_ONLY", False)):
+        if not any(path == "/admin/factory-pilot" for _, path in admin_routes_module.SECTIONS):
+            admin_routes_module.SECTIONS.append(("Factory Pilot", "/admin/factory-pilot"))
+        setup_factory_pilot_admin_routes(
+            deepalpha_web.app,
+            guard=admin_routes_module._guard,
+            layout=admin_routes_module._layout,
+            key=admin_routes_module._key,
+            request_id=admin_routes_module._request_id,
+        )
     install_webhook_cors(deepalpha_web.app)
     install_portal_quick_analysis()
     install_portal_webhook_scope()
@@ -211,6 +212,11 @@ def main() -> None:
     setup_velia_mobile_commercial_routes(
         deepalpha_web.app,
         velia_mobile_routes_module,
+    )
+    from velia_desktop_routes import setup_velia_desktop_routes
+    setup_velia_desktop_routes(
+        deepalpha_web.app,
+        velia_mobile_routes_module.authenticate_access_token,
     )
     setup_velia_usdt_checkout_routes(
         deepalpha_web.app,

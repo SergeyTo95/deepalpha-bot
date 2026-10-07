@@ -202,6 +202,63 @@ def create_admin_login_code(admin_user_id: int) -> Dict[str, Any]:
         conn.close()
 
 
+
+def create_admin_session_for_owner(
+    admin_user_id: int,
+    *,
+    user_agent: str = "",
+    ip: str = "",
+) -> Dict[str, Any]:
+    """Create a local browser session after an already-authenticated owner check.
+
+    This function does not validate Telegram codes itself. Callers must first
+    authenticate the owner through a trusted boundary (for Velyon preview that
+    is the production admin OTP endpoint).
+    """
+    if not is_admin_user(admin_user_id):
+        return {"ok": False, "error": "not_admin"}
+    ensure_velia_admin_tables()
+    now = _utcnow()
+    session_token = secrets.token_urlsafe(48)
+    csrf_token = secrets.token_urlsafe(32)
+    expires_at = now + timedelta(seconds=ADMIN_SESSION_TTL_SECONDS)
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO velia_admin_sessions (
+                session_token_hash, admin_user_id, csrf_token_hash,
+                created_at, expires_at, last_seen_at, user_agent, ip_hash
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                _sha256(session_token),
+                int(admin_user_id),
+                _sha256(csrf_token),
+                now,
+                expires_at,
+                now,
+                str(user_agent or "")[:512],
+                _hash_ip(ip),
+            ),
+        )
+        conn.commit()
+        return {
+            "ok": True,
+            "admin_user_id": int(admin_user_id),
+            "session_token": session_token,
+            "csrf_token": csrf_token,
+            "expires_at": expires_at.isoformat() + "Z",
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+
+
 def consume_admin_login_code(
     raw_code: str,
     *,
