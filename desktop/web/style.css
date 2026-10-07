@@ -1434,3 +1434,19 @@ dialog::backdrop {
 .voice-controls { display: flex; gap: 12px; margin-top: 16px; }
 .voice-controls button { flex: 1; margin: 0; }
 .voice-hint { font-size: 12px; margin-bottom: 0; }
+
+/* Compact voice call: transcript is optional, controls stay immediately visible. */
+.voice-dialog { width: min(420px, calc(100vw - 32px)); padding: 24px; text-align: center; }
+.voice-dialog h2 { font-size: 20px; margin: 0; }
+.voice-orb { margin: 24px auto 16px; width: 96px; height: 96px; }
+.voice-status { min-height: 40px; margin: 12px 0; font-size: 15px; line-height: 1.4; }
+.voice-controls { margin-top: 8px; }
+.voice-controls button:first-child { background: var(--text); color: var(--bg); }
+.voice-transcript { text-align: left; margin-top: 20px; }
+.voice-transcript summary { cursor: pointer; min-height: 36px; font-size: 13px; color: var(--soft); text-align: center; }
+.voice-captions { margin-top: 8px; max-height: 180px; }
+.voice-hint { font-size: 11px; margin-top: 8px; }
+@media (prefers-reduced-motion: no-preference) {
+ .voice-dialog[data-phase="listening"] .voice-orb { animation: voice-breathe 2s ease-in-out infinite; }
+ @keyframes voice-breathe { 50% { box-shadow: 0 0 0 16px var(--hover); } }
+}

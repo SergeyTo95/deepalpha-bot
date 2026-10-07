@@ -483,8 +483,8 @@ async function continueAfterTakeover() {
   }
 }
 
-async function openChat(chat) {
-  voice.stop();
+async function openChat(chat, background = false) {
+  if (!background) voice.stop();
   features.close();
   clearFiles();
   if (busy || (!profile && !guest)) return;
@@ -530,7 +530,7 @@ async function syncHistory() {
     if (currentId && !current()) currentId = null;
     $("history-state").textContent = "История в твоём аккаунте";
     save(); render();
-    if (current()?.remote) await openChat(current());
+    if (current()?.remote && !current().loaded) await openChat(current(), true);
   } catch (error) {
     $("history-state").textContent = "Не удалось обновить историю";
     toast(error.message);

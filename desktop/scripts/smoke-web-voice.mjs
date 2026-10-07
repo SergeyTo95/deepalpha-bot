@@ -17,6 +17,7 @@ try{
   Object.defineProperty(window,'speechSynthesis',{value:{cancel(){},getVoices(){return [{name:'Тестовый голос',voiceURI:'test',lang:'ru-RU',localService:true}];},addEventListener(){},speak(u){window.spoken.push(u);}}});
   const {setupVoice}=await import('/voice.mjs');window.voice=setupVoice({busy:()=>false,toast:()=>{},send:async text=>{window.sends.push(text);window.voice.complete('Это ответ. '.repeat(80));}});window.voice.settings(document.querySelector('#settings'));window.voice.open();
  });
+ await page.locator('.voice-transcript summary').click();
  await page.getByRole('button',{name:'Начать',exact:true}).click();
  await page.evaluate(()=>{const r=recognizers.at(-1);r.onresult({results:[Object.assign([{transcript:'Промежуточная речь'}],{isFinal:false})]});});
  assert.match(await page.locator('.voice-captions').innerText(),/Промежуточная речь/);
@@ -38,6 +39,34 @@ try{
  await page.getByRole('button',{name:'Завершить',exact:true}).click();await page.getByLabel('Голос',{exact:true}).selectOption('test');await page.getByLabel('Скорость речи').selectOption('1.2');await page.getByRole('button',{name:'Послушать голос'}).click();
  assert.equal(await page.evaluate(()=>spoken.at(-1).rate),1.2);assert.equal(await page.evaluate(()=>spoken.at(-1).voice.voiceURI),'test');
  await page.evaluate(()=>{voice.open();});await page.getByRole('button',{name:'Начать',exact:true}).click();await page.evaluate(()=>{voice.stop();voice.open();});
+ // An answer arriving while Android temporarily hides the page must survive.
+ await page.evaluate(()=>{
+   voice.stop();voice.open();
+   window.hiddenForTest=false;Object.defineProperty(document,'hidden',{configurable:true,get:()=>window.hiddenForTest});
+   const old=document.querySelector('.voice-dialog');old.close();old.remove();
+ });
+ await page.evaluate(async()=>{
+   const {setupVoice}=await import('/voice.mjs');
+   window.resolveSend=null;
+   window.voice=setupVoice({busy:()=>false,toast:()=>{},send:()=>new Promise(resolve=>{window.resolveSend=resolve;})});voice.open();
+ });
+ await page.getByRole('button',{name:'Начать',exact:true}).click();
+ await page.evaluate(()=>{
+   const r=recognizers.at(-1);r.onresult({results:[Object.assign([{transcript:'Велия привет'}],{isFinal:true})]});r.onend();
+   hiddenForTest=true;document.dispatchEvent(new Event('visibilitychange'));
+   window.spokenBefore=spoken.length;voice.complete('Привет! Рада тебя слышать.');resolveSend();
+ });
+ assert.equal(await page.evaluate(()=>spoken.length),await page.evaluate(()=>spokenBefore));
+ await page.evaluate(()=>{hiddenForTest=false;document.dispatchEvent(new Event('visibilitychange'));});
+ await page.waitForFunction(()=>spoken.length===spokenBefore+1);
+ assert.equal(await page.locator('.voice-dialog').getAttribute('data-phase'),'speaking');
+ await page.getByRole('button',{name:'Пауза',exact:true}).click();
+ await page.getByRole('button',{name:'Начать',exact:true}).click();
+ await page.evaluate(()=>{const r=recognizers.at(-1);r.onresult({results:[Object.assign([{transcript:'Ещё вопрос'}],{isFinal:true})]});r.onend();});
+ await page.getByRole('button',{name:'Пауза',exact:true}).click();
+ assert.doesNotMatch(await page.locator('.voice-captions').textContent(),/Готовлю ответ/);
+ await page.evaluate(()=>resolveSend());
  for(const width of [360,393,768,1440]){await page.setViewportSize({width,height:710});const box=await page.locator('.voice-dialog').boundingBox();assert.ok(box.x>=0&&box.x+box.width<=width);}
- assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,synthetic:true,checks:['captions','multi-chunk reply','silence retry','stale callback safety','permission error','voice/rate','mobile layout']}));
+ await page.setViewportSize({width:393,height:710});await page.screenshot({path:output+'/voice-mobile-compact.png'});
+ assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,synthetic:true,checks:['captions','multi-chunk reply','silence retry','stale callback safety','permission error','voice/rate','mobile layout','hidden pending answer survives','pause clears stale progress']}));
 }finally{await browser?.close();server.close();}
