@@ -13,7 +13,9 @@ CACHE_PATHS = (
     'chromium/ShaderCache', 'chromium/GrShaderCache',
     'chromium/GraphiteDawnCache', 'chromium/Crashpad/reports',
     'chromium/Crash Reports', 'chromium/BrowserMetrics',
-    'chromium/BrowserMetrics-spare.pma', 'dsh-home/cache',
+    'chromium/BrowserMetrics-spare.pma', 'chromium/component_crx_cache',
+    'chromium/Default/DawnGraphiteCache', 'chromium/Default/DawnWebGPUCache',
+    'dsh-home/cache',
 )
 TEMP_NAME = re.compile(r'\.(?:agent-session-id|takeover-state|session-cookies\.json)\.[0-9a-f]+\.tmp')
 

@@ -20,7 +20,9 @@ def test_cleanup_removes_only_regenerable_closed_profile_caches(tmp_path):
     protected=['chromium/Default/Network/Cookies','chromium/Default/Sessions/Session_1',
                'chromium/Default/IndexedDB/site/data','chromium/Default/Local Storage/data',
                'chromium/Default/Service Worker/CacheStorage/data',
-               'dsh-home/storages/agent.yml','workspace/report.pdf','session-cookies.json','agent-session-id']
+               'dsh-home/storages/agent.yml','workspace/report.pdf','session-cookies.json','agent-session-id',
+               'chromium/WasmTtsEngine/model.bin','chromium/OnDeviceHeadSuggestModel/model.bin',
+               'chromium/CertificateRevocation/list.bin']
     for p in protected:write(root,p)
     result=storage.maintain(tmp_path)
     assert result['cache_bytes_removed']==len(storage.CACHE_PATHS)*5
