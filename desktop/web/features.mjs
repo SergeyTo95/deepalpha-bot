@@ -38,6 +38,8 @@ export async function featureRequest(path, {method = 'GET', data, file, digest, 
 const node = (tag, text, cls) => {const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n;};
 const button = (text, action) => {const b = node('button', text); b.type = 'button'; b.onclick = action; return b;};
 const labels = {goal:'Цель', title:'Название', name:'Имя', description:'Описание', instructions:'Инструкции', audience:'Аудитория', style:'Стиль', constraints:'Ограничения', status:'Статус', domain:'Направление', content:'Содержание', summary:'Результат', conclusion:'Вывод', text:'Текст', created_at:'Создано', updated_at:'Обновлено', preferred_name:'Как обращаться', about_me:'О себе', credits:'Токены', user_messages:'Сообщения сегодня', user_cost_usd:'Расход сегодня, $', enabled:'Включено', available:'Доступно', revision:'Версия', query:'Поисковый запрос', kind:'Тип', prompt:'Описание', duration_seconds:'Длительность, сек.', error_code:'Ошибка', rationale:'Обоснование'};
+const statuses={draft:'Черновик',planned:'Запланировано',paused:'Приостановлено',active:'Активно',completed:'Завершено',failed:'Ошибка',pending:'Ожидает',running:'Выполняется',queued:'В очереди',ready:'Готово',cancelled:'Отменено'};
+const descriptions = {studio:'Создавай изображения, видео и музыку в одном месте.',projects:'Собирай идеи, задачи и материалы вокруг одной цели.',research:'От вопроса к источникам, выводам и отчёту.',medical:'Загружай исследования и следи за результатами анализа.',agents:'Настраивай помощников под свои задачи.',autopilot:'Управляй миссиями, задачами и проверками проектов.',profile:'Помоги Велии лучше понимать тебя.',plugins:'Выбирай инструменты, которые нужны в работе.',balance:'Следи за доступными токенами и использованием.',voice:'Настрой язык и голос для разговора с Велией.'};
 const hiddenKeys = new Set(['id','user_id','project_id','session_id','generation_id','client_request_id','signature','provider','model','input_sha256','worker_status']);
 function display(value, depth = 0) {
   const box = node('div', undefined, 'feature-detail');
@@ -58,13 +60,14 @@ function display(value, depth = 0) {
 export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings, openConversation}) {
   const root = document.getElementById('feature-view'), nav = document.getElementById('feature-nav');
   let epoch = 0, section = null, controller = null;
-  const close = () => {epoch++; controller?.abort(); root.replaceChildren(); root.hidden = true; section = null; document.getElementById('conversation-scroll').hidden = false; document.querySelector('.composer-area').hidden = false;};
+  const close = () => {epoch++; controller?.abort(); root.replaceChildren(); root.hidden = true; section = null; nav.querySelectorAll('button').forEach(b=>b.removeAttribute('aria-current')); document.getElementById('conversation-scroll').hidden = false; document.querySelector('.composer-area').hidden = false;};
   const call = (p, o = {}) => featureRequest(p, {...o, signal: controller?.signal});
   const run = async (b, fn) => {const ticket = epoch; b.disabled = true; try {await fn();} catch (e) {if (e.name !== 'AbortError' && ticket === epoch) toast(e.message);} finally {if (ticket === epoch) b.disabled = false;}};
   function form(fields, label, submit, initial = {}) {
     const f = node('form', undefined, 'feature-form'), controls = {};
     for (const spec of fields) {
-      const [key, title, type = 'text', options] = spec, l = node('label', title);
+      const [key, title, type = 'text', options] = spec, l = node('label', undefined, type === 'checkbox' ? 'feature-check' : 'feature-input');
+      const caption = node('span',title); l.append(caption);
       const input = node(type === 'textarea' ? 'textarea' : ['select','multi'].includes(type) ? 'select' : 'input');
       if(type === 'multi') input.multiple = true;
       if (!['textarea','select','multi'].includes(type)) input.type = type;
@@ -72,9 +75,9 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
       if (type === 'checkbox') input.checked = !!initial[key]; else if(initial[key] !== undefined || !['select','multi'].includes(type)) input.value = initial[key] ?? '';
       input.name = key; input.maxLength = type === 'textarea' ? 8000 : 200; input.required = !['checkbox','file','multi'].includes(type) && !['description','about_me','audience','style','constraints','lyrics'].includes(key);
       if (type === 'file') input.accept = '.zip,.nii,.gz';
-      controls[key] = input; l.append(input); f.append(l);
+      controls[key] = input; if(type==='checkbox') l.prepend(input); else l.append(input); if(type==='multi') l.append(node('small','На компьютере удерживай Ctrl или ⌘, чтобы выбрать несколько.', 'field-hint')); f.append(l);
     }
-    const b = node('button', label); b.type = 'submit'; f.append(b);
+    const b = node('button', label, 'feature-primary'); b.type = 'submit'; f.append(b);
     f.onsubmit = e => {e.preventDefault(); run(b, async () => {
       const data = Object.fromEntries(Object.entries(controls).map(([k,c]) => [k, c.multiple ? [...c.selectedOptions].map(o=>o.value) : c.type === 'checkbox' ? c.checked : c.type === 'file' ? c.files[0] : c.type === 'number' ? Number(c.value) : c.value]));
       await submit(data); toast('Сохранено');
@@ -89,13 +92,13 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
     if (ticket !== epoch) return;
     if (!offset) target.replaceChildren();
     const values = result[key] || [];
-    if (!values.length && !offset) target.append(node('p', 'Пока здесь ничего нет.'));
+    if (!values.length && !offset) target.append(node('div', 'Здесь появятся твои материалы. Создай первый с помощью формы выше.', 'feature-empty'));
     for (const item of values) {
       item.id ||= item.mission_id || item.task_id || item.run_id;
       const card = node('article', undefined, 'feature-card');
       const title = item.passport?.title || item.title || item.name || item.goal || item.instruction || 'Открыть';
       card.append(node('h3', title));
-      if (item.status) card.append(node('small', item.status));
+      if (item.status) card.append(node('small', statuses[item.status] || item.status));
       if (detail) actions(card, [['Открыть', () => detail(item, card)]]); else card.append(display(item));
       target.append(card);
     }
@@ -106,9 +109,9 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
     if (!signedIn() && name !== 'voice') {openAuth(); return;}
     close(); section = name; controller = new AbortController(); const ticket = epoch;
     root.hidden = false; document.getElementById('conversation-scroll').hidden = true; document.querySelector('.composer-area').hidden = true;
-    document.getElementById('sidebar').classList.remove('open'); document.getElementById('scrim').hidden = true;
-    const head = node('div', undefined, 'feature-header'); head.append(node('h1', SECTIONS.find(s=>s[0]===name)?.[1] || 'VELIA'), button('К диалогу', close)); root.append(head);
-    const body = node('div'); root.append(body); body.append(node('p','Загрузка…'));
+    document.getElementById('sidebar').classList.remove('open'); document.getElementById('scrim').hidden = true; document.getElementById('menu').setAttribute('aria-expanded','false'); nav.querySelectorAll('button').forEach(b=>{if(b.dataset.section===name)b.setAttribute('aria-current','page');});
+    const head = node('div', undefined, 'feature-header'), heading=node('div'); heading.append(node('span','ВОЗМОЖНОСТИ VELIA','feature-eyebrow'),node('h1', SECTIONS.find(s=>s[0]===name)?.[1] || 'VELIA'),node('p',descriptions[name])); head.append(heading, button('К диалогу', close)); root.append(head);
+    const body = node('div',undefined,'feature-body'); root.append(body); const loading=node('p','Загрузка…','feature-empty'); loading.setAttribute('role','status'); body.append(loading);
     try {
       if (name === 'voice') {body.replaceChildren(); voiceSettings(body); return;}
       if (name === 'profile') {
@@ -118,7 +121,7 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
         const names = {weather:'Погода',web_search:'Поиск в интернете',research:'Исследования',image_generation:'Изображения',file_analyst:'Анализ файлов',deepalpha_markets:'DeepAlpha'};
         for (const [key,v] of Object.entries(r.plugins || {})) {const l=node('label',names[key] || key,'feature-toggle'), c=node('input'); c.type='checkbox'; c.checked=v.enabled; c.disabled=!v.available; c.onchange=()=>run(c,async()=>{try{await call('plugins',{method:'PATCH',data:{plugins:{[key]:c.checked}}});}catch(e){c.checked=!c.checked;throw e;}}); l.append(c); if(!v.available) l.append(node('small','Сейчас недоступно')); body.append(l);}
       } else if (name === 'balance') {
-        const results = await Promise.all([call('economy/me'),call('usage')]); if(ticket!==epoch)return; body.replaceChildren(...results.map(r=>display(r.account||r.usage||r)));
+        const results = await Promise.all([call('economy/me'),call('usage')]); if(ticket!==epoch)return; body.replaceChildren(...results.map((r,i)=>{const card=node('article',undefined,'feature-card');card.append(node('h3',i===0?'Твой баланс':'Использование'),display(r.account||r.usage||r));return card;}));
       } else if (name === 'studio') await studio(body);
       else if (name === 'research') {
         body.replaceChildren(form([['goal','Что исследовать','textarea']], 'Создать исследование', async d=>{await call('research/missions',{method:'POST',data:d,key:crypto.randomUUID()}); await refresh();}));
@@ -141,7 +144,7 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
         const list=node('div');body.append(list);
         const refresh=()=>collection('agents','agents',list,async(a,card)=>{card.append(display(a));actions(card,[['Новый диалог',async()=>{const r=await call(`agents/${a.id}/conversations`,{method:'POST',data:{title:a.name}});close();await openConversation(r.conversation);}],['Удалить',async()=>{if(!confirm('Удалить этого агента?'))return;await call('agents/'+a.id,{method:'DELETE'});await refresh();}]]);});await refresh();
       } else if (name === 'medical') {
-        body.replaceChildren(node('p','КТ брюшной полости с контрастом. Результат анализа обсуди с врачом.'));
+        body.replaceChildren(node('p','КТ брюшной полости с контрастом. Результат анализа обсуди с врачом.','feature-notice'));
         body.append(form([['title','Название исследования'],['contrast_enhanced_confirmed','Подтверждаю наличие контраста','checkbox'],['abdomen_confirmed','Подтверждаю КТ брюшной полости','checkbox']], 'Создать исследование',async d=>{await call('medical/cases',{method:'POST',data:{...d,modality:'ct',study_kind:'contrast_abdomen'}});await refresh();}));
         const list=node('div');body.append(list);
         const detail=async(c,card)=>{const r=await call('medical/cases/'+c.id);card.replaceChildren(node('h3',c.title),display(r.case));
@@ -160,22 +163,23 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
   async function studio(body) {
     const ticket=epoch,status=await call('studio/status');if(ticket!==epoch)return;if(status.enabled===false)throw new Error('Studio сейчас отключена.');
     body.replaceChildren();let list=node('div');const options=node('div'),messages=node('div');let currentSession=null,mode='image',references=[],generationKey=null;
-    const modes=node('div',undefined,'feature-actions');body.append(modes,options,list,messages);
+    const modes=node('div',undefined,'feature-tabs'); modes.setAttribute('aria-label','Тип материала');body.append(modes,options,list,messages);
     const refresh=()=>collection('studio/sessions?mode='+mode,'sessions',list,select);
     async function select(s){currentSession=s;references=[];generationKey=null;await turns();}
     async function turns(){if(!currentSession)return;const selectedId=currentSession.id;const r=await call(`studio/sessions/${selectedId}/messages`);if(ticket!==epoch||currentSession?.id!==selectedId)return;messages.replaceChildren(node('h2',currentSession.title||'Studio'));for(const m of r.messages||[]){const card=node('article',undefined,'feature-card');card.append(node('p',m.content||m.status||''));const media=m.generation?.media,path=mediaPath(media?.content_url);if(path){const el=node(m.generation.type==='image'?'img':m.generation.type==='video'?'video':'audio');el.src=path;el.controls=true;el.alt=media.prompt||'Результат Studio';card.append(el);if(m.generation.type==='image'&&media.id)actions(card,[['Оживить изображение',async()=>{mode='video';configure();const r=await call('studio/sessions',{method:'POST',data:{mode:'video',title:'Видео из изображения'}});currentSession=r.session;references=[media.id];toast('Изображение добавлено. Опиши движение и нажми «Создать».');}]]);const a=node('a','Скачать');a.href=path;a.download='VELIA-'+media.id;card.append(a);}if(m.generation?.progress_percent)card.append(node('p',m.generation.progress_percent+'%'));messages.append(card);}}
-    function configure(){const nextList=node('div');list.replaceWith(nextList);list=nextList;options.replaceChildren();currentSession=null;references=[];messages.replaceChildren();
+    function configure(){modes.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.mode===mode)));const nextList=node('div');list.replaceWith(nextList);list=nextList;options.replaceChildren();currentSession=null;references=[];messages.replaceChildren();
       const cap=status[mode]||{};const fields=[['prompt','Что создать','textarea']];
       if(mode==='image'){const providers=(cap.providers||[]).filter(p=>p.enabled!==false).map(p=>[p.id||p.provider,p.display_name||p.label||p.name||p.id]);fields.push(['image_provider','Модель изображения','select',providers.length?providers:[['velia_image','Velia Image']]],['transparent_background','Прозрачный фон','checkbox']);}
       if(mode==='video'||mode==='music')fields.push(['duration_seconds','Длительность','select',(cap.duration_options_seconds||[mode==='video'?5:30]).map(v=>[String(v),v+' сек.'])]);
       if(mode==='music')fields.push(['lyrics_mode','Режим музыки','select',[['auto','Авто'],['custom','Свой текст'],['instrumental','Без вокала']]],['lyrics','Текст песни','textarea']);
       options.append(form(fields,'Создать',async d=>{if(!currentSession){const r=await call('studio/sessions',{method:'POST',data:{mode,title:d.prompt.slice(0,80)}});currentSession=r.session;}generationKey ||= crypto.randomUUID();await call(`studio/sessions/${currentSession.id}/generate`,{method:'POST',data:{...d,duration_seconds:Number(d.duration_seconds||5),reference_asset_ids:references,idempotency_key:generationKey},key:generationKey});generationKey=null;await turns();await refresh();}));
-      if(mode!=='music'){const l=node('label','Добавить референсы JPEG / PNG / WebP'),upload=node('input');upload.type='file';upload.accept='image/jpeg,image/png,image/webp';upload.multiple=mode==='image';l.append(upload);options.append(l);upload.onchange=()=>run(upload,async()=>{if(!currentSession){const r=await call('studio/sessions',{method:'POST',data:{mode,title:'Studio'}});currentSession=r.session;}for(const f of upload.files){const r=await call(`studio/sessions/${currentSession.id}/assets`,{method:'POST',file:f});references.push(r.asset.id);}toast('Референсов: '+references.length);});}
+      if(mode!=='music'){const l=node('label','Добавить референсы JPEG / PNG / WebP','feature-upload'),upload=node('input');upload.type='file';upload.accept='image/jpeg,image/png,image/webp';upload.multiple=mode==='image';l.append(upload);options.append(l);upload.onchange=()=>run(upload,async()=>{if(!currentSession){const r=await call('studio/sessions',{method:'POST',data:{mode,title:'Studio'}});currentSession=r.session;}for(const f of upload.files){const r=await call(`studio/sessions/${currentSession.id}/assets`,{method:'POST',file:f});references.push(r.asset.id);}toast('Референсов: '+references.length);});}
       actions(options,[['Новая сессия',async()=>{currentSession=null;references=[];generationKey=null;messages.replaceChildren();}],['Обновить результат',turns],['Обновить историю',refresh]]);
     }
-    for(const [key,title] of [['image','Изображения'],['video','Видео'],['music','Музыка']]){const b=button(title,()=>run(b,async()=>{mode=key;configure();await refresh();}));if(status[key]?.enabled===false)b.disabled=true;modes.append(b);}
+    for(const [key,title] of [['image','Изображения'],['video','Видео'],['music','Музыка']]){const b=button(title,()=>run(b,async()=>{mode=key;configure();await refresh();}));b.dataset.mode=key;if(status[key]?.enabled===false)b.disabled=true;modes.append(b);}
     configure();await refresh();
   }
-  for (const [key,title] of SECTIONS) nav.append(button(title,()=>open(key)));
+  const symbols=['<path d="m12 3 9 9-9 9-9-9z"/>','<rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 10h18M8 5V3"/>','<circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/>','<path d="M12 4v16M4 12h16"/>','<rect x="4" y="7" width="16" height="14" rx="4"/><path d="M12 3v4M8 12h1m6 0h1M8 17h8"/>','<path d="m12 3 8 4v6c0 4-8 8-8 8s-8-4-8-8V7zM9 12l2 2 4-4"/>','<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/>','<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12h8m-4-4v8"/>','<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>','<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11v1a7 7 0 0 0 14 0v-1M12 19v3"/>'];
+  for (const [index,[key,title]] of SECTIONS.entries()) {if(index===0||index===6)nav.append(node('span',index===0?'РАБОЧЕЕ ПРОСТРАНСТВО':'НАСТРОЙКИ','feature-nav-heading')); const b=button(title,()=>open(key)); b.dataset.section=key;const icon=node('span',undefined,'feature-nav-icon');icon.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'+symbols[index]+'</svg>';icon.setAttribute('aria-hidden','true');b.prepend(icon);nav.append(b);}
   return {close,open};
 }

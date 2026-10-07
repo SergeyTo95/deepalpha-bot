@@ -49,5 +49,20 @@ try{
   for(const name of ['Проекты','Исследования','Медицинский центр','Мои агенты','Автопилот','Плагины','Баланс и использование','Голос']){await open(name);await page.waitForTimeout(100);assert.equal(await page.getByText('Загрузка…',{exact:true}).count(),0);}
   await open('Автопилот');await page.getByRole('button',{name:'Открыть',exact:true}).click();await page.getByRole('button',{name:'Активировать',exact:true}).click();await page.waitForTimeout(100);assert.ok(calls.some(c=>c.path==='developer/autopilot/missions/mission1/activate'));
   await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'К диалогу',exact:true}).click();await page.locator('#menu').click();await open('Персонализация');await page.waitForTimeout(500);await page.screenshot({path:output+'/profile-mobile.png'});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  for(const width of [360,390,768,1440]) {
+    await page.setViewportSize({width,height:960});
+    for(const name of ['Медицинский центр','Проекты','Studio','Плагины','Баланс и использование','Голос']) {
+      if(width<=900)await page.locator('#menu').click();
+      await open(name);await page.waitForTimeout(100);
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`${name}: overflow at ${width}`);
+      assert.equal(await page.locator('#feature-nav button[aria-current=page]').count(),1);
+      if(name==='Медицинский центр') {
+        const label=page.locator('.feature-check').first();const checkbox=label.locator('input');await label.click();assert.equal(await checkbox.isChecked(),true);
+        await page.screenshot({path:output+`/medical-${width}.png`});
+      }
+    }
+  }
+  await page.setViewportSize({width:390,height:844});await page.locator('#theme').click();await page.locator('#menu').click();await open('Медицинский центр');await page.waitForTimeout(250);await page.screenshot({path:output+'/medical-light-mobile.png'});
+  await page.locator('#menu').click();await page.waitForTimeout(250);await page.screenshot({path:output+'/navigation-mobile.png'});
   assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,sections:10,quantumDisabled:true,image2:true,video15:true,autopilotId:true,mobile:true,featureCalls:calls.length}));
 }finally{await browser?.close();fixture.kill();}

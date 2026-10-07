@@ -42,3 +42,7 @@ actual GPU image/video/music/CT inference were not exercised by synthetic QA.
   greeting. That fixture failure is not counted as passing acceptance.
 
 The changes target only the separate browser gateway deployment branch.
+
+## Workspace design verification
+
+Shared cards, form fields, inline checkbox rows, primary actions, grouped navigation, active section indicators and Studio mode buttons support both themes. Navigation scrolls independently of account controls. Chromium acceptance covers all ten sections, 360/390/768/1440 px widths, no horizontal overflow, checkbox label clicks and selected navigation state. Feature responses in this UI check are synthetic.
