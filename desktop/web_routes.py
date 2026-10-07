@@ -429,6 +429,8 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     app.router.add_post("/web-api/v1/agent/browser", browser_agent)
     app.router.add_post("/web-api/v1/agent/browser/takeover", browser_takeover_state)
     app.router.add_post("/web-api/v1/agent/browser/takeover/action", browser_takeover_action)
+    from desktop.voice_routes import setup_voice_routes
+    setup_voice_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response)
     from desktop.account_routes import setup_account_routes
     from desktop.feature_routes import setup_feature_routes
     setup_feature_routes(app, session_for=session_for, same_origin=same_origin, upstream=upstream,
