@@ -3,8 +3,11 @@ import asyncio
 import os
 from collections import deque
 import time
+import io
+import zipfile
+import json
 from aiohttp import web
-from desktop.work_store import WorkStore, WorkError, ROLES
+from desktop.work_store import WorkStore, WorkError, ROLES, DEFAULT_AUTONOMY
 from desktop.work_runtime import FlashRoles, run_job
 from velia_desktop_routes import AuthenticationUnavailable
 
@@ -15,11 +18,15 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
     if store is None and os.getenv('VELIA_WORK_ENABLED')=='true':
         dsn=os.getenv('VELIA_WORK_DATABASE_URL') or os.getenv('VELIA_WEB_GUEST_DATABASE_URL')
         if dsn:store=WorkStore(dsn)
-    tasks={};search_rates={};slots=asyncio.Semaphore(4)
+    tasks={};search_rates={};slots=asyncio.Semaphore(4);sessions={};scanning=set()
     generate=generate or FlashRoles(upstream=upstream,upstream_stream=upstream_stream,authenticate=authenticate,allowed=allowed,handlers=handlers)
     async def lifecycle(application):
         if store:await asyncio.to_thread(store.initialize)
+        scheduler=asyncio.create_task(schedule()) if store else None
         yield
+        if scheduler:
+            scheduler.cancel()
+            await asyncio.gather(scheduler,return_exceptions=True)
         for task in list(tasks.values()):task.cancel()
         await asyncio.gather(*list(tasks.values()),return_exceptions=True)
     app.cleanup_ctx.append(lifecycle)
@@ -33,6 +40,7 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
             session=await session_for(request)
             if not session:return json_response({'ok':False,'error':'unauthorized'},401)
             request[WORK_SESSION]=session
+            if store:sessions[session.user_id]=session
             if request.path.endswith('/status'):return await handler(request)
             if store is None:raise WorkError('work_not_configured',503)
             if request.method!='GET':
@@ -50,6 +58,8 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
                              'execution_mode':'text_drafts','model':'velia-flash'})
     async def workspace(request):
         doc=await asyncio.to_thread(store.workspace,request[WORK_SESSION].user_id)
+        doc['autonomy']=doc.get('autonomy',DEFAULT_AUTONOMY)
+        for key in ('scan_token','scan_until'):doc.pop(key,None)
         for job in doc['jobs']:
             job.pop('outputs',None);job.pop('brief',None)
         return json_response({'ok':True,**doc})
@@ -91,15 +101,76 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
         data=request[WORK_BODY]
         if set(data)!={'query'} or not isinstance(data['query'],str) or not 2<=len(data['query'].strip())<=300:raise WorkError('invalid_query')
         if not web_search or not web_search.available:raise WorkError('search_unavailable',503)
-        user=request[WORK_SESSION].user_id;now=time.monotonic()
+        take_search_slot(request[WORK_SESSION].user_id)
+        result=await web_search.search(data['query'])
+        return json_response({'ok':True,'results':result['results'],'retrieved_at':result.get('retrieved_at'),'verified_jobs':False})
+    def take_search_slot(user):
+        now=time.monotonic()
         for key in list(search_rates):
             if not search_rates[key] or search_rates[key][-1]<now-60:del search_rates[key]
         entries=search_rates.setdefault(user,deque())
         while entries and entries[0]<now-60:entries.popleft()
         if len(entries)>=5:raise WorkError('search_rate_limit',429)
         entries.append(now)
-        result=await web_search.search(data['query'])
-        return json_response({'ok':True,'results':result['results'],'retrieved_at':result.get('retrieved_at'),'verified_jobs':False})
+    async def autonomy(request):
+        value=await asyncio.to_thread(store.set_autonomy,request[WORK_SESSION].user_id,request[WORK_BODY])
+        return json_response({'ok':True,'autonomy':value})
+    async def scan(session):
+        user=session.user_id
+        if user in scanning or not web_search or not web_search.available or slots.locked():return False
+        scanning.add(user)
+        await slots.acquire()
+        policy=None
+        try:
+            policy=await asyncio.to_thread(store.claim_scan,user)
+            if not policy:return False
+            identity=await authenticate(session.access)
+            if not identity or identity['user_id']!=user or not allowed(user):
+                await asyncio.to_thread(store.finish_scan,user,policy['token'],[],error='authentication_required')
+                sessions.pop(user,None);return False
+            take_search_slot(user)
+            result=await asyncio.wait_for(web_search.search(policy['query']),timeout=45)
+            id=await asyncio.to_thread(store.finish_scan,user,policy['token'],result.get('results',[]))
+            if id:
+                job=await asyncio.to_thread(store.claim,user,id)
+                key=(user,id);task=asyncio.create_task(run_job(store,user,job,session,generate));tasks[key]=task
+                try:await task
+                finally:
+                    if tasks.get(key) is task:tasks.pop(key,None)
+            return True
+        except asyncio.CancelledError:raise
+        except Exception:
+            if policy:
+                try:await asyncio.to_thread(store.finish_scan,user,policy['token'],[],error='autonomy_scan_failed')
+                except WorkError:pass
+            return False
+        finally:
+            slots.release();scanning.discard(user)
+    async def schedule():
+        while True:
+            await asyncio.sleep(30)
+            # Sessions stay in memory only. After restart the owner signs in again.
+            await asyncio.gather(*(scan(session) for session in list(sessions.values())),return_exceptions=True)
+    async def scan_now(request):
+        if request[WORK_BODY]:raise WorkError('invalid_request')
+        session=request[WORK_SESSION]
+        if session.user_id in scanning:raise WorkError('work_busy',429)
+        task=asyncio.create_task(scan(session));key=(session.user_id,'scan');tasks[key]=task
+        task.add_done_callback(lambda done:tasks.pop(key,None) if tasks.get(key) is done else None)
+        return json_response({'ok':True,'status':'scheduled'},202)
+    async def artifacts(request):
+        doc=await asyncio.to_thread(store.workspace,request[WORK_SESSION].user_id)
+        job=store.find(doc,request.match_info['job_id'])
+        if job['status']!='ready' or not job['outputs'].get('executor'):raise WorkError('artifact_not_ready',409)
+        buffer=io.BytesIO()
+        with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('result.txt',job['outputs']['executor'])
+            if job['outputs'].get('proposal'):archive.writestr('proposal-draft.txt',job['outputs']['proposal'])
+            archive.writestr('review.json',job['outputs'].get('reviewer','{}'))
+            archive.writestr('task.json',json.dumps({k:job[k] for k in ['id','title','brief','source_url']},ensure_ascii=False,indent=2))
+            archive.writestr('README.txt','Prepared text artifacts. No code was executed. No marketplace submission or payment is confirmed.')
+        return web.Response(body=buffer.getvalue(),content_type='application/zip',headers={
+            'Content-Disposition':'attachment; filename="velia-work-'+job['id']+'.zip"','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
     app.router.add_get('/web-api/v1/work/status',status)
     app.router.add_get('/web-api/v1/work/workspace',workspace)
     app.router.add_put('/web-api/v1/work/mandate',policy)
@@ -109,6 +180,9 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
     app.router.add_post('/web-api/v1/work/jobs/{job_id}/cancel',cancel)
     app.router.add_post('/web-api/v1/work/payouts',payout)
     app.router.add_post('/web-api/v1/work/discover',discover)
+    app.router.add_put('/web-api/v1/work/autonomy',autonomy)
+    app.router.add_post('/web-api/v1/work/scan',scan_now)
+    app.router.add_get('/web-api/v1/work/jobs/{job_id}/artifacts',artifacts)
 
 WORK_SESSION=web.RequestKey('velia_work_session',object)
 WORK_BODY=web.RequestKey('velia_work_body',dict)

@@ -9,7 +9,8 @@ import time
 import uuid
 from desktop.guest_store import GuestStore
 
-ROLES = [{'id':k,'name':v} for k,v in [('manager','Управляющий'),('executor','Исполнитель'),('reviewer','Контролёр качества'),('treasurer','Казначей')]]
+ROLES = [{'id':k,'name':v} for k,v in [('manager','Управляющий'),('proposal','Переговорщик'),('executor','Исполнитель'),('reviewer','Контролёр качества'),('treasurer','Казначей')]]
+DEFAULT_AUTONOMY={'enabled':False,'query':'','interval_minutes':60,'max_jobs_per_day':1}
 DEFAULT_MANDATE = {'reserve_usdt':'30','max_expense_usdt':'5','owner_address':'','network':'','agent_share_percent':10}
 class WorkError(Exception):
     def __init__(self, code, status=400):
@@ -102,6 +103,58 @@ class WorkStore(GuestStore):
             doc['mandate']=value;doc['mandate_revision']+=1
             return {'mandate':value,'mandate_revision':doc['mandate_revision']}
         return self.transaction(user,update)
+
+    def set_autonomy(self,user,value):
+        if (not isinstance(value,dict) or set(value)!=set(DEFAULT_AUTONOMY)
+                or type(value['enabled']) is not bool or not isinstance(value['query'],str)
+                or len(value['query'])>300 or (value['enabled'] and len(value['query'].strip())<2)
+                or type(value['interval_minutes']) is not int or not 15<=value['interval_minutes']<=1440
+                or type(value['max_jobs_per_day']) is not int or not 1<=value['max_jobs_per_day']<=3):
+            raise WorkError('invalid_autonomy')
+        def update(doc):
+            doc['autonomy']={**value,'query':value['query'].strip()}
+            doc['next_scan_at']=0
+            doc.update(scan_token=None,scan_until=0)
+            return doc['autonomy']
+        return self.transaction(user,update)
+
+    def claim_scan(self,user):
+        token=str(uuid.uuid4());now=time.time()
+        def claim(doc):
+            policy=doc.get('autonomy',DEFAULT_AUTONOMY)
+            if not policy['enabled'] or doc.get('next_scan_at',0)>now or doc.get('scan_until',0)>now:
+                return None
+            if any(j['status']=='running' for j in doc['jobs']):return None
+            doc.update(scan_token=token,scan_until=now+120,next_scan_at=now+policy['interval_minutes']*60)
+            return {**policy,'token':token}
+        return self.transaction(user,claim)
+
+    def finish_scan(self,user,token,results,error=None):
+        from desktop.web_search import public_url
+        def finish(doc):
+            if doc.get('scan_token')!=token or doc.get('scan_until',0)<time.time():raise WorkError('scan_expired',409)
+            doc.update(scan_token=None,scan_until=0,last_scan_at=time.time(),last_scan_error=error)
+            policy=doc.get('autonomy',DEFAULT_AUTONOMY)
+            if not policy['enabled'] or error:return None
+            today=int(time.time()//86400)
+            used=sum(j.get('autonomous',False) and int(j['created_at']//86400)==today for j in doc['jobs'])
+            if used>=policy['max_jobs_per_day'] or len(doc['jobs'])>=100:return None
+            known={j['source_url'] for j in doc['jobs']}
+            for item in results[:10]:
+                url=item.get('url');title=item.get('title');snippet=item.get('snippet')
+                if not isinstance(url,str) or not public_url(url) or url in known:continue
+                if not isinstance(title,str) or not title.strip() or not isinstance(snippet,str) or len(snippet.strip())<40:continue
+                id=str(uuid.uuid4())
+                doc['jobs'].insert(0,{'id':id,'title':title[:120],
+                    'brief':('Кандидат из поиска. Это не принятый заказ. Условия и оплата не подтверждены. '
+                        'Оцени, достаточно ли данных для конкретного текстового результата. При недостатке данных откажись. '
+                        'Не придумывай требования, бюджет, квалификацию владельца или договор с заказчиком.\n'
+                        'Направление владельца: '+policy['query']+'\nОписание источника: '+snippet)[:6000],
+                    'source_url':url,'expected_usdt':'0','autonomous':True,'status':'queued','outputs':{},'conversations':{},
+                    'client_request_id':'auto:'+id,'request_hash':'auto:'+id,'attempt':1,'created_at':time.time(),'error':None})
+                return id
+            return None
+        return self.transaction(user,finish)
 
     def create_job(self,user,data):
         if not isinstance(data,dict) or set(data)!={'title','brief','source_url','expected_usdt','client_request_id'}:

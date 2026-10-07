@@ -117,6 +117,13 @@ def test_routes_auth_isolation_and_real_background_chain(store):
                 if job['status']!='running':break
                 await asyncio.sleep(.01)
             assert job['status']=='ready' and len(job['outputs'])==4
+            response=await client.get(base+'jobs/'+id+'/artifacts',headers=h)
+            assert response.status==200
+            import io,zipfile
+            with zipfile.ZipFile(io.BytesIO(await response.read())) as bundle:
+                assert bundle.read('result.txt').decode()==ROLE_OUTPUTS['executor']
+                assert set(bundle.namelist())=={'result.txt','review.json','task.json','README.txt'}
+            assert (await client.get(base+'jobs/'+id+'/artifacts',headers={**h,'X-Test-User':'8'})).status==404
             status=await (await client.get(base+'status',headers=h)).json()
             assert not status['wallet']['connected'] and all(not c['connected'] for c in status['connectors'])
             assert (await client.post(base+'jobs/'+id+'/run',headers=h,json={})).status==409
@@ -211,3 +218,84 @@ def test_cancelled_job_cannot_initiate_new_agent_payout(store):
         store.payout(7,{'amount_usdt':'1','reason':'agent','client_request_id':'cancelled-payout'},
                      initiated_by='agent',job_id=id,lease=job['lease'])
     assert not store.workspace(7)['payouts']
+
+
+def test_autonomous_scan_dedup_limits_and_policy_invalidation(store):
+    from desktop.work_store import DEFAULT_AUTONOMY
+    policy={**DEFAULT_AUTONOMY,'enabled':True,'query':'Описания товаров','interval_minutes':15}
+    store.set_autonomy(7,policy)
+    scan=store.claim_scan(7);assert scan
+    assert store.claim_scan(7) is None
+    results=[{'title':'Описание товара','url':'https://example.com/task','snippet':'Написать описание товара по предоставленным характеристикам и критериям.'}]
+    id=store.finish_scan(7,scan['token'],results);assert id
+    job=store.find(store.workspace(7),id)
+    assert job['autonomous'] and job['expected_usdt']=='0'
+    assert not store.workspace(8)['jobs']
+    store.set_autonomy(7,policy)
+    scan=store.claim_scan(7)
+    assert store.finish_scan(7,scan['token'],[{**results[0],'url':'https://example.com/second'}]) is None
+    store.set_autonomy(7,{**policy,'max_jobs_per_day':3})
+    scan=store.claim_scan(7)
+    assert store.finish_scan(7,scan['token'],results) is None
+    store.set_autonomy(7,policy);scan=store.claim_scan(7)
+    store.set_autonomy(7,{**policy,'enabled':False})
+    with pytest.raises(WorkError,match='scan_expired'):store.finish_scan(7,scan['token'],results)
+    for changes in [{'max_jobs_per_day':4},{'interval_minutes':1},{'enabled':'true'},{'query':''}]:
+        with pytest.raises(WorkError):store.set_autonomy(7,{**policy,**changes})
+
+
+def test_autonomous_job_prepares_proposal_and_result(store):
+    async def scenario():
+        from desktop.work_store import DEFAULT_AUTONOMY
+        store.set_autonomy(7,{**DEFAULT_AUTONOMY,'enabled':True,'query':'Написать текст'})
+        policy=store.claim_scan(7)
+        id=store.finish_scan(7,policy['token'],[{'title':'Текст','url':'https://example.com/one','snippet':'Написать краткое описание товара с характеристиками: красная сумка, кожа, 20x30 см.'}])
+        seen=[]
+        async def generate(session,job,role,text,save):
+            seen.append(role)
+            return 'Черновик заявки без выдуманного опыта.' if role=='proposal' else ROLE_OUTPUTS[role]
+        await run_job(store,7,store.claim(7,id),SimpleNamespace(user_id=7),generate)
+        job=store.find(store.workspace(7),id)
+        assert job['status']=='ready'
+        assert seen==['manager','proposal','executor','reviewer','treasurer']
+        assert job['outputs']['proposal'].startswith('Черновик заявки')
+    asyncio.run(scenario())
+
+
+def test_autonomous_http_cycle_and_download(store):
+    async def scenario():
+        from desktop.work_store import DEFAULT_AUTONOMY
+        class Search:
+            available=True
+            calls=0
+            async def search(self,query):
+                self.calls+=1
+                return {'results':[{'title':'Описание','url':'https://example.com/autotask','snippet':'Написать описание сумки: красная кожаная сумка, ширина 20 см, высота 30 см.'}]}
+        search=Search()
+        async def session_for(request):return SimpleNamespace(user_id=7,access='private')
+        async def auth(token):return {'user_id':7}
+        async def generate(session,job,role,text,save):return 'Подготовленная заявка' if role=='proposal' else ROLE_OUTPUTS[role]
+        async def unused(*args,**kwargs):raise AssertionError('external call')
+        app=web.Application()
+        setup_work_routes(app,store=store,generate=generate,session_for=session_for,same_origin=lambda _:True,
+            json_response=lambda d,status=200:web.json_response(d,status=status),upstream=unused,upstream_stream=unused,
+            authenticate=auth,allowed=lambda _:True,handlers={},web_search=search)
+        async with TestServer(app) as server,ClientSession() as client:
+            base=str(server.make_url('/web-api/v1/work/'))
+            response=await client.put(base+'autonomy',json={**DEFAULT_AUTONOMY,'enabled':True,'query':'Описания товаров'})
+            assert response.status==200
+            assert (await client.post(base+'scan',json={})).status==202
+            for _ in range(100):
+                doc=await (await client.get(base+'workspace')).json()
+                if doc['jobs'] and doc['jobs'][0]['status']=='ready':break
+                await asyncio.sleep(.01)
+            assert len(doc['jobs'])==1 and doc['jobs'][0]['status']=='ready'
+            assert not {'scan_token','scan_until'} & set(doc)
+            assert (await client.post(base+'scan',json={})).status==202
+            await asyncio.sleep(.05)
+            assert search.calls==1
+            response=await client.get(base+'jobs/'+doc['jobs'][0]['id']+'/artifacts')
+            import io,zipfile
+            with zipfile.ZipFile(io.BytesIO(await response.read())) as bundle:
+                assert bundle.read('proposal-draft.txt').decode()=='Подготовленная заявка'
+    asyncio.run(scenario())
