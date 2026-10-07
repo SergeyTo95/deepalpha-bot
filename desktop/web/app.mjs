@@ -133,7 +133,7 @@ function setModel(value) {
       "aria-selected",
       String(option.dataset.model === value),
     );
-    option.disabled = profile ? !profile.models.includes(option.dataset.model) : option.dataset.model !== "velia-flash";
+    option.disabled = (agentMode && option.dataset.model !== "velia-flash") || (profile ? !profile.models.includes(option.dataset.model) : option.dataset.model !== "velia-flash");
   }
   try {
     localStorage.setItem("velia-web-model", value);
@@ -157,7 +157,9 @@ function setAgentMode(value) {
     ? "Browser Agent включён · VELIA Flash может открывать сайты и выполнять действия"
     : "VELIA Agent Core · браузерные действия через Flash";
   button.querySelector("span:last-child").textContent = enabled ? "AGENT ON" : "AGENT";
-  $("model-button").disabled = busy || enabled;
+  $("model-button").disabled = busy;
+  $("flash-description").textContent = enabled ? "Активна для VELIA Agent Core" : "Для повседневных вопросов";
+  setModel(model);
   try { localStorage.setItem("velia-web-agent", enabled ? "1" : "0"); } catch {}
 }
 
@@ -344,7 +346,7 @@ function setBusy(value) {
   $("prompt").disabled = value;
   $("attach").disabled = value;
   $("attachment-input").disabled = value;
-  $("model-button").disabled = value || agentMode;
+  $("model-button").disabled = value;
   $("agent-toggle").disabled = value || !profile?.browser_agent;
   $("new-chat").disabled = value;
   $("account").disabled = value;

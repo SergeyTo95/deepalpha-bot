@@ -1320,8 +1320,8 @@ dialog::backdrop {
 .sidebar { overflow-y: auto; scrollbar-width: thin; }
 .sidebar > * { flex-shrink: 0; }
 .sidebar .brand { margin-bottom: 22px; }
-.sidebar .history { flex: 1 1 110px; min-height: 70px; }
-.feature-nav { display: grid; gap: 3px; padding: 4px 0 18px; max-height: 45dvh; overflow-y: auto; scrollbar-width: thin; }
+.sidebar .history { flex: 1 0 110px; min-height: 70px; }
+.feature-nav { display: grid; gap: 3px; padding: 4px 0 18px; }
 .feature-nav-heading { color: var(--muted); font-size: 9px; letter-spacing: 1.3px; font-weight: 600; padding: 14px 12px 7px; }
 .feature-nav button { display: flex; align-items: center; gap: 11px; min-height: 42px; padding: 10px 12px; border: 0; border-radius: 10px; background: transparent; color: var(--soft); text-align: left; font: inherit; font-size: 13px; cursor: pointer; }
 .feature-nav button:hover, .feature-nav button[aria-current] { background: var(--hover); color: var(--text); }
@@ -1392,6 +1392,10 @@ dialog::backdrop {
 }
 .attachment-preview{display:flex;flex-wrap:wrap;gap:6px}.attachment-preview button{font:inherit;font-size:12px;background:var(--surface);color:inherit;border:1px solid var(--border);border-radius:8px;padding:5px}.feature-nav{flex-shrink:0}.feature-view{background:var(--bg)}
 .chat-tools-menu{position:absolute;right:30px;top:64px;z-index:5;display:grid;padding:8px;background:var(--surface);border:1px solid var(--border);border-radius:12px}.chat-tools-menu[hidden]{display:none}.chat-tools-menu button{background:transparent;color:inherit;border:0;font:inherit;padding:10px;cursor:pointer}.history-open{overflow:hidden}
-/* Keep navigation scroll separate from identity and account controls. */
-.sidebar { overflow: hidden; }
-.sidebar .feature-nav { flex: 0 1 45dvh; min-height: 160px; }
+
+/* Model picker stays within the composer edges on narrow screens. */
+@media (max-width: 520px) {
+  .model-control { position: static; }
+  .composer { position: relative; }
+  .model-menu { left: 0; right: 0; bottom: 74px; width: auto; max-height: min(360px, 65dvh); overflow-y: auto; }
+}

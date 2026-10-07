@@ -45,4 +45,6 @@ The changes target only the separate browser gateway deployment branch.
 
 ## Workspace design verification
 
-Shared cards, form fields, inline checkbox rows, primary actions, grouped navigation, active section indicators and Studio mode buttons support both themes. Navigation scrolls independently of account controls. Chromium acceptance covers all ten sections, 360/390/768/1440 px widths, no horizontal overflow, checkbox label clicks and selected navigation state. Feature responses in this UI check are synthetic.
+Shared cards, form fields, inline checkbox rows, primary actions, grouped navigation, active section indicators and Studio mode buttons support both themes. The sidebar uses one scroll surface to keep all navigation items reachable without clipping on short phone screens. The model list remains openable with Agent enabled and indicates its Flash requirement. Chromium acceptance covers all ten sections, 360/390/768/1440 px widths, no horizontal overflow, checkbox label clicks and selected navigation state. Feature responses in this UI check are synthetic.
+
+Short-screen regression checks cover 393 px width with 640/710/844 px height, model picker bounds in Agent mode and navigation/history separation. The Agent capability flag is synthetic in this UI check; no agent request is sent.

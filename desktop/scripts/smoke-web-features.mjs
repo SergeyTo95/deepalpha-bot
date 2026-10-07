@@ -39,6 +39,7 @@ try{
     if(p.startsWith('media/'))return route.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aPmQAAAAASUVORK5CYII=','base64')});
     await route.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,...result})});
   });
+  await context.route('**/web-api/v1/auth/exchange',async route=>{const response=await route.fetch(),data=await response.json();await route.fulfill({response,json:{...data,browser_agent:true}});});
   await page.goto('http://127.0.0.1:18180/');
   await page.locator('#model-button').click();assert.equal(await page.locator('[data-model="velia-quantum"]').isDisabled(),true);assert.match(await page.locator('[data-model="velia-quantum"]').innerText(),/Скоро/);await page.locator('#model-button').click();
   await page.locator('#account').click();await page.locator('#pairing-code').fill('ABCD-EFGH-2345-6789');await page.locator('#auth-submit').click();await page.locator('#auth-dialog').waitFor({state:'hidden'});
@@ -64,5 +65,25 @@ try{
   }
   await page.setViewportSize({width:390,height:844});await page.locator('#theme').click();await page.locator('#menu').click();await open('Медицинский центр');await page.waitForTimeout(250);await page.screenshot({path:output+'/medical-light-mobile.png'});
   await page.locator('#menu').click();await page.waitForTimeout(250);await page.screenshot({path:output+'/navigation-mobile.png'});
+  await page.locator('#scrim').click({position:{x:380,y:40}});
+  await page.getByRole('button',{name:'К диалогу',exact:true}).click();
+  for(const height of [640,710,844]) {
+    await page.setViewportSize({width:393,height});
+    await page.locator('#agent-toggle').click();
+    assert.equal(await page.locator('#model-button').isEnabled(),true);
+    await page.locator('#model-button').click();
+    await page.locator('#model-menu').waitFor({state:'visible'});
+    const menu=await page.locator('#model-menu').boundingBox();assert.ok(menu.x>=0&&menu.x+menu.width<=393&&menu.y>=0);
+    assert.match(await page.locator('#flash-description').innerText(),/Agent Core/);
+    assert.equal(await page.locator('[data-model="velia-quantum"]').isDisabled(),true);
+    await page.screenshot({path:output+`/model-agent-${height}.png`});
+    await page.locator('#model-button').click();await page.locator('#agent-toggle').click();
+    await page.locator('#menu').click();
+    const navBox=await page.locator('#feature-nav').boundingBox(),historyBox=await page.locator('.history-heading').boundingBox();
+    assert.ok(navBox.y+navBox.height<=historyBox.y+1,'Navigation overlaps history');
+    await page.locator('#feature-nav').getByRole('button',{name:'Голос',exact:true}).scrollIntoViewIfNeeded();
+    await page.waitForTimeout(250);await page.screenshot({path:output+`/navigation-short-${height}.png`});
+    await page.locator('#scrim').click({position:{x:380,y:40}});
+  }
   assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,sections:10,quantumDisabled:true,image2:true,video15:true,autopilotId:true,mobile:true,featureCalls:calls.length}));
 }finally{await browser?.close();fixture.kill();}
