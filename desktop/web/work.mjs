@@ -55,11 +55,20 @@ export async function mountWork(parent, {signal, toast = () => {}} = {}) {
     const policy=node('details');policy.append(node('summary','Правила казначея'));
     policy.append(form([['reserve_usdt','Рабочий резерв, USDT'],['max_expense_usdt','Лимит одного расхода, USDT'],['owner_address','Адрес владельца','text',false],['network','Сеть USDT','text',false],['agent_share_percent','Доля рабочего бюджета, %','number']], 'Сохранить правила',workspace.mandate, async data=> {data.agent_share_percent=Number(data.agent_share_percent);await call('mandate','PUT',data);toast('Правила сохранены');await refresh();}));root.append(policy);
     root.append(node('h3','Новое задание'));
-    root.append(form([['title','Название'],['brief','Требования и критерии результата','textarea'],['source_url','Ссылка на источник','url',false],['expected_usdt','Предполагаемая оплата, USDT']], 'Создать задание',{expected_usdt:'0'},async data=> {await call('jobs','POST',{...data,client_request_id:id()});await refresh();}));
+    const jobForm=form([['title','Название'],['brief','Требования и критерии результата','textarea'],['source_url','Ссылка на источник','url',false],['expected_usdt','Предполагаемая оплата, USDT']], 'Создать задание',{expected_usdt:'0'},async data=> {await call('jobs','POST',{...data,client_request_id:id()});await refresh();});
+    jobForm.elements.title.maxLength=120;jobForm.elements.brief.maxLength=6000;
+    root.append(jobForm);
     if(status.search_available) {
       root.append(node('h3','Поиск возможностей'));
       const results=node('div');
-      root.append(form([['query','Что искать']], 'Найти',{},async data=> {const result=await call('discover','POST',data);if(!live())return;results.replaceChildren(node('p','Кандидаты из поиска: условия и доступность заказов ещё не проверены.'));for(const item of result.results || []) {const p=node('p');let u;try{u=new URL(item.url);}catch{continue;}if(!['https:','http:'].includes(u.protocol))continue;const a=node('a',item.title);a.href=u.href;a.target='_blank';a.rel='noopener noreferrer';p.append(a,node('span',' — '+(item.snippet||'')));results.append(p);}}),results);
+      root.append(form([['query','Что искать']], 'Найти',{},async data=> {const result=await call('discover','POST',data);if(!live())return;results.replaceChildren(node('p','Кандидаты из поиска: условия и доступность заказов ещё не проверены.'));for(const item of result.results || []) {const p=node('p');let u;try{u=new URL(item.url);}catch{continue;}if(!['https:','http:'].includes(u.protocol))continue;const a=node('a',item.title);a.href=u.href;a.target='_blank';a.rel='noopener noreferrer';p.append(a,node('span',' — '+(item.snippet||'')));p.append(action('Подготовить задание',async()=>{
+        jobForm.elements.title.value=String(item.title || 'Найденная возможность').slice(0,120);
+        jobForm.elements.source_url.value=u.href;
+        jobForm.elements.brief.value=('Источник из поиска, условия не проверены.\n'+String(item.snippet || '')+'\n\nТребования и критерии результата: ').slice(0,6000);
+        jobForm.elements.expected_usdt.value='0';
+        jobForm.scrollIntoView?.({behavior:'smooth',block:'center'});jobForm.elements.brief.focus();
+        toast('Ссылка добавлена. Уточни требования и оплату перед созданием задания.');
+      }));results.append(p);}}),results);
     }
     root.append(node('h3','Задания'));
     if(!(workspace.jobs || []).length)root.append(node('p','Заданий пока нет.'));
