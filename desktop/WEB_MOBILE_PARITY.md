@@ -70,3 +70,9 @@ Rebuilt the native Web Speech conversation loop with interim captions, distinct 
 Speech output splits long answers into bounded chunks and removes spoken code/URLs/Markdown while preserving the original chat reply. A speech watchdog stops a stalled engine. Settings expose conversation language, available device voices, rate and a sample; voices loaded asynchronously refresh the selector. Responses remain in normal conversation history. Recognition listens between spoken answers, so automatic barge-in/echo cancellation and real-time model audio are not claimed. TTS begins after the full model reply arrives.
 
 Verification: 16 Node checks, focused gateway tests and synthetic Chromium speech lifecycle checks for interim captions, multi-chunk completion, silence retry, stale callbacks after pause, permission denial, selected voice/rate and mobile dialog bounds. Synthetic speech APIs qualify UI/control flow, not real microphone accuracy, actual speech quality or physical-device audio.
+
+## Browser Agent capacity feedback
+
+The gateway passes only allowlisted storage/profile-capacity error codes to the browser. Users receive a clear temporary-capacity message or an instruction to start a new Agent conversation when that profile reaches its limit; arbitrary upstream details are still sanitized. Browser-server cache sweeps, reserve checks and budgets are implemented separately on the Agent service branch. Existing browser user state is not deleted to admit a new request.
+
+Verification: 39 focused gateway tests, including both capacity codes and sanitization of an arbitrary upstream error; 16 Node tests. Agent-server storage and session validation adds 22 tests.

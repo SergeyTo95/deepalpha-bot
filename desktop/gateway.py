@@ -273,6 +273,8 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
                         ),
                     }
                 code = str(result.get("error") or "browser_agent_failed")
+                if response.status == 503 and code in {"browser_storage_capacity", "browser_profile_capacity"}:
+                    return 503, {"ok": False, "error": code}
                 if response.status == 429:
                     return 429, {"ok": False, "error": "browser_agent_busy"}
                 if response.status == 504:

@@ -173,6 +173,8 @@ export function apiError(code) {
       browser_agent_busy: "Browser Agent сейчас занят. Повтори через несколько секунд.",
       browser_agent_timeout: "Browser Agent не успел завершить задачу. Попробуй ещё раз.",
       browser_agent_unavailable: "Browser Agent временно недоступен. Попробуй позже.",
+      browser_storage_capacity: "Browser Agent временно не принимает задачи: хранилище заполнено. Текущая сессия сохранена. Попробуй позже.",
+      browser_profile_capacity: "Достигнут лимит данных этого браузерного диалога. Создай новый диалог Agent; прежняя сессия сохранена.",
       browser_agent_disabled: "Browser Agent пока отключён.",
       invalid_browser_task: "Не удалось понять задачу для Browser Agent.",
     }[code] || "Не удалось выполнить запрос. Попробуй ещё раз."

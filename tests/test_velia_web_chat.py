@@ -140,7 +140,7 @@ async def fixture(monkeypatch, **state):
             "session": request.headers.get("X-Velia-Session"),
         })
         if state.get("agent_status"):
-            return web.json_response({"ok": False, "error": "browser_agent_unavailable"},
+            return web.json_response({"ok": False, "error": state.get("agent_error", "browser_agent_unavailable")},
                                      status=state["agent_status"])
         return web.json_response({
             "ok": True,
@@ -602,4 +602,20 @@ def test_account_history_rejects_other_accounts_and_path_injection(monkeypatch):
                     assert response.status == 404
             async with client.get(server.make_url("/web-api/v1/conversations"), headers=headers()) as response:
                 assert response.status == 401
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("code,expected", [
+    ("browser_storage_capacity", "browser_storage_capacity"),
+    ("browser_profile_capacity", "browser_profile_capacity"),
+    ("private-server-path-and-secret", "browser_agent_unavailable"),
+])
+def test_browser_capacity_errors_are_allowlisted(monkeypatch, code, expected):
+    async def run():
+        async with fixture(monkeypatch, agent_status=503, agent_error=code) as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            async with client.post(server.make_url("/web-api/v1/agent/browser"), headers=headers(cookie),
+                    json={"prompt": "Открой сайт", "session_id": "11111111-1111-4111-8111-111111111111"}) as response:
+                assert response.status == 503
+                assert (await response.json())["error"] == expected
     asyncio.run(run())
