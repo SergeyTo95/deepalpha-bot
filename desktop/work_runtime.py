@@ -5,6 +5,7 @@ import uuid
 from desktop.work_store import WorkError, amount
 from desktop.account_routes import account_events
 from velia_desktop_routes import FLASH_ID, flash_enabled, AuthenticationUnavailable
+from services.velia_structured_output import strict_json_loads
 
 PROMPTS={
  'manager':'Ты управляющий рабочей команды VELIA. Оцени выполнимость задания в текущем режиме: только текстовые результаты, без запуска кода, регистрации, публикации и платежей. Верни только JSON {"decision":"proceed" или "decline","plan":"план или причина отказа"}. Не обещай получение заказа или денег.',
@@ -17,7 +18,7 @@ def structured(text,role):
     value=text.strip()
     if value.startswith('```') and value.endswith('```'):
         value=value.split('\n',1)[1].rsplit('```',1)[0]
-    try:data=json.loads(value)
+    try:data=strict_json_loads(value)
     except (ValueError,TypeError):raise WorkError('invalid_role_output',502)
     field='decision' if role=='manager' else 'verdict' if role=='reviewer' else 'recommendation'
     permitted={'manager':{'proceed','decline'},'reviewer':{'ready','needs_revision'}}
