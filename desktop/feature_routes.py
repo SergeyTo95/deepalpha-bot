@@ -32,6 +32,8 @@ def route_allowed(method, path):
     return any(method == verb and pattern.fullmatch(path) for verb, pattern in PATTERNS)
 
 def setup_feature_routes(app, *, session_for, same_origin, upstream, json_response, binary_upstream=None, origin=""):
+    from desktop.platform_status import setup_platform_status
+    setup_platform_status(app, session_for=session_for, upstream=upstream, json_response=json_response)
     async def relay(request):
         def error(code, status):
             return json_response({"ok": False, "error": code}, status)
@@ -39,7 +41,8 @@ def setup_feature_routes(app, *, session_for, same_origin, upstream, json_respon
         binary = any(request.method == verb and pattern.fullmatch(path) for verb, pattern in BINARY_ROUTES)
         if not route_allowed(request.method, path) and not binary:
             return error("feature_route_not_found", 404)
-        if set(request.query) - QUERY_KEYS or any(len(v) > 256 for v in request.query.values()):
+        query_keys = QUERY_KEYS | ({"q", "category"} if request.method == "GET" and path == "agents/capabilities" else set())
+        if set(request.query) - query_keys or any(len(v) > 256 for v in request.query.values()):
             return error("invalid_request", 400)
         if request.method != "GET":
             if binary:
