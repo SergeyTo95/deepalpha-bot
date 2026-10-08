@@ -90,9 +90,10 @@ async def index(request):
     <label>Цель<textarea name='goal' minlength='8' maxlength='2000' required>Улучшить правильность ответов, понимание опечаток и контекста Flash, сохранив компактность Bonsai. Проверить LoRA и дистилляцию; выяснить совместимость с текущим форматом весов и стоимость по RAM и размеру.</textarea></label>
     <p class='hint'>По нажатию: до 2 поисковых запросов и 1 запроса исследовательской модели. Её провайдер может списать оплату по своему тарифу. Выдержки поиска требуют проверки полных источников.</p><button class='primary'{research_disabled}>Начать исследование</button></form></div>
     <div class='card wide'><h2>Проверить интеллект Flash</h2><form method='post' action='/admin/research/runs'>{csrf}<input type='hidden' name='kind' value='benchmark'><input type='hidden' name='request_id' value='{uuid.uuid4()}'>
+    <label>Набор задач<select name="suite"><option value="default">Стандартный: 10 задач</option><option value="velia-deepseek-diagnostic-v1">Расширенный: 36 задач, 20 языков</option></select></label>
     <label>Название запуска<input name='label' maxlength='120' required value='Flash: исходная проверка'></label>
     <label>Что проверяем<textarea name='goal' minlength='8' maxlength='2000' required>Зафиксировать исходное качество Flash перед экспериментами с весами.</textarea></label>
-    <p class='hint'>8 задач с автоматической проверкой, 2 с ручной оценкой и до 4 ваших контрольных задач. Запросы выполняются по одному и ждут свободного Flash. Один текущий запрос может занять несколько минут. Малый набор не измеряет общий интеллект модели.</p><p class='hint'>Ревизия весов: {core._e(profile['revision'] or 'Не указана в VELIA_FLASH_MODEL_REVISION')}. Название запуска — ваша метка; оно не подтверждает смену весов.</p><button class='primary'{bench_disabled}>Запустить проверку качества</button></form></div>
+    <p class='hint'>Стандартный набор: 8 автоматических и 2 ручных проверки. Расширенный: 36 автоматических проверок на 20 языках, включая код, контекст, опечатки и планы вызова инструментов; инструменты не выполняются. Дополнительно — до 4 ваших контрольных задач. Платные внешние модели в этой проверке не вызываются. Запросы выполняются по одному и ждут свободного Flash. Один текущий запрос может занять несколько минут. Малый набор не измеряет общий интеллект модели.</p><p class='hint'>Ревизия весов: {core._e(profile['revision'] or 'Не указана в VELIA_FLASH_MODEL_REVISION')}. Название запуска — ваша метка; оно не подтверждает смену весов.</p><button class='primary'{bench_disabled}>Запустить проверку качества</button></form></div>
     <div class='card full'><h2>История запусков</h2><div class='table-wrap'><table><thead><tr><th>Название</th><th>Тип</th><th>Статус</th><th>Создано</th></tr></thead><tbody>{rows}</tbody></table></div><div class='lab-actions'><a class='button' href='/admin/research'>Обновить результаты</a></div></div>
     <div class='card wide'><h2>Добавить проверенный пример</h2><form method='post' action='/admin/research/examples'>{csrf}
     <label>Вопрос<textarea name='prompt' maxlength='6000' required placeholder='Реальная ошибка Flash или новая задача'></textarea></label><label>Правильный ответ / критерии<textarea name='target' maxlength='6000' required></textarea></label>
@@ -169,7 +170,7 @@ async def create_run(request):
     form = await request.post()
     try:
         run_id = await asyncio.to_thread(lab.enqueue, _owner(request), form.get("kind", ""),
-            form.get("goal", ""), form.get("label", ""), form.get("request_id", ""))
+            form.get("goal", ""), form.get("label", ""), form.get("request_id", ""), form.get("suite", "default"))
     except ValueError as exc:
         return _redirect(str(exc))
     return _redirect("Задание сохранено в очереди.", run_id)
@@ -237,3 +238,4 @@ def setup_model_lab_routes(app):
     app.router.add_post("/admin/research/{run_id}/cancel", cancel_run)
     app.router.add_post("/admin/research/{run_id}/review/{answer_id}", review_answer)
     app.router.add_post("/admin/research/examples/{example_id}/approval", approve_example)
+
