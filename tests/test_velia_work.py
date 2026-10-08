@@ -325,3 +325,81 @@ def test_review_feedback_drives_bounded_revision_and_distinct_attempts(store):
         assert len([x for x in seen if x[0]=='manager'])==1
         assert [attempt for role,attempt in seen if role=='executor']==list(range(1,executions+1))
     asyncio.run(scenario(False));asyncio.run(scenario(True))
+
+
+def test_pending_autonomous_resume_respects_policy_and_cancellation(store):
+    from desktop.work_store import DEFAULT_AUTONOMY
+    policy={**DEFAULT_AUTONOMY,'enabled':True,'query':'Тексты'}
+    store.set_autonomy(7,policy);scan=store.claim_scan(7)
+    id=store.finish_scan(7,scan['token'],[{'title':'Текст','url':'https://example.com/resume','snippet':'Подготовить текст о красной кожаной сумке размером 20 на 30 сантиметров.'}])
+    assert store.pending_autonomous(7)==id
+    job=store.claim(7,id);assert store.pending_autonomous(7) is None
+    store.update_job(7,id,job['lease'],status='interrupted')
+    assert store.pending_autonomous(7)==id
+    store.set_autonomy(7,{**policy,'query':'Переводы'})
+    assert store.pending_autonomous(7) is None
+    store.set_autonomy(7,policy);store.cancel(7,id)
+    assert store.pending_autonomous(7) is None
+
+
+def test_scheduler_long_job_does_not_block_later_owner(store):
+    async def scenario():
+        from desktop.work_store import DEFAULT_AUTONOMY
+        for user in [1,2]:store.set_autonomy(user,{**DEFAULT_AUTONOMY,'enabled':True,'query':'Тексты '+str(user)})
+        entered=asyncio.Event();gate=asyncio.Event()
+        class Search:
+            available=True
+            async def search(self,query):return {'results':[{'title':'Текст','url':'https://example.com/'+query[-1],'snippet':'Подготовить текст о красной кожаной сумке размером 20 на 30 сантиметров.'}]}
+        async def session_for(request):
+            user=int(request.headers['X-User']);return SimpleNamespace(user_id=user,access=str(user))
+        async def auth(token):return {'user_id':int(token)}
+        async def generate(session,job,role,text,save):
+            if session.user_id==1:entered.set();await gate.wait()
+            return 'Заявка' if role=='proposal' else ROLE_OUTPUTS[role]
+        async def unused(*args,**kwargs):raise AssertionError('unexpected external call')
+        app=web.Application()
+        setup_work_routes(app,store=store,generate=generate,session_for=session_for,same_origin=lambda _:True,
+            json_response=lambda d,status=200:web.json_response(d,status=status),upstream=unused,upstream_stream=unused,
+            authenticate=auth,allowed=lambda _:True,handlers={},web_search=Search(),scheduler_interval=.02)
+        async with TestServer(app) as server,ClientSession() as client:
+            base=str(server.make_url('/web-api/v1/work/'))
+            await client.get(base+'status',headers={'X-User':'1'})
+            await asyncio.wait_for(entered.wait(),2)
+            await client.get(base+'status',headers={'X-User':'2'})
+            for _ in range(200):
+                jobs=store.workspace(2)['jobs']
+                if jobs and jobs[0]['status']=='ready':break
+                await asyncio.sleep(.01)
+            assert jobs[0]['status']=='ready'
+            assert store.workspace(1)['jobs'][0]['status']=='running'
+        assert store.workspace(1)['jobs'][0]['status']=='interrupted'
+    asyncio.run(scenario())
+
+
+def test_scheduler_resumes_interrupted_autonomous_job_without_new_search(store):
+    async def scenario():
+        from desktop.work_store import DEFAULT_AUTONOMY
+        policy={**DEFAULT_AUTONOMY,'enabled':True,'query':'Тексты'}
+        store.set_autonomy(7,policy);scan=store.claim_scan(7)
+        id=store.finish_scan(7,scan['token'],[{'title':'Текст','url':'https://example.com/resume-http','snippet':'Подготовить текст о красной кожаной сумке размером 20 на 30 сантиметров.'}])
+        job=store.claim(7,id)
+        store.update_job(7,id,job['lease'],outputs={'manager':ROLE_OUTPUTS['manager']},status='interrupted')
+        seen=[]
+        async def session_for(request):return SimpleNamespace(user_id=7,access='owner')
+        async def auth(token):return {'user_id':7}
+        async def generate(session,job,role,text,save):
+            seen.append(role);return 'Заявка' if role=='proposal' else ROLE_OUTPUTS[role]
+        async def unused(*args,**kwargs):raise AssertionError('unexpected external call')
+        app=web.Application()
+        setup_work_routes(app,store=store,generate=generate,session_for=session_for,same_origin=lambda _:True,
+            json_response=lambda d,status=200:web.json_response(d,status=status),upstream=unused,upstream_stream=unused,
+            authenticate=auth,allowed=lambda _:True,handlers={},scheduler_interval=.02)
+        async with TestServer(app) as server,ClientSession() as client:
+            await client.get(server.make_url('/web-api/v1/work/status'))
+            for _ in range(200):
+                job=store.find(store.workspace(7),id)
+                if job['status']=='ready':break
+                await asyncio.sleep(.01)
+            assert job['status']=='ready' and len(store.workspace(7)['jobs'])==1
+            assert seen==['proposal','executor','reviewer','treasurer']
+    asyncio.run(scenario())

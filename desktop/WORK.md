@@ -69,3 +69,9 @@ Additional routes: POST upwork/connect, upwork/disconnect, upwork/verify; GET up
 When a reviewer returns needs_revision, the executor receives the full prior result and review notes and tries again, at most twice. The manager and proposal draft are retained; executor/reviewer generations use a new attempt key. Each rejected version remains in the owned job detail and the ready ZIP's history directory. Exhausted attempts retain needs_revision. The existing context limit still applies: oversized full revision context fails explicitly rather than silently omitting requirements. Cancellation and restart recovery use the same durable job lease and cached role outputs.
 
 GET upwork/capabilities exposes only the verified owner's tool catalog and timestamp, never OAuth tokens or registration secrets. It requires a currently valid connection. The dashboard renders schemas as plain text for inspection. execution_enabled remains false: inspecting a catalog does not enable tool calls or external submissions.
+
+## Scheduler recovery
+
+Owner scans run as independently tracked tasks, so one long role pipeline does not stop later owners from being scheduled. The existing four-process-slot bound and one-running-job-per-owner database claim still apply. Manual scans and scheduled scans share the same owner scan key.
+
+After a valid owner visit restores the in-memory session, queued/interrupted autonomous jobs with the current saved search direction resume before a new search. Existing cached role results are retained and no additional daily task is charged. Cancelled/failed jobs are not automatically retried; disabled or changed policy prevents automatic resume. Earlier jobs without an explicit saved direction require manual resume. A crash may need the existing lease to expire before recovery. This does not persist Flash account credentials or remove the need for owner reauthentication after server restart.

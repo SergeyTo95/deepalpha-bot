@@ -15,7 +15,7 @@ from velia_desktop_routes import AuthenticationUnavailable
 CONNECTORS=[{'id':id,'name':name,'connected':False} for id,name in [('upwork','Upwork'),('laborx','LaborX'),('direct','Прямые заказы')]]
 
 def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstream_stream,authenticate,allowed,handlers,
-                      web_search=None,store=None,generate=None,origin=None,upwork=None):
+                      web_search=None,store=None,generate=None,origin=None,upwork=None,scheduler_interval=30):
     if store is None and os.getenv('VELIA_WORK_ENABLED')=='true':
         dsn=os.getenv('VELIA_WORK_DATABASE_URL') or os.getenv('VELIA_WEB_GUEST_DATABASE_URL')
         if dsn:store=WorkStore(dsn)
@@ -130,20 +130,25 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
         return json_response({'ok':True,'autonomy':value})
     async def scan(session):
         user=session.user_id
-        if user in scanning or not web_search or not web_search.available or slots.locked():return False
+        if user in scanning or slots.locked():return False
         scanning.add(user)
         await slots.acquire()
         policy=None
         try:
-            policy=await asyncio.to_thread(store.claim_scan,user)
-            if not policy:return False
+            pending=await asyncio.to_thread(store.pending_autonomous,user)
+            if not pending:
+                if not web_search or not web_search.available:return False
+                policy=await asyncio.to_thread(store.claim_scan,user)
+                if not policy:return False
             identity=await authenticate(session.access)
             if not identity or identity['user_id']!=user or not allowed(user):
-                await asyncio.to_thread(store.finish_scan,user,policy['token'],[],error='authentication_required')
+                if policy:await asyncio.to_thread(store.finish_scan,user,policy['token'],[],error='authentication_required')
                 sessions.pop(user,None);return False
-            take_search_slot(user)
-            result=await asyncio.wait_for(web_search.search(policy['query']),timeout=45)
-            id=await asyncio.to_thread(store.finish_scan,user,policy['token'],result.get('results',[]))
+            id=pending
+            if not id:
+                take_search_slot(user)
+                result=await asyncio.wait_for(web_search.search(policy['query']),timeout=45)
+                id=await asyncio.to_thread(store.finish_scan,user,policy['token'],result.get('results',[]))
             if id:
                 job=await asyncio.to_thread(store.claim,user,id)
                 key=(user,id);task=asyncio.create_task(run_job(store,user,job,session,generate));tasks[key]=task
@@ -161,15 +166,20 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
             slots.release();scanning.discard(user)
     async def schedule():
         while True:
-            await asyncio.sleep(30)
+            await asyncio.sleep(scheduler_interval)
             # Sessions stay in memory only. After restart the owner signs in again.
-            await asyncio.gather(*(scan(session) for session in list(sessions.values())),return_exceptions=True)
+            for session in list(sessions.values()):
+                launch_scan(session)
+    def launch_scan(session):
+        key=(session.user_id,'scan')
+        if key in tasks or session.user_id in scanning:return False
+        task=asyncio.create_task(scan(session));tasks[key]=task
+        task.add_done_callback(lambda done:tasks.pop(key,None) if tasks.get(key) is done else None)
+        return True
     async def scan_now(request):
         if request[WORK_BODY]:raise WorkError('invalid_request')
         session=request[WORK_SESSION]
-        if session.user_id in scanning:raise WorkError('work_busy',429)
-        task=asyncio.create_task(scan(session));key=(session.user_id,'scan');tasks[key]=task
-        task.add_done_callback(lambda done:tasks.pop(key,None) if tasks.get(key) is done else None)
+        if not launch_scan(session):raise WorkError('work_busy',429)
         return json_response({'ok':True,'status':'scheduled'},202)
     async def artifacts(request):
         doc=await asyncio.to_thread(store.workspace,request[WORK_SESSION].user_id)

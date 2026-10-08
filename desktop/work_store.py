@@ -142,6 +142,14 @@ class WorkStore(GuestStore):
             return {**policy,'token':token}
         return self.transaction(user,claim)
 
+    def pending_autonomous(self,user):
+        def pending(doc):
+            policy=doc.get('autonomy',DEFAULT_AUTONOMY)
+            if not policy['enabled'] or any(j['status']=='running' for j in doc['jobs']):return None
+            return next((j['id'] for j in reversed(doc['jobs']) if j.get('autonomous')
+                and j['status'] in {'queued','interrupted'} and j.get('autonomy_query')==policy['query']),None)
+        return self.transaction(user,pending)
+
     def finish_scan(self,user,token,results,error=None):
         from desktop.web_search import public_url
         def finish(doc):
@@ -163,7 +171,7 @@ class WorkStore(GuestStore):
                         'Оцени, достаточно ли данных для конкретного текстового результата. При недостатке данных откажись. '
                         'Не придумывай требования, бюджет, квалификацию владельца или договор с заказчиком.\n'
                         'Направление владельца: '+policy['query']+'\nОписание источника: '+snippet)[:6000],
-                    'source_url':url,'expected_usdt':'0','autonomous':True,'status':'queued','outputs':{},'conversations':{},
+                    'source_url':url,'expected_usdt':'0','autonomous':True,'autonomy_query':policy['query'],'status':'queued','outputs':{},'conversations':{},
                     'client_request_id':'auto:'+id,'request_hash':'auto:'+id,'attempt':1,'created_at':time.time(),'error':None})
                 return id
             return None
