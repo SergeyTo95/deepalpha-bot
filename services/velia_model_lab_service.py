@@ -156,7 +156,15 @@ def builtin_cases() -> list[dict]:
     ]
 
 
+def diagnostic_holdouts():
+    from research.deepseek.evaluation import cases
+    return cases()
+
+
 def evaluate(case: dict, result: dict) -> str:
+    if case.get("suite_version") == "velia-deepseek-diagnostic-v1":
+        from research.deepseek.evaluation import evaluate as diagnostic_evaluate
+        return diagnostic_evaluate(case, result)
     if not result.get("ok") or not str(result.get("text") or "").strip():
         return "error"
     if result.get("finish_reason") == "length":
@@ -255,7 +263,9 @@ def get_run(owner_id: int, run_id: str) -> dict | None:
         return _detail(cur, owner_id, run_id)
 
 
-def enqueue(owner_id: int, kind: str, goal: str, label: str, request_id: str) -> str:
+def enqueue(owner_id: int, kind: str, goal: str, label: str, request_id: str, suite: str = "default") -> str:
+    if suite not in {"default", "velia-deepseek-diagnostic-v1"} or (kind != "benchmark" and suite != "default"):
+        raise ValueError("Неизвестный набор контрольных задач.")
     owner_id = _owner(owner_id)
     if not enabled():
         raise ValueError("Лаборатория отключена в конфигурации сервиса.")
@@ -285,7 +295,12 @@ def enqueue(owner_id: int, kind: str, goal: str, label: str, request_id: str) ->
             raise ValueError("В очереди уже четыре задания. Дождитесь результата или отмените лишнее.")
         config = {"suite_version": SUITE_VERSION, "profile": caps["profile"]}
         if kind == "benchmark":
-            cases = builtin_cases()
+            if suite == "velia-deepseek-diagnostic-v1":
+                from research.deepseek.evaluation import cases as diagnostic_cases, VERSION
+                cases = diagnostic_cases()
+                config["suite_version"] = VERSION
+            else:
+                cases = builtin_cases()
             cur.execute("SELECT * FROM velia_model_lab_examples WHERE owner_id=%s AND split='holdout' AND approved=TRUE ORDER BY id LIMIT 4", (owner_id,))
             for row in cur.fetchall():
                 example = _row(cur, row)
@@ -336,7 +351,7 @@ def add_example(owner_id: int, prompt: str, target: str, split: str, approved: b
         raise ValueError("Укажите вопрос и эталон до 6000 символов, выберите назначение данных.")
     messages = [{"role": "user", "content": prompt}]
     # Built-in exam prompts are immutable holdouts, including their multi-turn input.
-    if any(prompt == c["messages"][-1]["content"] for c in builtin_cases()):
+    if any(prompt == c["messages"][-1]["content"] for c in builtin_cases() + diagnostic_holdouts()):
         raise ValueError("Встроенные контрольные задачи нельзя включать в набор обучения.")
     ensure_tables()
     with _transaction() as cur:
@@ -635,3 +650,4 @@ async def worker_context(app):
     finally:
         stop.set()
         await asyncio.to_thread(thread.join, 5)
+
