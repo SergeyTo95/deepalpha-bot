@@ -173,15 +173,8 @@ def _extract_pdf(raw: bytes) -> str:
     if len(reader.pages) > max_pages:
         raise AttachmentError("pdf_too_many_pages", status=413)
 
-    chunks: List[str] = []
-    for page in reader.pages:
-        try:
-            page_text = str(page.extract_text() or "").strip()
-        except Exception:
-            page_text = ""
-        if page_text:
-            chunks.append(page_text)
-    text = _normalize_text("\n\n".join(chunks))
+    from services.velia_pdf_text import extract_pages
+    text = _normalize_text(extract_pages(reader.pages))
     if not text:
         raise AttachmentError("document_has_no_readable_text", status=422)
     return text

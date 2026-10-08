@@ -45,15 +45,8 @@ def _safe_extract_pdf(raw: bytes) -> str:
             status=413,
         )
 
-    chunks: List[str] = []
-    for page in pages:
-        try:
-            page_text = str(page.extract_text() or "").strip()
-        except Exception:
-            page_text = ""
-        if page_text:
-            chunks.append(page_text)
-    text = attachment_service._normalize_text("\n\n".join(chunks))
+    from services.velia_pdf_text import extract_pages
+    text = attachment_service._normalize_text(extract_pages(pages))
     if not text:
         raise attachment_service.AttachmentError(
             "document_has_no_readable_text",
