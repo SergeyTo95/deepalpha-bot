@@ -96,16 +96,20 @@ async def run_job(store,user,job,session,generate):
             active=store.find(current,id)
             if active['status']!='running' or active.get('lease')!=lease:raise WorkError('job_cancelled',409)
             job=active
-            if role in job['outputs']:continue
-            # Refresh the lease before each bounded provider call.
-            job=await asyncio.to_thread(store.update_job,user,id,lease,current_role=role)
-            async def save_conversation(conversation):
-                job['conversations'][role]=conversation
-                await asyncio.to_thread(store.update_job,user,id,lease,conversations=job['conversations'])
-            output=await asyncio.wait_for(generate(session,job,role,prompt(job,role,current['mandate']),save_conversation),timeout=390)
-            data=structured(output,role) if role not in {'executor','proposal'} else None
-            job['outputs'][role]=output
-            await asyncio.to_thread(store.update_job,user,id,lease,outputs=job['outputs'])
+            if role in job['outputs']:
+                # Re-apply saved decisions after recovery; persistence is not approval.
+                output=job['outputs'][role]
+                data=structured(output,role) if role not in {'executor','proposal'} else None
+            else:
+                # Refresh the lease before each bounded provider call.
+                job=await asyncio.to_thread(store.update_job,user,id,lease,current_role=role)
+                async def save_conversation(conversation):
+                    job['conversations'][role]=conversation
+                    await asyncio.to_thread(store.update_job,user,id,lease,conversations=job['conversations'])
+                output=await asyncio.wait_for(generate(session,job,role,prompt(job,role,current['mandate']),save_conversation),timeout=390)
+                data=structured(output,role) if role not in {'executor','proposal'} else None
+                job['outputs'][role]=output
+                await asyncio.to_thread(store.update_job,user,id,lease,outputs=job['outputs'])
             if role=='reviewer' and data['verdict']=='needs_revision' and job.get('revision_count',0)<2:
                 history=job.get('revision_history',[])+[{'executor':job['outputs']['executor'],'reviewer':output}]
                 updated=await asyncio.to_thread(store.update_job,user,id,lease,
@@ -116,6 +120,9 @@ async def run_job(store,user,job,session,generate):
                 await run_job(store,user,updated,session,generate)
                 return
             if role=='manager' and data['decision']=='decline':
+                await asyncio.to_thread(store.update_job,user,id,lease,status='needs_revision',current_role=None)
+                return
+            if role=='reviewer' and data['verdict']=='needs_revision':
                 await asyncio.to_thread(store.update_job,user,id,lease,status='needs_revision',current_role=None)
                 return
         treasury=structured(job['outputs']['treasurer'],'treasurer')
