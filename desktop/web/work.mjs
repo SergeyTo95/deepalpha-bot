@@ -2,7 +2,7 @@ const node = (tag, text, cls) => {const n = document.createElement(tag); if (tex
 const states = {draft:'Черновик',queued:'В очереди',needs_revision:'Нужна доработка',planning:'Планирование',executing:'Выполнение',reviewing:'Проверка',ready:'Результат подготовлен',completed:'Результат подготовлен',failed:'Ошибка',cancelled:'Отменено',running:'В работе',interrupted:'Прервано'};
 export async function mountWork(parent, {signal, toast = () => {}} = {}) {
   const root = node('section', undefined, 'feature-work'); parent.append(root);
-  let timer, workspace, status, refreshing = false;
+  let timer, workspace, status, refreshing = false, connecting = false, connectionFeedback={text:'',error:false};
   const live = () => !signal?.aborted && root.isConnected;
   signal?.addEventListener('abort', () => clearTimeout(timer), {once:true});
   async function call(path, method = 'GET', data) {
@@ -10,7 +10,7 @@ export async function mountWork(parent, {signal, toast = () => {}} = {}) {
       headers:method === 'GET' ? {} : {'Content-Type':'application/json','X-Velia-Request':'1'},
       body:method === 'GET' ? undefined : JSON.stringify(data || {})});
     const result = await response.json();
-    const errors={upwork_discovery_unavailable:'Сервер авторизации Upwork сейчас недоступен. Подключение не создано.',upwork_access_denied:'Upwork не подтвердил доступ. Попробуй подключиться позже.',upwork_connect_rate_limit:'Подожди минуту перед следующей проверкой Upwork.',upwork_reconnect_required:'Требуется повторный вход в Upwork.',upwork_service_unavailable:'Сервис Upwork сейчас недоступен.'};
+    const errors={upwork_connect_timeout:'Upwork не ответил вовремя. Подключение не создано; попробуй позже.',upwork_discovery_unavailable:'Сервер авторизации Upwork сейчас недоступен. Подключение не создано.',upwork_access_denied:'Upwork не подтвердил доступ. Попробуй подключиться позже.',upwork_connect_rate_limit:'Подожди минуту перед следующей проверкой Upwork.',upwork_reconnect_required:'Требуется повторный вход в Upwork.',upwork_service_unavailable:'Сервис Upwork сейчас недоступен.'};
     if(!response.ok || result.ok === false) throw new Error(response.status === 401 ? 'Войди в VELIA, чтобы продолжить.' : errors[result.error] || 'Действие недоступно: ' + (result.error || response.status));
     return result;
   }
@@ -57,16 +57,24 @@ export async function mountWork(parent, {signal, toast = () => {}} = {}) {
     root.append(node('p','Площадки: '+(status.connectors || []).map(c=>c.name+': '+(c.connected?'подключена':'не подключена')).join(' · ')));
     if(status.upwork_available) {
       const upwork=(status.connectors || []).find(c=>c.id==='upwork');
+      const connectionMessage=node('p',connectionFeedback.text);connectionMessage.setAttribute('role',connectionFeedback.error?'alert':'status');connectionMessage.setAttribute('aria-live','polite');
+      const showConnection=(text,error=false)=>{connectionFeedback={text,error};connectionMessage.textContent=text;connectionMessage.setAttribute('role',error?'alert':'status');};
       root.append(node('p','Upwork: вход и разрешение доступа выполняются на сайте площадки. Сейчас подключение проверяет доступ и список инструментов; отправка заявок ещё не включена.'));
       if(upwork?.connected)root.append(node('p','Доступ проверен · инструментов: '+upwork.tool_count));
       if(upwork?.connected){const catalog=node('div');root.append(action('Инструменты Upwork',async()=>{const result=await call('upwork/capabilities');if(!live())return;catalog.replaceChildren(node('p','Проверенный каталог. Автоматическое выполнение методов ещё не включено.'));for(const tool of result.tools || []) {const d=node('details');d.append(node('summary',tool.name));const p=node('pre',JSON.stringify({description:tool.description,inputSchema:tool.inputSchema,annotations:tool.annotations},null,2));p.style.whiteSpace='pre-wrap';p.style.overflowWrap='anywhere';d.append(p);catalog.append(d);}}),catalog);}
       if(upwork?.connected || upwork?.status==='reconnect_required')root.append(action('Проверить и обновить доступ Upwork',async()=>{await call('upwork/verify','POST',{});await refresh();}));
       root.append(action(upwork?.connected?'Отключить Upwork':'Подключить Upwork',async()=>{
         if(upwork?.connected){await call('upwork/disconnect','POST',{});await refresh();return;}
-        const result=await call('upwork/connect','POST',{});const url=new URL(result.authorization_url);
-        if(url.protocol!=='https:' || !(url.hostname==='upwork.com' || url.hostname.endsWith('.upwork.com')))throw new Error('Некорректный адрес авторизации');
-        window.location.assign(url.href);
-      }));
+        connecting=true;showConnection('Проверяю сервер авторизации Upwork…');
+        try {
+          const result=await call('upwork/connect','POST',{});if(!live())return;const url=new URL(result.authorization_url);
+          if(url.protocol!=='https:' || !(url.hostname==='upwork.com' || url.hostname.endsWith('.upwork.com')))throw new Error('Некорректный адрес авторизации');
+          showConnection('Перехожу на Upwork для входа…');window.location.assign(url.href);
+        } catch(error) {
+          if(error.name!=='AbortError' && live())showConnection(error.message,true);
+          throw error;
+        } finally {connecting=false;}
+      }),connectionMessage);
     }
     root.append(node('p','Кошелёк не подключён. Подтверждённый баланс и доход недоступны.'));
     root.append(action('Обновить',refresh));
@@ -116,7 +124,7 @@ export async function mountWork(parent, {signal, toast = () => {}} = {}) {
   }
   async function refresh() {
     if(refreshing || !live())return;refreshing=true;clearTimeout(timer);
-    try {status=await call('status');workspace=status.available ? await call('workspace') : null;const editing=root.contains(document.activeElement) && ['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);if(!editing)draw();}
+    try {status=await call('status');workspace=status.available ? await call('workspace') : null;const editing=root.contains(document.activeElement) && ['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);if(!editing && !connecting)draw();}
     finally {refreshing=false;const running=workspace?.jobs?.some(j=>['planning','executing','reviewing','running'].includes(j.status));if(live() && (running || workspace?.autonomy?.enabled))timer=setTimeout(()=>refresh().catch(e=>{if(e.name!=='AbortError'&&live())toast(e.message);}),running?4000:15000);}
   }
   root.append(node('p','Загрузка рабочего пространства…'));await refresh();

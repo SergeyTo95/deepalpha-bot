@@ -6,6 +6,7 @@ import time
 import io
 import zipfile
 import json
+import logging
 from aiohttp import web
 from desktop.work_store import WorkStore, WorkError, ROLES, DEFAULT_AUTONOMY
 from desktop.work_runtime import FlashRoles, run_job
@@ -203,7 +204,14 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
         require_upwork()
         if request[WORK_BODY]:raise WorkError('invalid_request')
         if connector_slots.locked():raise WorkError('upwork_connect_rate_limit',429)
-        async with connector_slots:url=await upwork.start(request[WORK_SESSION].user_id)
+        try:
+            async with connector_slots:url=await asyncio.wait_for(upwork.start(request[WORK_SESSION].user_id),timeout=45)
+        except asyncio.TimeoutError:
+            logging.getLogger(__name__).warning('VELIA_UPWORK_CONNECT_FAILED code=upwork_connect_timeout')
+            raise WorkError('upwork_connect_timeout',504)
+        except WorkError as exc:
+            logging.getLogger(__name__).warning('VELIA_UPWORK_CONNECT_FAILED code=%s',exc.code)
+            raise
         return json_response({'ok':True,'authorization_url':url})
     async def callback_upwork(request):
         require_upwork()

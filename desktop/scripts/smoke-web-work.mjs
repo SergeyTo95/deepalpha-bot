@@ -44,3 +44,22 @@ assert.equal(unavailableCalls.length,1);assert(unavailableCalls[0].endsWith('/st
 assert(emptyRoot.textContent.includes('Рабочее пространство ещё не подключено'));
 assert.equal(emptyRoot.querySelectorAll('form').length,0);
 console.log('Unavailable workspace smoke passed.');
+const connectionRoot=document.createElement('main');document.body.append(connectionRoot);
+let releaseConnect;let navigations=0;
+globalThis.window={location:{assign:()=>{navigations++;}}};
+globalThis.fetch=async(url)=>{
+ if(url.endsWith('/upwork/connect'))return new Promise(resolve=>{releaseConnect=()=>resolve({ok:false,status:503,json:async()=>({ok:false,error:'upwork_discovery_unavailable'})});});
+ const result=url.endsWith('/status')?{ok:true,available:true,roles:[],connectors:[{id:'upwork',name:'Upwork',connected:false}],upwork_available:true}:{ok:true,mandate:{},jobs:[],payouts:[]};
+ return {ok:true,status:200,json:async()=>result};
+};
+await mountWork(connectionRoot,{});
+const connect=[...connectionRoot.querySelectorAll('button')].find(b=>b.textContent==='Подключить Upwork');
+const pending=connect.onclick();
+assert(connect.disabled);
+assert(connectionRoot.textContent.includes('Проверяю сервер авторизации Upwork'));
+releaseConnect();await pending;
+assert(!connect.disabled);assert.equal(navigations,0);
+assert(connectionRoot.querySelector('[role="alert"]').textContent.includes('Подключение не создано'));
+await [...connectionRoot.querySelectorAll('button')].find(b=>b.textContent==='Обновить').onclick();
+assert(connectionRoot.querySelector('[role="alert"]').textContent.includes('Подключение не создано'));
+console.log('Upwork connection smoke passed: visible pending state, persistent provider error, retry restored, no false navigation.');
