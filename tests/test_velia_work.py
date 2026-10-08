@@ -447,3 +447,56 @@ def test_scheduler_resumes_interrupted_autonomous_job_without_new_search(store):
             assert job['status']=='ready' and len(store.workspace(7)['jobs'])==1
             assert seen==['proposal','executor','reviewer','treasurer']
     asyncio.run(scenario())
+
+@pytest.mark.parametrize('role,output', [
+    ('manager', '{"decision":"decline","plan":"Нужен недоступный инструмент"}'),
+    ('reviewer', '{"verdict":"needs_revision","notes":"Нет доказательства результата"}'),
+])
+def test_recovered_negative_decision_blocks_later_agents(store, role, output):
+    async def scenario():
+        id=store.create_job(7,data(client_request_id='saved-stop-'+role))
+        job=store.claim(7,id)
+        outputs={'manager':ROLE_OUTPUTS['manager']}
+        if role=='reviewer':outputs.update(proposal=ROLE_OUTPUTS['proposal'],executor=ROLE_OUTPUTS['executor'])
+        outputs[role]=output
+        store.update_job(7,id,job['lease'],outputs=outputs,status='interrupted',revision_count=2)
+        async def forbidden(*args):raise AssertionError('later agent must not run')
+        await run_job(store,7,store.claim(7,id),SimpleNamespace(user_id=7),forbidden)
+        result=store.find(store.workspace(7),id)
+        assert result['status']=='needs_revision'
+        assert 'treasurer' not in result['outputs']
+        assert not store.workspace(7)['payouts']
+    asyncio.run(scenario())
+
+def test_exhausted_review_never_calls_treasurer(store):
+    async def scenario():
+        id=store.create_job(7,data(client_request_id='review-stop-finance'))
+        seen=[]
+        async def generate(session,job,role,text,save):
+            seen.append(role)
+            if role=='reviewer':return '{"verdict":"needs_revision","notes":"Результат не соответствует требованиям"}'
+            if role=='treasurer':raise AssertionError('unreviewed task cannot reach finance')
+            return ROLE_OUTPUTS[role]
+        await run_job(store,7,store.claim(7,id),SimpleNamespace(user_id=7),generate)
+        assert seen.count('executor')==3
+        assert 'treasurer' not in seen
+        assert store.find(store.workspace(7),id)['status']=='needs_revision'
+    asyncio.run(scenario())
+
+def test_recovered_review_continues_bounded_repair(store):
+    async def scenario():
+        id=store.create_job(7,data(client_request_id='saved-review-repair'))
+        job=store.claim(7,id)
+        outputs={k:ROLE_OUTPUTS[k] for k in ('manager','proposal','executor')}
+        outputs['reviewer']='{"verdict":"needs_revision","notes":"Исправить ошибку"}'
+        store.update_job(7,id,job['lease'],outputs=outputs,status='interrupted')
+        seen=[]
+        async def generate(session,job,role,text,save):
+            seen.append(role)
+            if role=='executor':assert 'Исправить ошибку' in text
+            return ROLE_OUTPUTS[role]
+        await run_job(store,7,store.claim(7,id),SimpleNamespace(user_id=7),generate)
+        result=store.find(store.workspace(7),id)
+        assert seen==['executor','reviewer','treasurer']
+        assert result['status']=='ready' and result['revision_count']==1
+    asyncio.run(scenario())
