@@ -11,11 +11,29 @@ DOMAINS = (
 )
 
 
+def readiness(domain, data):
+    """Use declared prerequisites; never infer execution from HTTP success."""
+    missing = []
+    if domain == 'software':
+        for field in ('worker_enabled', 'coding_enabled', 'write_enabled', 'worker_ready'):
+            if data.get(field) is False:
+                missing.append(field)
+    elif domain == 'plugins':
+        plugins = data.get('plugins')
+        if isinstance(plugins, dict):
+            for name in ('weather', 'web_search', 'research', 'image_generation', 'file_analyst', 'deepalpha_markets'):
+                item = plugins.get(name)
+                if isinstance(item, dict) and item.get('available') is False:
+                    missing.append(name + '_unavailable')
+    return missing
+
+
 async def observe_platform(upstream, token, *, timeout=3):
     slots = asyncio.Semaphore(2)
 
     async def probe(domain, path):
         async with slots:
+            missing = []
             try:
                 status, data = await asyncio.wait_for(
                     upstream('GET', '/mobile-api/v1/' + path, token=token, data=None), timeout)
@@ -28,13 +46,14 @@ async def observe_platform(upstream, token, *, timeout=3):
                 elif data.get('enabled') is False or data.get('available') is False:
                     state = 'disabled'
                 else:
-                    state = 'responding'
+                    missing = readiness(domain, data)
+                    state = 'partial' if missing else 'responding'
             except asyncio.TimeoutError:
                 state = 'timeout'
             except Exception:
                 # Never expose provider errors, credentials or account content.
                 state = 'unavailable'
-            return {'domain': domain, 'state': state, 'execution_verified': False}
+            return {'domain': domain, 'state': state, 'missing_prerequisites': missing, 'execution_verified': False}
 
     observations = await asyncio.gather(*(probe(*item) for item in DOMAINS))
     return {'ok': True, 'observed_at': datetime.now(timezone.utc).isoformat(),
