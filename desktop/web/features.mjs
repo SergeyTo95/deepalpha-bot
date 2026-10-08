@@ -1,9 +1,10 @@
 import {renderMarkdown} from './core.mjs';
+import {mountWork} from './work.mjs';
 
 export const SECTIONS = Object.freeze([
   ['studio', 'Studio'], ['projects', 'Проекты'], ['research', 'Исследования'],
   ['medical', 'Медицинский центр'], ['agents', 'Мои агенты'],
-  ['autopilot', 'Автопилот'], ['profile', 'Персонализация'],
+  ['work', 'Работа и заработок'], ['autopilot', 'Автопилот'], ['profile', 'Персонализация'],
   ['plugins', 'Плагины'], ['balance', 'Баланс и использование'], ['voice', 'Голос'],
 ]);
 export function mediaPath(value) {
@@ -39,7 +40,7 @@ const node = (tag, text, cls) => {const n = document.createElement(tag); if (tex
 const button = (text, action) => {const b = node('button', text); b.type = 'button'; b.onclick = action; return b;};
 const labels = {items:'Результаты',notes:'Описание',completed:'Выполнено',start:'Начало',end:'Окончание',goal:'Цель', title:'Название', name:'Имя', description:'Описание', instructions:'Инструкции', audience:'Аудитория', style:'Стиль', constraints:'Ограничения', status:'Статус', domain:'Направление', content:'Содержание', summary:'Результат', conclusion:'Вывод', text:'Текст', created_at:'Создано', updated_at:'Обновлено', preferred_name:'Как обращаться', about_me:'О себе', credits:'Токены', user_messages:'Сообщения сегодня', user_cost_usd:'Расход сегодня, $', enabled:'Включено', available:'Доступно', revision:'Версия', query:'Поисковый запрос', kind:'Тип', prompt:'Описание', duration_seconds:'Длительность, сек.', error_code:'Ошибка', rationale:'Обоснование'};
 const statuses={draft:'Черновик',planned:'Запланировано',paused:'Приостановлено',active:'Активно',completed:'Завершено',failed:'Ошибка',pending:'Ожидает',running:'Выполняется',queued:'В очереди',ready:'Готово',awaiting_approval:'Ожидает подтверждения',cancelled:'Отменено'};
-const descriptions = {studio:'Создавай изображения, видео и музыку в одном месте.',projects:'Собирай идеи, задачи и материалы вокруг одной цели.',research:'От вопроса к источникам, выводам и отчёту.',medical:'Загружай исследования и следи за результатами анализа.',agents:'Настраивай помощников под свои задачи.',autopilot:'Задачи по расписанию, результаты и разработка в одном месте.',profile:'Помоги Велии лучше понимать тебя.',plugins:'Выбирай инструменты, которые нужны в работе.',balance:'Следи за доступными токенами и использованием.',voice:'Настрой язык и голос для разговора с Велией.'};
+const descriptions = {work:'Команда агентов, задания и управление рабочим бюджетом.',studio:'Создавай изображения, видео и музыку в одном месте.',projects:'Собирай идеи, задачи и материалы вокруг одной цели.',research:'От вопроса к источникам, выводам и отчёту.',medical:'Загружай исследования и следи за результатами анализа.',agents:'Настраивай помощников под свои задачи.',autopilot:'Задачи по расписанию, результаты и разработка в одном месте.',profile:'Помоги Велии лучше понимать тебя.',plugins:'Выбирай инструменты, которые нужны в работе.',balance:'Следи за доступными токенами и использованием.',voice:'Настрой язык и голос для разговора с Велией.'};
 const hiddenKeys = new Set(['id','user_id','project_id','session_id','generation_id','client_request_id','signature','provider','model','input_sha256','worker_status']);
 function display(value, depth = 0) {
   const box = node('div', undefined, 'feature-detail');
@@ -138,6 +139,8 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
         const list=node('div');body.append(list);
         const detail=async(p,card)=>{const r=await call('projects/'+p.id);card.replaceChildren(form(fields,'Сохранить изменения',async d=>{await call('projects/'+p.id,{method:'PATCH',data:{passport:d,expected_revision:r.project.revision}});await detail(p,card);},r.project.passport));const resources=node('div');card.append(form([['kind','Тип','select',[['chat','Диалог'],['deepalpha','DeepAlpha'],['image','Изображения'],['video','Видео'],['music','Музыка']]],['title','Название'],['query','Запрос','textarea']],'Добавить ресурс',async d=>{await call('project-resources',{method:'POST',data:{...d,project_id:p.id},key:crypto.randomUUID()});await collection('project-resources?project_id='+encodeURIComponent(p.id),'resources',resources);}));card.append(resources);await collection('project-resources?project_id='+encodeURIComponent(p.id),'resources',resources);};
         const refresh=()=>collection('projects','projects',list,detail);await refresh();
+      } else if (name === 'work') {
+        body.replaceChildren(); await mountWork(body,{signal:controller.signal,toast});
       } else if (name === 'agents') {
         const capabilities = await call('agents/capabilities'); if(ticket!==epoch)return;
         body.replaceChildren(form([['name','Название'],['description','Описание','textarea'],['instructions','Инструкции','textarea'],['capability_ids','Возможности агента','multi',(capabilities.capabilities||[]).map(c=>[c.id,c.name])]], 'Создать агента',async d=>{await call('agents',{method:'POST',data:{...d,can_create_chats:true}});await refresh();}));
