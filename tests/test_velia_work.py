@@ -51,7 +51,7 @@ def test_atomic_claim_and_cancel_stale_writer(store):
     with pytest.raises(WorkError):store.update_job(7,id,job['lease'],status='ready')
     assert store.workspace(7)['jobs'][0]['status']=='cancelled'
 
-ROLE_OUTPUTS={'manager':'{"decision":"proceed","plan":"Написать текст"}','executor':'Готовое описание товара.',
+ROLE_OUTPUTS={'proposal':'Черновик заявки без выдуманного опыта.','manager':'{"decision":"proceed","plan":"Написать текст"}','executor':'Готовое описание товара.',
               'reviewer':'{"verdict":"ready","notes":"Текст соответствует заданию; внешняя приёмка отсутствует"}',
               'treasurer':'{"recommendation":"Поступлений нет; выплата после подключения кошелька","action":"hold","amount_usdt":"0"}'}
 
@@ -63,8 +63,8 @@ def test_pipeline_separate_roles_recovery_and_finance_unknown(store):
             await save('role-'+role);return ROLE_OUTPUTS[role]
         await run_job(store,7,job,SimpleNamespace(user_id=7),generate)
         result=store.workspace(7)
-        assert seen==['manager','executor','reviewer','treasurer']
-        assert result['jobs'][0]['status']=='ready' and len(result['jobs'][0]['outputs'])==4
+        assert seen==['manager','proposal','executor','reviewer','treasurer']
+        assert result['jobs'][0]['status']=='ready' and len(result['jobs'][0]['outputs'])==5
         assert result['balance_usdt'] is None and result['earnings_confirmed_usdt'] is None
         assert not result['payouts']
         id=store.create_job(7,data(client_request_id='request-recovery'));job=store.claim(7,id)
@@ -116,20 +116,64 @@ def test_routes_auth_isolation_and_real_background_chain(store):
                 job=(await (await client.get(base+'jobs/'+id,headers=h)).json())['job']
                 if job['status']!='running':break
                 await asyncio.sleep(.01)
-            assert job['status']=='ready' and len(job['outputs'])==4
+            assert job['status']=='ready' and len(job['outputs'])==5
             response=await client.get(base+'jobs/'+id+'/artifacts',headers=h)
             assert response.status==200
             import io,zipfile
             with zipfile.ZipFile(io.BytesIO(await response.read())) as bundle:
                 assert bundle.read('result.txt').decode()==ROLE_OUTPUTS['executor']
-                assert set(bundle.namelist())=={'result.txt','review.json','task.json','README.txt'}
+                assert set(bundle.namelist())=={'result.txt','proposal-draft.txt','review.json','task.json','README.txt'}
             assert (await client.get(base+'jobs/'+id+'/artifacts',headers={**h,'X-Test-User':'8'})).status==404
             status=await (await client.get(base+'status',headers=h)).json()
             assert not status['wallet']['connected'] and all(not c['connected'] for c in status['connectors'])
             assert (await client.post(base+'jobs/'+id+'/run',headers=h,json={})).status==409
+            revision={'brief':'Уточнённое полное описание товара.','client_request_id':'owner-revision-1'}
+            assert (await client.post(base+'jobs/'+id+'/revise',headers={**h,'X-Test-User':'8'},json=revision)).status==404
+            assert (await client.post(base+'jobs/'+id+'/revise',headers=h,json=revision)).status==200
+            assert (await client.post(base+'jobs/'+id+'/run',headers=h,json={})).status==202
+            for _ in range(100):
+                job=(await (await client.get(base+'jobs/'+id,headers=h)).json())['job']
+                if job['status']!='running':break
+                await asyncio.sleep(.01)
+            assert job['status']=='ready'
+            response=await client.get(base+'jobs/'+id+'/artifacts',headers=h)
+            with zipfile.ZipFile(io.BytesIO(await response.read())) as bundle:
+                previous=json.loads(bundle.read('task-history/version-1.json'))
+                assert previous['brief']==data()['brief'] and previous['outputs']['executor']==ROLE_OUTPUTS['executor']
             assert (await client.post(base+'payouts',headers=h,json={'amount_usdt':'1','reason':'owner','client_request_id':'payout-test'})).status==201
             doc=await (await client.get(base+'workspace',headers=h)).json()
             assert doc['balance_usdt'] is None and doc['payouts'][0]['status']=='blocked_wallet_unconnected'
+    asyncio.run(scenario())
+
+def test_owner_revision_limit(store):
+    id=store.create_job(7,data())
+    for index in range(6):
+        job=store.claim(7,id);store.update_job(7,id,job['lease'],status='needs_revision')
+        value={'brief':'Updated requirements','client_request_id':'revision-'+str(index)}
+        if index<5:store.revise(7,id,value)
+        else:
+            with pytest.raises(WorkError,match='task_revision_limit'):store.revise(7,id,value)
+
+def test_owner_revision_preserves_history_and_restarts_roles(store):
+    id=store.create_job(7,data());running=store.claim(7,id)
+    revision={'brief':'Новые полные требования','client_request_id':'revise-owner-1'}
+    with pytest.raises(WorkError,match='invalid_job_state'):store.revise(7,id,revision)
+    store.update_job(7,id,running['lease'],outputs=dict(ROLE_OUTPUTS),status='needs_revision')
+    assert store.revise(7,id,revision)['status']=='queued'
+    assert store.revise(7,id,revision)['status']=='queued'
+    with pytest.raises(WorkError,match='idempotency_mismatch'):store.revise(7,id,{**revision,'brief':'Different'})
+    job=store.find(store.workspace(7),id)
+    assert len(job['task_history'])==1 and job['task_history'][0]['outputs']==ROLE_OUTPUTS
+    assert job['brief']==revision['brief'] and job['outputs']=={} and job['attempt']==2
+    assert not job['autonomous'] and 'revision_requests' not in job
+    with pytest.raises(WorkError):store.update_job(7,id,running['lease'],outputs={'executor':'stale'})
+    async def scenario():
+        seen=[]
+        async def generate(session,job,role,text,save):
+            assert revision['brief'] in text;seen.append(role);return ROLE_OUTPUTS[role]
+        await run_job(store,7,store.claim(7,id),SimpleNamespace(user_id=7),generate)
+        assert seen==['manager','proposal','executor','reviewer','treasurer']
+        assert store.find(store.workspace(7),id)['status']=='ready'
     asyncio.run(scenario())
 
 def test_flash_roles_use_account_authority_isolation_and_idempotency(monkeypatch):

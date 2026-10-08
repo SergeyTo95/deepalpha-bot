@@ -96,7 +96,7 @@ class WorkStore(GuestStore):
     def workspace(self,user):
         doc=self.transaction(user)
         for job in doc['jobs']:
-            for key in ['lease','lease_until','conversations','request_hash','client_request_id']:
+            for key in ['lease','lease_until','conversations','request_hash','client_request_id','revision_requests']:
                 job.pop(key,None)
         for payout in doc['payouts']:
             for key in ['request_hash','client_request_id']:
@@ -198,6 +198,33 @@ class WorkStore(GuestStore):
             doc['jobs'].insert(0,job)
             return job['id']
         return self.transaction(user,create)
+
+    def revise(self,user,id,data):
+        if not isinstance(data,dict) or set(data)!={'brief','client_request_id'}:
+            raise WorkError('invalid_job')
+        if not isinstance(data['brief'],str) or not 1<=len(data['brief'].strip())<=6000:
+            raise WorkError('invalid_job')
+        key=identity_key(data['client_request_id']);digest=fingerprint(data)
+        def revise(doc):
+            job=self.find(doc,id)
+            requests=job.setdefault('revision_requests',{})
+            if key in requests:
+                if requests[key]!=digest:raise WorkError('idempotency_mismatch',409)
+                return {'id':id,'status':job['status']}
+            if job['status'] not in {'needs_revision','failed','ready'}:
+                raise WorkError('invalid_job_state',409)
+            history=job.get('task_history',[])
+            if len(history)>=5:raise WorkError('task_revision_limit',409)
+            history.append({'brief':job['brief'],'outputs':job['outputs'],
+                            'revision_history':job.get('revision_history',[]),'status':job['status']})
+            requests[key]=digest
+            job.update(brief=data['brief'],task_history=history,status='queued',outputs={},conversations={},
+                       attempt=job['attempt']+1,revision_count=0,revision_history=[],revision_feedback=None,
+                       error=None,current_role=None,lease=None,lease_until=0)
+            # An owner revision requires an explicit run; it must not be resumed by the search scheduler.
+            job['autonomous']=False
+            return {'id':id,'status':'queued'}
+        return self.transaction(user,revise)
 
     def claim(self,user,id):
         token=str(uuid.uuid4())

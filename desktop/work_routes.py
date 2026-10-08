@@ -85,6 +85,9 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
     async def detail(request):
         doc=await asyncio.to_thread(store.workspace,request[WORK_SESSION].user_id)
         return json_response({'ok':True,'job':store.find(doc,request.match_info['job_id'])})
+    async def revise(request):
+        result=await asyncio.to_thread(store.revise,request[WORK_SESSION].user_id,request.match_info['job_id'],request[WORK_BODY])
+        return json_response({'ok':True,**result})
     async def start(request):
         if request[WORK_BODY]:raise WorkError('invalid_request')
         id=request.match_info['job_id'];session=request[WORK_SESSION]
@@ -193,6 +196,8 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
             archive.writestr('review.json',job['outputs'].get('reviewer','{}'))
             archive.writestr('task.json',json.dumps({k:job[k] for k in ['id','title','brief','source_url']},ensure_ascii=False,indent=2))
             archive.writestr('README.txt','Prepared text artifacts. No code was executed. No marketplace submission or payment is confirmed.')
+            for index,version in enumerate(job.get('task_history',[]),1):
+                archive.writestr('task-history/version-'+str(index)+'.json',json.dumps(version,ensure_ascii=False,indent=2))
             for index,revision in enumerate(job.get('revision_history',[]),1):
                 archive.writestr('history/result-'+str(index)+'.txt',revision['executor'])
                 archive.writestr('history/review-'+str(index)+'.json',revision['reviewer'])
@@ -240,6 +245,7 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
     app.router.add_post('/web-api/v1/work/jobs',create)
     app.router.add_get('/web-api/v1/work/jobs/{job_id}',detail)
     app.router.add_post('/web-api/v1/work/jobs/{job_id}/run',start)
+    app.router.add_post('/web-api/v1/work/jobs/{job_id}/revise',revise)
     app.router.add_post('/web-api/v1/work/jobs/{job_id}/cancel',cancel)
     app.router.add_post('/web-api/v1/work/payouts',payout)
     app.router.add_post('/web-api/v1/work/discover',discover)

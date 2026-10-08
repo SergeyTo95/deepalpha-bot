@@ -92,7 +92,6 @@ async def run_job(store,user,job,session,generate):
     lease=job['lease'];id=job['id']
     try:
         for role in PROMPTS:
-            if role=='proposal' and not job.get('autonomous'):continue
             current=await asyncio.to_thread(store.transaction,user)
             active=store.find(current,id)
             if active['status']!='running' or active.get('lease')!=lease:raise WorkError('job_cancelled',409)

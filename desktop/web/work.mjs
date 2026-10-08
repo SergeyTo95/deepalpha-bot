@@ -37,6 +37,10 @@ export async function mountWork(parent, {signal, toast = () => {}} = {}) {
   }
   function detail(job, target) {
     target.replaceChildren();
+    for(const [i,version] of (job.task_history || []).entries()) {
+      const d=node('details');d.append(node('summary','Задание до уточнения '+(i+1)));
+      const p=node('pre',JSON.stringify(version,null,2));p.style.whiteSpace='pre-wrap';p.style.overflowWrap='anywhere';d.append(p);target.append(d);
+    }
     for(const [i,revision] of (job.revision_history || []).entries()) {
       const d=node('details');d.append(node('summary','Предыдущая версия '+(i+1)));
       const p=node('pre',revision.executor+'\n\nПроверка:\n'+revision.reviewer);p.style.whiteSpace='pre-wrap';p.style.overflowWrap='anywhere';d.append(p);target.append(d);
@@ -113,6 +117,13 @@ export async function mountWork(parent, {signal, toast = () => {}} = {}) {
       if(job.autonomous)card.append(node('p','Найдено командой автоматически · внешний заказ не принят'));
       if(job.status==='ready') {const download=node('a','Скачать результат и проверку (ZIP)');download.href='/web-api/v1/work/jobs/'+encodeURIComponent(job.id)+'/artifacts';card.append(download);}
       card.append(action('Результаты',async()=>{const result=await call('jobs/'+encodeURIComponent(job.id));if(live())detail(result.job || result,output);}));
+      if(['needs_revision','failed','ready'].includes(job.status)) {
+        const revision=node('details');revision.append(node('summary','Уточнить задание и подготовить новую версию'));
+        revision.append(node('p','Предыдущий результат сохранится в истории. После сохранения нажми «Запустить команду». Доступно до пяти уточнений.'));
+        revision.append(form([['brief','Полные требования для новой версии','textarea']], 'Сохранить уточнение',{brief:job.brief},async data=>{
+          await call('jobs/'+encodeURIComponent(job.id)+'/revise','POST',{...data,client_request_id:id()});await refresh();
+        }));revision.querySelector('textarea').maxLength=6000;card.append(revision);
+      }
       if(['draft','queued','failed','interrupted'].includes(job.status)) {const start=action('Запустить команду',async()=>{await call('jobs/'+encodeURIComponent(job.id)+'/run','POST',{});await refresh();});start.disabled=!status.available;card.append(start);}
       if(['draft','queued','planning','executing','reviewing','running'].includes(job.status))card.append(action('Отменить',async()=>{await call('jobs/'+encodeURIComponent(job.id)+'/cancel','POST',{});await refresh();}));
       card.append(output);root.append(card);
