@@ -65,3 +65,21 @@ def test_existing_capability_search_filters_are_route_scoped():
             assert (await client.get(server.make_url('/web-api/v1/features/profile?q=secret'))).status==400
             assert len(seen)==count
     asyncio.run(scenario())
+
+def test_declared_worker_and_plugin_blockers_are_not_reported_ready():
+    from desktop.platform_status import readiness
+    assert readiness('software',{'worker_enabled':False,'coding_enabled':True,'write_enabled':False,'worker_ready':False})==['worker_enabled','write_enabled','worker_ready']
+    assert readiness('software',{'worker_ready':True})==[]
+    assert readiness('plugins',{'plugins':{'research':{'available':False},'file_analyst':{'available':True},'private':{'available':False,'api_key':'secret'}}})==['research_unavailable']
+    assert readiness('plugins',{'plugins':None})==[]
+
+def test_partial_status_uses_fixed_public_reasons():
+    async def scenario():
+        async def upstream(method,path,**kwargs):
+            return 200,{'ok':True,'enabled':True,'worker_ready':False,'error':'secret'}
+        result=await observe_platform(upstream,'token')
+        software=next(x for x in result['observations'] if x['domain']=='software')
+        assert software['state']=='partial'
+        assert software['missing_prerequisites']==['worker_ready']
+        assert 'secret' not in str(result)
+    asyncio.run(scenario())
