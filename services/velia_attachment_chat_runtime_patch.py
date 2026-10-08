@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from db.database import get_connection
 from services import velia_flash_service as flash
+from services import velia_quantum_service as quantum
 from velia_request_understanding import understanding_instruction, interpreted_content
 from services.velia_attachment_service import (
     AttachmentError,
@@ -146,10 +147,12 @@ def install(chat_module: Any) -> None:
         on_delta: Any = None,
         on_reset: Any = None,
     ) -> Dict[str, Any]:
-        if chat_mode not in {"pro", "flash"}:
+        if chat_mode not in {"pro", "flash", "quantum"}:
             return {"ok": False, "error": "invalid_chat_mode"}
         if chat_mode == "flash" and not flash.available():
             return {"ok": False, "error": "flash_unavailable"}
+        if chat_mode == "quantum" and not quantum.available():
+            return {"ok": False, "error": "quantum_unavailable"}
         if not chat_module.is_velia_chat_enabled_for_user(user_id):
             return {"ok": False, "error": "velia_chat_disabled"}
         try:
@@ -162,6 +165,12 @@ def install(chat_module: Any) -> None:
             and not flash.attachments_available()
         ):
             return {"ok": False, "error": "flash_attachments_unsupported"}
+        if (
+            chat_mode == "quantum"
+            and normalized_attachment_ids
+            and not quantum.attachments_available()
+        ):
+            return {"ok": False, "error": "quantum_attachments_unsupported"}
         if (
             normalized_attachment_ids
             and not chat_module._env_bool("VELIA_FILE_ANALYST_ENABLED", False)
@@ -223,8 +232,12 @@ def install(chat_module: Any) -> None:
                 conn.rollback()
                 return existing
 
-            budget_error = (flash.budget_error(cursor, user_id) if chat_mode == "flash"
-                            else chat_module._budget_error(user_id))
+            if chat_mode == "flash":
+                budget_error = flash.budget_error(cursor, user_id)
+            elif chat_mode == "quantum":
+                budget_error = quantum.budget_error(cursor, user_id)
+            else:
+                budget_error = chat_module._budget_error(user_id)
             if budget_error:
                 conn.rollback()
                 return {"ok": False, "error": budget_error}
@@ -296,6 +309,12 @@ def install(chat_module: Any) -> None:
                     "estimated_cost_usd=0 WHERE message_id=%s AND user_id=%s",
                     (assistant_message_id, int(user_id)),
                 )
+            elif chat_mode == "quantum":
+                cursor.execute(
+                    "UPDATE velia_messages SET provider='quantum', model='velia-quantum', "
+                    "estimated_cost_usd=0 WHERE message_id=%s AND user_id=%s",
+                    (assistant_message_id, int(user_id)),
+                )
 
             current_title = str(chat_module._row_value(conversation, "title", 1, ""))
             title_source = str(
@@ -354,6 +373,11 @@ def install(chat_module: Any) -> None:
             if chat_mode == "flash":
                 generation = flash.generate(
                     flash.build_prompt(chat_module, user_id, conversation_id),
+                    request_id=request_id, on_delta=on_delta, on_reset=on_reset,
+                )
+            elif chat_mode == "quantum":
+                generation = quantum.generate(
+                    quantum.build_prompt(chat_module, user_id, conversation_id),
                     request_id=request_id, on_delta=on_delta, on_reset=on_reset,
                 )
             else:

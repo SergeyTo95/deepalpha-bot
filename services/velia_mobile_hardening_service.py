@@ -4,7 +4,7 @@ import os
 from typing import Any, Callable, Dict, Optional
 
 from aiohttp import web
-from services.velia_flash_service import dispatch_send
+from services.velia_model_router import dispatch_send
 
 
 _MESSAGE_ROUTE = "/mobile-api/v1/conversations/{conversation_id}/messages"
@@ -305,6 +305,7 @@ def replace_blocking_message_handler(app: web.Application, routes_module: Any) -
             "idempotency_attachment_mismatch",
             "idempotency_mode_mismatch",
             "flash_busy",
+            "quantum_busy",
         } or result.get("pending"):
             status = 409
         elif error.endswith("limit_exceeded"):
@@ -313,10 +314,12 @@ def replace_blocking_message_handler(app: web.Application, routes_module: Any) -
             "velia_chat_disabled",
             "velia_file_analyst_disabled",
             "flash_unavailable",
+            "quantum_unavailable",
         }:
             status = 503
         elif error in {
             "flash_timeout", "flash_provider_error", "flash_invalid_response",
+            "quantum_timeout", "quantum_provider_error", "quantum_invalid_response",
             "timeout",
             "connection_error",
             "rate_limit",

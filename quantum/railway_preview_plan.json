@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "model_id": "velia-quantum",
+  "preview_release": "RCO-256 + TQ2_0 matrices + Q8_0 PLE",
+  "runtime": {
+    "platform": "Railway",
+    "accelerator": "cpu",
+    "dockerfile": "quantum_worker/Dockerfile",
+    "private_network_endpoint": "velia-quantum",
+    "public_domain_required": false,
+    "replicas": 1,
+    "cpu_vcpu_target": 24,
+    "memory_gb_target": 24,
+    "model_mount": "/model",
+    "model_path": "/model/velia-quantum.gguf"
+  },
+  "storage": {
+    "persistent_volume_required": true,
+    "create_only_after_gguf_size_is_measured": true,
+    "minimum_headroom_fraction": 0.2,
+    "weights_baked_into_container": false,
+    "runtime_requires_local_mmap": true,
+    "artifact_transport": "object-storage-to-volume with SHA-256 verification"
+  },
+  "rollout": {
+    "default_public_enabled": false,
+    "private_preview_allowlist_required": true,
+    "public_enable_only_after_acceptance": true
+  },
+  "acceptance": {
+    "benchmark_script": "quantum/benchmark_cpu_endpoint.py",
+    "acceptance_script": "quantum/acceptance.py",
+    "metrics": [
+      "rss_gb",
+      "ttft_seconds_2k",
+      "warm_output_tokens_per_second",
+      "quality_retention"
+    ]
+  }
+}

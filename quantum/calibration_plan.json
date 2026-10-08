@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "dataset_id": "velia-quantum-multilingual-v1",
+  "purpose": "RCO expert-selection calibration for VELIA Quantum; preserve broad multilingual general capability rather than optimize for the current user mix.",
+  "sample_schema": {
+    "id": "unique string",
+    "language": "BCP-47-like short code",
+    "category": "one category from categories",
+    "messages": "array of chat messages ending in an assistant reference answer",
+    "source": "dataset/source identifier",
+    "license": "source license identifier"
+  },
+  "core_languages": [
+    "en",
+    "ru",
+    "es",
+    "de",
+    "fr",
+    "tr",
+    "pt",
+    "it",
+    "pl",
+    "uk",
+    "ar",
+    "zh",
+    "ja",
+    "ko",
+    "hi",
+    "id",
+    "vi",
+    "nl",
+    "cs",
+    "ro"
+  ],
+  "extended_languages": [
+    "el",
+    "he",
+    "fa",
+    "ur",
+    "bn",
+    "ta",
+    "te",
+    "th",
+    "ms",
+    "fil",
+    "sv",
+    "da",
+    "no",
+    "fi",
+    "hu",
+    "bg",
+    "sr",
+    "hr",
+    "sk",
+    "sl",
+    "lt",
+    "lv",
+    "et",
+    "ka",
+    "hy",
+    "az",
+    "kk",
+    "uz"
+  ],
+  "language_balance": {
+    "minimum_distinct_languages": 20,
+    "minimum_core_language_share_each": 0.02,
+    "maximum_language_share_any": 0.08,
+    "maximum_en_plus_ru_share": 0.15,
+    "notes": "Core languages are coverage floors, not a statement that VELIA only supports these languages."
+  },
+  "categories": [
+    "general_dialogue",
+    "reasoning_math",
+    "coding",
+    "tool_use",
+    "agentic_browser",
+    "documents_retrieval",
+    "knowledge",
+    "structured_output",
+    "translation",
+    "safety",
+    "vision_text"
+  ],
+  "category_balance": {
+    "minimum_share": {
+      "general_dialogue": 0.15,
+      "reasoning_math": 0.15,
+      "coding": 0.1,
+      "tool_use": 0.1,
+      "agentic_browser": 0.08,
+      "documents_retrieval": 0.08,
+      "knowledge": 0.08,
+      "structured_output": 0.05,
+      "translation": 0.05,
+      "safety": 0.05
+    },
+    "maximum_share_any": 0.25
+  },
+  "split_policy": {
+    "calibration": 0.8,
+    "development": 0.1,
+    "holdout": 0.1,
+    "holdout_never_used_for_pruning_or_quantization": true
+  },
+  "minimum_dataset_size": {
+    "smoke": 256,
+    "pruning_search": 4096,
+    "release_candidate": 20000
+  },
+  "deduplication": {
+    "normalized_text_sha256": true,
+    "reject_duplicate_prompt_across_splits": true
+  },
+  "modality_policy": {
+    "text_rco_calibration": "Only text/tool/browser/document traces are used for answer-token KL pruning.",
+    "vision_routing_profile": "Real image/video tokens are profiled on the original multimodal Qwen and protected during expert-mask finalization.",
+    "vision_category_required_in_text_corpus": false,
+    "vision_profile_required_for_pruning": true,
+    "minimum_vision_profile_samples_release_candidate": 256
+  }
+}

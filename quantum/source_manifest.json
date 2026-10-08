@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "commercial_training_requires_permissive_license": true,
+    "holdout_sources_must_never_enter_calibration": true,
+    "source_revision_required": true,
+    "generated_samples_require_generator_provenance": true
+  },
+  "calibration_sources": [
+    {
+      "id": "aya-human",
+      "provider": "huggingface",
+      "dataset": "CohereLabs/aya_dataset",
+      "revision": "f9ea045",
+      "license": "Apache-2.0",
+      "split": "train",
+      "role": "multilingual-human-instruction",
+      "allowed_categories": [
+        "general_dialogue",
+        "knowledge",
+        "translation",
+        "documents_retrieval"
+      ],
+      "max_share": 0.35
+    },
+    {
+      "id": "aya-collection",
+      "provider": "huggingface",
+      "dataset": "CohereLabs/aya_collection",
+      "revision": "0906907",
+      "license": "Apache-2.0",
+      "split": "train",
+      "configs": [
+        {
+          "name": "translated_flan_cot",
+          "default_category": "reasoning_math"
+        },
+        {
+          "name": "translated_flan_qa",
+          "default_category": "knowledge"
+        }
+      ],
+      "allowed_categories": [
+        "reasoning_math",
+        "knowledge"
+      ],
+      "max_share": 0.5
+    },
+    {
+      "id": "oasst2",
+      "provider": "huggingface",
+      "dataset": "OpenAssistant/oasst2",
+      "revision": "179dd21",
+      "license": "Apache-2.0",
+      "split": "train",
+      "role": "multilingual-dialogue-and-code",
+      "allowed_categories": [
+        "general_dialogue",
+        "coding"
+      ],
+      "max_share": 0.1
+    },
+    {
+      "id": "velia-owned",
+      "provider": "local",
+      "dataset": "VELIA-owned generated/curated calibration",
+      "revision": "dataset-sha256",
+      "license": "VELIA-owned",
+      "role": "capability-coverage",
+      "allowed_categories": [
+        "coding",
+        "tool_use",
+        "agentic_browser",
+        "structured_output",
+        "safety",
+        "vision_text",
+        "translation",
+        "reasoning_math"
+      ],
+      "max_share": 0.52,
+      "requirements": [
+        "prompts must be multilingual",
+        "answers must be generated or curated from the pinned original Qwen base or human-authored",
+        "every row must record generator/model revision or author provenance",
+        "no holdout benchmark questions may be copied into this source"
+      ]
+    }
+  ],
+  "holdout_only_sources": [
+    {
+      "id": "mgsm",
+      "dataset": "juletxara/mgsm",
+      "revision": "d40160b310046775b3d8842ebbf04066c6650cc7",
+      "license": "CC-BY-SA-4.0",
+      "purpose": "multilingual_reasoning"
+    },
+    {
+      "id": "humanevalpack",
+      "dataset": "bigcode/humanevalpack",
+      "revision": "9a41762",
+      "license": "MIT",
+      "purpose": "coding"
+    },
+    {
+      "id": "bfcl",
+      "dataset": "gorilla-llm/Berkeley-Function-Calling-Leaderboard",
+      "revision": "61fc060",
+      "license": "Apache-2.0",
+      "purpose": "tool_calling"
+    }
+  ],
+  "excluded_sources": [
+    {
+      "id": "bactrian-x",
+      "dataset": "MBZUAI/Bactrian-X",
+      "license": "CC-BY-NC-4.0",
+      "reason": "non-commercial restriction is incompatible with the Quantum product training corpus"
+    }
+  ]
+}
