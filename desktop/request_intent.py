@@ -12,6 +12,7 @@ from aiohttp import ClientSession, ClientTimeout, DummyCookieJar
 from velia_desktop_routes import check_flash_context, flash_endpoint
 from velia_request_understanding import plausible_restoration, restoration_content
 from desktop.spelling_hints import spelling_hints, phonetic_restoration
+from services.velia_structured_output import strict_json_loads
 
 
 INSTRUCTION = (
@@ -190,7 +191,7 @@ def parse_decision(result, question):
     calls = result["choices"][0]["message"].get("tool_calls", [])
     if len(calls) != 1 or calls[0]["function"].get("name") != "understand_request":
         raise ValueError("invalid_understanding_response")
-    args = json.loads(calls[0]["function"]["arguments"])
+    args = strict_json_loads(calls[0]["function"]["arguments"])
     if (not isinstance(args, dict) or set(args) - {"context"} not in ({"action", "quote", "query"}, {"action", "quote", "candidate", "query"}, {"action", "quote", "candidate", "query", "source_scope"}, {"action", "quote", "candidate", "query", "source_scope", "task_query"})
             or any(not isinstance(args[k], str) for k in args if k != "context")
             or args["action"] not in {"direct", "search", "clarify"}):
@@ -352,7 +353,7 @@ async def understand(messages, *, on_invalid=None):
             if len(functions) == 1 and functions[0].get("name") == "understand_request":
                 arguments = functions[0].get("arguments")
                 try:
-                    decoded = json.loads(arguments) if isinstance(arguments, str) else None
+                    decoded = strict_json_loads(arguments) if isinstance(arguments, str) else None
                 except (ValueError, TypeError):
                     decoded = None
                 if isinstance(decoded, dict):
