@@ -1,0 +1,27 @@
+{
+  "scope": "Python hash-addressing microbenchmark only; not VELIA inference",
+  "tokens": 1024,
+  "samples_seconds": [
+    0.004975966999950288,
+    0.004492319999940264,
+    0.004622082000082628,
+    0.005542934999994031,
+    0.004539369000099214
+  ],
+  "architecture": "x86_64",
+  "budget_estimate": {
+    "table_bytes": 2097152,
+    "projection_bytes": 2621440,
+    "weight_bytes": 4718592,
+    "training_optimizer_activation_bytes": null,
+    "quality_gain": null,
+    "checkpoint_created": false,
+    "quantum_existing_ple_must_be_baseline": true
+  },
+  "flash_model_benchmark": null,
+  "quantum_model_benchmark": null,
+  "quality_gain": null,
+  "torch_prototype_tested": false,
+  "teacher_called": false,
+  "deepseek_flash_reserved_usd_for_36_cases_128_output_tokens": "0.0096240"
+}
