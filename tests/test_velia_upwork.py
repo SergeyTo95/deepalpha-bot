@@ -149,3 +149,16 @@ def test_oauth_routes_keep_auth_origin_and_credentials_private(connector):
             assert 'secret-access' not in json.dumps(body) and 'secret-refresh' not in json.dumps(body)
             assert (await client.post(base+'upwork/disconnect',headers=h,json={})).status==200
     asyncio.run(scenario())
+
+
+def test_capabilities_are_owned_and_do_not_expose_credentials(connector):
+    async def scenario():
+        state=parse_qs(urlsplit(await connector.start(7)).query)['state'][0]
+        await connector.callback_exchange(7,state,'code')
+        result=await connector.capabilities(7)
+        assert result['tools'][0]['name']=='job_search' and not result['execution_enabled']
+        assert 'secret-access' not in json.dumps(result) and 'secret-refresh' not in json.dumps(result)
+        with pytest.raises(WorkError):await connector.capabilities(8)
+        connector.vault.disconnect(7)
+        with pytest.raises(WorkError):await connector.capabilities(7)
+    asyncio.run(scenario())

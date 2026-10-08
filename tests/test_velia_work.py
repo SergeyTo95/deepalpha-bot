@@ -299,3 +299,29 @@ def test_autonomous_http_cycle_and_download(store):
             with zipfile.ZipFile(io.BytesIO(await response.read())) as bundle:
                 assert bundle.read('proposal-draft.txt').decode()=='Подготовленная заявка'
     asyncio.run(scenario())
+
+
+def test_review_feedback_drives_bounded_revision_and_distinct_attempts(store):
+    async def scenario(always_reject):
+        id=store.create_job(7,data(client_request_id='revision-'+str(always_reject)))
+        seen=[];executions=0;reviews=0
+        async def generate(session,job,role,text,save):
+            nonlocal executions,reviews
+            seen.append((role,job['attempt']))
+            if role=='executor':
+                executions+=1
+                if executions>1:assert 'Исправить фактическую ошибку' in text and 'previous_result' in text
+                return 'Результат версии '+str(executions)
+            if role=='reviewer':
+                reviews+=1
+                if always_reject or reviews==1:return '{"verdict":"needs_revision","notes":"Исправить фактическую ошибку"}'
+            return ROLE_OUTPUTS[role]
+        await run_job(store,7,store.claim(7,id),SimpleNamespace(user_id=7),generate)
+        job=store.find(store.workspace(7),id)
+        assert job['status']==('needs_revision' if always_reject else 'ready')
+        assert executions==(3 if always_reject else 2)
+        assert job['revision_count']==executions-1
+        assert len(job['revision_history'])==executions-1
+        assert len([x for x in seen if x[0]=='manager'])==1
+        assert [attempt for role,attempt in seen if role=='executor']==list(range(1,executions+1))
+    asyncio.run(scenario(False));asyncio.run(scenario(True))

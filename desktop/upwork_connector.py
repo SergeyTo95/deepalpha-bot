@@ -206,6 +206,12 @@ class UpworkConnector:
         return {'connected':connected,'status':'connected' if connected else 'reconnect_required' if doc.get('status')=='connected' else doc.get('status','disconnected'),
                 'tool_count':len(doc.get('tools',[])) if connected else 0,'verified_at':doc.get('verified_at')}
 
+    async def capabilities(self,user):
+        doc=await asyncio.to_thread(self.vault.read,user)
+        if doc.get('status')!='connected' or doc.get('expires_at',0)<=time.time()+30:
+            raise WorkError('upwork_reconnect_required',409)
+        return {'tools':doc.get('tools',[]),'verified_at':doc.get('verified_at'),'execution_enabled':False}
+
     async def verify(self,user):
         async with self.locks.setdefault(user,asyncio.Lock()):
             doc=await asyncio.to_thread(self.vault.read,user)

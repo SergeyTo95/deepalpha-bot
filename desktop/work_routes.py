@@ -74,6 +74,7 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
         for key in ('scan_token','scan_until'):doc.pop(key,None)
         for job in doc['jobs']:
             job.pop('outputs',None);job.pop('brief',None)
+            job.pop('revision_history',None);job.pop('revision_feedback',None)
         return json_response({'ok':True,**doc})
     async def policy(request):
         return json_response({'ok':True,**await asyncio.to_thread(store.set_mandate,request[WORK_SESSION].user_id,request[WORK_BODY])})
@@ -181,6 +182,9 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
             archive.writestr('review.json',job['outputs'].get('reviewer','{}'))
             archive.writestr('task.json',json.dumps({k:job[k] for k in ['id','title','brief','source_url']},ensure_ascii=False,indent=2))
             archive.writestr('README.txt','Prepared text artifacts. No code was executed. No marketplace submission or payment is confirmed.')
+            for index,revision in enumerate(job.get('revision_history',[]),1):
+                archive.writestr('history/result-'+str(index)+'.txt',revision['executor'])
+                archive.writestr('history/review-'+str(index)+'.json',revision['reviewer'])
         return web.Response(body=buffer.getvalue(),content_type='application/zip',headers={
             'Content-Disposition':'attachment; filename="velia-work-'+job['id']+'.zip"','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
     def require_upwork():
@@ -209,6 +213,9 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
         if connector_slots.locked():raise WorkError('upwork_connect_rate_limit',429)
         async with connector_slots:result=await upwork.verify(request[WORK_SESSION].user_id)
         return json_response({'ok':True,**result})
+    async def capabilities_upwork(request):
+        require_upwork()
+        return json_response({'ok':True,**await upwork.capabilities(request[WORK_SESSION].user_id)})
     app.router.add_get('/web-api/v1/work/status',status)
     app.router.add_get('/web-api/v1/work/workspace',workspace)
     app.router.add_put('/web-api/v1/work/mandate',policy)
@@ -225,6 +232,7 @@ def setup_work_routes(app,*,session_for,same_origin,json_response,upstream,upstr
     app.router.add_get('/web-api/v1/work/upwork/callback',callback_upwork)
     app.router.add_post('/web-api/v1/work/upwork/disconnect',disconnect_upwork)
     app.router.add_post('/web-api/v1/work/upwork/verify',verify_upwork)
+    app.router.add_get('/web-api/v1/work/upwork/capabilities',capabilities_upwork)
 
 WORK_SESSION=web.RequestKey('velia_work_session',object)
 WORK_BODY=web.RequestKey('velia_work_body',dict)

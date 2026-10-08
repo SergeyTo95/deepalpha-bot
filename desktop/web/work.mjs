@@ -37,6 +37,10 @@ export async function mountWork(parent, {signal, toast = () => {}} = {}) {
   }
   function detail(job, target) {
     target.replaceChildren();
+    for(const [i,revision] of (job.revision_history || []).entries()) {
+      const d=node('details');d.append(node('summary','Предыдущая версия '+(i+1)));
+      const p=node('pre',revision.executor+'\n\nПроверка:\n'+revision.reviewer);p.style.whiteSpace='pre-wrap';p.style.overflowWrap='anywhere';d.append(p);target.append(d);
+    }
     for(const role of ['manager','proposal','executor','reviewer','treasurer']) {
       const value=job.outputs?.[role]; if(value == null) continue;
       const d=node('details'); d.append(node('summary',({manager:'Управляющий',proposal:'Черновик заявки',executor:'Исполнитель',reviewer:'Контролёр качества',treasurer:'Казначей'})[role]));
@@ -55,6 +59,7 @@ export async function mountWork(parent, {signal, toast = () => {}} = {}) {
       const upwork=(status.connectors || []).find(c=>c.id==='upwork');
       root.append(node('p','Upwork: вход и разрешение доступа выполняются на сайте площадки. Сейчас подключение проверяет доступ и список инструментов; отправка заявок ещё не включена.'));
       if(upwork?.connected)root.append(node('p','Доступ проверен · инструментов: '+upwork.tool_count));
+      if(upwork?.connected){const catalog=node('div');root.append(action('Инструменты Upwork',async()=>{const result=await call('upwork/capabilities');if(!live())return;catalog.replaceChildren(node('p','Проверенный каталог. Автоматическое выполнение методов ещё не включено.'));for(const tool of result.tools || []) {const d=node('details');d.append(node('summary',tool.name));const p=node('pre',JSON.stringify({description:tool.description,inputSchema:tool.inputSchema,annotations:tool.annotations},null,2));p.style.whiteSpace='pre-wrap';p.style.overflowWrap='anywhere';d.append(p);catalog.append(d);}}),catalog);}
       if(upwork?.connected || upwork?.status==='reconnect_required')root.append(action('Проверить и обновить доступ Upwork',async()=>{await call('upwork/verify','POST',{});await refresh();}));
       root.append(action(upwork?.connected?'Отключить Upwork':'Подключить Upwork',async()=>{
         if(upwork?.connected){await call('upwork/disconnect','POST',{});await refresh();return;}
