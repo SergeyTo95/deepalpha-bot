@@ -36,6 +36,25 @@ export async function featureRequest(path, {method = 'GET', data, file, digest, 
   }
   return result;
 }
+export function researchReportView(item) {
+  const report=item?.report || {};
+  const citations=Array.isArray(report.evidence?.citations)?report.evidence.citations:[];
+  return {goal:report.mission?.goal || '',summary:report.conclusion?.summary || '',
+    limitations:report.limitations || [],questions:report.open_questions || [],
+    boundary:report.conclusion?.boundary || '',
+    sources:citations.map(source=>{let url=null;try{const parsed=new URL(source.url);if(['https:','http:'].includes(parsed.protocol)&&!parsed.username&&!parsed.password)url=parsed.href;}catch{}return {title:source.title || source.doi || 'Source',year:source.published_year || '',url};})};
+}
+function renderResearchReport(item) {
+  const view=researchReportView(item),box=node('article',undefined,'feature-card');
+  const ru=(document.documentElement.lang || navigator.language || '').startsWith('ru');
+  box.append(node('h3',view.goal || (ru?'Отчёт исследования':'Research report')));
+  for(const [title,value] of [[ru?'Вывод':'Conclusion',view.summary],[ru?'Ограничения':'Limitations',view.limitations],[ru?'Открытые вопросы':'Open questions',view.questions],[ru?'Границы выводов':'Evidence boundary',view.boundary]]){box.append(node('h4',title),display(value));}
+  box.append(node('h4',ru?'Источники':'Sources'));
+  if(!view.sources.length)box.append(node('p',ru?'Источники не приложены. Выводы требуют проверки.':'No sources attached. Conclusions need verification.'));
+  for(const source of view.sources){const row=node('p');row.append(node('span',source.title+(source.year?' · '+source.year:'')));if(source.url){const link=node('a',ru?' Открыть источник':' Open source');link.href=source.url;link.target='_blank';link.rel='noopener noreferrer';row.append(link);}box.append(row);}
+  box.append(node('small',ru?'Список источников сам по себе не подтверждает каждый вывод.':'A source list alone does not verify every conclusion.'));
+  return box;
+}
 const node = (tag, text, cls) => {const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n;};
 const button = (text, action) => {const b = node('button', text); b.type = 'button'; b.onclick = action; return b;};
 const labels = {items:'Результаты',notes:'Описание',completed:'Выполнено',start:'Начало',end:'Окончание',goal:'Цель', title:'Название', name:'Имя', description:'Описание', instructions:'Инструкции', audience:'Аудитория', style:'Стиль', constraints:'Ограничения', status:'Статус', domain:'Направление', content:'Содержание', summary:'Результат', conclusion:'Вывод', text:'Текст', created_at:'Создано', updated_at:'Обновлено', preferred_name:'Как обращаться', about_me:'О себе', credits:'Токены', user_messages:'Сообщения сегодня', user_cost_usd:'Расход сегодня, $', enabled:'Включено', available:'Доступно', revision:'Версия', query:'Поисковый запрос', kind:'Тип', prompt:'Описание', duration_seconds:'Длительность, сек.', error_code:'Ошибка', rationale:'Обоснование'};
@@ -173,7 +192,7 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
           card.append(node('p','Запуск включает поиск источников и анализ до двух итераций. Настроенный внешний AI-провайдер может списать оплату. Автоматический отчёт зависит от конфигурации; сохранённые отчёты доступны ниже.'));
           if(researchState.director?.enabled!==true)card.append(node('p','Автоматическое исследование отключено. Доступные ручные действия — ниже.'));
           await refreshRuns().catch(e=>{progress.replaceChildren(node('p',e.message));start.disabled=true;});
-          actions(card,[['Найти литературу',async()=>{const r=await call(`research/missions/${m.id}/literature`,{method:'POST',data:{query:m.goal,max_results:12}});out.replaceChildren(display(r.literature));}],['Синтез',async()=>{const r=await call(`research/missions/${m.id}/synthesize`,{method:'POST',data:{max_sources:12}});out.replaceChildren(display(r.synthesis));}],['Сформировать отчёт',async()=>{const r=await call(`research/missions/${m.id}/reports`,{method:'POST'});out.replaceChildren(display(r.report));}],...['sources','evidence-claims','claims','reports','scientific-alerts'].map((k,i)=>[['Источники','Доказательства','Утверждения','Отчёты','Уведомления'][i],async()=>{const r=await call(`research/missions/${m.id}/${k}`);out.replaceChildren(display(r[k==='scientific-alerts'?'alerts':k.replaceAll('-','_')]));}])]);
+          actions(card,[['Найти литературу',async()=>{const r=await call(`research/missions/${m.id}/literature`,{method:'POST',data:{query:m.goal,max_results:12}});out.replaceChildren(display(r.literature));}],['Синтез',async()=>{const r=await call(`research/missions/${m.id}/synthesize`,{method:'POST',data:{max_sources:12}});out.replaceChildren(display(r.synthesis));}],['Сформировать отчёт',async()=>{const r=await call(`research/missions/${m.id}/reports`,{method:'POST'});out.replaceChildren(renderResearchReport(r.report));}],...['sources','evidence-claims','claims','reports','scientific-alerts'].map((k,i)=>[['Источники','Доказательства','Утверждения','Отчёты','Уведомления'][i],async()=>{const r=await call(`research/missions/${m.id}/${k}`);if(k==='reports')out.replaceChildren(...(r.reports || []).map(renderResearchReport));else out.replaceChildren(display(r[k==='scientific-alerts'?'alerts':k.replaceAll('-','_')]));}])]);
         };
         const refresh=()=>collection('research/missions','missions',list,detail); await refresh();
       } else if (name === 'projects') {
