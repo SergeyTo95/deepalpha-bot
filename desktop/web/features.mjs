@@ -42,13 +42,19 @@ export function researchReportView(item) {
   return {goal:report.mission?.goal || '',summary:report.conclusion?.summary || '',
     limitations:report.limitations || [],questions:report.open_questions || [],
     boundary:report.conclusion?.boundary || '',
+    findings:Array.isArray(report.conclusion?.claim_findings)?report.conclusion.claim_findings:[],
+    assessments:(Array.isArray(report.evidence?.assessments)?report.evidence.assessments:[]).filter(a=>citations.some(c=>c.source_id===a.source_id)).map(a=>({...a,source:citations.find(c=>c.source_id===a.source_id)?.title || a.source_id})),
     sources:citations.map(source=>{let url=null;try{const parsed=new URL(source.url);if(['https:','http:'].includes(parsed.protocol)&&!parsed.username&&!parsed.password)url=parsed.href;}catch{}return {title:source.title || source.doi || 'Source',year:source.published_year || '',url};})};
 }
+export function researchReportJSON(item){return JSON.stringify(item?.report || {},null,2);}
 function renderResearchReport(item) {
   const view=researchReportView(item),box=node('article',undefined,'feature-card research-report');
   const ru=(document.documentElement.lang || navigator.language || '').startsWith('ru');
   box.append(node('h3',view.goal || (ru?'Отчёт исследования':'Research report')));
   for(const [title,value] of [[ru?'Вывод':'Conclusion',view.summary],[ru?'Ограничения':'Limitations',view.limitations],[ru?'Открытые вопросы':'Open questions',view.questions],[ru?'Границы выводов':'Evidence boundary',view.boundary]]){box.append(node('h4',title),display(value));}
+  if(view.findings.length)box.append(node('h4',ru?'Выводы реестра утверждений':'Claim ledger findings'),display(view.findings));
+  if(view.assessments.length){box.append(node('h4',ru?'Оценка источников':'Source assessment'));for(const assessment of view.assessments){const entry=node('div');entry.append(node('strong',assessment.source),node('p',assessment.notes));box.append(entry);}}
+  const download=button(ru?'Скачать отчёт · JSON':'Download report · JSON',()=>{const url=URL.createObjectURL(new Blob([researchReportJSON(item)],{type:'application/json;charset=utf-8'}));const link=node('a');link.href=url;link.download='VELIA-research-report.json';box.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);});box.append(download);
   box.append(node('h4',ru?'Источники':'Sources'));
   if(!view.sources.length)box.append(node('p',ru?'Источники не приложены. Выводы требуют проверки.':'No sources attached. Conclusions need verification.'));
   for(const source of view.sources){const row=node('p');row.append(node('span',source.title+(source.year?' · '+source.year:'')));if(source.url){const link=node('a',ru?' Открыть источник':' Open source');link.href=source.url;link.target='_blank';link.rel='noopener noreferrer';row.append(link);}box.append(row);}
@@ -189,9 +195,10 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
             if(!(data.runs || []).length)progress.append(node('p','Исследование ещё не запущено.'));
           };
           actions(card,[['Обновить прогресс',refreshRuns]]);
-          const start=button('Начать исследование',async()=>{await run(start,async()=>{await call(`research/missions/${m.id}/runs`,{method:'POST',data:{max_iterations:2}});});await refreshRuns().catch(e=>{progress.replaceChildren(node('p',e.message));start.disabled=true;});});
+          const depth=node('select');depth.setAttribute('aria-label','Глубина исследования');for(const [value,title] of [[1,'Краткое · 1 итерация'],[2,'Стандартное · 2 итерации'],[3,'Углублённое · 3 итерации']]){if(value>(researchState.director?.max_iterations || 2))continue;const option=node('option',title);option.value=String(value);depth.append(option);}depth.value=String(Math.min(2,researchState.director?.max_iterations || 2));card.append(depth);
+          const start=button('Начать исследование',async()=>{await run(start,async()=>{await call(`research/missions/${m.id}/runs`,{method:'POST',data:{max_iterations:Number(depth.value)}});});await refreshRuns().catch(e=>{progress.replaceChildren(node('p',e.message));start.disabled=true;});});
           start.classList.add('feature-primary');start.disabled=researchState.director?.enabled!==true;card.append(start);
-          card.append(node('p','Запуск включает поиск источников и анализ до двух итераций. Настроенный внешний AI-провайдер может списать оплату. Автоматический отчёт зависит от конфигурации; сохранённые отчёты доступны ниже.'));
+          card.append(node('p','Запуск включает поиск источников и анализ с выбранным лимитом итераций. Больше итераций может увеличить время и стоимость, но не гарантирует качество. Настроенный внешний AI-провайдер может списать оплату. Автоматический отчёт зависит от конфигурации; сохранённые отчёты доступны ниже.'));
           if(researchState.director?.enabled!==true)card.append(node('p','Автоматическое исследование отключено. Доступные ручные действия — ниже.'));
           await refreshRuns().catch(e=>{progress.replaceChildren(node('p',e.message));start.disabled=true;});
           const advanced=node('details',undefined,'research-details');advanced.append(node('summary','Источники и ручное управление'));card.append(advanced);
