@@ -1476,3 +1476,7 @@ dialog::backdrop {
 .research-report small{display:block;color:var(--muted);line-height:1.6;margin-top:20px}
 .research-body button:focus-visible,.research-details summary:focus-visible{outline:2px solid var(--text);outline-offset:4px}
 @media(max-width:640px){.research-body .feature-actions{display:grid;grid-template-columns:1fr}.research-body button{min-height:44px}.research-intro{border-radius:16px}.research-body .feature-card{overflow-wrap:anywhere}}
+
+/* Keep long saved research prompts compact without modifying their content. */
+.research-list>.feature-card:not(.research-mission)>h3{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;line-height:1.45;overflow-wrap:anywhere;font-size:18px}
+.research-list>.research-mission>h3{font-size:20px}
