@@ -1455,3 +1455,24 @@ dialog::backdrop {
 .voice-profile select { min-height: 40px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; font: inherit; }
 .voice-dialog .voice-sound-test { margin: 8px 0; min-height: 36px; font-size: 12px; background: transparent; }
 .voice-profile select { max-width: 65%; min-width: 0; text-overflow: ellipsis; }
+
+/* Research workspace: scoped to the research section, touch-friendly. */
+.research-body{max-width:1040px;margin-inline:auto}
+.research-intro{padding:clamp(20px,4vw,36px);margin-bottom:24px;border:1px solid var(--border);border-radius:20px;background:var(--surface)}
+.research-intro small{letter-spacing:.14em;color:var(--muted);font-size:11px}
+.research-intro h2{font-size:clamp(23px,3.5vw,34px);line-height:1.2;max-width:650px;margin:14px 0}
+.research-intro p{color:var(--muted);max-width:640px;line-height:1.65}
+.research-body textarea{min-height:130px;resize:vertical}
+.research-list{display:grid;gap:16px}
+.research-list>.feature-card{margin:0}
+.research-mission>h3{line-height:1.5;overflow-wrap:anywhere}
+.research-badge{display:inline-block;padding:6px 12px;border-radius:20px;background:var(--hover);font-size:12px;margin-bottom:16px}
+.research-details{border-top:1px solid var(--border);padding:16px 0;margin-top:16px}
+.research-details summary{cursor:pointer;min-height:44px;display:list-item;align-content:center;font-weight:600}
+.research-run{padding:14px 0;border-bottom:1px solid var(--border)}
+.research-run progress{width:100%;height:8px;accent-color:var(--text)}
+.research-report h4{margin:24px 0 10px;font-size:14px}
+.research-report a{display:inline-block;padding:8px 0;overflow-wrap:anywhere}
+.research-report small{display:block;color:var(--muted);line-height:1.6;margin-top:20px}
+.research-body button:focus-visible,.research-details summary:focus-visible{outline:2px solid var(--text);outline-offset:4px}
+@media(max-width:640px){.research-body .feature-actions{display:grid;grid-template-columns:1fr}.research-body button{min-height:44px}.research-intro{border-radius:16px}.research-body .feature-card{overflow-wrap:anywhere}}
