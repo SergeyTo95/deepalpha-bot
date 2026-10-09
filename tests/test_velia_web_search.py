@@ -247,3 +247,21 @@ def test_health_source_failure_does_not_fall_back_to_unverified_restrictions(mon
                 assert (await response.json())["error"] == "web_search_unavailable"
             assert len(state["search_queries"]) == 1 and state["payloads"] == []
     asyncio.run(run())
+
+
+def test_medical_flash_request_never_uses_search_even_when_explicitly_requested(monkeypatch,tmp_path):
+    async def run():
+        async with fixture(monkeypatch, guest_store=GuestStore(sqlite_path=tmp_path/'medical.db'), with_search=True) as (server,client,state):
+            cookie,_,_=await login(server,client)
+            async with client.post(server.make_url('/web-api/v1/conversations'),headers=headers(cookie),json={'title':'Medical'}) as response:
+                cid=(await response.json())['conversation']['id']
+            body={'content':'Private medical document discussion','model':'velia-flash','idempotency_key':'medical-private-01','medical_no_search':True,'web_search':True}
+            async with client.post(server.make_url(f'/web-api/v1/conversations/{cid}/messages/stream'),headers=headers(cookie),json=body) as response:
+                assert response.status==200
+                await response.text()
+            assert state['search_queries']==[]
+            assert state['account_calls'][0]['content']==body['content']
+            for change in [{'medical_no_search':'true'},{'model':'velia-pro'}]:
+                async with client.post(server.make_url(f'/web-api/v1/conversations/{cid}/messages/stream'),headers=headers(cookie),json={**body,**change}) as response:
+                    assert response.status==400
+    asyncio.run(run())
