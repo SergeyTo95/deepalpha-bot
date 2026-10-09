@@ -548,7 +548,7 @@ async function copyText(text) {
 }
 function applyProfile(value) {
   const changed = profile?.account !== value.account;
-  if(changed){features.close();voice.stop();clearFiles();fileTools.clear();}
+  if(changed){features.close();features.clearMedicalData();medicalDraftMode=false;voice.stop();clearFiles();fileTools.clear();}
   profile = value;
   internetAvailable = !!value.web_search;
   $("guest-notice").hidden = true;
@@ -588,7 +588,7 @@ function applyGuest(value) {
   if (profile) return;
   $("research-link").hidden = true;
   const changed = guest?.account !== value.account || storageKey !== "velia-web-guest-v1:" + value.account;
-  if(changed){features.close();voice.stop();clearFiles();fileTools.clear();}
+  if(changed){features.close();features.clearMedicalData();medicalDraftMode=false;voice.stop();clearFiles();fileTools.clear();}
   guest = value;
   internetAvailable = !!value.web_search;
   setAgentMode(false);
@@ -938,7 +938,7 @@ $("account").onclick = async () => {
       AbortSignal.timeout(20000),
     );
     if (!response.ok) throw new Error();
-    features.close();voice.stop();clearFiles();fileTools.clear();
+    features.close();features.clearMedicalData();medicalDraftMode=false;voice.stop();clearFiles();fileTools.clear();
     profile = null;
     $("research-link").hidden = true;
     storageKey = null;

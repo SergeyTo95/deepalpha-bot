@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {medicalUploadFormat,medicalFindings,medicalDocumentPrompt,filterMedicalFindings,compareMedicalValues} from '../features.mjs';
+import {medicalUploadFormat,medicalFindings,medicalDocumentPrompt,filterMedicalFindings,compareMedicalValues,symptomEntry,medicalVisitCard} from '../features.mjs';
 test('medical files reject unrelated gzip, documents and empty studies',()=>{for(const name of ['photo.jpg','report.pdf','archive.gz'])assert.throws(()=>medicalUploadFormat({name,size:10}));assert.throws(()=>medicalUploadFormat({name:'ct.zip',size:0}));assert.equal(medicalUploadFormat({name:'CT.NII.GZ',size:1}),'nifti_gz');assert.equal(medicalUploadFormat({name:'ct.zip',size:1}),'dicom_zip');});
 test('medical scores retain uncalibrated semantics and reject invalid values',()=>{assert.deepEqual(medicalFindings({findings:[{score:0.9}]}),[]);const rows=medicalFindings({score_semantics:'model_score_not_calibrated_probability',findings:[{organ:'Pancreas',finding:'Example',score:0.7},{score:NaN},{score:2}]});assert.equal(rows.length,1);assert.equal(rows[0].score,'0.700');});
 
@@ -11,3 +11,6 @@ test('findings search preserves scores and searches Cyrillic and English without
 const values={indicator:'Example',date1:'2026-01-01',date2:'2026-02-01',unit1:'mg/L',unit2:'mg/L',value1:'10',value2:'12,5'};
 test('lab comparison calculates decimal changes without treating a zero baseline as a percentage',()=>{const result=compareMedicalValues(values);assert.equal(result.change,2.5);assert.equal(result.percent,25);assert.equal(compareMedicalValues({...values,value1:'0'}).percent,null);});
 test('lab comparison rejects mismatched units, invalid chronology, missing and threshold values',()=>{for(const update of [{unit2:'mmol/L'},{date2:'2026-01-01'},{date1:'2026-02-30'},{value1:''},{value2:'<5'}])assert.throws(()=>compareMedicalValues({...values,...update}));});
+
+test('symptom entries distinguish missing intensity from zero and reject invalid data',()=>{assert.equal(symptomEntry({date:'2026-01-01',symptom:'Example',intensity:''}).intensity,null);assert.equal(symptomEntry({date:'2026-01-01',symptom:'Example',intensity:0}).intensity,0);for(const data of [{date:'2026-02-30',symptom:'x'},{date:'2026-01-01',symptom:''},{date:'2026-01-01',symptom:'x',intensity:11}])assert.throws(()=>symptomEntry(data));});
+test('visit summary orders observations without adding diagnoses and preserves medication notes',()=>{const entries=[symptomEntry({date:'2026-02-01',symptom:'Second'}),symptomEntry({date:'2026-01-01',symptom:'First',intensity:0})];const card=medicalVisitCard(entries,{medications:'Patient note'});assert.ok(card.indexOf('First')<card.indexOf('Second'));assert.match(card,/Patient note/);assert.match(card,/не указана/);assert.match(card,/0\/10/);assert.equal(entries[0].symptom,'Second');});
