@@ -12,6 +12,11 @@ def test_feature_paths_are_exact_and_do_not_expose_auth_or_admin():
     assert not route_allowed('POST', 'agent/schedules/schedule1/run')
     assert not route_allowed('GET', 'agent/schedules/a/b')
     assert route_allowed('POST', 'research/missions/m1/literature')
+    assert route_allowed('GET', 'research/missions/m1/runs')
+    assert route_allowed('GET', 'research/runs/r1')
+    assert route_allowed('POST', 'research/runs/r1/cancel')
+    assert not route_allowed('GET', 'research/runs/r1/cancel')
+    assert not route_allowed('POST', 'research/runs/a/b/cancel')
     assert not route_allowed('POST', 'profile')
     for path in ('auth/refresh', 'admin', 'profile/../auth/refresh', 'https://example.com', 'research/missions/a/b/literature'):
         assert not route_allowed('GET', path)
@@ -49,3 +54,31 @@ def test_history_attachment_metadata_does_not_expose_originals_or_credentials():
     item={'id':'11111111-1111-1111-1111-111111111111','name':'photo.jpg','mime_type':'image/jpeg','kind':'image','byte_size':42,'content_bytes':'private','extracted_text':'private','content_url':'https://private','access_token':'secret'}
     result=message({'role':'user','content':'Фото','attachments':[item,{'id':'invalid','name':'bad'}]})
     assert result['attachments']==[{key:item[key] for key in ('id','name','mime_type','kind','byte_size')}]
+
+
+def test_research_progress_and_cancel_preserve_session_and_backend_access_checks():
+    async def scenario():
+        seen = []
+        async def session_for(request):
+            return SimpleNamespace(access='owner-token', user_id=7) if request.headers.get('X-Test-Session') else None
+        async def upstream(method, path, **kwargs):
+            seen.append((method, path, kwargs))
+            return 403, {'ok': False, 'error': 'research_run_forbidden'}
+        app = web.Application()
+        setup_feature_routes(app, origin='https://velia.example.com', session_for=session_for, same_origin=lambda r: r.headers.get('Origin') == 'https://velia.example.com', upstream=upstream, json_response=lambda data, status=200: web.json_response(data, status=status))
+        async with TestServer(app) as server, ClientSession() as client:
+            progress = str(server.make_url('/web-api/v1/features/research/missions/m1/runs'))
+            cancel = str(server.make_url('/web-api/v1/features/research/runs/r1/cancel'))
+            assert (await client.get(progress)).status == 401
+            assert (await client.post(cancel, json={})).status == 403
+            assert not seen
+            headers = {'X-Test-Session': 'yes', 'Origin': 'https://velia.example.com'}
+            assert (await client.get(progress, headers=headers)).status == 403
+            assert seen[-1][2]['token'] == 'owner-token'
+            response = await client.post(cancel, headers=headers, json={})
+            assert response.status == 403
+            assert (await response.json())['error'] == 'research_run_forbidden'
+            assert seen[-1][0] == 'POST'
+            assert seen[-1][1].endswith('/research/runs/r1/cancel')
+            assert seen[-1][2]['token'] == 'owner-token'
+    asyncio.run(scenario())
