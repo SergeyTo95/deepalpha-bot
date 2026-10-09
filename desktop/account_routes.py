@@ -164,9 +164,11 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
 
     async def send(request):
         data = await read_body(request)
-        if (set(data) - {"web_search", "attachment_ids", "voice_turn"} != {"content", "model", "idempotency_key"}
+        if (set(data) - {"web_search", "attachment_ids", "voice_turn", "medical_no_search"} != {"content", "model", "idempotency_key"}
                 or ("web_search" in data and type(data["web_search"]) is not bool)
                 or ("voice_turn" in data and type(data["voice_turn"]) is not bool)
+                or ("medical_no_search" in data and type(data["medical_no_search"]) is not bool)
+                or (data.get("medical_no_search") and data.get("model") != FLASH_ID)
                 or data.get("model") not in {FLASH_ID, MODEL_ID}
                 or not isinstance(data.get("content"), str) or not data["content"].strip()
                 or len(data["content"]) > 12000 or not REQUEST_ID.fullmatch(str(data.get("idempotency_key", "")))):
@@ -187,7 +189,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
         source = stream = None
         try:
             content, result = data["content"], None
-            if not data.get("voice_turn") and ((web_search and web_search.available) or data.get("web_search")):
+            if not data.get("medical_no_search") and not data.get("voice_turn") and ((web_search and web_search.available) or data.get("web_search")):
                 if web_search is None:
                     raise SearchUnavailable()
                 status, previous = await relay(request, "GET", "/messages?limit=20")
