@@ -45,7 +45,7 @@ export function researchReportView(item) {
     sources:citations.map(source=>{let url=null;try{const parsed=new URL(source.url);if(['https:','http:'].includes(parsed.protocol)&&!parsed.username&&!parsed.password)url=parsed.href;}catch{}return {title:source.title || source.doi || 'Source',year:source.published_year || '',url};})};
 }
 function renderResearchReport(item) {
-  const view=researchReportView(item),box=node('article',undefined,'feature-card');
+  const view=researchReportView(item),box=node('article',undefined,'feature-card research-report');
   const ru=(document.documentElement.lang || navigator.language || '').startsWith('ru');
   box.append(node('h3',view.goal || (ru?'Отчёт исследования':'Research report')));
   for(const [title,value] of [[ru?'Вывод':'Conclusion',view.summary],[ru?'Ограничения':'Limitations',view.limitations],[ru?'Открытые вопросы':'Open questions',view.questions],[ru?'Границы выводов':'Evidence boundary',view.boundary]]){box.append(node('h4',title),display(value));}
@@ -168,17 +168,19 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
       else if (name === 'research') {
         const capability=await call('research/status');if(ticket!==epoch)return;
         const researchState=capability.research || {};
-        body.replaceChildren(form([['goal','Что исследовать','textarea']], 'Создать исследование', async d=>{await call('research/missions',{method:'POST',data:d,key:crypto.randomUUID()}); await refresh();}));
-        const list=node('div');body.append(list);
+        const intro=node('div',undefined,'research-intro');intro.append(node('small','VELIA RESEARCH'),node('h2','Разберись в теме. Опирайся на источники.'),node('p','Собери материалы, изучи противоречия и сохрани выводы в одном исследовании.'));
+        body.replaceChildren(intro,form([['goal','Что исследовать','textarea']], 'Создать исследование', async d=>{await call('research/missions',{method:'POST',data:d,key:crypto.randomUUID()}); await refresh();}));
+        body.classList.add('research-body');
+        const list=node('div',undefined,'research-list');body.append(node('h2','Мои исследования'),list);
         const detail=async (m,card)=>{
-          const r=await call('research/missions/'+m.id);card.replaceChildren(node('h3',m.goal),display(r.mission));
+          const r=await call('research/missions/'+m.id);card.classList.add('research-mission');card.replaceChildren(node('h3',m.goal),node('span',statuses[r.mission.status] || r.mission.status,'research-badge'));const technical=node('details',undefined,'research-details');technical.append(node('summary','Параметры исследования'),display(r.mission));card.append(technical);
           const out=node('div');card.append(out);
           const progress=node('div',undefined,'feature-card');card.append(progress);
           const refreshRuns=async()=>{
             const data=await call(`research/missions/${m.id}/runs`);if(ticket!==epoch)return;
             progress.replaceChildren(node('h3','Ход исследования'));
             for(const run of data.runs || []){
-              const row=node('div');row.append(node('p',(statuses[run.status] || run.status)+' · '+(run.completed_iterations || 0)+' / '+run.max_iterations+' этапов'));
+              const row=node('div',undefined,'research-run');const meter=node('progress');meter.max=Math.max(1,Number(run.max_iterations)||1);meter.value=Math.min(meter.max,Math.max(0,Number(run.completed_iterations)||0));meter.setAttribute('aria-label','Завершённые итерации исследования');row.append(meter);row.append(node('p',(statuses[run.status] || run.status)+' · '+(run.completed_iterations || 0)+' / '+run.max_iterations+' этапов'));
               if(run.stop_reason){const reasons={user_cancelled:'Отменено пользователем',attempt_limit:'Исчерпан лимит повторных попыток',mission_not_active:'Исследование закрыто',evidence_sufficient:'Собрано достаточно доказательств',no_open_questions:'Открытых вопросов больше нет',no_new_evidence:'Новые доказательства не найдены',iteration_limit:'Достигнут лимит итераций',stage_failed:'Этап завершился ошибкой',internal_error:'Ошибка исполнения'};row.append(node('p','Причина остановки: '+(reasons[run.stop_reason] || 'Исполнение остановлено')));}
               if(['queued','running'].includes(run.status))actions(row,[['Остановить исследование',async()=>{await call(`research/runs/${run.id}/cancel`,{method:'POST',data:{}});await refreshRuns();}]]);
               progress.append(row);
@@ -188,11 +190,13 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
           };
           actions(card,[['Обновить прогресс',refreshRuns]]);
           const start=button('Начать исследование',async()=>{await run(start,async()=>{await call(`research/missions/${m.id}/runs`,{method:'POST',data:{max_iterations:2}});});await refreshRuns().catch(e=>{progress.replaceChildren(node('p',e.message));start.disabled=true;});});
-          start.disabled=researchState.director?.enabled!==true;card.append(start);
+          start.classList.add('feature-primary');start.disabled=researchState.director?.enabled!==true;card.append(start);
           card.append(node('p','Запуск включает поиск источников и анализ до двух итераций. Настроенный внешний AI-провайдер может списать оплату. Автоматический отчёт зависит от конфигурации; сохранённые отчёты доступны ниже.'));
           if(researchState.director?.enabled!==true)card.append(node('p','Автоматическое исследование отключено. Доступные ручные действия — ниже.'));
           await refreshRuns().catch(e=>{progress.replaceChildren(node('p',e.message));start.disabled=true;});
-          actions(card,[['Найти литературу',async()=>{const r=await call(`research/missions/${m.id}/literature`,{method:'POST',data:{query:m.goal,max_results:12}});out.replaceChildren(display(r.literature));}],['Синтез',async()=>{const r=await call(`research/missions/${m.id}/synthesize`,{method:'POST',data:{max_sources:12}});out.replaceChildren(display(r.synthesis));}],['Сформировать отчёт',async()=>{const r=await call(`research/missions/${m.id}/reports`,{method:'POST'});out.replaceChildren(renderResearchReport(r.report));}],...['sources','evidence-claims','claims','reports','scientific-alerts'].map((k,i)=>[['Источники','Доказательства','Утверждения','Отчёты','Уведомления'][i],async()=>{const r=await call(`research/missions/${m.id}/${k}`);if(k==='reports')out.replaceChildren(...(r.reports || []).map(renderResearchReport));else out.replaceChildren(display(r[k==='scientific-alerts'?'alerts':k.replaceAll('-','_')]));}])]);
+          const advanced=node('details',undefined,'research-details');advanced.append(node('summary','Источники и ручное управление'));card.append(advanced);
+          actions(advanced,[['Найти литературу',async()=>{const r=await call(`research/missions/${m.id}/literature`,{method:'POST',data:{query:m.goal,max_results:12}});out.replaceChildren(display(r.literature));}],['Синтез',async()=>{const r=await call(`research/missions/${m.id}/synthesize`,{method:'POST',data:{max_sources:12}});out.replaceChildren(display(r.synthesis));}],['Сформировать отчёт',async()=>{const r=await call(`research/missions/${m.id}/reports`,{method:'POST'});out.replaceChildren(renderResearchReport(r.report));}],...['sources','evidence-claims','claims','reports','scientific-alerts'].map((k,i)=>[['Источники','Доказательства','Утверждения','Отчёты','Уведомления'][i],async()=>{const r=await call(`research/missions/${m.id}/${k}`);if(k==='reports')out.replaceChildren(...(r.reports || []).map(renderResearchReport));else out.replaceChildren(display(r[k==='scientific-alerts'?'alerts':k.replaceAll('-','_')]));}])]);
+          const saved=await call(`research/missions/${m.id}/reports`).catch(()=>null);if(ticket!==epoch)return;if(saved?.reports?.length)out.replaceChildren(...saved.reports.map(renderResearchReport));else out.append(node('p','Готовый отчёт появится здесь. Сохранённые отчёты доступны при повторном открытии.','feature-help'));
         };
         const refresh=()=>collection('research/missions','missions',list,detail); await refresh();
       } else if (name === 'projects') {
