@@ -85,7 +85,7 @@ function addFiles(files){if(busy)return;if(!profile){openAuth();return;}if(agent
 
 const current = () => chats.find((c) => c.id === currentId);
 const voice = setupVoice({busy:()=>busy, toast, send:text=>{if(agentMode)setAgentMode(false);setModel("velia-flash");$("prompt").value=text;return generate(false, true);}});
-const features = setupFeatures({signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
+const features = setupFeatures({signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,prepareMedicalChat:async prompt=>{if(busy)throw new Error('Дождись завершения ответа.');if(!profile?.models?.includes('velia-flash'))throw new Error('VELIA Flash сейчас недоступна.');setAgentMode(false);setModel('velia-flash');newChat();$('prompt').value=prompt;resizePrompt();$('prompt').focus();toast('Прикрепи заключения и проверь текст перед отправкой.');},openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
 const browserStorage = { getItem: (key) => localStorage.getItem(key) };
 function toast(text) {
   clearTimeout(toastTimer);
