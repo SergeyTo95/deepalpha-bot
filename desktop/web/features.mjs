@@ -46,6 +46,11 @@ export function researchReportView(item) {
     assessments:(Array.isArray(report.evidence?.assessments)?report.evidence.assessments:[]).filter(a=>citations.some(c=>c.source_id===a.source_id)).map(a=>({...a,source:citations.find(c=>c.source_id===a.source_id)?.title || a.source_id})),
     sources:citations.map(source=>{let url=null;try{const parsed=new URL(source.url);if(['https:','http:'].includes(parsed.protocol)&&!parsed.username&&!parsed.password)url=parsed.href;}catch{}return {title:source.title || source.doi || 'Source',year:source.published_year || '',url};})};
 }
+export function medicalDocumentPrompt(mode){
+ const tasks={summary:'Объясни содержание медицинского заключения простым языком. Отдели написанное врачом от своих пояснений.',compare:'Сравни прикреплённые медицинские заключения по датам. Не сравнивай показатели с разными единицами или условиями как одинаковые. Если даты, единицы или референсные диапазоны отсутствуют, укажи это.',visit:'Подготовь краткое резюме прикреплённых заключений и вопросы для обсуждения с врачом.'};
+ if(!tasks[mode])throw new Error('Unknown medical document task');
+ return tasks[mode]+' Используй только данные файлов, не придумывай показатели. Приводи название файла и страницу, только если она известна. Отметь неразборчивые места и недостаток данных. Не ставь окончательный диагноз и не назначай лечение. Ответь на языке пользователя.';
+}
 export function medicalUploadFormat(file){
   if(!file || !Number.isFinite(file.size) || file.size<=0)throw new Error('Выбери непустой файл исследования.');
   if(/\.zip$/i.test(file.name))return 'dicom_zip';
@@ -102,7 +107,7 @@ function display(value, depth = 0) {
   return box;
 }
 
-export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings, openImage, openConversation}) {
+export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat}) {
   const root = document.getElementById('feature-view'), nav = document.getElementById('feature-nav');
   let epoch = 0, section = null, controller = null;
   const close = () => {epoch++; controller?.abort(); root.replaceChildren(); root.hidden = true; section = null; nav.querySelectorAll('button').forEach(b=>b.removeAttribute('aria-current')); document.getElementById('conversation-scroll').hidden = false; document.querySelector('.composer-area').hidden = false;};
@@ -241,6 +246,8 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
       } else if (name === 'medical') {
         const medicalCapability=await call('medical/status');if(ticket!==epoch)return;const medicalReady=medicalCapability.medical?.radar?.available===true;
         body.classList.add('medical-body');const intro=node('section',undefined,'medical-intro');intro.append(node('small','VELIA MEDICAL'),node('h2','Исследования здоровья в одном месте'),node('p','Сейчас доступен анализ КТ брюшной полости с контрастом. МРТ, УЗИ, фотографии и анализы крови этим инструментом не поддерживаются.'),node('p',medicalReady?'Анализатор настроен. Готовность GPU проверяется при обращении.':'Анализатор сейчас недоступен. Загружать КТ пока нельзя.','feature-notice'));body.replaceChildren(intro);
+        const documents=node('section',undefined,'feature-card');documents.append(node('h3','Заключения и подготовка к врачу'),node('p','Открой отдельный диалог VELIA Flash и прикрепи PDF или текст заключения. До 4 файлов, по 15 МБ. Для сканов извлечение текста может быть недоступно. Файлы отправляются только после твоего нажатия «Отправить».'));
+        if(prepareMedicalChat)actions(documents,[['Объяснить заключение',async()=>{await prepareMedicalChat(medicalDocumentPrompt('summary'));close();}],['Сравнить по датам',async()=>{await prepareMedicalChat(medicalDocumentPrompt('compare'));close();}],['Подготовиться к врачу',async()=>{await prepareMedicalChat(medicalDocumentPrompt('visit'));close();}]]);body.append(documents);
         body.append(form([['title','Название исследования'],['contrast_enhanced_confirmed','Подтверждаю наличие контраста','checkbox'],['abdomen_confirmed','Подтверждаю КТ брюшной полости','checkbox']], 'Создать исследование',async d=>{await call('medical/cases',{method:'POST',data:{...d,modality:'ct',study_kind:'contrast_abdomen'}});await refresh();}));
         const list=node('div');body.append(list);
         const detail=async(c,card)=>{const r=await call('medical/cases/'+c.id);card.classList.add('medical-case');card.replaceChildren(node('h3',c.title));const stateNames={draft:'Ожидает загрузки',uploading:'Загрузка файла',queued:'В очереди на анализ',running:'Анализ выполняется',completed:'Анализ завершён',failed:'Обработка не удалась'};card.append(node('p',stateNames[r.case.status] || statuses[r.case.status] || 'Статус неизвестен','research-badge'),renderMedicalResult(r.case));if(r.case.error)card.append(node('p','Ошибка обработки. Обнови статус; если ошибка сохраняется, повторную загрузку согласуй после проверки доступности сервиса.','feature-notice'));
