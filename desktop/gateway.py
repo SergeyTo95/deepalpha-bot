@@ -367,7 +367,9 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
         ready = (app[READY] and bool(os.getenv("KIMI_API_KEY", "").strip())
                  and os.getenv("VELIA_DESKTOP_API_ENABLED", "").lower() in {"true", "1"}
                  and bool(os.getenv("VELIA_DESKTOP_PREVIEW_USER_IDS", "").strip()))
-        return json_response({"ok": ready, "service": "velia-desktop-gateway"}, 200 if ready else 503)
+        from desktop.decision_router import status as decision_status
+        return json_response({"ok": ready, "service": "velia-desktop-gateway",
+                              "decision_router": decision_status()}, 200 if ready else 503)
 
     async def pairing_page(request):
         raise web.HTTPFound(location=config.browser_origin + "/mobile-connect",
