@@ -192,6 +192,10 @@ class WebSearch:
             hashlib.sha256).hexdigest()
 
     async def _understand(self, messages):
+        from desktop.decision_router import try_direct
+        decision = await try_direct(messages)
+        if decision is not None:
+            return decision
         return await understand(messages)
 
     async def plan(self, messages):
