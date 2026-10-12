@@ -87,7 +87,7 @@ function addFiles(files){if(busy)return;if(!profile){openAuth();return;}if(agent
 
 const current = () => chats.find((c) => c.id === currentId);
 const voice = setupVoice({busy:()=>busy, toast, send:text=>{if(agentMode)setAgentMode(false);setModel("velia-flash");$("prompt").value=text;return generate(false, true);}});
-const features = setupFeatures({signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,prepareMedicalChat:async prompt=>{if(busy)throw new Error('Дождись завершения ответа.');if(!profile?.models?.includes('velia-flash'))throw new Error('VELIA Flash сейчас недоступна.');setAgentMode(false);setModel('velia-flash');newChat();medicalDraftMode=true;$('prompt').value=prompt;resizePrompt();$('prompt').focus();toast('Прикрепи заключения и проверь текст перед отправкой.');},openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
+const features = setupFeatures({onUnauthorized:()=>{lockHistory();profile=null;guest=null;notifyAuthChange('lock');render();openAuth();},signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,prepareMedicalChat:async prompt=>{if(busy)throw new Error('Дождись завершения ответа.');if(!profile?.models?.includes('velia-flash'))throw new Error('VELIA Flash сейчас недоступна.');setAgentMode(false);setModel('velia-flash');newChat();medicalDraftMode=true;$('prompt').value=prompt;resizePrompt();$('prompt').focus();toast('Прикрепи заключения и проверь текст перед отправкой.');},openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
 const browserStorage = { getItem: (key) => localStorage.getItem(key) };
 const localHistory = new LocalHistory(browserHistoryStore());
 const authChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('velia-auth-v1') : null;
@@ -403,7 +403,12 @@ function openAuth() {
 async function jsonRequest(path, data) {
   const response = await request(path, data, AbortSignal.timeout(25000));
   const value = await response.json();
-  if (!response.ok) throw new Error(apiError(value.error?.message || value.error));
+  if (!response.ok) {
+    if (response.status === 401 && profile) {
+      lockHistory();profile=null;guest=null;notifyAuthChange('lock');render();openAuth();
+    }
+    const error=new Error(apiError(value.error?.message || value.error));error.status=response.status;throw error;
+  }
   return value;
 }
 function takeoverLabel(kind) {

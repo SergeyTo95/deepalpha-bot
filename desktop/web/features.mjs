@@ -26,15 +26,34 @@ export async function featureRequest(path, {method = 'GET', data, file, digest, 
     else {body = new FormData(); body.append('file', file);}
   } else if (method !== 'GET') {headers['Content-Type'] = 'application/json'; body = JSON.stringify(data || {});}
   if (key) headers['Idempotency-Key'] = key;
-  const response = await fetch('/web-api/v1/features/' + path, {method, headers, body, credentials: 'same-origin', signal});
-  const result = await response.json();
-  if (!response.ok || result.ok === false) {
-    const error = new Error(response.status === 401 ? 'Войди в VELIA, чтобы продолжить.' :
-      response.status === 503 ? 'Этот раздел сейчас недоступен. Повтори позже.' :
-      response.status === 402 ? 'Недостаточно токенов на балансе.' : 'Не удалось выполнить действие: ' + (result.error || response.status));
-    error.code = result.error; throw error;
-  }
-  return result;
+  const controller = new AbortController();
+  const abort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, {once:true});
+  let timedOut = false;
+  const timer = setTimeout(() => {timedOut = true; controller.abort();}, file ? 180000 : 60000);
+  try {
+    const response = await fetch('/web-api/v1/features/' + path, {method, headers, body, credentials:'same-origin', signal:controller.signal});
+    let result;
+    try { result = await response.json(); } catch {
+      if (signal?.aborted) throw new DOMException('Cancelled','AbortError');
+      const error = new Error('Сервис не смог ответить. Попробуй ещё раз чуть позже.');
+      error.status = response.status; throw error;
+    }
+    if (!response.ok || result.ok === false) {
+      const messages = {401:'Войди в VELIA, чтобы продолжить.',402:'Недостаточно токенов. Проверь баланс.',
+        403:'Это действие недоступно для твоего аккаунта.',404:'Материал не найден. Обнови список.',
+        409:'Данные уже изменились. Обнови раздел и повтори действие.',413:'Файл слишком большой. Выбери файл меньшего размера.',
+        429:'Слишком много запросов. Подожди немного и повтори.',503:'Раздел временно недоступен. Попробуй позже.'};
+      const error = new Error(messages[response.status] || 'Не удалось выполнить действие. Проверь введённые данные и повтори.');
+      error.code = result.error; error.status = response.status; throw error;
+    }
+    return result;
+  } catch(error) {
+    if (timedOut) throw new Error('Ответ занимает слишком много времени. Обнови раздел: действие могло уже выполниться.');
+    if (error.name === 'TypeError') throw new Error('Нет связи с VELIA. Проверь интернет и повтори.');
+    throw error;
+  } finally {clearTimeout(timer); signal?.removeEventListener('abort', abort);}
+
 }
 export function researchReportView(item) {
   const report=item?.report || {};
@@ -134,6 +153,19 @@ function renderResearchReport(item) {
   for(const [title,value] of [[ru?'Вывод':'Conclusion',view.summary],[ru?'Ограничения':'Limitations',view.limitations],[ru?'Открытые вопросы':'Open questions',view.questions],[ru?'Границы выводов':'Evidence boundary',view.boundary]]){box.append(node('h4',title),display(value));}
   if(view.findings.length)box.append(node('h4',ru?'Выводы реестра утверждений':'Claim ledger findings'),display(view.findings));
   if(view.assessments.length){box.append(node('h4',ru?'Оценка источников':'Source assessment'));for(const assessment of view.assessments){const entry=node('div');entry.append(node('strong',assessment.source),node('p',assessment.notes));box.append(entry);}}
+  const readable=button(ru?'Скачать отчёт':'Download report',()=>{
+    const list=value=>Array.isArray(value)?value:value?[value]:[];
+    const text=value=>typeof value==='object'&&value!==null ? Object.entries(value).filter(([k])=>!hiddenKeys.has(k)).map(([k,v])=>(labels[k]||k.replaceAll('_',' '))+': '+(typeof v==='object'?JSON.stringify(v):String(v))).join('; ') : String(value);
+    const lines=['# '+(view.goal || 'VELIA Research'), '', '## '+(ru?'Вывод':'Conclusion'), view.summary,
+      '', '## '+(ru?'Ограничения':'Limitations'), ...list(view.limitations).map(v=>'- '+text(v)),
+      '', '## '+(ru?'Открытые вопросы':'Open questions'), ...list(view.questions).map(v=>'- '+text(v)),
+      '', view.boundary, '', '## '+(ru?'Подробные выводы':'Detailed findings'), ...view.findings.map(v=>'- '+text(v)),
+      '', '## '+(ru?'Оценка источников':'Source assessments'), ...view.assessments.map(v=>'- '+v.source+': '+(v.notes||'')),
+      '', '## '+(ru?'Источники':'Sources'),
+      ...view.sources.map(v=>'- '+v.title+(v.year?' ('+v.year+')':'')+(v.url?' — '+v.url:''))];
+    const url=URL.createObjectURL(new Blob([lines.join('\n')],{type:'text/markdown;charset=utf-8'}));
+    const link=node('a');link.href=url;link.download='VELIA-research-report.md';box.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  });box.append(readable);
   const download=button(ru?'Скачать отчёт · JSON':'Download report · JSON',()=>{const url=URL.createObjectURL(new Blob([researchReportJSON(item)],{type:'application/json;charset=utf-8'}));const link=node('a');link.href=url;link.download='VELIA-research-report.json';box.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);});box.append(download);
   box.append(node('h4',ru?'Источники':'Sources'));
   if(!view.sources.length)box.append(node('p',ru?'Источники не приложены. Выводы требуют проверки.':'No sources attached. Conclusions need verification.'));
@@ -143,7 +175,7 @@ function renderResearchReport(item) {
 }
 const node = (tag, text, cls) => {const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n;};
 const button = (text, action) => {const b = node('button', text); b.type = 'button'; b.onclick = action; return b;};
-const labels = {items:'Результаты',notes:'Описание',completed:'Выполнено',start:'Начало',end:'Окончание',goal:'Цель', title:'Название', name:'Имя', description:'Описание', instructions:'Инструкции', audience:'Аудитория', style:'Стиль', constraints:'Ограничения', status:'Статус', domain:'Направление', content:'Содержание', summary:'Результат', conclusion:'Вывод', text:'Текст', created_at:'Создано', updated_at:'Обновлено', preferred_name:'Как обращаться', about_me:'О себе', credits:'Токены', user_messages:'Сообщения сегодня', user_cost_usd:'Расход сегодня, $', enabled:'Включено', available:'Доступно', revision:'Версия', query:'Поисковый запрос', kind:'Тип', prompt:'Описание', duration_seconds:'Длительность, сек.', error_code:'Ошибка', rationale:'Обоснование'};
+const labels = {claim:'Утверждение',confidence:'Уверенность',limitations:'Ограничения',open_questions:'Открытые вопросы',source_ids:'Источники',sources:'Источники',recommendations:'Рекомендации',reason:'Причина',message:'Сообщение',results:'Результаты',amount:'Сумма',balance:'Баланс',next_run_at:'Следующий запуск',last_run_at:'Последний запуск',timezone:'Часовой пояс',items:'Результаты',notes:'Описание',completed:'Выполнено',start:'Начало',end:'Окончание',goal:'Цель', title:'Название', name:'Имя', description:'Описание', instructions:'Инструкции', audience:'Аудитория', style:'Стиль', constraints:'Ограничения', status:'Статус', domain:'Направление', content:'Содержание', summary:'Результат', conclusion:'Вывод', text:'Текст', created_at:'Создано', updated_at:'Обновлено', preferred_name:'Как обращаться', about_me:'О себе', credits:'Токены', user_messages:'Сообщения сегодня', user_cost_usd:'Расход сегодня, $', enabled:'Включено', available:'Доступно', revision:'Версия', query:'Поисковый запрос', kind:'Тип', prompt:'Описание', duration_seconds:'Длительность, сек.', error_code:'Ошибка', rationale:'Обоснование'};
 const statuses={draft:'Черновик',planned:'Запланировано',paused:'Приостановлено',active:'Активно',completed:'Завершено',failed:'Ошибка',pending:'Ожидает',running:'Выполняется',queued:'В очереди',ready:'Готово',awaiting_approval:'Ожидает подтверждения',cancelled:'Отменено'};
 const descriptions = {work:'Команда агентов, задания и управление рабочим бюджетом.',studio:'Создавай изображения, видео и музыку в одном месте.',projects:'Собирай идеи, задачи и материалы вокруг одной цели.',research:'От вопроса к источникам, выводам и отчёту.',medical:'Загружай исследования и следи за результатами анализа.',agents:'Настраивай помощников под свои задачи.',autopilot:'Задачи по расписанию, результаты и разработка в одном месте.',profile:'Помоги Велии лучше понимать тебя.',plugins:'Выбирай инструменты, которые нужны в работе.',balance:'Следи за доступными токенами и использованием.',voice:'Настрой язык и голос для разговора с Велией.'};
 const hiddenKeys = new Set(['id','user_id','project_id','session_id','generation_id','client_request_id','signature','provider','model','input_sha256','worker_status']);
@@ -157,17 +189,20 @@ function display(value, depth = 0) {
     if (!Array.isArray(value)) row.append(node('strong', labels[k] || k.replaceAll('_',' ')));
     if(['url','source_url'].includes(k) && typeof v === 'string'){try{const u=new URL(v);if(['https:','http:'].includes(u.protocol)&&!u.username&&!u.password){const a=node('a',v);a.href=u.href;a.target='_blank';a.rel='noopener noreferrer';row.append(a);box.append(row);continue;}}catch{}}
     if (typeof v === 'string' && v.length > 100) {const t = node('div'); t.innerHTML = renderMarkdown(v); row.append(t);}
-    else row.append(display(v, depth + 1));
+    else row.append(display(k === 'status' ? statuses[v] || v : v, depth + 1));
     box.append(row);
   }
   return box;
 }
 
-export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat}) {
+export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, onUnauthorized = () => {}}) {
   const root = document.getElementById('feature-view'), nav = document.getElementById('feature-nav');
   let epoch = 0, section = null, controller = null;
   const close = () => {epoch++; controller?.abort(); root.replaceChildren(); root.hidden = true; section = null; nav.querySelectorAll('button').forEach(b=>b.removeAttribute('aria-current')); document.getElementById('conversation-scroll').hidden = false; document.querySelector('.composer-area').hidden = false;};
-  const call = (p, o = {}) => featureRequest(p, {...o, signal: o.signal ?? controller?.signal});
+  const call = async (p, o = {}) => {
+    try {return await featureRequest(p, {...o, signal: o.signal ?? controller?.signal});}
+    catch(error) {if(error.status === 401) onUnauthorized(); throw error;}
+  };
   const run = async (b, fn) => {const ticket = epoch; b.disabled = true; try {await fn();} catch (e) {if (e.name !== 'AbortError' && ticket === epoch) toast(e.message);} finally {if (ticket === epoch) b.disabled = false;}};
   function form(fields, label, submit, initial = {}) {
     const f = node('form', undefined, 'feature-form'), controls = {};
@@ -179,14 +214,14 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
       if (!['textarea','select','multi'].includes(type)) input.type = type;
       if (options) for (const [value, text] of options) {const o = node('option', text); o.value = value; input.append(o);}
       if (type === 'checkbox') input.checked = !!initial[key]; else if(initial[key] !== undefined || !['select','multi'].includes(type)) input.value = initial[key] ?? '';
-      input.name = key; input.maxLength = type === 'textarea' ? 8000 : 200; input.required = !['checkbox','file','multi'].includes(type) && !['description','about_me','audience','style','constraints','lyrics','notes'].includes(key);
+      input.name = key; input.maxLength = type === 'textarea' ? 8000 : 200; input.required = !['checkbox','file','multi'].includes(type) && !['preferred_name','description','about_me','audience','style','constraints','lyrics','notes'].includes(key);
       if (type === 'file') input.accept = '.zip,.nii,.gz';
       controls[key] = input; if(type==='checkbox') l.prepend(input); else l.append(input); if(type==='multi') l.append(node('small','На компьютере удерживай Ctrl или ⌘, чтобы выбрать несколько.', 'field-hint')); f.append(l);
     }
     const b = node('button', label, 'feature-primary'); b.type = 'submit'; f.append(b);
     f.onsubmit = e => {e.preventDefault(); run(b, async () => {
       const data = Object.fromEntries(Object.entries(controls).map(([k,c]) => [k, c.multiple ? [...c.selectedOptions].map(o=>o.value) : c.type === 'checkbox' ? c.checked : c.type === 'file' ? c.files[0] : c.type === 'number' ? Number(c.value) : c.value]));
-      await submit(data); toast('Сохранено');
+      await submit(data); toast(label.startsWith('Сохранить') ? 'Изменения сохранены.' : label.startsWith('Создать') ? 'Создано.' : 'Действие выполнено.');
     });}; return f;
   }
   function actions(parent, items) {
@@ -208,7 +243,7 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
       if (detail) actions(card, [['Открыть', () => detail(item, card)]]); else card.append(display(item));
       target.append(card);
     }
-    if (result.next_offset != null) {const more = button('Показать ещё', () => run(more, async () => {more.remove(); await collection(path,key,target,detail,result.next_offset);})); target.append(more);}
+    if (result.next_offset != null) {const more = button('Показать ещё', () => run(more, async () => {await collection(path,key,target,detail,result.next_offset); more.remove();})); target.append(more);}
   }
   let symptomEntries=[];const visitNotes={goal:'',medications:'',questions:''};
   window.addEventListener('beforeunload',event=>{if(symptomEntries.length || Object.values(visitNotes).some(Boolean)){event.preventDefault();event.returnValue='';}});
@@ -216,9 +251,9 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
     if (isBusy()) {toast('Дождись завершения ответа.'); return;}
     if (!signedIn() && name !== 'voice') {openAuth(); return;}
     close(); section = name; controller = new AbortController(); const ticket = epoch;
-    root.hidden = false; document.getElementById('conversation-scroll').hidden = true; document.querySelector('.composer-area').hidden = true;
+    root.hidden = false; root.scrollTop = 0; document.getElementById('conversation-scroll').hidden = true; document.querySelector('.composer-area').hidden = true;
     document.getElementById('sidebar').classList.remove('open'); document.getElementById('scrim').hidden = true; document.getElementById('menu').setAttribute('aria-expanded','false'); nav.querySelectorAll('button').forEach(b=>{if(b.dataset.section===name)b.setAttribute('aria-current','page');});
-    const head = node('div', undefined, 'feature-header'), heading=node('div'); heading.append(node('span','ВОЗМОЖНОСТИ VELIA','feature-eyebrow'),node('h1', SECTIONS.find(s=>s[0]===name)?.[1] || 'VELIA'),node('p',descriptions[name])); head.append(heading, button('К диалогу', close)); root.append(head);
+    const head = node('div', undefined, 'feature-header'), heading=node('div'); heading.append(node('span','ВОЗМОЖНОСТИ VELIA','feature-eyebrow'),node('h1', SECTIONS.find(s=>s[0]===name)?.[1] || 'VELIA'),node('p',descriptions[name])); head.append(heading, button('К диалогу', close)); heading.querySelector('h1').tabIndex=-1; root.append(head); heading.querySelector('h1').focus({preventScroll:true});
     const body = node('div',undefined,'feature-body'); root.append(body); const loading=node('p','Загрузка…','feature-empty'); loading.setAttribute('role','status'); body.append(loading);
     try {
       if (name === 'voice') {body.replaceChildren(); voiceSettings(body); return;}
@@ -331,7 +366,7 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
       } else if (name === 'autopilot') {
         await autopilot(body,draft);
       }
-    } catch(e) {if(e.name!=='AbortError'&&ticket===epoch)body.replaceChildren(node('p',e.message),button('Повторить',()=>open(name)));}
+    } catch(e) {if(e.name!=='AbortError'&&ticket===epoch){const message=node('p',e.message,'feature-notice');message.setAttribute('role','alert');body.replaceChildren(message,button('Повторить',()=>open(name)));}}
   }
   async function development(body) {
     const ticket=epoch;
@@ -412,8 +447,8 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
     for(const [key,title] of [['image','Изображения'],['video','Видео'],['music','Музыка']]){const b=button(title,()=>run(b,async()=>{mode=key;configure();await refresh();}));b.dataset.mode=key;if(status[key]?.enabled===false)b.disabled=true;modes.append(b);}
     configure();await refresh();
   }
-  const symbols=['<path d="m12 3 9 9-9 9-9-9z"/>','<rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 10h18M8 5V3"/>','<circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/>','<path d="M12 4v16M4 12h16"/>','<rect x="4" y="7" width="16" height="14" rx="4"/><path d="M12 3v4M8 12h1m6 0h1M8 17h8"/>','<path d="m12 3 8 4v6c0 4-8 8-8 8s-8-4-8-8V7zM9 12l2 2 4-4"/>','<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/>','<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12h8m-4-4v8"/>','<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>','<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11v1a7 7 0 0 0 14 0v-1M12 19v3"/>'];
-  for (const [index,[key,title]] of SECTIONS.entries()) {if(index===0||index===6)nav.append(node('span',index===0?'РАБОЧЕЕ ПРОСТРАНСТВО':'НАСТРОЙКИ','feature-nav-heading')); const b=button(title,()=>open(key)); b.dataset.section=key;const icon=node('span',undefined,'feature-nav-icon');icon.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'+symbols[index]+'</svg>';icon.setAttribute('aria-hidden','true');b.prepend(icon);nav.append(b);}
+  const symbols=['<path d="m12 3 9 9-9 9-9-9z"/>','<rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 10h18M8 5V3"/>','<circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/>','<path d="M12 4v16M4 12h16"/>','<rect x="4" y="7" width="16" height="14" rx="4"/><path d="M12 3v4M8 12h1m6 0h1M8 17h8"/>','<path d="m12 3 8 4v6c0 4-8 8-8 8s-8-4-8-8V7zM9 12l2 2 4-4"/>','<path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="6"/><path d="M12 9v3l2 2"/>','<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/>','<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12h8m-4-4v8"/>','<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>','<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11v1a7 7 0 0 0 14 0v-1M12 19v3"/>'];
+  for (const [index,[key,title]] of SECTIONS.entries()) {if(index===0||key==='profile')nav.append(node('span',index===0?'РАБОЧЕЕ ПРОСТРАНСТВО':'НАСТРОЙКИ','feature-nav-heading')); const b=button(title,()=>open(key)); b.dataset.section=key;const icon=node('span',undefined,'feature-nav-icon');icon.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'+(symbols[index] || '<path d="M9 3h6v10a3 3 0 0 1-6 0zM5 11v2a7 7 0 0 0 14 0M12 20v2"/>')+'</svg>';icon.setAttribute('aria-hidden','true');b.prepend(icon);nav.append(b);}
   const clearMedicalData=()=>{symptomEntries=[];for(const key of Object.keys(visitNotes))visitNotes[key]='';};
   return {close,open,clearMedicalData};
 }
