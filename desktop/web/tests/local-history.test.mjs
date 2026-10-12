@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {webcrypto} from 'node:crypto';
-import {LocalHistory} from '../local-history.mjs';
+import {LocalHistory, browserHistoryStore} from '../local-history.mjs';
 const account = 'a'.repeat(24), key = '1'.repeat(64);
 function fixture() {
   const records = new Map();
@@ -43,4 +43,20 @@ test('a read already in progress cannot return plaintext after lock',async()=>{
 test('cache size limit fails without replacing existing history',async()=>{
   const {cache}=fixture();await cache.unlock(account,key);await cache.write({secret:'kept'});
   await assert.rejects(cache.write({large:'x'.repeat(13*1024*1024)}));assert.deepEqual(await cache.read(),{secret:'kept'});
+});
+
+test('a blocked browser database times out instead of hanging sign-in and can retry',async()=>{
+  const requests=[];
+  const store=browserHistoryStore({open:()=>{const request={};requests.push(request);return request;}},10);
+  await assert.rejects(store.get(account),/timed out/);
+  let closed=false;
+  requests[0].result={close:()=>closed=true};requests[0].onsuccess();assert.equal(closed,true);
+  await assert.rejects(store.get(account),/timed out/);assert.equal(requests.length,2);
+});
+test('quota failure retains previous ciphertext and the next save can recover',async()=>{
+  const {cache,store}=fixture();await cache.unlock(account,key);await cache.write({secret:'kept'});
+  const put=store.put;store.put=async()=>{throw new DOMException('Full','QuotaExceededError');};
+  await assert.rejects(cache.write({secret:'new'}),{name:'QuotaExceededError'});
+  assert.deepEqual(await cache.read(),{secret:'kept'});
+  store.put=put;await cache.write({secret:'recovered'});assert.deepEqual(await cache.read(),{secret:'recovered'});
 });

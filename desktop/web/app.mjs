@@ -97,13 +97,21 @@ function lockHistory() {
   features.close(); features.clearMedicalData(); voice.stop(); clearFiles(); fileTools.clear();
   $('prompt').value = ''; medicalDraftMode = false;
 }
-function resetOtherTab() { lockHistory(); profile = null; guest = null; render(); location.reload(); }
-function notifyAuthChange() {
-  authChannel?.postMessage('auth-change');
-  try { localStorage.setItem('velia-auth-change', crypto.randomUUID()); } catch {}
+function resetOtherTab(reload = true) {
+  lockHistory(); profile = null; guest = null; render();
+  $('account-label').textContent = 'Войти в VELIA';
+  if (reload) location.reload();
 }
-authChannel?.addEventListener('message', event => { if (event.data === 'auth-change') resetOtherTab(); });
-window.addEventListener('storage', event => { if (!authChannel && event.key === 'velia-auth-change') resetOtherTab(); });
+function notifyAuthChange(kind = 'auth-change') {
+  authChannel?.postMessage(kind);
+  try { localStorage.setItem('velia-auth-change', kind + ':' + crypto.randomUUID()); } catch {}
+}
+authChannel?.addEventListener('message', event => {
+  if (event.data === 'auth-change' || event.data === 'lock') resetOtherTab(event.data !== 'lock');
+});
+window.addEventListener('storage', event => {
+  if (!authChannel && event.key === 'velia-auth-change') resetOtherTab(!event.newValue?.startsWith('lock:'));
+});
 function toast(text) {
   clearTimeout(toastTimer);
   $("toast").textContent = text;
@@ -577,9 +585,15 @@ async function applyProfile(value) {
       if (profile?.account !== owner) return;
       chats = cached ? loadChats({getItem:()=>JSON.stringify(cached.chats)}, '') : loadChats(browserStorage, storageKey);
       currentId = cached?.active || localStorage.getItem(storageKey + ':active');
-      if (await localHistory.write({chats, active:currentId})) {
-        localStorage.removeItem(storageKey); localStorage.removeItem(storageKey + ':active');
+      try {
+        if (await localHistory.write({chats, active:currentId}) && profile?.account === owner) {
+          localStorage.removeItem(storageKey); localStorage.removeItem(storageKey + ':active');
+        }
+      } catch {
+        // A quota error must not discard browser-only legacy conversations.
+        toast('Не удалось сохранить защищённую копию. История остаётся открытой в этой вкладке; экспортируй важные локальные диалоги.');
       }
+      if (profile?.account !== owner) return;
     } catch {
       if (profile?.account !== owner) return;
       localHistory.lock(); chats = []; currentId = null;
@@ -962,7 +976,7 @@ $('logout-confirm').onclick = async () => {
   const logoutAccount = profile.account;
   const clearLocal = $('logout-clear').checked;
   $('logout-dialog').close();
-  lockHistory(); render();
+  lockHistory(); notifyAuthChange('lock'); render();
   try {
     const response = await request(
       "auth/logout",
@@ -989,6 +1003,8 @@ $('logout-confirm').onclick = async () => {
     await refreshGuest();
   } catch {
     profile = null;
+    $("account-label").textContent = "Войти в VELIA";
+    $("research-link").hidden = true;
     toast("Локальная история заблокирована. Не удалось подтвердить выход на сервере; повтори вход и выход при восстановлении связи.");
     render();
   }

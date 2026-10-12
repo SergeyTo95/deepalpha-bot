@@ -126,7 +126,7 @@ try {
       sessionCookie.secure &&
       sessionCookie.sameSite === "Lax",
   );
-  assert.equal(await page.locator("#prompt").inputValue(), "Привет, Велия");
+  assert.equal(await page.locator("#prompt").inputValue(), "");
   await page.getByRole("button", { name: "Старый диалог из приложения", exact: true }).waitFor();
   assert.equal(await page.locator('[data-model="velia-pro"]').isDisabled(), true);
   await page.locator(".history-open").filter({hasText: "Старый диалог из приложения"}).click();

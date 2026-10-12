@@ -46,14 +46,31 @@ export class LocalHistory {
     if (account) await this.store.delete(account);
   }
 }
-export function browserHistoryStore() {
+export function browserHistoryStore(indexedDBAPI = globalThis.indexedDB, timeoutMs = 5000) {
   let database;
-  const open = () => database ||= new Promise((resolve, reject) => {
-    const request = indexedDB.open('velia-encrypted-history-v1', 1);
-    request.onupgradeneeded = () => request.result.createObjectStore('accounts');
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
+  const open = () => {
+    if (database) return database;
+    database = new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => { settled = true; reject(new Error('History storage timed out')); }, timeoutMs);
+      let request;
+      try { request = indexedDBAPI.open('velia-encrypted-history-v1', 1); }
+      catch (error) { clearTimeout(timer); settled = true; reject(error); return; }
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains('accounts')) request.result.createObjectStore('accounts');
+      };
+      request.onsuccess = () => {
+        clearTimeout(timer);
+        if (settled) { request.result.close(); return; }
+        settled = true;
+        const db = request.result;
+        db.onversionchange = () => { db.close(); database = null; };
+        resolve(db);
+      };
+      request.onerror = () => { clearTimeout(timer); settled = true; reject(request.error); };
+    }).catch(error => { database = null; throw error; });
+    return database;
+  };
   const run = async (mode, action) => {
     const db = await open();
     return new Promise((resolve, reject) => {
