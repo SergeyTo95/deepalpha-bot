@@ -3,6 +3,7 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass, field
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -211,7 +212,10 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             credits = await account_balance(session.access)
         except AuthenticationUnavailable:
             credits = None
-        return {"ok": True, "account": account, "name": session.name, "credits": credits,
+        return {"ok": True, "account": account, "history_cache_key": hmac.new(
+                os.environ["VELIA_WEB_SESSION_KEY"].encode(),
+                ("velia-local-history-v1:" + origin + ":" + str(session.user_id)).encode(),
+                hashlib.sha256).hexdigest(), "name": session.name, "credits": credits,
             "web_search": bool(web_search and web_search.available),
             "browser_agent": browser_agent_run is not None,
             "pro_locked_reason": None if credits and credits > 0 else
@@ -411,7 +415,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
 
     async def asset(request):
         name = request.match_info.get("name", "index.html")
-        if name not in {"index.html", "app.mjs", "core.mjs", "features.mjs", "work.mjs", "voice.mjs", "files.mjs", "style.css", "favicon.svg"}:
+        if name not in {"index.html", "app.mjs", "core.mjs", "local-history.mjs", "features.mjs", "work.mjs", "voice.mjs", "files.mjs", "style.css", "favicon.svg"}:
             raise web.HTTPNotFound()
         response = web.FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
         response.headers.update({"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",

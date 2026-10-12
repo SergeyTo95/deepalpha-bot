@@ -1,3 +1,4 @@
+import {LocalHistory, browserHistoryStore} from "./local-history.mjs";
 import {
   MODELS,
   renderMarkdown,
@@ -88,6 +89,29 @@ const current = () => chats.find((c) => c.id === currentId);
 const voice = setupVoice({busy:()=>busy, toast, send:text=>{if(agentMode)setAgentMode(false);setModel("velia-flash");$("prompt").value=text;return generate(false, true);}});
 const features = setupFeatures({signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,prepareMedicalChat:async prompt=>{if(busy)throw new Error('Дождись завершения ответа.');if(!profile?.models?.includes('velia-flash'))throw new Error('VELIA Flash сейчас недоступна.');setAgentMode(false);setModel('velia-flash');newChat();medicalDraftMode=true;$('prompt').value=prompt;resizePrompt();$('prompt').focus();toast('Прикрепи заключения и проверь текст перед отправкой.');},openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
 const browserStorage = { getItem: (key) => localStorage.getItem(key) };
+const localHistory = new LocalHistory(browserHistoryStore());
+const authChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('velia-auth-v1') : null;
+function lockHistory() {
+  abort?.abort(); clearTimeout(saveTimer); saveTimer = null;
+  localHistory.lock(); storageKey = null; chats = []; currentId = null;
+  features.close(); features.clearMedicalData(); voice.stop(); clearFiles(); fileTools.clear();
+  $('prompt').value = ''; medicalDraftMode = false;
+}
+function resetOtherTab(reload = true) {
+  lockHistory(); profile = null; guest = null; render();
+  $('account-label').textContent = 'Войти в VELIA';
+  if (reload) location.reload();
+}
+function notifyAuthChange(kind = 'auth-change') {
+  authChannel?.postMessage(kind);
+  try { localStorage.setItem('velia-auth-change', kind + ':' + crypto.randomUUID()); } catch {}
+}
+authChannel?.addEventListener('message', event => {
+  if (event.data === 'auth-change' || event.data === 'lock') resetOtherTab(event.data !== 'lock');
+});
+window.addEventListener('storage', event => {
+  if (!authChannel && event.key === 'velia-auth-change') resetOtherTab(!event.newValue?.startsWith('lock:'));
+});
 function toast(text) {
   clearTimeout(toastTimer);
   $("toast").textContent = text;
@@ -95,15 +119,10 @@ function toast(text) {
   toastTimer = setTimeout(() => ($("toast").hidden = true), 4500);
 }
 function save() {
-  if (!storageKey) return;
-  try {
-    localStorage.setItem(storageKey, JSON.stringify(chats.slice(0, 100)));
-    localStorage.setItem(storageKey + ":active", currentId || "");
-  } catch {
-    toast(
-      "Не удалось сохранить историю в браузере. Освободи место в хранилище.",
-    );
-  }
+  if (!storageKey || !profile) return;
+  return localHistory.write({chats: chats.slice(0, 100), active: currentId || ''}).catch(() => {
+    toast('Не удалось сохранить защищённую копию на устройстве. Облачная история доступна после входа.');
+  });
 }
 function scheduleSave() {
   if (saveTimer) return;
@@ -546,9 +565,10 @@ async function copyText(text) {
     toast("Не удалось скопировать. Выдели текст и скопируй вручную.");
   }
 }
-function applyProfile(value) {
+async function applyProfile(value) {
+  const cacheKey = value.history_cache_key; delete value.history_cache_key;
   const changed = profile?.account !== value.account;
-  if(changed){features.close();features.clearMedicalData();medicalDraftMode=false;voice.stop();clearFiles();fileTools.clear();}
+  if(changed){lockHistory(); guest = null;}
   profile = value;
   internetAvailable = !!value.web_search;
   $("guest-notice").hidden = true;
@@ -558,11 +578,26 @@ function applyProfile(value) {
   $("research-link").hidden = false;
   storageKey = "velia-web-chats-v1:" + value.account;
   if (changed) {
-    chats = loadChats(browserStorage, storageKey);
+    const owner = value.account;
     try {
-      currentId = localStorage.getItem(storageKey + ":active");
+      await localHistory.unlock(owner, cacheKey);
+      const cached = await localHistory.read();
+      if (profile?.account !== owner) return;
+      chats = cached ? loadChats({getItem:()=>JSON.stringify(cached.chats)}, '') : loadChats(browserStorage, storageKey);
+      currentId = cached?.active || localStorage.getItem(storageKey + ':active');
+      try {
+        if (await localHistory.write({chats, active:currentId}) && profile?.account === owner) {
+          localStorage.removeItem(storageKey); localStorage.removeItem(storageKey + ':active');
+        }
+      } catch {
+        // A quota error must not discard browser-only legacy conversations.
+        toast('Не удалось сохранить защищённую копию. История остаётся открытой в этой вкладке; экспортируй важные локальные диалоги.');
+      }
+      if (profile?.account !== owner) return;
     } catch {
-      currentId = null;
+      if (profile?.account !== owner) return;
+      localHistory.lock(); chats = []; currentId = null;
+      toast('Защищённое хранилище недоступно. Загружаю облачную историю.');
     }
     if (!current()) currentId = null;
     for (const chat of chats)
@@ -595,14 +630,14 @@ function applyGuest(value) {
   $("agent-toggle").hidden = true;
   storageKey = "velia-web-guest-v1:" + value.account;
   if (changed) {
-    chats = loadChats(browserStorage, storageKey);
-    try { currentId = localStorage.getItem(storageKey + ":active"); } catch { currentId = null; }
+    localHistory.lock(); chats = []; currentId = null;
+    try { localStorage.removeItem(storageKey); localStorage.removeItem(storageKey + ':active'); } catch {}
     if (!current()) currentId = null;
     for (const c of chats) for (const m of c.messages) if (m.pending) { m.pending = false; m.stopped = true; }
   }
   model = "velia-flash";
   setModel(model);
-  $("history-state").textContent = "Гостевая история в этом браузере";
+  $("history-state").textContent = "Гостевая история только до закрытия вкладки";
   $("account-label").innerHTML = "Войти в VELIA<small>Синхронизация истории и доступ к PRO</small>";
   $("pro-description").textContent = "Войди в аккаунт с токенами для PRO";
   $("guest-notice").hidden = false;
@@ -760,12 +795,12 @@ async function generate(retry = false, voiceTurn = false) {
       answer.failed =
         error.message || "Соединение прервалось. Попробуй ещё раз.";
       if (error.status === 401) {
-        profile = null;
+        lockHistory(); profile = null; notifyAuthChange();
         toast("Сессия завершилась. Войди снова.");
         $("account-label").textContent = "Войти в VELIA";
       }
       if (error.status === 402 || error.status === 503) {
-        request("session").then(async (r) => { if (r.ok) applyProfile(await r.json()); }).catch(() => {});
+        request("session").then(async (r) => { if (r.ok) await applyProfile(await r.json()); }).catch(() => {});
       }
       if (!profile && error.status === 429) {
         await refreshGuest();
@@ -913,7 +948,8 @@ $("auth-form").onsubmit = async (e) => {
       ),
       data = await response.json();
     if (!response.ok) throw new Error(apiError(data.error));
-    applyProfile(data);
+    notifyAuthChange();
+    await applyProfile(data);
     try { sessionStorage.removeItem("velia-auth-pending"); } catch {}
     $("auth-dialog").close();
     $("pairing-code").value = "";
@@ -931,6 +967,16 @@ $("account").onclick = async () => {
     openAuth();
     return;
   }
+  $('logout-clear').checked = false;
+  $('logout-dialog').showModal();
+};
+$('logout-cancel').onclick = () => $('logout-dialog').close();
+$('logout-confirm').onclick = async () => {
+  if (!profile) { $('logout-dialog').close(); return; }
+  const logoutAccount = profile.account;
+  const clearLocal = $('logout-clear').checked;
+  $('logout-dialog').close();
+  lockHistory(); notifyAuthChange('lock'); render();
   try {
     const response = await request(
       "auth/logout",
@@ -938,7 +984,9 @@ $("account").onclick = async () => {
       AbortSignal.timeout(20000),
     );
     if (!response.ok) throw new Error();
-    features.close();features.clearMedicalData();medicalDraftMode=false;voice.stop();clearFiles();fileTools.clear();
+    try { if (clearLocal) { await localHistory.tail.catch(() => {}); await localHistory.store.delete(logoutAccount); } } catch { toast("Не удалось удалить локальную копию; доступ к ней заблокирован."); }
+    lockHistory();
+    notifyAuthChange();
     profile = null;
     $("research-link").hidden = true;
     storageKey = null;
@@ -954,7 +1002,11 @@ $("account").onclick = async () => {
     toast("Ты вышел из аккаунта.");
     await refreshGuest();
   } catch {
-    toast("Не удалось выйти. Попробуй ещё раз.");
+    profile = null;
+    $("account-label").textContent = "Войти в VELIA";
+    $("research-link").hidden = true;
+    toast("Локальная история заблокирована. Не удалось подтвердить выход на сервере; повтори вход и выход при восстановлении связи.");
+    render();
   }
 };
 $("delete-cancel").onclick = () => $("confirm-dialog").close();
@@ -973,13 +1025,6 @@ $("delete-confirm").onclick = async () => {
   finally { button.disabled = false; }
 };
 window.addEventListener("pagehide", save);
-window.addEventListener("storage", (e) => {
-  if (e.key === storageKey && !busy) {
-    chats = loadChats(browserStorage, storageKey);
-    if (!current()) currentId = null;
-    render();
-  }
-});
 setTheme(theme);
 setModel(model);
 renderHistory();
@@ -991,7 +1036,7 @@ try {
     undefined,
     AbortSignal.timeout(20000),
   );
-  if (response.ok) applyProfile(await response.json());
+  if (response.ok) await applyProfile(await response.json());
   else if (response.status === 401) await refreshGuest();
   else if (response.status !== 401)
     toast("Сервис входа временно недоступен. Попробуй позже.");

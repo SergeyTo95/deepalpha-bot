@@ -339,6 +339,13 @@
         ><button id="delete-confirm" class="primary-button">Удалить</button>
       </div>
     </dialog>
+    <dialog class="confirm-dialog" id="logout-dialog" aria-labelledby="logout-title">
+      <h2 id="logout-title">Выйти из VELIA?</h2>
+      <p>История на устройстве будет заблокирована до следующего входа в этот аккаунт.</p>
+      <label><input type="checkbox" id="logout-clear"> Удалить историю чатов с этого устройства</label>
+      <p>Облачные диалоги сохранятся. Диалоги, существующие только в браузере, будут удалены без восстановления.</p>
+      <div class="dialog-actions"><button id="logout-cancel">Отмена</button><button id="logout-confirm" class="primary-button">Выйти</button></div>
+    </dialog>
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
   </body>
 </html>
