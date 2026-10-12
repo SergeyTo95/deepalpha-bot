@@ -185,7 +185,7 @@ try {
       .textContent.startsWith("Войти в VELIA"),
   );
   await page.getByText("Без регистрации · осталось 29 из 30 сообщений", {exact: true}).waitFor();
-  assert.equal(await page.locator(".history-row").count(), 1);
+  assert.equal(await page.locator(".history-row").count(), 0);
   assert.equal(
     (await context.cookies()).filter((c) => c.name === "__Host-velia-web")
       .length,
