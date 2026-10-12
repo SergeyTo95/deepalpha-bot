@@ -93,6 +93,8 @@ export function compareMedicalValues(data){
   if(!Number.isFinite(change) || (percent!==null&&!Number.isFinite(percent)))throw new Error('Изменение слишком большое для расчёта.');
   return {indicator:String(data.indicator || '').trim(),first_date:firstDate,second_date:secondDate,first,second,unit:unit1,change,percent};
 }
+export const PROJECT_FIELD_LIMITS=Object.freeze({title:120,goal:1200,audience:600,style:800,constraints:1000});
+export function projectBrief(project){const passport=project?.passport || {};return ['VELIA · Бриф проекта',...Object.keys(PROJECT_FIELD_LIMITS).map(key=>({title:'Название',goal:'Цель',audience:'Аудитория',style:'Стиль',constraints:'Ограничения'}[key])+': '+String(passport[key] || '')), 'Версия: '+String(project?.revision ?? '')].join('\n');}
 export function mountMedicalNavigation(parent){
  const ru=(document.documentElement.lang || navigator.language || '').startsWith('ru'),labels=ru?['Заключения','Дневник и приём','Динамика анализов','КТ']:['Documents','Diary & visit','Lab trends','CT'];
  const keys=['documents','journal','lab','ct'],bar=node('div',undefined,'medical-tabs'),panels={},buttons=[];bar.setAttribute('role','tablist');bar.setAttribute('aria-label',ru?'Инструменты медицинского центра':'Medical center tools');parent.append(bar);
@@ -289,10 +291,19 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
         };
         const refresh=()=>collection('research/missions','missions',list,detail); await refresh();
       } else if (name === 'projects') {
-        const fields=['title','goal','audience','style','constraints'].map(k=>[k,labels[k],k==='title'?'text':'textarea']);
-        body.replaceChildren(form(fields,'Создать проект',async d=>{await call('projects',{method:'POST',data:{passport:d},key:crypto.randomUUID()});await refresh();}));
-        const list=node('div');body.append(list);
-        const detail=async(p,card)=>{const r=await call('projects/'+p.id);card.replaceChildren(form(fields,'Сохранить изменения',async d=>{await call('projects/'+p.id,{method:'PATCH',data:{passport:d,expected_revision:r.project.revision}});await detail(p,card);},r.project.passport));const resources=node('div');card.append(form([['kind','Тип','select',[['chat','Диалог'],['deepalpha','DeepAlpha'],['image','Изображения'],['video','Видео'],['music','Музыка']]],['title','Название'],['query','Запрос','textarea']],'Добавить ресурс',async d=>{await call('project-resources',{method:'POST',data:{...d,project_id:p.id},key:crypto.randomUUID()});await collection('project-resources?project_id='+encodeURIComponent(p.id),'resources',resources);}));card.append(resources);await collection('project-resources?project_id='+encodeURIComponent(p.id),'resources',resources);};
+        body.classList.add('project-body');const intro=node('section',undefined,'project-intro');intro.append(node('h2','Одна цель — общий контекст'),node('p','Проект объединяет связанные диалоги и материалы. Запиши цель, аудиторию и ограничения один раз: бриф используется в связанных диалогах. Для автоматического исполнения задач открой «Работа и заработок».'));body.replaceChildren(intro);
+        const fields=Object.keys(PROJECT_FIELD_LIMITS).map(k=>[k,labels[k],k==='title'?'text':'textarea']);
+        const constrainPassport=f=>{for(const [key,limit] of Object.entries(PROJECT_FIELD_LIMITS)){const control=f.querySelector(`[name="${key}"]`);control.maxLength=limit;control.required=key==='title';}return f;};
+        body.append(constrainPassport(form(fields,'Создать проект',async d=>{await call('projects',{method:'POST',data:{passport:d},key:crypto.randomUUID()});await refresh();})));
+        const list=node('div');body.append(node('h2','Мои проекты'),list);
+        const detail=async(p,card)=>{
+          const r=await call('projects/'+p.id);if(ticket!==epoch)return;card.replaceChildren(node('h3',r.project.passport.title));const brief=node('details',undefined,'project-brief');brief.append(node('summary','Бриф проекта · версия '+r.project.revision),constrainPassport(form(fields,'Сохранить бриф',async d=>{await call('projects/'+p.id,{method:'PATCH',data:{passport:d,expected_revision:r.project.revision}});await detail(p,card);},r.project.passport)));card.append(brief);
+          actions(card,[['Скачать бриф · TXT',()=>downloadMedicalText(card,projectBrief(r.project),'VELIA-project-brief.txt')]]);
+          const history=node('details',undefined,'project-brief');history.append(node('summary','История брифа'));for(const revision of r.project.revisions || []){const item=node('details');item.append(node('summary','Версия '+revision.revision+' · '+(revision.created_at || '')),display(revision.passport));history.append(item);}card.append(history);
+          const resources=node('div');const loadResources=()=>collection('project-resources?project_id='+encodeURIComponent(p.id),'resources',resources,async(resource,row)=>{row.replaceChildren(node('h3',resource.title),node('p',resource.kind==='chat'?'Диалог с контекстом проекта':resource.kind==='deepalpha'?'Исследование DeepAlpha':'Материал Studio'));if(['chat','deepalpha'].includes(resource.kind))actions(row,[['Продолжить диалог',async()=>{close();await openConversation({id:resource.id,title:resource.title});}]]);else actions(row,[['Открыть Studio',()=>open('studio')]]);});
+          const create=form([['kind','Тип','select',[['chat','Диалог'],['deepalpha','DeepAlpha'],['image','Изображения'],['video','Видео'],['music','Музыка']]],['title','Название'],['query','Начальный запрос','textarea']],'Добавить в проект',async d=>{await call('project-resources',{method:'POST',data:{...d,project_id:p.id},key:crypto.randomUUID()});await loadResources();});
+          create.querySelector('[name="title"]').maxLength=120;const query=create.querySelector('[name="query"]'),kind=create.querySelector('[name="kind"]');query.maxLength=2000;const configureQuery=()=>{query.required=kind.value==='deepalpha';};kind.onchange=configureQuery;configureQuery();card.append(node('p','Создание ресурса не запускает генерацию. Запросы и расходы возникают при выполнении действий.'),create,node('h4','Связанные диалоги и материалы'),resources);await loadResources();
+        };
         const refresh=()=>collection('projects','projects',list,detail);await refresh();
       } else if (name === 'work') {
         body.replaceChildren(); await mountWork(body,{signal:controller.signal,toast});
