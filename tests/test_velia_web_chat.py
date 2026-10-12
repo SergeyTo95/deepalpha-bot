@@ -241,7 +241,7 @@ def test_opaque_secure_cookie_and_no_authority_secrets(monkeypatch):
             cookie, result, wire = await login(server, client)
             assert all(value not in json.dumps(result) + wire for value in (TOKEN, REFRESH, "never-return-this", "authority_cookie"))
             assert all(flag in wire for flag in ("HttpOnly", "Secure", "SameSite=Lax", "Path=/"))
-            assert set(result) == {"ok", "account", "name", "models", "credits", "pro_locked_reason", "web_search", "browser_agent"}
+            assert set(result) == {"ok", "account", "name", "models", "credits", "pro_locked_reason", "web_search", "browser_agent", "history_cache_key"}
             assert result["browser_agent"] is True
             assert result["models"] == ["velia-pro", "velia-flash"]
             async with client.get(server.make_url("/web-api/v1/session"), headers=headers(cookie)) as response:
@@ -656,4 +656,26 @@ def test_voice_direct_turn_is_bounded_and_never_calls_browser_or_search(monkeypa
             assert state["search_queries"] == [] and state["agent_calls"] == []
             assert state["payloads"][0]["max_tokens"] == 128
             assert state["payloads"][0]["reasoning_effort"] == "none"
+    asyncio.run(run())
+
+
+def test_local_history_key_requires_auth_and_is_account_scoped(monkeypatch):
+    async def run():
+        async with fixture(monkeypatch) as (server, client, state):
+            async with client.get(server.make_url("/web-api/v1/session"), headers=headers()) as response:
+                assert response.status == 401
+                assert "history_cache_key" not in await response.text()
+            cookie, first, _ = await login(server, client)
+            assert len(first["history_cache_key"]) == 64
+            async with client.get(server.make_url("/web-api/v1/session"), headers=headers(cookie)) as response:
+                assert response.headers["Cache-Control"] == "no-store"
+                assert (await response.json())["history_cache_key"] == first["history_cache_key"]
+            state["user_id"] = 8
+            monkeypatch.setenv("VELIA_DESKTOP_PREVIEW_USER_IDS", "7,8")
+            _, second, _ = await login(server, client)
+            assert second["account"] != first["account"]
+            assert second["history_cache_key"] != first["history_cache_key"]
+            async with client.get(server.make_url("/web-api/v1/session"), headers=headers(cookie)) as response:
+                assert response.status == 401
+                assert "history_cache_key" not in await response.text()
     asyncio.run(run())
