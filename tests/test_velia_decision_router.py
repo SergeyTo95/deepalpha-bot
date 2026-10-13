@@ -127,7 +127,7 @@ def test_real_search_interpreter_handoff(monkeypatch):
         monkeypatch.setattr(router, "try_direct", direct)
         monkeypatch.setattr("desktop.web_search.understand", flash)
         search = WebSearch()
-        messages = [{"role": "user", "content": "2+2"}]
+        messages = [{"role": "user", "content": "Explain browser storage and cloud storage."}]
         assert (await search._understand(messages))["action"] == "direct"
         assert not calls
         async def unavailable(messages):
