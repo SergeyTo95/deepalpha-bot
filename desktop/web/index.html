@@ -81,7 +81,7 @@
           <div class="topbar-actions">
             <button id="chat-tools" class="icon-button" aria-label="Действия с диалогом">⋯</button>
             <div id="chat-tools-menu" class="chat-tools-menu" hidden><button id="chat-rename" type="button">Переименовать</button><button id="chat-pin" type="button">Закрепить / открепить</button><button id="chat-schedule" type="button">Запланировать задачу</button><button id="chat-export" type="button">Скачать диалог .md</button><button id="chat-share" type="button">Поделиться</button></div>
-            <span class="web-badge">WEB PREVIEW</span
+            <span class="web-badge">VELIA Web</span
             ><button id="theme" class="icon-button" aria-label="Светлая тема">
               <span data-icon="sun"></span>
             </button>
@@ -338,6 +338,13 @@
         <button id="delete-cancel">Отмена</button
         ><button id="delete-confirm" class="primary-button">Удалить</button>
       </div>
+    </dialog>
+    <dialog class="confirm-dialog" id="logout-dialog" aria-labelledby="logout-title">
+      <h2 id="logout-title">Выйти из VELIA?</h2>
+      <p>История на устройстве будет заблокирована до следующего входа в этот аккаунт.</p>
+      <label><input type="checkbox" id="logout-clear"> Удалить историю чатов с этого устройства</label>
+      <p>Облачные диалоги сохранятся. Диалоги, существующие только в браузере, будут удалены без восстановления.</p>
+      <div class="dialog-actions"><button id="logout-cancel">Отмена</button><button id="logout-confirm" class="primary-button">Выйти</button></div>
     </dialog>
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
   </body>

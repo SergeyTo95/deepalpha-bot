@@ -18,13 +18,24 @@ def _lexicon(language):
         if re.fullmatch(r"[а-яё]+" if language == "ru" else r"[a-z]+", word)}
 
 
+@lru_cache(maxsize=8)
+def _phonetic_index(language, length):
+    # Same candidates and ranking as a full lexicon scan, computed once.
+    # A request only reads the matching length/consonant bucket.
+    buckets = {}
+    for word in _lexicon(language):
+        if len(word) == length:
+            buckets.setdefault(word.translate(_VOWELS), []).append(word)
+    return buckets
+
+
 @lru_cache(maxsize=256)
 def _candidates(word, language):
     lexicon = _lexicon(language)
     if word in lexicon:
         return ()
     folded = word.translate(_VOWELS)
-    found = {value for value in lexicon if len(value) == len(word) and value.translate(_VOWELS) == folded}
+    found = set(_phonetic_index(language, len(word)).get(folded, ()))
     alphabet = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя" if language == "ru" else "abcdefghijklmnopqrstuvwxyz"
     for index in range(len(word) + 1):
         left, right = word[:index], word[index:]

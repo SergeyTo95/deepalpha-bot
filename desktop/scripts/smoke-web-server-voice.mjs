@@ -34,5 +34,13 @@ delayed=false;const select=document.querySelector('.voice-dialog select');select
 voice.stop();assert.ok(audios.at(-1).paused);
 // A local voice still uses the device engine.
 select.value='device';select.dispatchEvent(new window.Event('change'));voice.speak('Локальный голос.');assert.equal(spoken.at(-1).voice.voiceURI,'device');voice.stop();
-console.log(JSON.stringify({ok:true,synthetic:true,checks:['persisted remote voice','three catalog voices','phrase playback','emoji silent','microphone resumes','abort late download','speaker ID changes','device voice retained']}));
+// Online speech remains usable on browsers without a device TTS engine.
+window.speechSynthesis=null;localStorage.setItem('velia-voice-uri','speechkit:jane');
+document.querySelector('#settings').replaceChildren();
+const onlineOnly=setupVoice({send:async()=>{},busy:()=>false,toast:()=>{}});
+onlineOnly.settings(document.querySelector('#settings'));await tick();
+const soundButton=[...document.querySelector('#settings').querySelectorAll('button')].find(b=>b.textContent==='Послушать голос');
+assert.equal(soundButton.disabled,false);soundButton.click();await tick();
+assert.equal(requests.at(-1).data.voice,'speechkit:jane');onlineOnly.stop();
+console.log(JSON.stringify({ok:true,synthetic:true,checks:['persisted remote voice','three catalog voices','phrase playback','emoji silent','microphone resumes','abort late download','speaker ID changes','device voice retained','online speech without device TTS']}));
 dom.window.close();

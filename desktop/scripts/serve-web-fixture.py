@@ -14,6 +14,7 @@ from desktop.web_search import WebSearch
 async def main():
     calls = []
     credits = 0
+    user_id = 7
     old_id = "11111111-1111-1111-1111-111111111111"
     conversations = {old_id: {"conversation": {"id": old_id, "title": "Старый диалог из приложения", "updated_at": "2026-10-01T19:00:00Z"},
         "messages": [{"role": "user", "content": "Моя прежняя идея", "status": "completed"},
@@ -23,7 +24,7 @@ async def main():
     async def health(request):
         return web.json_response({"ok": True, "enabled": True})
     async def me(request):
-        return web.json_response({"ok": True, "user": {"id": 7}}) if request.headers.get("Authorization") == "Bearer " + access else web.json_response({"ok": False}, status=401)
+        return web.json_response({"ok": True, "user": {"id": user_id}}) if request.headers.get("Authorization") == "Bearer " + access else web.json_response({"ok": False}, status=401)
     async def auth(request):
         return web.json_response({"ok": True, "access_token": access, "refresh_token": refresh, "access_expires_in": 900})
     async def logout(request):
@@ -33,6 +34,10 @@ async def main():
     async def fixture_credits(request):
         nonlocal credits
         credits = (await request.json())["credits"]
+        return web.json_response({"ok": True})
+    async def fixture_user(request):
+        nonlocal user_id
+        user_id = (await request.json())["user_id"]
         return web.json_response({"ok": True})
     async def fixture_search(request):
         await request.json()
@@ -83,6 +88,15 @@ async def main():
         return web.json_response({"tokens": [1, 2, 3]})
     async def model(request):
         payload = await request.json()
+        tool = payload.get("tools", [{}])[0].get("function", {}).get("name")
+        if tool == "understand_request":
+            args = {"action": "search", "quote": "", "query": "Python fixture"}
+            return web.json_response({"choices": [{"message": {"tool_calls": [{"function": {
+                "name": tool, "arguments": json.dumps(args)}}]}, "finish_reason": "tool_calls"}]})
+        if tool == "publish_reviewed_answer":
+            args = {"paragraphs": [{"text": "Я Велия. **Готова помочь** с твоей идеей.\n\n```python\nprint('VELIA')\n```", "source_ids": [1]}]}
+            return web.json_response({"choices": [{"message": {"tool_calls": [{"function": {
+                "name": tool, "arguments": json.dumps(args)}}]}, "finish_reason": "tool_calls"}]})
         calls.append(payload["model"])
         slow = "останов" in payload["messages"][-1]["content"].lower()
         text = "Я Велия. **Готова помочь** с твоей идеей.\n\n```python\nprint('VELIA')\n```"
@@ -103,6 +117,7 @@ async def main():
     authority.router.add_get("/mobile-api/v1/me", me)
     authority.router.add_get("/mobile-api/v1/economy/me", economy)
     authority.router.add_post("/__fixture/credits", fixture_credits)
+    authority.router.add_post("/__fixture/user", fixture_user)
     authority.router.add_post("/__fixture/search", fixture_search)
     authority.router.add_get("/mobile-api/v1/conversations", stored_conversations)
     authority.router.add_post("/mobile-api/v1/conversations", stored_conversations)
@@ -121,7 +136,7 @@ async def main():
     await site.start()
     os.environ.update(VELIA_WEB_ENABLED="true", VELIA_WEB_ORIGIN="https://fixture.invalid",
         VELIA_WEB_SESSION_KEY=base64.urlsafe_b64encode(b"t" * 32).decode(),
-        VELIA_DESKTOP_API_ENABLED="true", VELIA_DESKTOP_PREVIEW_USER_IDS="7",
+        VELIA_DESKTOP_API_ENABLED="true", VELIA_DESKTOP_PREVIEW_USER_IDS="7,8",
         KIMI_API_KEY="fixture", KIMI_BASE_URL="http://127.0.0.1:18181/v1",
         VELIA_DESKTOP_FLASH_ENABLED="true", VELIA_DESKTOP_FLASH_API_KEY="fixture",
         VELIA_DESKTOP_FLASH_BASE_URL="http://127.0.0.1:18181")

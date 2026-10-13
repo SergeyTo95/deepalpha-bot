@@ -83,8 +83,7 @@ try {
   assert.ok((await context.cookies()).find((c) => c.name === "__Host-velia-guest")?.httpOnly);
   await page.reload();
   await page.getByText("Без регистрации · осталось 29 из 30 сообщений", {exact: true}).waitFor();
-  await page.locator("#messages").getByText("Привет без регистрации", {exact: true}).waitFor();
-  await page.locator('.message-sources a[href="https://www.python.org/downloads/"]').waitFor();
+  assert.equal(await page.locator("#messages").getByText("Привет без регистрации", {exact: true}).count(), 0);
   assert.equal(await page.locator('[data-model="velia-pro"]').isDisabled(), true);
   await page.screenshot({path: root + "/VELIA-Web-guest.png"});
   await page.locator("#new-chat").click();
@@ -127,7 +126,7 @@ try {
       sessionCookie.secure &&
       sessionCookie.sameSite === "Lax",
   );
-  assert.equal(await page.locator("#prompt").inputValue(), "Привет, Велия");
+  assert.equal(await page.locator("#prompt").inputValue(), "");
   await page.getByRole("button", { name: "Старый диалог из приложения", exact: true }).waitFor();
   assert.equal(await page.locator('[data-model="velia-pro"]').isDisabled(), true);
   await page.locator(".history-open").filter({hasText: "Старый диалог из приложения"}).click();
@@ -179,13 +178,14 @@ try {
   assert.equal(await page.locator("html").getAttribute("data-theme"), "light");
   await page.screenshot({ path: root + "/VELIA-Web-light.png" });
   await page.locator("#account").click();
+  await page.locator("#logout-confirm").click();
   await page.waitForFunction(() =>
     document
       .getElementById("account-label")
       .textContent.startsWith("Войти в VELIA"),
   );
   await page.getByText("Без регистрации · осталось 29 из 30 сообщений", {exact: true}).waitFor();
-  assert.equal(await page.locator(".history-row").count(), 1);
+  assert.equal(await page.locator(".history-row").count(), 0);
   assert.equal(
     (await context.cookies()).filter((c) => c.name === "__Host-velia-web")
       .length,

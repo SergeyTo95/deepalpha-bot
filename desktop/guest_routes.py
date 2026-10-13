@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import time
 import os
 import re
 import secrets
@@ -104,11 +105,17 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_
         if failure is not None:
             return failure
         response = None
+        started = time.monotonic()
+        def timing(stage):
+            # Timings only: no prompts, account identifiers, keys or answers.
+            print("VELIA_GUEST_TIMING " + json.dumps({"stage": stage,
+                "elapsed_ms": round((time.monotonic() - started) * 1000)}), flush=True)
         try:
             async with ClientSession(timeout=ClientTimeout(total=600, sock_read=300)) as client:
                 headers = {"Authorization": "Bearer " + os.environ["VELIA_DESKTOP_FLASH_API_KEY"]}
                 endpoint = flash_endpoint()
                 await check_flash_context(client, endpoint, headers, payload)
+                timing("context_checked")
                 try:
                     remaining = await asyncio.to_thread(store.reserve, quota_keys)
                 except GuestLimitReached:
@@ -120,6 +127,7 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_
                     if web_search is None:
                         raise SearchUnavailable()
                     payload = await web_search.enrich(request, payload)
+                    timing("request_prepared")
                     if request.get(PREPARED_REPLY):
                         return await prepared_web_response(request, request[PREPARED_REPLY],
                             headers={"X-Velia-Guest-Remaining": str(remaining)})
@@ -130,12 +138,18 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_
                     response = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-store",
                         "X-Accel-Buffering": "no", "X-Velia-Guest-Remaining": str(remaining)})
                     await response.prepare(request)
+                    timing("model_connected")
                     from desktop.answer_review import REVIEW_CONTEXT, reviewed_web_stream
                     stream = (reviewed_web_stream(request, upstream.content, endpoint, headers)
                         if request.get(REVIEW_CONTEXT) else public_web_stream(request, upstream.content))
+                    first_chunk = True
                     async for chunk in stream:
+                        if first_chunk:
+                            timing("first_event")
+                            first_chunk = False
                         await response.write(chunk)
                     await response.write_eof()
+                    timing("complete")
                     return response
         except FlashContextTooLong:
             return error("flash_context_too_long", 400)

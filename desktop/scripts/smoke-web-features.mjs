@@ -78,7 +78,8 @@ try{
       assert.equal(await page.locator('#feature-nav button[aria-current=page]').count(),1);
       if(name==='Автопилот'&&width===390)await page.screenshot({path:output+'/autopilot-mobile.png'});
       if(name==='Медицинский центр') {
-        const label=page.locator('.feature-check').first();const checkbox=label.locator('input');await label.click();assert.equal(await checkbox.isChecked(),true);
+        await page.locator('#medical-tab-ct').click();
+        const label=page.locator('#medical-panel-ct .feature-check').first();const checkbox=label.locator('input');await label.click();assert.equal(await checkbox.isChecked(),true);
         await page.screenshot({path:output+`/medical-${width}.png`});
       }
     }
@@ -119,5 +120,7 @@ try{
   await page.getByRole('button',{name:'Удалить notes.csv',exact:true}).click();assert.equal(await page.locator('.file-chip').count(),3);
   const download=page.waitForEvent('download');await page.getByRole('button',{name:'Сохранить .md',exact:true}).first().click();assert.equal((await download).suggestedFilename(),'VELIA-answer.md');
   await page.locator('#chat-tools').click();const exportDownload=page.waitForEvent('download');await page.locator('#chat-export').click();assert.equal((await exportDownload).suggestedFilename(),'VELIA-chat.md');
+  assert.equal(await page.locator('#feature-nav svg').count(),11);
+  assert.equal(await page.locator('#feature-nav').innerText().then(t=>t.includes('undefined')),false);
   assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,sections:10,quantumDisabled:true,image2:true,video15:true,autopilotId:true,mobile:true,featureCalls:calls.length}));
 }finally{await browser?.close();fixture.kill();}
