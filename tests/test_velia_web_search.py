@@ -5,7 +5,12 @@ import pytest
 from desktop.guest_store import GuestStore
 from desktop.web_search import MARKER, public_url
 from test_velia_web_chat import fixture, login, headers
-from test_velia_web_guest import BODY, guest, guest_headers
+from test_velia_web_guest import BODY as GUEST_BODY, guest, guest_headers
+
+# Search acceptance uses an actual retrieval request, not a greeting that can
+# now be routed directly without a model-based planner.
+SEARCH_QUESTION = "Найди актуальную информацию о Python."
+BODY = {**GUEST_BODY, "messages": [{"role": "user", "content": SEARCH_QUESTION}]}
 
 
 @pytest.mark.parametrize("action", ["direct", "search"])
@@ -98,7 +103,7 @@ def test_guest_search_is_default_and_legacy_false_cannot_disable_it(monkeypatch,
             async with client.post(server.make_url("/web-api/v1/guest/chat/completions"), headers=guest_headers(cookie), json={**BODY, **extra}) as response:
                 assert response.status == 200
                 assert '"web_search"' in await response.text()
-            assert state["search_queries"] == ["Привет"]
+            assert state["search_queries"] == [SEARCH_QUESTION]
             assert MARKER in state["payloads"][0]["messages"][-1]["content"]
     asyncio.run(run())
 

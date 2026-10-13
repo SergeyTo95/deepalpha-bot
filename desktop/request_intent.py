@@ -7,6 +7,12 @@ import json
 import os
 import asyncio
 import re
+import copy
+import hashlib
+import hmac
+import secrets
+import time
+from collections import OrderedDict
 
 from aiohttp import ClientSession, ClientTimeout, DummyCookieJar
 from velia_desktop_routes import check_flash_context, flash_endpoint
@@ -96,6 +102,55 @@ TOOL = {"type": "function", "function": {
                 "status": {"type": "string", "enum": ["stated", "unspecified"]}},
             "required": ["quote", "kind", "status"], "additionalProperties": False}}},
         "required": ["action", "quote", "candidate", "query", "source_scope", "task_query", "context"], "additionalProperties": False}}}
+
+
+def _compact_schema(value):
+    """Drop duplicate prose only; retain every type, enum and validation limit.
+
+    The complete interpretation instruction stays unchanged. Its rules already
+    describe these fields, so the tool schema need not repeat that prose.
+    """
+    if isinstance(value, dict):
+        return {key: _compact_schema(item) for key, item in value.items() if key != "description"}
+    if isinstance(value, list):
+        return [_compact_schema(item) for item in value]
+    return value
+
+FULL_TOOL = copy.deepcopy(TOOL)
+TOOL["function"]["parameters"] = _compact_schema(TOOL["function"]["parameters"])
+_DIRECT_CACHE = OrderedDict()
+_DIRECT_CACHE_SECRET = secrets.token_bytes(32)
+_DIRECT_CACHE_TTL = 120
+_DIRECT_CACHE_LIMIT = 128
+
+def _direct_cache_key(payload, endpoint, credential):
+    # Exact model input, including history/hints/instruction/schema and provider.
+    # No submitted text or credential becomes a dictionary key or log message.
+    material = json.dumps([endpoint, credential, payload], ensure_ascii=False, sort_keys=True).encode()
+    return hmac.new(_DIRECT_CACHE_SECRET, material, hashlib.sha256).digest()
+
+def _direct_cache_get(key):
+    now = time.monotonic()
+    for stale, (deadline, _) in list(_DIRECT_CACHE.items()):
+        if deadline <= now:
+            _DIRECT_CACHE.pop(stale, None)
+    hit = _DIRECT_CACHE.get(key)
+    if hit is None:
+        return None
+    _DIRECT_CACHE.move_to_end(key)
+    return copy.deepcopy(hit[1])
+
+def _direct_cache_put(key, decision):
+    # Cache only a validated, plain direct route. Search/clarification, spelling
+    # repair and personal/medical context always run the existing full planner.
+    if (decision.get("action") != "direct" or decision.get("context") != [] or
+            decision.get("candidate") or decision.get("span") or decision.get("source_scope") or
+            decision.get("query")):
+        return
+    _DIRECT_CACHE[key] = (time.monotonic() + _DIRECT_CACHE_TTL, copy.deepcopy(decision))
+    _DIRECT_CACHE.move_to_end(key)
+    while len(_DIRECT_CACHE) > _DIRECT_CACHE_LIMIT:
+        _DIRECT_CACHE.popitem(last=False)
 
 
 class _MergedContextConcepts(ValueError):
@@ -309,6 +364,11 @@ async def understand(messages, *, on_invalid=None):
         "thinking_budget_tokens": 0, "parallel_tool_calls": False}
     endpoint = flash_endpoint()
     headers = {"Authorization": "Bearer " + os.environ["VELIA_DESKTOP_FLASH_API_KEY"]}
+    cache_key = _direct_cache_key(payload, endpoint, headers["Authorization"])
+    if on_invalid is None:
+        cached = _direct_cache_get(cache_key)
+        if cached is not None:
+            return cached
     for attempt in range(2):
         async with ClientSession(timeout=ClientTimeout(total=180, sock_read=150), cookie_jar=DummyCookieJar()) as client:
             await check_flash_context(client, endpoint, headers, payload)
@@ -323,7 +383,10 @@ async def understand(messages, *, on_invalid=None):
                         raise ValueError("invalid_understanding_response")
                 result = json.loads(body)
         try:
-            return parse_decision(result, question)
+            decision = parse_decision(result, question)
+            if on_invalid is None and attempt == 0:
+                _direct_cache_put(cache_key, decision)
+            return decision
         except (KeyError, IndexError, TypeError, ValueError) as error:
             choices = result.get("choices", []) if isinstance(result, dict) else []
             choice = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
@@ -336,6 +399,8 @@ async def understand(messages, *, on_invalid=None):
                     "arguments": str(function.get("arguments", ""))[:4096]} for function in functions]})
             if attempt:
                 raise ValueError("invalid_understanding_response") from None
+            # A failed compact call retries with the complete original schema.
+            payload["tools"] = [FULL_TOOL]
             repair = {"error": "invalid_understanding_response", "instruction":
                 "Исправь предыдущий вызов understand_request для того же исходного сообщения. "
                 "Все quote должны дословно присутствовать в исходном вопросе. "
