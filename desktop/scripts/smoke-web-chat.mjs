@@ -62,6 +62,20 @@ try {
   });
   await page.goto("http://127.0.0.1:18180/");
   await page.locator("#welcome").waitFor();
+  assert.equal(await page.locator('#feature-nav button').count(),3);
+  await page.getByRole('button',{name:'Инструменты',exact:true}).first().click();
+  await page.getByRole('heading',{name:'Инструменты',exact:true}).waitFor();
+  assert.equal(await page.locator('#auth-dialog').isVisible(),false);
+  await page.getByRole('button',{name:'Что появится',exact:true}).click();
+  await page.getByRole('heading',{name:'Studio · Скоро',exact:true}).waitFor();
+  assert.equal(await page.locator('#auth-dialog').isVisible(),false);
+  await page.getByRole('button',{name:'К диалогу',exact:true}).click();
+  await page.locator('#chat-task-open').click();
+  await page.getByRole('button',{name:/^Составить план/}).click();
+  assert.match(await page.locator('#prompt').inputValue(),/практический план/);
+  assert.equal(calls.length,0,'Selecting a task must not submit it');
+  await page.getByRole('button',{name:'Обычный чат',exact:true}).click();
+  await page.locator('#prompt').fill('');
   await page.screenshot({ path: root + "/VELIA-Web-desktop.png" });
   await page.locator("#model-button").click();
   await page.getByRole("option", { name: /VELIA FLASH/ }).click();
@@ -163,8 +177,14 @@ try {
   await page.locator("#prompt").fill("Покажи остановку");
   await page.locator("#send").click();
   await page.locator("#stop").waitFor({ state: "visible" });
+  assert.equal(await page.locator('#prompt').isEnabled(),true);
+  const callsBeforeDraft=calls.length;
+  await page.locator('#prompt').fill('Черновик следующего вопроса');
+  await page.locator('#prompt').press('Enter');
+  assert.equal(calls.length,callsBeforeDraft,'A draft during generation must not start another request');
   await page.locator("#stop").click();
   await page.getByText("Ответ остановлен.", { exact: true }).waitFor();
+  assert.equal(await page.locator('#prompt').inputValue(),'Черновик следующего вопроса');
   await page.locator("#new-chat").click();
   await page.locator("#search").fill("Привет");
   assert.equal(await page.locator(".history-row").count(), 1);
@@ -178,6 +198,7 @@ try {
   assert.equal(await page.locator("html").getAttribute("data-theme"), "light");
   await page.screenshot({ path: root + "/VELIA-Web-light.png" });
   await page.locator("#account").click();
+  await page.getByRole("button", {name:"Выйти из VELIA", exact:true}).click();
   await page.locator("#logout-confirm").click();
   await page.waitForFunction(() =>
     document
