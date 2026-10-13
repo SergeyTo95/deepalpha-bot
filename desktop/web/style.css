@@ -1486,3 +1486,22 @@ dialog::backdrop {
 .medical-journal-entry{padding:16px 0;border-bottom:1px solid var(--border);overflow-wrap:anywhere}.medical-visit-preview{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.65}.medical-body>.feature-card>.feature-input{display:grid;gap:8px;margin:16px 0}
 
 .medical-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;padding:6px;border:1px solid var(--border);border-radius:14px;margin:0 0 24px;background:var(--surface)}.medical-tabs button{min-height:48px;padding:10px 8px;border:0;background:transparent;border-radius:10px;font-size:13px}.medical-tabs button[aria-selected=true]{background:var(--strong);color:var(--on)}.medical-tabs button:focus-visible{outline:2px solid var(--text);outline-offset:2px}.medical-panel[hidden]{display:none}.medical-panel>.feature-card{margin-bottom:18px}@media(max-width:640px){.medical-tabs{grid-template-columns:repeat(2,minmax(0,1fr))}.medical-tabs button{font-size:12px}}
+
+/* A compact workspace with task entry points beside the unified composer. */
+.workspace-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:16px 0 28px}
+.workspace-grid .feature-card{margin:0;display:flex;flex-direction:column;align-items:flex-start;gap:12px}
+.workspace-grid .feature-card p{margin:0;color:var(--soft);line-height:1.6}
+.workspace-grid .feature-card button{margin-top:auto}
+.chat-task-dialog{width:min(680px,calc(100vw - 32px));max-height:85dvh;overflow:auto;padding:24px;border:1px solid var(--border);border-radius:20px;background:var(--bg);color:var(--text)}
+.chat-task-dialog::backdrop{background:rgba(0,0,0,.65)}
+.chat-task-dialog h2{margin:0;font-size:24px}
+.chat-task-dialog p{color:var(--soft);line-height:1.6}
+.chat-task-dialog button,.chat-task-button,.chat-task-state button{font:inherit;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:10px;min-height:40px;padding:8px 12px;cursor:pointer}
+.chat-task-dialog .workspace-grid button{text-align:left;min-height:100px;padding:16px}
+.chat-task-dialog button small{display:block;margin-top:8px;color:var(--soft);line-height:1.5}
+.chat-task-button{font-size:12px;white-space:nowrap}
+.chat-task-state{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:8px 0;color:var(--soft);font-size:12px}
+.chat-task-state[hidden]{display:none}
+.chat-task-state button{font-size:12px;min-height:32px}
+.chat-task-dialog button:focus-visible,.chat-task-button:focus-visible,.chat-task-state button:focus-visible{outline:2px solid var(--text);outline-offset:3px}
+@media(max-width:640px){.workspace-grid{grid-template-columns:1fr}.chat-task-dialog{padding:18px}.composer-toolbar{flex-wrap:wrap;gap:6px}.chat-task-button{min-height:44px}.chat-task-dialog .workspace-grid button{min-height:80px}}
