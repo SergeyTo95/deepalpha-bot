@@ -8,7 +8,7 @@ import {
   apiError,
   safeSearch,
 } from "./core.mjs";
-import {setupFeatures, featureRequest} from "./features.mjs";
+import {setupFeatures, featureRequest, CHAT_TASKS, suggestedChatTask} from "./features.mjs";
 import {prepareFile, fileSize, setupFileTools} from "./files.mjs";
 import {setupVoice} from "./voice.mjs";
 const $ = (id) => document.getElementById(id);
@@ -87,11 +87,50 @@ function addFiles(files){if(busy)return;if(!profile){openAuth();return;}if(agent
 
 const current = () => chats.find((c) => c.id === currentId);
 const voice = setupVoice({busy:()=>busy, toast, send:text=>{if(agentMode)setAgentMode(false);setModel("velia-flash");$("prompt").value=text;return generate(false, true);}});
-const features = setupFeatures({onUnauthorized:()=>{lockHistory();profile=null;guest=null;notifyAuthChange('lock');render();openAuth();},signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,prepareMedicalChat:async prompt=>{if(busy)throw new Error('Дождись завершения ответа.');if(!profile?.models?.includes('velia-flash'))throw new Error('VELIA Flash сейчас недоступна.');setAgentMode(false);setModel('velia-flash');newChat();medicalDraftMode=true;$('prompt').value=prompt;resizePrompt();$('prompt').focus();toast('Прикрепи заключения и проверь текст перед отправкой.');},openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
+const features = setupFeatures({onUnauthorized:()=>{lockHistory();profile=null;guest=null;notifyAuthChange('lock');render();openAuth();},signedIn:()=>!!profile,openAuth,toast,prepareChatTask,openLogout:()=>{$("logout-clear").checked=false;$("logout-dialog").showModal();},isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,prepareMedicalChat:async prompt=>{if(busy)throw new Error('Дождись завершения ответа.');if(!profile?.models?.includes('velia-flash'))throw new Error('VELIA Flash сейчас недоступна.');setAgentMode(false);setModel('velia-flash');newChat();medicalDraftMode=true;$('prompt').value=prompt;resizePrompt();$('prompt').focus();toast('Прикрепи заключения и проверь текст перед отправкой.');},openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
 const browserStorage = { getItem: (key) => localStorage.getItem(key) };
+function taskButton(label, action) {
+  const button=document.createElement('button'); button.type='button'; button.textContent=label; button.onclick=action; return button;
+}
+function prepareChatTask(id) {
+  if(busy)return;
+  const task=CHAT_TASKS.find(item=>item.id===id); if(!task)return;
+  if(['document','medical','browser'].includes(id) && !profile){taskDialog.close();openAuth();return;}
+  if(id==='browser' && !profile.browser_agent){toast('Работа в браузере сейчас недоступна.');return;}
+  if(id==='browser' && selectedFiles.length){toast('Сначала отправь или убери файлы из черновика.');return;}
+  if(id==='medical' && !profile.models.includes('velia-flash')){toast('VELIA Flash сейчас недоступна.');return;}
+  features.close(); taskDialog.close(); sidebar(false);
+  setAgentMode(id==='browser');
+  medicalDraftMode=id==='medical';
+  if(current())current().medicalNoSearch=medicalDraftMode;
+  if(medicalDraftMode)setModel('velia-flash');
+  if(!$('prompt').value.trim())$('prompt').value=task.prompt;
+  const state=$('chat-task-state'); state.replaceChildren();state.hidden=false;
+  const label=document.createElement('span');label.textContent=task.title;state.append(label);
+  state.append(taskButton('Обычный чат',()=>{setAgentMode(false);medicalDraftMode=false;if(current())current().medicalNoSearch=false;state.hidden=true;showTaskSuggestion();}));
+  if(task.section)state.append(taskButton('Подробная работа',()=>features.open(task.section)));
+  $('chat-task-suggestion').hidden=true;resizePrompt();$('prompt').focus();
+  if(['document','medical'].includes(id) && !selectedFiles.length)toast('Прикрепи файл кнопкой скрепки и проверь запрос перед отправкой.');
+}
+function showTaskSuggestion() {
+  const root=$('chat-task-suggestion');root.replaceChildren();root.hidden=true;
+  if(busy || !$('chat-task-state').hidden)return;
+  const id=suggestedChatTask($('prompt').value), task=CHAT_TASKS.find(item=>item.id===id);
+  if(!task)return;
+  root.append(taskButton('Использовать: '+task.title,()=>prepareChatTask(id)));root.hidden=false;
+}
+const taskDialog=document.createElement('dialog');taskDialog.className='chat-task-dialog';taskDialog.setAttribute('aria-labelledby','chat-task-title');
+taskDialog.innerHTML='<div class="feature-header"><h2 id="chat-task-title">Что нужно сделать?</h2></div><p>Выбери задачу или просто напиши её в чате. Запрос отправится только после нажатия кнопки отправки.</p>';
+taskDialog.querySelector('.feature-header').append(taskButton('Закрыть',()=>taskDialog.close()));
+const taskGrid=document.createElement('div');taskGrid.className='workspace-grid';
+for(const task of CHAT_TASKS){const b=taskButton(task.title,()=>prepareChatTask(task.id));const small=document.createElement('small');small.textContent=task.description;b.append(small);taskGrid.append(b);}
+taskDialog.append(taskGrid,taskButton('Все инструменты',()=>{taskDialog.close();features.open('tools');}));document.body.append(taskDialog);
+taskDialog.addEventListener('close',()=>{$('chat-task-open').focus();});
+$('chat-task-open').onclick=()=>taskDialog.showModal();
 const localHistory = new LocalHistory(browserHistoryStore());
 const authChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('velia-auth-v1') : null;
 function lockHistory() {
+  taskDialog.close(); medicalDraftMode=false; $('chat-task-state').hidden=true; $('chat-task-suggestion').hidden=true;
   abort?.abort(); clearTimeout(saveTimer); saveTimer = null;
   localHistory.lock(); storageKey = null; chats = []; currentId = null;
   features.close(); features.clearMedicalData(); voice.stop(); clearFiles(); fileTools.clear();
@@ -180,7 +219,7 @@ function setAgentMode(value) {
   button.title = enabled
     ? "Browser Agent включён · VELIA Flash может открывать сайты и выполнять действия"
     : "VELIA Agent Core · браузерные действия через Flash";
-  button.querySelector("span:last-child").textContent = enabled ? "AGENT ON" : "AGENT";
+  button.querySelector("span:last-child").textContent = enabled ? "Браузер включён" : "Браузер";
   $("model-button").disabled = busy;
   $("flash-description").textContent = enabled ? "Активна для VELIA Agent Core" : "Для повседневных вопросов";
   setModel(model);
@@ -368,7 +407,8 @@ function setBusy(value) {
   busy = value;
   $("send").hidden = value;
   $("stop").hidden = !value;
-  $("prompt").disabled = value;
+  $("prompt").disabled = false;
+  $("chat-task-open").disabled = value;
   $("attach").disabled = value;
   $("attachment-input").disabled = value;
   $("model-button").disabled = value;
@@ -382,6 +422,8 @@ function setBusy(value) {
 }
 function newChat() {
   medicalDraftMode=false;
+  $("chat-task-state").replaceChildren(); $("chat-task-state").hidden=true;
+  $("chat-task-suggestion").hidden=true;
   voice.stop();
   features.close();
   clearFiles();
@@ -510,6 +552,7 @@ async function continueAfterTakeover() {
 }
 
 async function openChat(chat, background = false) {
+  medicalDraftMode=false; $('chat-task-state').hidden=true; $('chat-task-suggestion').hidden=true;
   if (!background) voice.stop();
   features.close();
   clearFiles();
@@ -833,7 +876,7 @@ $("composer").onsubmit = (e) => {
   e.preventDefault();
   generate();
 };
-$("prompt").oninput = resizePrompt;
+$("prompt").oninput = () => {resizePrompt();showTaskSuggestion();};
 $("prompt").onkeydown = (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
@@ -972,8 +1015,7 @@ $("account").onclick = async () => {
     openAuth();
     return;
   }
-  $('logout-clear').checked = false;
-  $('logout-dialog').showModal();
+  features.open("account");
 };
 $('logout-cancel').onclick = () => $('logout-dialog').close();
 $('logout-confirm').onclick = async () => {
