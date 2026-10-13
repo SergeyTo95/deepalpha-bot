@@ -57,10 +57,17 @@ try{
   await page.goto('http://127.0.0.1:18180/');
   await page.locator('#model-button').click();assert.equal(await page.locator('[data-model="velia-quantum"]').isDisabled(),true);assert.match(await page.locator('[data-model="velia-quantum"]').innerText(),/Скоро/);await page.locator('#model-button').click();
   await page.locator('#account').click();await page.locator('#pairing-code').fill('ABCD-EFGH-2345-6789');await page.locator('#auth-submit').click();await page.locator('#auth-dialog').waitFor({state:'hidden'});
-  const open=async name=>{await page.locator('#feature-nav').getByRole('button',{name,exact:true}).click();await page.locator('#feature-view h1').getByText(name,{exact:true}).waitFor();};
+  const groups={'Проекты':'Мои материалы','Персонализация':'Аккаунт','Плагины':'Аккаунт','Баланс и использование':'Аккаунт','Голос':'Аккаунт'};
+  const open=async name=>{
+    await page.locator('#feature-nav').getByRole('button',{name:groups[name]||'Инструменты',exact:true}).click();
+    const card=page.locator('#feature-view article').filter({has:page.getByRole('heading',{name,exact:true})});
+    await card.getByRole('button',{name:name==='Studio'?'Что появится':name==='Проекты'?'Открыть проекты':'Открыть',exact:true}).click();
+    await page.locator('#feature-view h1').getByText(name,{exact:true}).waitFor();
+  };
   await open('Персонализация');await page.locator('[name=preferred_name]').fill('Новое имя');await page.getByRole('button',{name:'Сохранить',exact:true}).click();await page.waitForTimeout(100);assert.equal(calls.at(-1).body.preferred_name,'Новое имя');
-  await open('Studio');await page.locator('[name=image_provider]').selectOption('velia_image_2');await page.locator('[name=prompt]').fill('Прозрачный персонаж');await page.locator('[name=transparent_background]').check();await page.getByRole('button',{name:'Создать',exact:true}).click();await page.locator('.feature-card img').waitFor();await page.getByRole('button',{name:'Открыть изображение',exact:true}).click();await page.locator('.file-dialog img').waitFor();assert.match(await page.locator('.file-dialog img').getAttribute('src'),/features\/media\/images/);await page.locator('.file-dialog').getByRole('button',{name:'Закрыть',exact:true}).click();assert.equal(calls.findLast(c=>c.path.endsWith('/generate')).body.image_provider,'velia_image_2');await page.screenshot({path:output+'/studio-desktop.png'});
-  await page.getByRole('button',{name:'Видео',exact:true}).click();await page.locator('[name=duration_seconds]').selectOption('15');await page.locator('[name=prompt]').fill('Видео');await page.getByRole('button',{name:'Создать',exact:true}).click();await page.waitForTimeout(100);assert.equal(calls.findLast(c=>c.path.endsWith('/generate')).body.duration_seconds,15);
+  const studioCalls=calls.filter(c=>c.path.startsWith('studio')).length;
+  await open('Studio');await page.getByRole('heading',{name:'Studio · Скоро',exact:true}).waitFor();
+  assert.equal(calls.filter(c=>c.path.startsWith('studio')).length,studioCalls,'Closed Studio must not call media APIs');
   for(const name of ['Проекты','Исследования','Медицинский центр','Мои агенты','Автопилот','Плагины','Баланс и использование','Голос']){await open(name);await page.waitForTimeout(100);assert.equal(await page.getByText('Загрузка…',{exact:true}).count(),0);}
   await open('Автопилот');await page.locator('[name=instruction]').fill('Еженедельный обзор');await page.locator('[name=kind]').selectOption('weekly');await page.locator('[name=weekday]').selectOption('4');await page.locator('[name=time]').fill('10:30');await page.getByRole('button',{name:'Создать расписание',exact:true}).click();await page.getByRole('button',{name:'Включить',exact:true}).waitFor();
   const scheduled=calls.findLast(c=>c.path==='agent/schedules'&&c.method==='POST').body;assert.deepEqual(scheduled.schedule,{kind:'weekly',time:'10:30',weekdays:[4]});assert.equal(scheduled.actions[0].tool_name,'velia.tasks.list');assert.ok(scheduled.timezone);
@@ -102,7 +109,7 @@ try{
     await page.locator('#menu').click();
     const navBox=await page.locator('#feature-nav').boundingBox(),historyBox=await page.locator('.history-heading').boundingBox();
     assert.ok(navBox.y+navBox.height<=historyBox.y+1,'Navigation overlaps history');
-    await page.locator('#feature-nav').getByRole('button',{name:'Голос',exact:true}).scrollIntoViewIfNeeded();
+    await page.locator('#feature-nav').getByRole('button',{name:'Аккаунт',exact:true}).scrollIntoViewIfNeeded();
     await page.waitForTimeout(250);await page.screenshot({path:output+`/navigation-short-${height}.png`});
     await page.locator('#scrim').click({position:{x:380,y:40}});
   }
@@ -120,7 +127,7 @@ try{
   await page.getByRole('button',{name:'Удалить notes.csv',exact:true}).click();assert.equal(await page.locator('.file-chip').count(),3);
   const download=page.waitForEvent('download');await page.getByRole('button',{name:'Сохранить .md',exact:true}).first().click();assert.equal((await download).suggestedFilename(),'VELIA-answer.md');
   await page.locator('#chat-tools').click();const exportDownload=page.waitForEvent('download');await page.locator('#chat-export').click();assert.equal((await exportDownload).suggestedFilename(),'VELIA-chat.md');
-  assert.equal(await page.locator('#feature-nav svg').count(),11);
+  assert.equal(await page.locator('#feature-nav svg').count(),3);
   assert.equal(await page.locator('#feature-nav').innerText().then(t=>t.includes('undefined')),false);
-  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,sections:10,quantumDisabled:true,image2:true,video15:true,autopilotId:true,mobile:true,featureCalls:calls.length}));
+  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,sections:10,quantumDisabled:true,studioClosed:true,autopilotId:true,mobile:true,featureCalls:calls.length}));
 }finally{await browser?.close();fixture.kill();}

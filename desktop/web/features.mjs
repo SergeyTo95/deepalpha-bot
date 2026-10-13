@@ -7,6 +7,30 @@ export const SECTIONS = Object.freeze([
   ['work', 'Работа и заработок'], ['autopilot', 'Автопилот'], ['profile', 'Персонализация'],
   ['plugins', 'Плагины'], ['balance', 'Баланс и использование'], ['voice', 'Голос'],
 ]);
+export const WORKSPACE = Object.freeze([
+  ['tools', 'Инструменты', ['research','medical','agents','autopilot','work','studio']],
+  ['materials', 'Мои материалы', ['projects']],
+  ['account', 'Аккаунт', ['profile','balance','voice','plugins']],
+]);
+export const CHAT_TASKS = Object.freeze([
+  {id:'text', title:'Написать текст', description:'Письмо, объявление или готовый ответ.', prompt:'Помоги написать текст. Вот задача: '},
+  {id:'plan', title:'Составить план', description:'Понятные шаги для твоей цели.', prompt:'Составь практический план для этой цели: '},
+  {id:'document', title:'Разобрать документ', description:'Прикрепи файл и получи объяснение или сравнение.', prompt:'Разбери прикреплённый документ: кратко объясни главное и выдели важные детали.'},
+  {id:'research', title:'Найти информацию', description:'Ответ с источниками; подробные отчёты — в Исследованиях.', prompt:'Найди информацию по этому вопросу, сравни источники и объясни выводы: ', section:'research'},
+  {id:'medical', title:'Разобрать заключение', description:'Объяснение документа и вопросы к приёму.', prompt:medicalDocumentPrompt('summary'), section:'medical'},
+  {id:'browser', title:'Работа в браузере', description:'Открыть сайт и выполнить задачу через Agent.', prompt:'Открой сайт и помоги выполнить задачу: '},
+]);
+export function workspaceFor(section) {
+  return WORKSPACE.find(([key,,children])=>key===section || children.includes(section))?.[0] || null;
+}
+// Suggestions never execute tools, submit a prompt, or transmit a draft.
+export function suggestedChatTask(text) {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  if (/(?:открой|перейди|зайди)\s+(?:на\s+)?(?:сайт|https?:\/\/)|open\s+(?:https?:\/\/|the\s+website)/i.test(text)) return 'browser';
+  if (/(?:заключени|анализы|анализов|вопросы\s+врачу|medical\s+report)/i.test(text)) return 'medical';
+  if (/(?:найди|сравни)\s+(?:источники|информацию)|research\s+(?:sources|topic)/i.test(text)) return 'research';
+  return null;
+}
 export function mediaPath(value) {
   try {
     const u = new URL(value, location.origin);
@@ -177,7 +201,19 @@ const node = (tag, text, cls) => {const n = document.createElement(tag); if (tex
 const button = (text, action) => {const b = node('button', text); b.type = 'button'; b.onclick = action; return b;};
 const labels = {claim:'Утверждение',confidence:'Уверенность',limitations:'Ограничения',open_questions:'Открытые вопросы',source_ids:'Источники',sources:'Источники',recommendations:'Рекомендации',reason:'Причина',message:'Сообщение',results:'Результаты',amount:'Сумма',balance:'Баланс',next_run_at:'Следующий запуск',last_run_at:'Последний запуск',timezone:'Часовой пояс',items:'Результаты',notes:'Описание',completed:'Выполнено',start:'Начало',end:'Окончание',goal:'Цель', title:'Название', name:'Имя', description:'Описание', instructions:'Инструкции', audience:'Аудитория', style:'Стиль', constraints:'Ограничения', status:'Статус', domain:'Направление', content:'Содержание', summary:'Результат', conclusion:'Вывод', text:'Текст', created_at:'Создано', updated_at:'Обновлено', preferred_name:'Как обращаться', about_me:'О себе', credits:'Токены', user_messages:'Сообщения сегодня', user_cost_usd:'Расход сегодня, $', enabled:'Включено', available:'Доступно', revision:'Версия', query:'Поисковый запрос', kind:'Тип', prompt:'Описание', duration_seconds:'Длительность, сек.', error_code:'Ошибка', rationale:'Обоснование'};
 const statuses={draft:'Черновик',planned:'Запланировано',paused:'Приостановлено',active:'Активно',completed:'Завершено',failed:'Ошибка',pending:'Ожидает',running:'Выполняется',queued:'В очереди',ready:'Готово',awaiting_approval:'Ожидает подтверждения',cancelled:'Отменено'};
-const descriptions = {work:'Команда агентов, задания и управление рабочим бюджетом.',studio:'Создавай изображения, видео и музыку в одном месте.',projects:'Собирай идеи, задачи и материалы вокруг одной цели.',research:'От вопроса к источникам, выводам и отчёту.',medical:'Загружай исследования и следи за результатами анализа.',agents:'Настраивай помощников под свои задачи.',autopilot:'Задачи по расписанию, результаты и разработка в одном месте.',profile:'Помоги Велии лучше понимать тебя.',plugins:'Выбирай инструменты, которые нужны в работе.',balance:'Следи за доступными токенами и использованием.',voice:'Настрой язык и голос для разговора с Велией.'};
+const descriptions = {
+  research:'Изучи вопрос по источникам и собери выводы в отчёт. Здесь можно вернуться к материалам и проверить, на чём основан результат.',
+  medical:'Разбери медицинское заключение, подготовь вопросы врачу и веди дневник симптомов. Анализ КТ доступен при подключённом сервисе; пояснения Велии не заменяют врача.',
+  agents:'Настрой помощника под конкретную задачу: задай его роль, инструкции и доступные инструменты. Используй его для повторяющейся работы.',
+  autopilot:'Настрой задачи по расписанию и просматривай результаты запусков. Здесь же доступны задания по разработке и действия, ожидающие твоего подтверждения.',
+  work:'Создавай рабочие задания для команды агентов и следи за их выполнением и бюджетом. Возможность заработать зависит от подключённых площадок и выполненных заказов.',
+  studio:'Создание изображений, видео и музыки появится позже. Сейчас Studio закрыта.',
+  projects:'Собери цель, задачи и материалы проекта в одном месте. Возвращайся к сохранённому контексту, чтобы продолжить работу.',
+  profile:'Укажи, как к тебе обращаться и что Велии полезно знать о тебе. Эти настройки помогают учитывать твой контекст в ответах.',
+  plugins:'Посмотри, какие дополнительные инструменты доступны для чата, и включи нужные. Недоступные инструменты отмечены отдельно.',
+  balance:'Проверь остаток токенов и историю использования. Покупка пакетов и отдельных токенов появится позже.',
+  voice:'Выбери язык разговора, доступный голос и скорость речи. Прослушай голос перед началом разговора.',
+};
 const hiddenKeys = new Set(['id','user_id','project_id','session_id','generation_id','client_request_id','signature','provider','model','input_sha256','worker_status']);
 function display(value, depth = 0) {
   const box = node('div', undefined, 'feature-detail');
@@ -195,7 +231,7 @@ function display(value, depth = 0) {
   return box;
 }
 
-export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, onUnauthorized = () => {}}) {
+export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, prepareChatTask, openLogout, onUnauthorized = () => {}}) {
   const root = document.getElementById('feature-view'), nav = document.getElementById('feature-nav');
   let epoch = 0, section = null, controller = null;
   const close = () => {epoch++; controller?.abort(); root.replaceChildren(); root.hidden = true; section = null; nav.querySelectorAll('button').forEach(b=>b.removeAttribute('aria-current')); document.getElementById('conversation-scroll').hidden = false; document.querySelector('.composer-area').hidden = false;};
@@ -249,13 +285,34 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
   window.addEventListener('beforeunload',event=>{if(symptomEntries.length || Object.values(visitNotes).some(Boolean)){event.preventDefault();event.returnValue='';}});
   async function open(name, draft = {}) {
     if (isBusy()) {toast('Дождись завершения ответа.'); return;}
-    if (!signedIn() && name !== 'voice') {openAuth(); return;}
+    const hub = WORKSPACE.find(([key])=>key===name);
+    if (!signedIn() && !hub && !['voice','studio'].includes(name)) {openAuth(); return;}
     close(); section = name; controller = new AbortController(); const ticket = epoch;
     root.hidden = false; root.scrollTop = 0; document.getElementById('conversation-scroll').hidden = true; document.querySelector('.composer-area').hidden = true;
-    document.getElementById('sidebar').classList.remove('open'); document.getElementById('scrim').hidden = true; document.getElementById('menu').setAttribute('aria-expanded','false'); nav.querySelectorAll('button').forEach(b=>{if(b.dataset.section===name)b.setAttribute('aria-current','page');});
-    const head = node('div', undefined, 'feature-header'), heading=node('div'); heading.append(node('span','ВОЗМОЖНОСТИ VELIA','feature-eyebrow'),node('h1', SECTIONS.find(s=>s[0]===name)?.[1] || 'VELIA'),node('p',descriptions[name])); head.append(heading, button('К диалогу', close)); heading.querySelector('h1').tabIndex=-1; root.append(head); heading.querySelector('h1').focus({preventScroll:true});
+    document.getElementById('sidebar').classList.remove('open'); document.getElementById('scrim').hidden = true; document.getElementById('menu').setAttribute('aria-expanded','false'); nav.querySelectorAll('button').forEach(b=>{if(b.dataset.section===workspaceFor(name))b.setAttribute('aria-current','page');});
+    const hubDescriptions={tools:'Выбери задачу или просто опиши её Велии в чате.',materials:'Проекты и материалы для продолжения работы. Диалоги доступны в истории слева.',account:'Личные настройки, голос и использование Велии.'};
+    const head = node('div', undefined, 'feature-header'), heading=node('div'); heading.append(node('span','ВОЗМОЖНОСТИ VELIA','feature-eyebrow'),node('h1', hub?.[1] || SECTIONS.find(s=>s[0]===name)?.[1] || 'VELIA'),node('p',hubDescriptions[name] || descriptions[name])); head.append(heading, button('К диалогу', close)); if(!hub && workspaceFor(name))head.append(button('Назад',()=>open(workspaceFor(name)))); heading.querySelector('h1').tabIndex=-1; root.append(head); heading.querySelector('h1').focus({preventScroll:true});
     const body = node('div',undefined,'feature-body'); root.append(body); const loading=node('p','Загрузка…','feature-empty'); loading.setAttribute('role','status'); body.append(loading);
     try {
+      if (name === 'studio') {
+        body.replaceChildren(node('h2','Studio · Скоро'),node('p','Создание изображений, видео и музыки появится здесь позже. Studio пока закрыта для всех пользователей.','feature-notice'),button('Вернуться в чат',close)); return;
+      }
+      if (hub) {
+        body.replaceChildren();
+        if (name==='tools') {
+          body.append(node('h2','Начать в чате'));
+          const tasks=node('div',undefined,'workspace-grid');
+          for(const task of CHAT_TASKS){const card=node('article',undefined,'feature-card');card.append(node('h3',task.title),node('p',task.description));card.append(button('Начать в чате',()=>prepareChatTask?.(task.id)));tasks.append(card);}body.append(tasks,node('h2','Подробная работа'));
+        }
+        const grid=node('div',undefined,'workspace-grid');
+        for(const key of hub[2]){const card=node('article',undefined,'feature-card');card.append(node('h3',SECTIONS.find(s=>s[0]===key)[1]),node('p',descriptions[key]));
+          if(key==='studio')card.append(node('small','Скоро'),button('Что появится',()=>open('studio')));
+          else {if(!signedIn()&&key!=='voice')card.append(node('small','Доступ после входа'));card.append(button(key==='projects'?'Открыть проекты':'Открыть',()=>open(key)));}
+          grid.append(card);
+        }body.append(grid);
+        if(name==='account'){body.append(node('p','Покупка пакетов и отдельных токенов появится позже.','feature-help'));if(!signedIn())body.append(button('Войти в VELIA',openAuth));else body.append(button('Выйти из VELIA',openLogout));}
+        return;
+      }
       if (name === 'voice') {body.replaceChildren(); voiceSettings(body); return;}
       if (name === 'profile') {
         const r = await call('profile'); if (ticket !== epoch) return; body.replaceChildren(form([['preferred_name','Как обращаться'],['about_me','О себе','textarea']], 'Сохранить', d=>call('profile',{method:'PATCH',data:d}), r.profile));
@@ -447,8 +504,13 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
     for(const [key,title] of [['image','Изображения'],['video','Видео'],['music','Музыка']]){const b=button(title,()=>run(b,async()=>{mode=key;configure();await refresh();}));b.dataset.mode=key;if(status[key]?.enabled===false)b.disabled=true;modes.append(b);}
     configure();await refresh();
   }
-  const symbols=['<path d="m12 3 9 9-9 9-9-9z"/>','<rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 10h18M8 5V3"/>','<circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/>','<path d="M12 4v16M4 12h16"/>','<rect x="4" y="7" width="16" height="14" rx="4"/><path d="M12 3v4M8 12h1m6 0h1M8 17h8"/>','<path d="m12 3 8 4v6c0 4-8 8-8 8s-8-4-8-8V7zM9 12l2 2 4-4"/>','<path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="6"/><path d="M12 9v3l2 2"/>','<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/>','<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12h8m-4-4v8"/>','<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>','<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11v1a7 7 0 0 0 14 0v-1M12 19v3"/>'];
-  for (const [index,[key,title]] of SECTIONS.entries()) {if(index===0||key==='profile')nav.append(node('span',index===0?'РАБОЧЕЕ ПРОСТРАНСТВО':'НАСТРОЙКИ','feature-nav-heading')); const b=button(title,()=>open(key)); b.dataset.section=key;const icon=node('span',undefined,'feature-nav-icon');icon.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'+(symbols[index] || '<path d="M9 3h6v10a3 3 0 0 1-6 0zM5 11v2a7 7 0 0 0 14 0M12 20v2"/>')+'</svg>';icon.setAttribute('aria-hidden','true');b.prepend(icon);nav.append(b);}
+  const workspaceIcons={tools:'<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',materials:'<path d="M3 7h7l2 2h9v11H3zM3 7V4h7l2 3"/>',account:'<circle cx="12" cy="7" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/>'};
+  for (const [key,title] of WORKSPACE) {
+    const b=button(title,()=>open(key)); b.dataset.section=key;
+    const icon=node('span',undefined,'feature-nav-icon');
+    icon.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'+workspaceIcons[key]+'</svg>';
+    icon.setAttribute('aria-hidden','true');b.prepend(icon);nav.append(b);
+  }
   const clearMedicalData=()=>{symptomEntries=[];for(const key of Object.keys(visitNotes))visitNotes[key]='';};
   return {close,open,clearMedicalData};
 }

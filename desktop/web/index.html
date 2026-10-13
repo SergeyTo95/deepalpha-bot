@@ -93,11 +93,10 @@
             <div class="welcome-symbol">
               <img src="/web/favicon.svg" alt="" width="58" height="58" />
             </div>
-            <div class="eyebrow">ТВОИ ИДЕИ. НОВЫЕ ВОЗМОЖНОСТИ.</div>
-            <h1>Место для<br /><span>твоих идей.</span></h1>
+            <div class="eyebrow">ОТ ЗАДАЧИ К РЕЗУЛЬТАТУ</div>
+            <h1>Что нужно<br /><span>сделать?</span></h1>
             <p class="welcome-copy">
-              Думай шире. Создавай проще.<br class="mobile-break" />
-              Велия рядом.
+              Опиши задачу, прикрепи файл или поговори с Велией.
             </p>
             <div class="suggestions">
               <button
@@ -105,7 +104,7 @@
                 data-prompt="Помоги превратить мою идею в понятный план. Для начала задай несколько важных вопросов."
               >
                 <span data-icon="spark"></span><strong>Из идеи — в план</strong
-                ><small>Найти первый шаг</small
+                ><small>Понятные шаги к твоей цели</small
                 ><span class="suggestion-arrow">↗</span>
               </button>
               <button
@@ -113,7 +112,7 @@
                 data-prompt="Помоги написать сильный текст. Уточни аудиторию, задачу и желаемый тон."
               >
                 <span data-icon="pen"></span><strong>Найти нужные слова</strong
-                ><small>Текст с твоим характером</small
+                ><small>Письмо, объявление или ответ</small
                 ><span class="suggestion-arrow">↗</span>
               </button>
               <button
@@ -154,12 +153,15 @@
             <label class="sr-only" for="prompt">Сообщение Велии</label
             ><textarea
               id="prompt"
-              placeholder="Расскажи Велии, что задумал…"
+              placeholder="Какую задачу нужно решить?"
               rows="1"
               maxlength="32000"
             ></textarea>
             <div id="attachment-preview" class="attachment-preview"></div>
+            <div id="chat-task-state" class="chat-task-state" hidden></div>
+            <div id="chat-task-suggestion" class="chat-task-state" hidden></div>
             <div class="composer-toolbar">
+              <button type="button" id="chat-task-open" class="chat-task-button" aria-haspopup="dialog">Инструменты</button>
               <button type="button" id="attach" class="icon-button" aria-label="Прикрепить файл"><span data-icon="attachment"></span></button>
               <input type="file" id="attachment-input" multiple hidden accept="image/jpeg,image/png,image/webp,.pdf,.txt,.md,.csv,.json,.docx" />
               <button type="button" id="voice-open" class="icon-button" aria-label="Голосовой разговор"><span data-icon="mic"></span></button>
