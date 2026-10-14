@@ -324,11 +324,16 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
         const draw=()=>{grid.replaceChildren();for(const item of result.connections || []){
           if(![item.name,item.description,groupNames[item.category]].join(' ').toLowerCase().includes(filter.value.toLowerCase()))continue;
           const card=node('article',undefined,'feature-card');card.append(node('h3',item.name),node('small',groupNames[item.category] || ''),node('p',item.description),node('p',item.status_text,'feature-help'));
-          const providers=['notion','google-calendar','google-drive','google-sheets','google-tasks','gmail','google-classroom','youtube','outlook','onedrive','microsoft-todo','onenote'];
+          const providers=['notion','google-calendar','google-drive','google-sheets','google-tasks','gmail','google-classroom','youtube','outlook','onedrive','microsoft-todo','onenote','todoist','dropbox','trello','slack','hubspot','canva','zotero','zoom','figma','asana','clickup','monday','jira','shopify','wordpress','zendesk'];
+          if(item.permission_notice)card.append(node('p',item.permission_notice,'feature-help'));
+          let tenant;
+          if(item.available && !item.connected && ['shopify','zendesk'].includes(item.id)){tenant=node('input');tenant.placeholder=item.setup_hint;tenant.setAttribute('aria-label',item.setup_hint);tenant.maxLength=63;card.append(tenant);}
           if(item.connected && providers.includes(item.id))card.append(button('Отключить',()=>run(card.querySelector('button'),async()=>{await call('agent/connectors/'+item.id,{method:'DELETE'});await open('connections');})));
           else if(item.available && providers.includes(item.id))card.append(button('Подключить',()=>run(card.querySelector('button'),async()=>{
-            const response=await call('agent/connectors/'+item.id+'/connect',item.id==='google-calendar'?{}:{method:'POST'});
-            const url=new URL(response.url);const expected=item.id==='notion'?'api.notion.com':['outlook','onedrive','microsoft-todo','onenote'].includes(item.id)?'login.microsoftonline.com':'accounts.google.com';
+            if(tenant && !/^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(tenant.value.trim().toLowerCase()))throw new Error('Укажи название рабочего пространства без адреса сайта.');
+            const response=await call('agent/connectors/'+item.id+'/connect',item.id==='google-calendar'?{}:{method:'POST',data:tenant?{tenant:tenant.value.trim().toLowerCase()}: {}});
+            const hosts={todoist:'app.todoist.com',dropbox:'www.dropbox.com',trello:'auth.atlassian.com',slack:'slack.com',hubspot:'app.hubspot.com',canva:'www.canva.com',zotero:'www.zotero.org',zoom:'zoom.us',figma:'www.figma.com',asana:'app.asana.com',clickup:'app.clickup.com',monday:'auth.monday.com',jira:'auth.atlassian.com',wordpress:'public-api.wordpress.com'};
+            const url=new URL(response.url);const expected=tenant?tenant.value.trim().toLowerCase()+'.'+(item.id==='shopify'?'myshopify.com':'zendesk.com'):(hosts[item.id] || (item.id==='notion'?'api.notion.com':['outlook','onedrive','microsoft-todo','onenote'].includes(item.id)?'login.microsoftonline.com':'accounts.google.com'));
             if(url.protocol!=='https:' || url.hostname!==expected || url.username || url.password)throw new Error('Ссылка подключения недействительна.');
             location.assign(url.href);
           })));
