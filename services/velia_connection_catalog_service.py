@@ -38,15 +38,17 @@ CONNECTORS = (
 
 def list_connections(user_id):
     from services import velia_notion_connection_service as notion
+    from services import velia_cloud_connection_service as cloud
     result=[]
     for key,name,category,description in CONNECTORS:
         row=dict(id=key,name=name,category=category,description=description,
                  connected=False,configured=False,available=False,status='planned',
                  status_text='Готовится',read_only=True)
         adapter=calendar if key=='google-calendar' else notion if key=='notion' else None
-        if adapter:
+        implemented=adapter is not None or key in cloud.SPECS
+        if implemented:
             try:
-                status=adapter.connection_status(int(user_id))
+                status=cloud.connection_status(int(user_id),key) if key in cloud.SPECS else adapter.connection_status(int(user_id))
                 row.update(connected=bool(status.get('connected')),
                            configured=bool(status.get('configured')),
                            available=bool(status.get('configured')))
@@ -55,7 +57,7 @@ def list_connections(user_id):
                     row['available']=row['available'] and redirect.scheme=='https' and bool(redirect.hostname) and not redirect.username
                 row['status']='connected' if row['connected'] else 'available' if row['available'] else 'requires_setup'
                 row['status_text']='Подключено' if row['connected'] else 'Можно подключить' if row['available'] else 'Нужно настроить приложение VELIA'
-                row['read_only']=key=='notion'
+                row['read_only']=key!='google-calendar'
             except Exception:
                 row.update(status='unavailable',status_text='Не удалось проверить подключение',available=False)
         result.append(row)
