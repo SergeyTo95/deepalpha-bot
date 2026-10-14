@@ -18,8 +18,10 @@ try{
   await context.route('**/web-api/v1/features/**',async route=>{
     const req=route.request(),p=new URL(req.url()).pathname.split('/features/')[1];calls.push({method:req.method(),path:p,body:req.headers()['content-type']?.includes('json')?req.postDataJSON():null});
     const map={
-      'agent/connectors':{connections:[{id:'notion',name:'Notion',category:'knowledge',description:'Заметки',status_text:'Нужно настроить приложение VELIA',available:false,connected:false},{id:'youtube',name:'YouTube',category:'content',description:'Для авторов',status_text:'Готовится',available:false,connected:false},{id:'outlook',name:'Outlook',category:'personal',description:'Почта',status_text:'Можно подключить',available:true,connected:false}]},
+      'agent/connectors':{connections:[{id:'notion',name:'Notion',category:'knowledge',description:'Заметки',status_text:'Нужно настроить приложение VELIA',available:false,connected:false},{id:'youtube',name:'YouTube',category:'content',description:'Для авторов',status_text:'Готовится',available:false,connected:false},{id:'outlook',name:'Outlook',category:'personal',description:'Почта',status_text:'Можно подключить',available:true,connected:false},{id:'slack',name:'Slack',category:'team',description:'Каналы',status_text:'Можно подключить',available:true,connected:false},{id:'shopify',name:'Shopify',category:'business',description:'Товары',status_text:'Можно подключить',available:true,connected:false,setup_hint:'Название до .myshopify.com'}]},
       'agent/connectors/outlook/connect':{url:'https://evil.example/authorize'},
+      'agent/connectors/slack/connect':{url:'https://slack.com.evil.example/oauth/v2/authorize'},
+      'agent/connectors/shopify/connect':{url:'https://other-store.myshopify.com/admin/oauth/authorize'},
       profile:{profile:{preferred_name:'Сергей',about_me:'Проекты'}},
       plugins:{plugins:{weather:{enabled:true,available:true},web_search:{enabled:true,available:true}}},
       'economy/me':{account:{credits:100}},usage:{usage:{user_messages:2}},
@@ -68,7 +70,7 @@ try{
   };
   await open('Персонализация');await page.locator('[name=preferred_name]').fill('Новое имя');await page.getByRole('button',{name:'Сохранить',exact:true}).click();await page.waitForTimeout(100);assert.equal(calls.at(-1).body.preferred_name,'Новое имя');
   await open('Подключения');await page.locator('#feature-view article h3').getByText('Notion',{exact:true}).waitFor();
-  assert.equal(await page.locator('#feature-view article').count(),3);
+  assert.equal(await page.locator('#feature-view article').count(),5);
   await page.getByRole('searchbox',{name:'Найти подключение'}).fill('YouTube');
   assert.equal(await page.locator('#feature-view article').count(),1);assert.equal(await page.getByRole('button',{name:'Подключить',exact:true}).count(),0);
   await page.getByRole('searchbox',{name:'Найти подключение'}).fill('Outlook');
@@ -76,6 +78,23 @@ try{
   await page.getByText('Ссылка подключения недействительна.',{exact:true}).waitFor();
   assert.equal(calls.at(-1).path,'agent/connectors/outlook/connect');assert.equal(calls.at(-1).method,'POST');
   assert.equal(new URL(page.url()).hostname,'127.0.0.1');
+  await page.getByRole('searchbox',{name:'Найти подключение'}).fill('Slack');
+  await page.getByRole('button',{name:'Подключить',exact:true}).click();
+  await page.getByText('Ссылка подключения недействительна.',{exact:true}).waitFor();
+  assert.equal(calls.at(-1).path,'agent/connectors/slack/connect');
+  await page.getByRole('searchbox',{name:'Найти подключение'}).fill('Shopify');
+  await page.getByRole('textbox',{name:'Название до .myshopify.com'}).fill('https://evil.example');
+  const beforeInvalidTenant=calls.length;
+  await page.getByRole('button',{name:'Подключить',exact:true}).click();
+  await page.getByText('Укажи название рабочего пространства без адреса сайта.',{exact:true}).waitFor();
+  assert.equal(calls.length,beforeInvalidTenant);
+  await page.getByRole('textbox',{name:'Название до .myshopify.com'}).fill('my-store');
+  await page.getByRole('button',{name:'Подключить',exact:true}).click();
+  await page.getByText('Ссылка подключения недействительна.',{exact:true}).waitFor();
+  assert.equal(calls.at(-1).path,'agent/connectors/shopify/connect');
+  assert.deepEqual(calls.at(-1).body,{tenant:'my-store'});
+  assert.equal(new URL(page.url()).hostname,'127.0.0.1');
+
 
   const studioCalls=calls.filter(c=>c.path.startsWith('studio')).length;
   await open('Studio');await page.getByRole('heading',{name:'Studio · Скоро',exact:true}).waitFor();
