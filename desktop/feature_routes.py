@@ -13,6 +13,10 @@ ROUTES += [("GET", "research/missions/{missionId}/runs"), ("GET", "research/runs
            ("POST", "research/runs/{runId}/cancel")]
 ROUTES += [("GET", "agent/connectors"), ("POST", "agent/connectors/notion/connect"),
            ("DELETE", "agent/connectors/notion")]
+CLOUD_CONNECTORS=('google-drive','google-sheets','google-tasks','gmail','google-classroom','youtube',
+                  'outlook','onedrive','microsoft-todo','onenote')
+for connector in CLOUD_CONNECTORS:
+    ROUTES += [('POST','agent/connectors/'+connector+'/connect'),('DELETE','agent/connectors/'+connector)]
 PATTERNS = [(method, re.compile(re.sub(r"\{[^}]+\}", "[A-Za-z0-9_-]{1,128}", path) + r"\Z"))
             for method, path in ROUTES]
 BINARY_ROUTES = [
@@ -39,24 +43,26 @@ def setup_feature_routes(app, *, session_for, same_origin, upstream, json_respon
     from desktop.platform_status import setup_platform_status
     setup_platform_status(app, session_for=session_for, upstream=upstream, json_response=json_response)
     async def notion_callback(request):
+        connector=request.match_info.get('connector','notion')
         headers={"Cache-Control":"no-store","Referrer-Policy":"no-referrer"}
         if request.query.get('error'):
-            return web.Response(text='Подключение Notion отменено. Вернись в Велию.',headers=headers)
+            return web.Response(text='Подключение отменено. Вернись в Велию.',headers=headers)
         code,state=request.query.get('code',''),request.query.get('state','')
         if not 1<=len(code)<=2048 or not 32<=len(state)<=128:
             return web.Response(text='Ссылка подключения недействительна.',status=400,headers=headers)
         try:
             session=await session_for(request)
             if not session:
-                return web.Response(text='Войди в Велию и начни подключение Notion заново.',status=401,headers=headers)
-            status,result=await upstream('POST','/mobile-api/v1/agent/connectors/notion/complete',
+                return web.Response(text='Войди в Велию и начни подключение заново.',status=401,headers=headers)
+            status,result=await upstream('POST','/mobile-api/v1/agent/connectors/'+connector+'/complete',
                 token=session.access,data={'code':code,'state':state})
             if status!=200 or result.get('ok') is not True:
-                return web.Response(text='Не удалось подключить Notion. Начни подключение заново.',status=400,headers=headers)
+                return web.Response(text='Не удалось подключить сервис. Начни подключение заново.',status=400,headers=headers)
         except Exception:
             return web.Response(text='Сервис подключения временно недоступен.',status=503,headers=headers)
         raise web.HTTPSeeOther(location='/',headers=headers)
     app.router.add_get('/web-api/v1/connectors/notion/callback',notion_callback)
+    app.router.add_get('/web-api/v1/connectors/{connector:'+('|'.join(CLOUD_CONNECTORS))+'}/callback',notion_callback)
     async def relay(request):
         def error(code, status):
             return json_response({"ok": False, "error": code}, status)
