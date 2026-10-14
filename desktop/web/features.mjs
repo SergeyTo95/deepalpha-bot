@@ -324,10 +324,11 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
         const draw=()=>{grid.replaceChildren();for(const item of result.connections || []){
           if(![item.name,item.description,groupNames[item.category]].join(' ').toLowerCase().includes(filter.value.toLowerCase()))continue;
           const card=node('article',undefined,'feature-card');card.append(node('h3',item.name),node('small',groupNames[item.category] || ''),node('p',item.description),node('p',item.status_text,'feature-help'));
-          if(item.connected && ['notion','google-calendar'].includes(item.id))card.append(button('Отключить',()=>run(card.querySelector('button'),async()=>{await call('agent/connectors/'+item.id,{method:'DELETE'});await open('connections');})));
-          else if(item.available && ['notion','google-calendar'].includes(item.id))card.append(button('Подключить',()=>run(card.querySelector('button'),async()=>{
-            const response=await call('agent/connectors/'+item.id+'/connect',item.id==='notion'?{method:'POST'}:{});
-            const url=new URL(response.url);const expected=item.id==='notion'?'api.notion.com':'accounts.google.com';
+          const providers=['notion','google-calendar','google-drive','google-sheets','google-tasks','gmail','google-classroom','youtube','outlook','onedrive','microsoft-todo','onenote'];
+          if(item.connected && providers.includes(item.id))card.append(button('Отключить',()=>run(card.querySelector('button'),async()=>{await call('agent/connectors/'+item.id,{method:'DELETE'});await open('connections');})));
+          else if(item.available && providers.includes(item.id))card.append(button('Подключить',()=>run(card.querySelector('button'),async()=>{
+            const response=await call('agent/connectors/'+item.id+'/connect',item.id==='google-calendar'?{}:{method:'POST'});
+            const url=new URL(response.url);const expected=item.id==='notion'?'api.notion.com':['outlook','onedrive','microsoft-todo','onenote'].includes(item.id)?'login.microsoftonline.com':'accounts.google.com';
             if(url.protocol!=='https:' || url.hostname!==expected || url.username || url.password)throw new Error('Ссылка подключения недействительна.');
             location.assign(url.href);
           })));
