@@ -87,6 +87,8 @@ def ensure_builtin_tools() -> None:
     notion.register_tools()
     from services import velia_cloud_connection_service as cloud
     cloud.register_tools()
+    from services import velia_vendor_connection_service as vendor
+    vendor.register_tools()
     _BUILTINS_READY = True
 
 
@@ -96,6 +98,8 @@ def public_tools() -> List[Dict[str, Any]]:
     notion.register_tools()
     from services import velia_cloud_connection_service as cloud
     cloud.register_tools()
+    from services import velia_vendor_connection_service as vendor
+    vendor.register_tools()
     return tools.list_tools()
 
 
