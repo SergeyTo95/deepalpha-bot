@@ -200,7 +200,7 @@ def disconnect(user_id,connector):
 
 
 def identifier(value):
-    if not isinstance(value,str) or not re.fullmatch(r'[A-Za-z0-9_=.-]{1,512}',value):raise ConnectionError('invalid_resource_id')
+    if not isinstance(value,str) or value in ('.','..') or not re.fullmatch(r'[A-Za-z0-9_=.-]{1,512}',value):raise ConnectionError('invalid_resource_id')
     return value
 
 
