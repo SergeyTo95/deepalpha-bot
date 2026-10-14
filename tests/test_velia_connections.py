@@ -21,7 +21,8 @@ def test_catalog_never_marks_planned_services_available(monkeypatch):
     assert next(r for r in rows if r['id']=='google-calendar')['connected']
     for row in rows:
         from services import velia_cloud_connection_service as cloud
-        if row['id'] in cloud.SPECS:
+        from services import velia_vendor_connection_service as vendor
+        if row['id'] in cloud.SPECS or row['id'] in vendor.SPECS:
             assert row['status']=='requires_setup' and not row['available']
         elif row['id'] not in ('notion','google-calendar'):
             assert row['status']=='planned' and not row['available'] and not row['connected']
