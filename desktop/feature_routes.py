@@ -11,6 +11,8 @@ ROUTES += [("GET", "agent/schedules/status"), ("GET", "agent/schedules"), ("POST
            ("POST", "agent/schedules/{scheduleId}/disable"), ("DELETE", "agent/schedules/{scheduleId}")]
 ROUTES += [("GET", "research/missions/{missionId}/runs"), ("GET", "research/runs/{runId}"),
            ("POST", "research/runs/{runId}/cancel")]
+ROUTES += [("GET", "agent/connectors"), ("POST", "agent/connectors/notion/connect"),
+           ("DELETE", "agent/connectors/notion")]
 PATTERNS = [(method, re.compile(re.sub(r"\{[^}]+\}", "[A-Za-z0-9_-]{1,128}", path) + r"\Z"))
             for method, path in ROUTES]
 BINARY_ROUTES = [
@@ -36,6 +38,25 @@ def route_allowed(method, path):
 def setup_feature_routes(app, *, session_for, same_origin, upstream, json_response, binary_upstream=None, origin=""):
     from desktop.platform_status import setup_platform_status
     setup_platform_status(app, session_for=session_for, upstream=upstream, json_response=json_response)
+    async def notion_callback(request):
+        headers={"Cache-Control":"no-store","Referrer-Policy":"no-referrer"}
+        if request.query.get('error'):
+            return web.Response(text='Подключение Notion отменено. Вернись в Велию.',headers=headers)
+        code,state=request.query.get('code',''),request.query.get('state','')
+        if not 1<=len(code)<=2048 or not 32<=len(state)<=128:
+            return web.Response(text='Ссылка подключения недействительна.',status=400,headers=headers)
+        try:
+            session=await session_for(request)
+            if not session:
+                return web.Response(text='Войди в Велию и начни подключение Notion заново.',status=401,headers=headers)
+            status,result=await upstream('POST','/mobile-api/v1/agent/connectors/notion/complete',
+                token=session.access,data={'code':code,'state':state})
+            if status!=200 or result.get('ok') is not True:
+                return web.Response(text='Не удалось подключить Notion. Начни подключение заново.',status=400,headers=headers)
+        except Exception:
+            return web.Response(text='Сервис подключения временно недоступен.',status=503,headers=headers)
+        raise web.HTTPSeeOther(location='/',headers=headers)
+    app.router.add_get('/web-api/v1/connectors/notion/callback',notion_callback)
     async def relay(request):
         def error(code, status):
             return json_response({"ok": False, "error": code}, status)
