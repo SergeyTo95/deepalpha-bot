@@ -65,6 +65,8 @@ def _setup_agent_extensions(app: web.Application, routes_module: Any) -> None:
 
     install_agent_memory_recall(chat_service)
     setup_velia_google_calendar_routes(app, routes_module)
+    from services.velia_connection_routes import setup_connection_routes
+    setup_connection_routes(app, routes_module)
     # Install background-worker patches before Autopilot registers its cleanup
     # context. Review wraps the CI-aware run_once implementation, so explicit
     # REQUEST_CHANGES is processed before the next queued task. Merge policy is
