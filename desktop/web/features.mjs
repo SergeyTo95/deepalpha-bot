@@ -5,12 +5,12 @@ export const SECTIONS = Object.freeze([
   ['studio', 'Studio'], ['projects', 'Проекты'], ['research', 'Исследования'],
   ['medical', 'Медицинский центр'], ['agents', 'Мои агенты'],
   ['work', 'Работа и заработок'], ['autopilot', 'Автопилот'], ['profile', 'Персонализация'],
-  ['plugins', 'Плагины'], ['balance', 'Баланс и использование'], ['voice', 'Голос'],
+  ['plugins', 'Плагины'], ['connections','Подключения'], ['balance', 'Баланс и использование'], ['voice', 'Голос'],
 ]);
 export const WORKSPACE = Object.freeze([
   ['tools', 'Инструменты', ['research','medical','agents','autopilot','work','studio']],
   ['materials', 'Мои материалы', ['projects']],
-  ['account', 'Аккаунт', ['profile','balance','voice','plugins']],
+  ['account', 'Аккаунт', ['profile','balance','voice','plugins','connections']],
 ]);
 export const CHAT_TASKS = Object.freeze([
   {id:'text', title:'Написать текст', description:'Письмо, объявление или готовый ответ.', prompt:'Помоги написать текст. Вот задача: '},
@@ -202,6 +202,7 @@ const button = (text, action) => {const b = node('button', text); b.type = 'butt
 const labels = {claim:'Утверждение',confidence:'Уверенность',limitations:'Ограничения',open_questions:'Открытые вопросы',source_ids:'Источники',sources:'Источники',recommendations:'Рекомендации',reason:'Причина',message:'Сообщение',results:'Результаты',amount:'Сумма',balance:'Баланс',next_run_at:'Следующий запуск',last_run_at:'Последний запуск',timezone:'Часовой пояс',items:'Результаты',notes:'Описание',completed:'Выполнено',start:'Начало',end:'Окончание',goal:'Цель', title:'Название', name:'Имя', description:'Описание', instructions:'Инструкции', audience:'Аудитория', style:'Стиль', constraints:'Ограничения', status:'Статус', domain:'Направление', content:'Содержание', summary:'Результат', conclusion:'Вывод', text:'Текст', created_at:'Создано', updated_at:'Обновлено', preferred_name:'Как обращаться', about_me:'О себе', credits:'Токены', user_messages:'Сообщения сегодня', user_cost_usd:'Расход сегодня, $', enabled:'Включено', available:'Доступно', revision:'Версия', query:'Поисковый запрос', kind:'Тип', prompt:'Описание', duration_seconds:'Длительность, сек.', error_code:'Ошибка', rationale:'Обоснование'};
 const statuses={draft:'Черновик',planned:'Запланировано',paused:'Приостановлено',active:'Активно',completed:'Завершено',failed:'Ошибка',pending:'Ожидает',running:'Выполняется',queued:'В очереди',ready:'Готово',awaiting_approval:'Ожидает подтверждения',cancelled:'Отменено'};
 const descriptions = {
+  connections:'Подключи свои сервисы, чтобы Велия работала с твоими материалами и делами. Доступные функции и готовность показаны у каждого сервиса.',
   research:'Изучи вопрос по источникам и собери выводы в отчёт. Здесь можно вернуться к материалам и проверить, на чём основан результат.',
   medical:'Разбери медицинское заключение, подготовь вопросы врачу и веди дневник симптомов. Анализ КТ доступен при подключённом сервисе; пояснения Велии не заменяют врача.',
   agents:'Настрой помощника под конкретную задачу: задай его роль, инструкции и доступные инструменты. Используй его для повторяющейся работы.',
@@ -314,6 +315,31 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
         return;
       }
       if (name === 'voice') {body.replaceChildren(); voiceSettings(body); return;}
+      if (name === 'connections') {
+        const result=await call('agent/connectors');if(ticket!==epoch)return;
+        body.replaceChildren(node('p','Подключение аккаунта не запускает задачи автоматически. Велия использует разрешённые данные по твоему запросу.','feature-help'));
+        const filter=node('input');filter.type='search';filter.placeholder='Найти сервис';filter.setAttribute('aria-label','Найти подключение');body.append(filter);
+        const groupNames={personal:'Личные дела',knowledge:'Заметки и документы',education:'Учёба',team:'Команда',business:'Бизнес',content:'Контент'};
+        const grid=node('div',undefined,'workspace-grid');body.append(grid);
+        const draw=()=>{grid.replaceChildren();for(const item of result.connections || []){
+          if(![item.name,item.description,groupNames[item.category]].join(' ').toLowerCase().includes(filter.value.toLowerCase()))continue;
+          const card=node('article',undefined,'feature-card');card.append(node('h3',item.name),node('small',groupNames[item.category] || ''),node('p',item.description),node('p',item.status_text,'feature-help'));
+          const providers=['notion','google-calendar','google-drive','google-sheets','google-tasks','gmail','google-classroom','youtube','outlook','onedrive','microsoft-todo','onenote','todoist','dropbox','trello','slack','hubspot','canva','zotero','zoom','figma','asana','clickup','monday','jira','shopify','wordpress','zendesk'];
+          if(item.permission_notice)card.append(node('p',item.permission_notice,'feature-help'));
+          let tenant;
+          if(item.available && !item.connected && ['shopify','zendesk'].includes(item.id)){tenant=node('input');tenant.placeholder=item.setup_hint;tenant.setAttribute('aria-label',item.setup_hint);tenant.maxLength=63;card.append(tenant);}
+          if(item.connected && providers.includes(item.id))card.append(button('Отключить',()=>run(card.querySelector('button'),async()=>{await call('agent/connectors/'+item.id,{method:'DELETE'});await open('connections');})));
+          else if(item.available && providers.includes(item.id))card.append(button('Подключить',()=>run(card.querySelector('button'),async()=>{
+            if(tenant && !/^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(tenant.value.trim().toLowerCase()))throw new Error('Укажи название рабочего пространства без адреса сайта.');
+            const response=await call('agent/connectors/'+item.id+'/connect',item.id==='google-calendar'?{}:{method:'POST',data:tenant?{tenant:tenant.value.trim().toLowerCase()}: {}});
+            const hosts={todoist:'app.todoist.com',dropbox:'www.dropbox.com',trello:'auth.atlassian.com',slack:'slack.com',hubspot:'app.hubspot.com',canva:'www.canva.com',zotero:'www.zotero.org',zoom:'zoom.us',figma:'www.figma.com',asana:'app.asana.com',clickup:'app.clickup.com',monday:'auth.monday.com',jira:'auth.atlassian.com',wordpress:'public-api.wordpress.com'};
+            const url=new URL(response.url);const expected=tenant?tenant.value.trim().toLowerCase()+'.'+(item.id==='shopify'?'myshopify.com':'zendesk.com'):(hosts[item.id] || (item.id==='notion'?'api.notion.com':['outlook','onedrive','microsoft-todo','onenote'].includes(item.id)?'login.microsoftonline.com':'accounts.google.com'));
+            if(url.protocol!=='https:' || url.hostname!==expected || url.username || url.password)throw new Error('Ссылка подключения недействительна.');
+            location.assign(url.href);
+          })));
+          grid.append(card);
+        }};filter.oninput=draw;draw();return;
+      }
       if (name === 'profile') {
         const r = await call('profile'); if (ticket !== epoch) return; body.replaceChildren(form([['preferred_name','Как обращаться'],['about_me','О себе','textarea']], 'Сохранить', d=>call('profile',{method:'PATCH',data:d}), r.profile));
       } else if (name === 'plugins') {
