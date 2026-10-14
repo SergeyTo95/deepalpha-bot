@@ -15,7 +15,8 @@ ROUTES += [("GET", "agent/connectors"), ("POST", "agent/connectors/notion/connec
            ("DELETE", "agent/connectors/notion")]
 CLOUD_CONNECTORS=('google-drive','google-sheets','google-tasks','gmail','google-classroom','youtube',
                   'outlook','onedrive','microsoft-todo','onenote')
-for connector in CLOUD_CONNECTORS:
+VENDOR_CONNECTORS=('todoist','dropbox','trello','slack','hubspot','canva','zotero','zoom','figma','asana','clickup','monday','jira','shopify','wordpress','zendesk')
+for connector in (*CLOUD_CONNECTORS,*VENDOR_CONNECTORS):
     ROUTES += [('POST','agent/connectors/'+connector+'/connect'),('DELETE','agent/connectors/'+connector)]
 PATTERNS = [(method, re.compile(re.sub(r"\{[^}]+\}", "[A-Za-z0-9_-]{1,128}", path) + r"\Z"))
             for method, path in ROUTES]
@@ -47,7 +48,9 @@ def setup_feature_routes(app, *, session_for, same_origin, upstream, json_respon
         headers={"Cache-Control":"no-store","Referrer-Policy":"no-referrer"}
         if request.query.get('error'):
             return web.Response(text='Подключение отменено. Вернись в Велию.',headers=headers)
-        code,state=request.query.get('code',''),request.query.get('state','')
+        code,state=request.query.get('oauth_verifier' if connector=='zotero' else 'code',''),request.query.get('state','')
+        if any(len(request.query.getall(k))!=1 for k in request.query):
+            return web.Response(text='Ссылка подключения недействительна.',status=400,headers=headers)
         if not 1<=len(code)<=2048 or not 32<=len(state)<=128:
             return web.Response(text='Ссылка подключения недействительна.',status=400,headers=headers)
         try:
@@ -55,14 +58,14 @@ def setup_feature_routes(app, *, session_for, same_origin, upstream, json_respon
             if not session:
                 return web.Response(text='Войди в Велию и начни подключение заново.',status=401,headers=headers)
             status,result=await upstream('POST','/mobile-api/v1/agent/connectors/'+connector+'/complete',
-                token=session.access,data={'code':code,'state':state})
+                token=session.access,data={'code':code,'state':state,**({'provider':dict(request.query)} if connector in ('zotero','shopify') else {})})
             if status!=200 or result.get('ok') is not True:
                 return web.Response(text='Не удалось подключить сервис. Начни подключение заново.',status=400,headers=headers)
         except Exception:
             return web.Response(text='Сервис подключения временно недоступен.',status=503,headers=headers)
         raise web.HTTPSeeOther(location='/',headers=headers)
     app.router.add_get('/web-api/v1/connectors/notion/callback',notion_callback)
-    app.router.add_get('/web-api/v1/connectors/{connector:'+('|'.join(CLOUD_CONNECTORS))+'}/callback',notion_callback)
+    app.router.add_get('/web-api/v1/connectors/{connector:'+('|'.join((*CLOUD_CONNECTORS,*VENDOR_CONNECTORS)))+'}/callback',notion_callback)
     async def relay(request):
         def error(code, status):
             return json_response({"ok": False, "error": code}, status)
