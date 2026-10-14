@@ -83,11 +83,15 @@ def ensure_builtin_tools() -> None:
         from services import velia_agent_google_calendar_service as google_calendar
 
         google_calendar.register_tools()
+    from services import velia_notion_connection_service as notion
+    notion.register_tools()
     _BUILTINS_READY = True
 
 
 def public_tools() -> List[Dict[str, Any]]:
     ensure_builtin_tools()
+    from services import velia_notion_connection_service as notion
+    notion.register_tools()
     return tools.list_tools()
 
 
