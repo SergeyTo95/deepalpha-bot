@@ -126,6 +126,7 @@ def choose_rift_coordinates(seed,count=None,config=None):
     return coords
 
 def ensure_world_initialized_in_transaction(conn,season_id:int):
+    init_world_schema(conn)
     ensure_null_faction(conn,season_id)
     c=conn.cursor(); season=_fetchone(c,'SELECT * FROM polywar_seasons WHERE id=%s',(season_id,)); now=_now(); start=season.get('starts_at') or now
     if isinstance(start,str): start=datetime.fromisoformat(start)

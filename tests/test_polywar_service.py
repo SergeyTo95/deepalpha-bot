@@ -110,7 +110,7 @@ def test_join_faction_is_atomic_and_rejects_repeat_or_unknown(polydb):
     conn = polydb()
     season_id = state["season"]["id"]
     stats = conn.execute("SELECT active_members_count FROM polywar_faction_season_stats WHERE season_id = ? AND faction_id = 1", (season_id,)).fetchone()
-    events = conn.execute("SELECT COUNT(*) FROM polywar_events WHERE season_id = ? AND user_id = 42", (season_id,)).fetchone()[0]
+    events = conn.execute("SELECT COUNT(*) FROM polywar_events WHERE season_id = ? AND user_id = 42 AND event_type = 'join'", (season_id,)).fetchone()[0]
     assert stats["active_members_count"] == 1
     assert events == 1
     conn.close()
@@ -132,7 +132,7 @@ def test_two_competing_join_attempts_create_one_membership_event_and_stat(polydb
 
     conn = polydb()
     player = conn.execute("SELECT faction_id, season_id FROM polywar_players WHERE user_id = 77").fetchone()
-    events = conn.execute("SELECT COUNT(*) FROM polywar_events WHERE user_id = 77").fetchone()[0]
+    events = conn.execute("SELECT COUNT(*) FROM polywar_events WHERE user_id = 77 AND event_type = 'join'").fetchone()[0]
     member_sum = conn.execute("SELECT SUM(active_members_count) FROM polywar_faction_season_stats WHERE season_id = ?", (player["season_id"],)).fetchone()[0]
     assert len(results) == 1
     assert errors == ["faction_already_selected"]
