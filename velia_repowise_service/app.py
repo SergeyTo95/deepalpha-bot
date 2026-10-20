@@ -10,6 +10,7 @@ from aiohttp import web
 
 from velia_repowise_service.config import ConfigurationError, Settings
 from velia_repowise_service.mcp_client import MCPContextError, get_planning_context
+from velia_repowise_service.mirror_sync import MirrorSyncManager
 from velia_repowise_service.workspace import (
     Workspace,
     WorkspaceError,
@@ -93,13 +94,16 @@ def create_app(
     *,
     manager: WorkspaceManager | None = None,
     context_loader: ContextLoader = get_planning_context,
+    mirror_sync_manager: MirrorSyncManager | None = None,
 ) -> web.Application:
     current = settings or Settings.load()
     workspace_manager = manager or WorkspaceManager(current)
+    sync_manager = mirror_sync_manager or MirrorSyncManager(current)
     app = web.Application(client_max_size=current.max_request_bytes)
     app["settings"] = current
     app["workspace_manager"] = workspace_manager
     app["context_loader"] = context_loader
+    app["mirror_sync_manager"] = sync_manager
     app["semaphore"] = asyncio.Semaphore(current.max_concurrency)
 
     async def health(_request: web.Request) -> web.Response:
@@ -107,10 +111,11 @@ def create_app(
             {
                 "ok": True,
                 "service": "velia-repowise",
-                "version": 1,
+                "version": 2,
                 "repowise_version": _repowise_version(),
                 "mode": "read_only",
                 "repositories_configured": len(current.repositories),
+                "mirror_sync": sync_manager.public_status(),
                 "telemetry": False,
                 "llm_generation": False,
             }
@@ -198,9 +203,17 @@ def create_app(
         except Exception as exc:
             return _error_response(exc)
 
+    async def start_background_services(_app: web.Application) -> None:
+        await sync_manager.start()
+
+    async def stop_background_services(_app: web.Application) -> None:
+        await sync_manager.close()
+
     app.router.add_get("/health", health)
     app.router.add_get("/v1/license", license_info)
     app.router.add_post("/v1/context/planning", planning)
+    app.on_startup.append(start_background_services)
+    app.on_cleanup.append(stop_background_services)
     return app
 
 
