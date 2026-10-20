@@ -74,7 +74,6 @@ def _decode(value: Any) -> dict:
         return {}
 
 
-
 def _activity_fingerprint(metadata: dict) -> str:
     meta = metadata if isinstance(metadata, dict) else {}
     if meta.get("activity_fingerprint") is not None and str(meta.get("activity_fingerprint")).strip():
@@ -99,6 +98,7 @@ def _safe_activity_metadata(metadata: dict) -> dict:
         if isinstance(value, str) and len(value) > 160:
             safe[key] = value[:157].rstrip() + "..."
     return safe
+
 
 def _stable_code(user_id: int) -> str:
     secret = os.getenv("AIRDROP_REFERRAL_CODE_SECRET") or os.getenv("BOT_TOKEN") or "deepalpha-airdrop-referrals-v1"
@@ -348,7 +348,6 @@ def record_referred_user_activity(user_id: int, activity_type: str, metadata: di
         awarded.append(_award_milestone(referrer, uid, M2_FIRST_ANALYSIS, PENDING, meta, "first_analysis"))
     if count >= 3:
         awarded.append(_award_milestone(referrer, uid, M3_THREE_ANALYSES, PENDING, meta, "three_analyses"))
-    # A later UTC day than referral creation is approximated by at least two active days in v1 memory-safe path.
     if days >= 2:
         awarded.append(_award_milestone(referrer, uid, M4_NEXT_DAY_RETURN, PENDING, meta, "next_day_return"))
     if count >= 3 and days >= 2:
@@ -369,9 +368,42 @@ def _rows_for_user(user_id: int) -> list[dict]:
         return [m for m in _MEMORY_MILESTONES if int(m.get("referrer_user_id") or 0) == uid]
 
 
+def _referred_user_ids_for_user(user_id: int) -> set[int]:
+    """Return every distinct referred user from both current and legacy referral stores."""
+    uid = int(user_id)
+    referred: set[int] = set()
+    try:
+        conn, cur = _connect_ready()
+        try:
+            cur.execute(
+                """
+                SELECT referred_user_id
+                FROM airdrop_referrals
+                WHERE referrer_user_id=%s
+                UNION
+                SELECT user_id
+                FROM users
+                WHERE referred_by=%s
+                """,
+                (uid, uid),
+            )
+            referred.update(int(row[0]) for row in (cur.fetchall() or []) if row and row[0] is not None)
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning("airdrop_referral_summary_fallback user_id=%s error=%s", uid, type(exc).__name__)
+        referred.update(
+            int(row["referred_user_id"])
+            for row in _MEMORY_REFERRALS.values()
+            if int(row.get("referrer_user_id") or 0) == uid
+        )
+    return referred
+
+
 def get_referral_summary(user_id: int) -> dict:
     uid = int(user_id); rows = _rows_for_user(uid)
-    referred = {int(r["referred_user_id"]) for r in rows}
+    referred = _referred_user_ids_for_user(uid)
+    referred.update(int(r["referred_user_id"]) for r in rows)
     active = {int(r["referred_user_id"]) for r in rows if r["milestone"] == M5_ACTIVE_REFERRAL and r["status"] == CONFIRMED}
     pending = sum(Decimal(str(r["points"])) for r in rows if r["status"] == PENDING)
     confirmed = sum(Decimal(str(r["points"])) for r in rows if r["status"] == CONFIRMED)
