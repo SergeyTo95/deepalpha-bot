@@ -436,3 +436,6 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     setup_account_routes(app, session_for=session_for, same_origin=same_origin, upstream=upstream,
         upstream_stream=upstream_stream, authorize_model=authorize_model, handlers=handlers,
         json_response=json_response, web_search=web_search)
+    from desktop.project_workflow import setup_project_workflow_routes
+    setup_project_workflow_routes(app, session_for=session_for, upstream=upstream,
+        json_response=json_response, web_search=web_search, same_origin=same_origin)

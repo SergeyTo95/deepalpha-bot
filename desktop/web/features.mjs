@@ -39,6 +39,12 @@ const node = (tag, text, cls) => {const n = document.createElement(tag); if (tex
 const button = (text, action) => {const b = node('button', text); b.type = 'button'; b.onclick = action; return b;};
 const labels = {items:'Результаты',notes:'Описание',completed:'Выполнено',start:'Начало',end:'Окончание',goal:'Цель', title:'Название', name:'Имя', description:'Описание', instructions:'Инструкции', audience:'Аудитория', style:'Стиль', constraints:'Ограничения', status:'Статус', domain:'Направление', content:'Содержание', summary:'Результат', conclusion:'Вывод', text:'Текст', created_at:'Создано', updated_at:'Обновлено', preferred_name:'Как обращаться', about_me:'О себе', credits:'Токены', user_messages:'Сообщения сегодня', user_cost_usd:'Расход сегодня, $', enabled:'Включено', available:'Доступно', revision:'Версия', query:'Поисковый запрос', kind:'Тип', prompt:'Описание', duration_seconds:'Длительность, сек.', error_code:'Ошибка', rationale:'Обоснование'};
 const statuses={draft:'Черновик',planned:'Запланировано',paused:'Приостановлено',active:'Активно',completed:'Завершено',failed:'Ошибка',pending:'Ожидает',running:'Выполняется',queued:'В очереди',ready:'Готово',awaiting_approval:'Ожидает подтверждения',cancelled:'Отменено'};
+export const PROJECT_WORKFLOW_PREFIX = 'VELIA_PROJECT_WORKFLOW_V1\n';
+export function projectWorkflowQuery(url, goal) {
+  const target = new URL(url);
+  if(target.protocol!=='https:' || target.username || target.password || target.hash || target.href.length>512 || !goal.trim() || goal.trim().length>800)throw new Error('Укажи HTTPS-ссылку и цель до 800 символов.');
+  return PROJECT_WORKFLOW_PREFIX+JSON.stringify({version:'velia-replica-v1',url:target.href,goal:goal.trim()});
+}
 const descriptions = {studio:'Создавай изображения, видео и музыку в одном месте.',projects:'Собирай идеи, задачи и материалы вокруг одной цели.',research:'От вопроса к источникам, выводам и отчёту.',medical:'Загружай исследования и следи за результатами анализа.',agents:'Настраивай помощников под свои задачи.',autopilot:'Задачи по расписанию, результаты и разработка в одном месте.',profile:'Помоги Велии лучше понимать тебя.',plugins:'Выбирай инструменты, которые нужны в работе.',balance:'Следи за доступными токенами и использованием.',voice:'Настрой язык и голос для разговора с Велией.'};
 const hiddenKeys = new Set(['id','user_id','project_id','session_id','generation_id','client_request_id','signature','provider','model','input_sha256','worker_status']);
 function display(value, depth = 0) {
@@ -62,6 +68,13 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
   let epoch = 0, section = null, controller = null;
   const close = () => {epoch++; controller?.abort(); root.replaceChildren(); root.hidden = true; section = null; nav.querySelectorAll('button').forEach(b=>b.removeAttribute('aria-current')); document.getElementById('conversation-scroll').hidden = false; document.querySelector('.composer-area').hidden = false;};
   const call = (p, o = {}) => featureRequest(p, {...o, signal: controller?.signal});
+  const workflowCall=async(path='',{method='GET',data,key}={})=>{
+    const response=await fetch('/web-api/v1/project-workflows'+path,{method,credentials:'same-origin',signal:controller?.signal,
+      headers:method==='GET'?{}:{'Content-Type':'application/json','X-Velia-Request':'1','Idempotency-Key':key},...(method==='GET'?{}:{body:JSON.stringify(data)})});
+    const result=await response.json();
+    if(!response.ok||!result.ok)throw new Error(response.status===401?'Войди в VELIA, чтобы продолжить.':response.status===400?'Проверь HTTPS-ссылку и цель до 800 символов.':'Не удалось открыть разбор. Повтори действие.');
+    return result;
+  };
   const run = async (b, fn) => {const ticket = epoch; b.disabled = true; try {await fn();} catch (e) {if (e.name !== 'AbortError' && ticket === epoch) toast(e.message);} finally {if (ticket === epoch) b.disabled = false;}};
   function form(fields, label, submit, initial = {}) {
     const f = node('form', undefined, 'feature-form'), controls = {};
@@ -73,7 +86,7 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
       if (!['textarea','select','multi'].includes(type)) input.type = type;
       if (options) for (const [value, text] of options) {const o = node('option', text); o.value = value; input.append(o);}
       if (type === 'checkbox') input.checked = !!initial[key]; else if(initial[key] !== undefined || !['select','multi'].includes(type)) input.value = initial[key] ?? '';
-      input.name = key; input.maxLength = type === 'textarea' ? 8000 : 200; input.required = !['checkbox','file','multi'].includes(type) && !['description','about_me','audience','style','constraints','lyrics','notes'].includes(key);
+      input.name = key; input.setAttribute('aria-label',title); input.maxLength = type === 'textarea' ? 8000 : 200; input.required = !['checkbox','file','multi'].includes(type) && !['description','about_me','audience','style','constraints','lyrics','notes'].includes(key);
       if (type === 'file') input.accept = '.zip,.nii,.gz';
       controls[key] = input; if(type==='checkbox') l.prepend(input); else l.append(input); if(type==='multi') l.append(node('small','На компьютере удерживай Ctrl или ⌘, чтобы выбрать несколько.', 'field-hint')); f.append(l);
     }
@@ -136,7 +149,35 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
         const fields=['title','goal','audience','style','constraints'].map(k=>[k,labels[k],k==='title'?'text':'textarea']);
         body.replaceChildren(form(fields,'Создать проект',async d=>{await call('projects',{method:'POST',data:{passport:d},key:crypto.randomUUID()});await refresh();}));
         const list=node('div');body.append(list);
-        const detail=async(p,card)=>{const r=await call('projects/'+p.id);card.replaceChildren(form(fields,'Сохранить изменения',async d=>{await call('projects/'+p.id,{method:'PATCH',data:{passport:d,expected_revision:r.project.revision}});await detail(p,card);},r.project.passport));const resources=node('div');card.append(form([['kind','Тип','select',[['chat','Диалог'],['deepalpha','DeepAlpha'],['image','Изображения'],['video','Видео'],['music','Музыка']]],['title','Название'],['query','Запрос','textarea']],'Добавить ресурс',async d=>{await call('project-resources',{method:'POST',data:{...d,project_id:p.id},key:crypto.randomUUID()});await collection('project-resources?project_id='+encodeURIComponent(p.id),'resources',resources);}));card.append(resources);await collection('project-resources?project_id='+encodeURIComponent(p.id),'resources',resources);};
+        const detail=async(p,card)=>{
+          const r=await call('projects/'+p.id); if(ticket!==epoch)return;
+          card.replaceChildren(node('h3',r.project.passport.title));
+          const edit=node('details'),summary=node('summary','Настройки проекта');edit.append(summary,form(fields,'Сохранить изменения',async d=>{await call('projects/'+p.id,{method:'PATCH',data:{passport:d,expected_revision:r.project.revision}});await detail(p,card);},r.project.passport));card.append(edit);
+          card.append(node('h4','Разобрать и улучшить сервис'),node('p','Добавь ссылку и цель. Велия поможет разобрать сценарии, изучить отзывы и подготовить проверки. Каждый этап сохраняется в диалоге проекта.','feature-help'));
+          let workflowKey=crypto.randomUUID(),workflowData='';
+          const starter=form([['target_url','Ссылка на сервис','url'],['workflow_goal','Что хочешь создать или улучшить','textarea']],'Начать разбор',async d=>{
+            const query=projectWorkflowQuery(d.target_url,d.workflow_goal);
+            if(query!==workflowData){workflowData=query;workflowKey=crypto.randomUUID();}
+            const result=await workflowCall('',{method:'POST',data:{project_id:p.id,url:new URL(d.target_url).href,goal:d.workflow_goal.trim()},key:workflowKey});
+            if(ticket!==epoch)return;
+            close();await openConversation({id:result.resource.id,title:result.resource.title},{projectStage:{project_id:p.id,stage:'recon'},content:'Разбери сервис и предложи полезную первую версию по указанной цели.'});
+          });
+          starter.elements.target_url.maxLength=512;starter.elements.workflow_goal.maxLength=800;
+          const creation=node('details');creation.open=true;creation.append(node('summary','Новый разбор сервиса'),starter);card.append(creation);
+          const resources=node('div');card.append(resources);
+          async function resourceDetail(item, target){
+            if(item.kind==='chat' && item.seed_query?.startsWith(PROJECT_WORKFLOW_PREFIX)){
+              creation.open=false;
+              if(!target.isConnected)resources.prepend(target);
+              await projectWorkflow(p,item,target);
+            }else if(['chat','deepalpha'].includes(item.kind)){
+              close();await openConversation({id:item.id,title:item.title});
+            }else target.append(display({...item,seed_query:undefined}));
+          }
+          const refreshResources=()=>collection('project-resources?project_id='+encodeURIComponent(p.id),'resources',resources,resourceDetail);
+          const extra=node('details');extra.append(node('summary','Добавить другой материал'),form([['kind','Тип','select',[['chat','Диалог'],['deepalpha','DeepAlpha'],['image','Изображения'],['video','Видео'],['music','Музыка']]],['title','Название'],['query','Запрос','textarea']],'Добавить ресурс',async d=>{await call('project-resources',{method:'POST',data:{...d,project_id:p.id},key:crypto.randomUUID()});await refreshResources();}));card.append(extra);
+          await refreshResources();
+        };
         const refresh=()=>collection('projects','projects',list,detail);await refresh();
       } else if (name === 'agents') {
         const capabilities = await call('agents/capabilities'); if(ticket!==epoch)return;
@@ -156,6 +197,61 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
         await autopilot(body,draft);
       }
     } catch(e) {if(e.name!=='AbortError'&&ticket===epoch)body.replaceChildren(node('p',e.message),button('Повторить',()=>open(name)));}
+  }
+  async function projectWorkflow(project, resource, card) {
+    const ticket=epoch;
+    const result=await workflowCall(`/${encodeURIComponent(project.id)}/${encodeURIComponent(resource.id)}`);if(ticket!==epoch)return;
+    const completed=new Set(result.workflow.completed);
+    card.replaceChildren(node('h3',resource.title),node('p',result.workflow.goal),node('p','Flash · результаты сохраняются в аккаунте','feature-help'));
+    const stageOptions=Object.entries(result.stages).map(([key,title])=>[key,title+(completed.has(key)?' · ответ сохранён':'')]);
+    const first=stageOptions.find(([key])=>!completed.has(key))?.[0]||'diff';
+    const feedback=evidenceEditor('feedback'),results=evidenceEditor('results');
+    const work=form([['stage','Этап','select',stageOptions],['stage_notes','Материалы и замечания','textarea']],'Выполнить этап',async d=>{
+      const content=d.stage==='feedback'?feedback.serialize():d.stage==='diff'?results.serialize():d.stage_notes.trim()||'Разбери сервис и предложи полезную первую версию по указанной цели.';
+      close();await openConversation({id:resource.id,title:resource.title},{projectStage:{project_id:project.id,stage:d.stage},content});
+    },{stage:first});
+    work.elements.stage_notes.required=false;work.elements.stage_notes.maxLength=6000;
+    work.insertBefore(feedback.root,work.querySelector('button[type=submit]'));work.insertBefore(results.root,work.querySelector('button[type=submit]'));
+    const hint=node('p',undefined,'feature-help');
+    const update=()=>{
+      const stage=work.elements.stage.value,needs=stage==='diff'?'test':stage!=='recon'?'recon':null;
+      work.querySelector('button[type=submit]').disabled=!!needs&&!completed.has(needs);
+      const help={recon:'Укажи известные сценарии или вставь выдержки из документации. При доступном интернет-поиске Велия использует публичные источники.',feedback:'Добавь тексты отзывов и ссылки на них. Велия сохранит цитаты и сгруппирует проблемы. Содержимое ссылок автоматически не подтверждается.',test:'Велия составит план проверок. Этот этап не запускает тесты на чужом сервисе.',diff:'Добавь результаты проверок и ссылки на доказательства. Обязательная проверка без результата или ссылки блокирует готовность. Это оценка внесённых данных.'};
+      hint.textContent=(needs&&!completed.has(needs)?'Сначала выполни этап «'+result.stages[needs]+'». ':'')+help[stage];
+      const structured=['feedback','diff'].includes(stage);work.elements.stage_notes.closest('label').hidden=structured;work.elements.stage_notes.disabled=structured;
+      feedback.active(stage==='feedback');results.active(stage==='diff');
+    };
+    work.elements.stage.onchange=update;work.append(hint);update();card.append(work);
+    actions(card,[['Открыть сохранённый диалог',async()=>{close();await openConversation({id:resource.id,title:resource.title});}],['Обновить этапы',()=>projectWorkflow(project,resource,card)]]);
+  }
+  function evidenceEditor(kind) {
+    const root=node('div',undefined,'feature-evidence'),list=node('div'),items=[];
+    root.append(list);
+    const field=(parent,label,type='text',options=[])=>{
+      const wrap=node('label',undefined,'feature-input'),input=node(type==='textarea'?'textarea':type==='select'?'select':'input');
+      if(!['textarea','select'].includes(type))input.type=type;
+      input.setAttribute('aria-label',label);input.required=true;input.maxLength=type==='textarea'?1500:512;
+      for(const [value,text] of options){const option=node('option',text);option.value=value;input.append(option);}
+      wrap.append(node('span',label),input);parent.append(wrap);return input;
+    };
+    const add=()=>{
+      if(items.length>=60)return;
+      const row=node('div',undefined,'feature-card'),item={row};
+      if(kind==='feedback'){
+        item.url=field(row,'Ссылка на отзыв','url');item.text=field(row,'Текст отзыва','textarea');
+      }else{
+        item.name=field(row,'Что проверяли');item.name.maxLength=200;item.name.pattern='[^|]+';
+        item.priority=field(row,'Важность','select',[['must','Обязательная проверка'],['should','Желательная проверка'],['could','Дополнительная проверка'],['S1','Критическая ошибка'],['S2','Серьёзная ошибка']]);
+        item.status=field(row,'Результат','select');item.url=field(row,'Ссылка на доказательство','url');
+        const options=()=>{const bug=['S1','S2'].includes(item.priority.value);item.status.replaceChildren();for(const [value,text] of bug?[['open','Не исправлена'],['fixed','Исправлена']]:[['not_run','Не проверено'],['passed','Пройдено'],['partial','Частично'],['failed','Ошибка']]){const option=node('option',text);option.value=value;item.status.append(option);}item.url.required=bug;};
+        item.priority.onchange=options;options();
+      }
+      const remove=button('Удалить строку',()=>{if(items.length===1)return;items.splice(items.indexOf(item),1);row.remove();});row.append(remove);items.push(item);list.append(row);
+    };
+    const addButton=button(kind==='feedback'?'Добавить отзыв':'Добавить проверку',add);root.append(addButton);add();
+    return {root,active(value){root.hidden=!value;root.querySelectorAll('input,textarea,select,button').forEach(input=>input.disabled=!value);},
+      serialize(){return items.map(item=>kind==='feedback'?`${item.url.value.trim()} | ${item.text.value.trim().replace(/\r?\n/g,' ')}`:
+        `${item.name.value.trim()} | ${item.priority.value} | ${item.status.value} | ${item.url.value.trim()||'-'}`).join('\n');}};
   }
   async function development(body) {
     const ticket=epoch;

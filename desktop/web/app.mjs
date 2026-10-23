@@ -85,7 +85,14 @@ function addFiles(files){if(busy)return;if(!profile){openAuth();return;}if(agent
 
 const current = () => chats.find((c) => c.id === currentId);
 const voice = setupVoice({busy:()=>busy, toast, send:text=>{if(agentMode)setAgentMode(false);setModel("velia-flash");$("prompt").value=text;return generate(false, true);}});
-const features = setupFeatures({signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
+let nextProjectStage = null;
+const features = setupFeatures({signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,openConversation:async (c,draft)=>{
+  const account=profile?.account;await syncHistory();if(!profile||profile.account!==account||busy)return;
+  let chat=chats.find(x=>x.id===c.id);
+  if(!chat){chat={id:c.id,title:c.title,messages:[],remote:true};chats.unshift(chat);}
+  await openChat(chat);
+  if(draft&&profile?.account===account&&currentId===c.id){setAgentMode(false);setModel('velia-flash');nextProjectStage={conversation:c.id,...draft.projectStage};$('prompt').value=draft.content;resizePrompt();await generate();}
+}});
 const browserStorage = { getItem: (key) => localStorage.getItem(key) };
 function toast(text) {
   clearTimeout(toastTimer);
@@ -484,6 +491,7 @@ async function continueAfterTakeover() {
 }
 
 async function openChat(chat, background = false) {
+  nextProjectStage = null;
   if (!background) voice.stop();
   features.close();
   clearFiles();
@@ -505,6 +513,7 @@ async function openChat(chat, background = false) {
         pending: m.status === "pending",
         failed: m.status === "error" ? "Не удалось получить ответ. Можно повторить запрос." : undefined,
         internet: m.web_search === true,
+        projectStage: m.project_stage,
         search: m.role === "assistant" && m.web_search ? safeSearch(m.web_search) : undefined,
       }));
       chat.loaded = true;
@@ -663,7 +672,9 @@ async function generate(retry = false, voiceTurn = false) {
       catch(error){toast(error.message);return;}finally{setBusy(false);}
     }
     chat.messages.push({ role: "user", content: text, attachmentIds:attachments, fileNames:selectedFiles.map(x=>x.file.name), requestId: crypto.randomUUID(),
-      internet: !agentMode && internetAvailable, agent: agentMode });
+      internet: !agentMode && internetAvailable, agent: agentMode,
+      ...(nextProjectStage?.conversation===chat.id?{projectStage:{project_id:nextProjectStage.project_id,stage:nextProjectStage.stage}}:{}) });
+    nextProjectStage=null;
     clearFiles();
     $("prompt").value = "";
     resizePrompt();
@@ -674,6 +685,7 @@ async function generate(retry = false, voiceTurn = false) {
       idempotency_key: user.requestId || (user.requestId = crypto.randomUUID()), ...(user.attachmentIds?.length ? {attachment_ids:user.attachmentIds} : {})} : chatPayload(chat, selected),
     answer = { role: "assistant", content: "", model: selected, pending: true, agent: agentMode };
   if (voiceTurn) {payload.voice_turn=true;payload.web_search=false;}
+  else if(user.projectStage){payload.project_stage=user.projectStage;payload.web_search=false;}
   else if (!agentMode && internetAvailable) payload.web_search = true;
   chat.messages.push(answer);
   chat.updated = Date.now();

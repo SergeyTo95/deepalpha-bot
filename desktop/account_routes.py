@@ -4,6 +4,7 @@ import re
 from aiohttp import ClientError, web
 from velia_desktop_routes import AuthenticationUnavailable, FLASH_ID, MODEL_ID, flash_enabled
 from desktop.web_search import SearchUnavailable, source_event
+from desktop import project_workflow as workflow
 
 ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 REQUEST_ID = re.compile(r"[A-Za-z0-9:_-]{8,128}\Z")
@@ -38,7 +39,7 @@ def message(value):
     return result
 
 
-async def account_events(source, model):
+async def account_events(source, model, *, footer=""):
     """Strip usage, internal plans, provider identifiers and account credentials."""
     pending = b""
     completed = False
@@ -71,7 +72,7 @@ async def account_events(source, model):
                     raise ValueError("invalid_account_stream")
                 # Duplicate requests may contain no deltas; persisted content is canonical.
                 safe = {"model": model, "reset": True,
-                    "choices": [{"delta": {"content": final}, "finish_reason": "stop"}]}
+                    "choices": [{"delta": {"content": final + footer}, "finish_reason": "stop"}]}
                 completed = True
             if safe is not None:
                 yield ("data: " + json.dumps(safe, ensure_ascii=False) + "\n\n").encode()
@@ -153,6 +154,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
             if web_search:
                 result["messages"] = await web_search.restore_messages(request[ACCOUNT_SESSION].user_id,
                     request.match_info["conversation_id"], result["messages"])
+            result["messages"] = workflow.restore_messages(result["messages"])
         return json_response(result, status)
 
     async def delete(request):
@@ -164,7 +166,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
 
     async def send(request):
         data = await read_body(request)
-        if (set(data) - {"web_search", "attachment_ids", "voice_turn"} != {"content", "model", "idempotency_key"}
+        if (set(data) - {"web_search", "attachment_ids", "voice_turn", "project_stage"} != {"content", "model", "idempotency_key"}
                 or ("web_search" in data and type(data["web_search"]) is not bool)
                 or ("voice_turn" in data and type(data["voice_turn"]) is not bool)
                 or data.get("model") not in {FLASH_ID, MODEL_ID}
@@ -177,6 +179,19 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
         if data["model"] == FLASH_ID and not flash_enabled():
             return error("flash_unavailable", 503)
         session = request[ACCOUNT_SESSION]
+        skill_context = stage = None
+        if "project_stage" in data:
+            selected = data["project_stage"]
+            if (not isinstance(selected, dict) or set(selected) != {"project_id", "stage"}
+                    or selected.get("stage") not in workflow.STAGES or data["model"] != FLASH_ID
+                    or attachments or data.get("voice_turn")):
+                return error("invalid_project_stage", 400)
+            stage = selected["stage"]
+            try:
+                skill_context = await workflow.resolve(upstream, session, selected["project_id"], request.match_info["conversation_id"])
+                prepared_content = workflow.stage_content(skill_context, stage, data["content"])
+            except workflow.WorkflowError as exc:
+                return error(exc.code, exc.status)
         permission = await authorize_model(session.access, data["model"])
         if permission:
             return error(*permission)
@@ -187,7 +202,19 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
         source = stream = None
         try:
             content, result = data["content"], None
-            if not data.get("voice_turn") and ((web_search and web_search.available) or data.get("web_search")):
+            footer = ""
+            if skill_context:
+                content = prepared_content
+                footer = workflow.assessment_footer(content)
+                if stage == "recon" and web_search and web_search.available:
+                    from urllib.parse import urlsplit
+                    target = urlsplit(skill_context["url"])
+                    # Only the public target host/path reach search, never project goals or pasted feedback.
+                    query = "site:" + target.hostname + target.path + " features help documentation pricing"
+                    content, result = await web_search.account_question(session.user_id,
+                        request.match_info["conversation_id"], data["idempotency_key"], content, FLASH_ID,
+                        search_query=query)
+            elif not data.get("voice_turn") and ((web_search and web_search.available) or data.get("web_search")):
                 if web_search is None:
                     raise SearchUnavailable()
                 status, previous = await relay(request, "GET", "/messages?limit=20")
@@ -203,7 +230,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
             source = upstream_stream("/mobile-api/v1/conversations/" + request.match_info["conversation_id"] + "/messages/stream",
                 token=session.access, data={"content": content, "chat_mode": "flash" if data["model"] == FLASH_ID else "pro",
                     "idempotency_key": data["idempotency_key"], **({"voice_turn": True} if data.get("voice_turn") else {}), **({"attachment_ids": attachments} if attachments else {})})
-            stream = account_events(source, data["model"])
+            stream = account_events(source, data["model"], footer=footer)
             first = await anext(stream)
             await response.prepare(request)
             if result:

@@ -1358,6 +1358,7 @@ dialog::backdrop {
 .feature-card h3 { margin: 0 0 10px; font-size: 17px; line-height: 1.4; }
 .feature-card > small { display: inline-block; color: var(--soft); background: var(--hover); border-radius: 6px; padding: 3px 8px; font-size: 11px; }
 .feature-card .feature-form { background: var(--bg); margin-top: 16px; }
+.feature-evidence .feature-card { display: grid; gap: 14px; padding: 16px; }
 .feature-card img, .feature-card video { display: block; max-width: 100%; max-height: 600px; border-radius: 12px; margin: 16px 0; }
 .feature-card audio { width: 100%; max-width: 100%; margin: 12px 0; }
 .feature-detail { display: grid; gap: 12px; }
