@@ -40,6 +40,9 @@ COPY velia_desktop_routes.py /app/velia_desktop_routes.py
 COPY velia_request_understanding.py /app/velia_request_understanding.py
 COPY desktop/gateway.py desktop/admin_proxy.py desktop/probe_gateway.py desktop/probe_browser_agent_web.py desktop/probe_request_intent.py desktop/answer_review.py desktop/web_routes.py desktop/feature_routes.py desktop/account_routes.py desktop/guest_routes.py desktop/guest_store.py desktop/web_search.py desktop/request_intent.py desktop/spelling_hints.py desktop/flash_worker_start.py /app/desktop/
 COPY desktop/web /app/desktop/web
+COPY desktop/project_workflow.py /app/desktop/
+COPY tests/test_velia_project_workflow.py /app/tests/
+RUN python -m pytest -q -p no:cacheprovider tests/test_velia_project_workflow.py
 COPY tests/test_velia_desktop_gateway.py tests/test_velia_desktop_relay.py tests/test_velia_desktop_flash.py tests/test_velia_web_chat.py tests/test_velia_web_guest.py tests/test_velia_web_search.py tests/test_velia_request_understanding.py tests/test_velia_request_intent.py tests/test_velia_answer_review.py tests/test_velia_flash_worker_start.py tests/test_velia_desktop_flash_readiness.py tests/test_velia_admin_proxy.py tests/test_velia_web_features.py /app/tests/
 RUN python -m pytest -q -p no:cacheprovider tests/test_velia_desktop_gateway.py tests/test_velia_desktop_relay.py tests/test_velia_desktop_flash.py tests/test_velia_web_chat.py tests/test_velia_web_guest.py tests/test_velia_web_search.py tests/test_velia_request_understanding.py tests/test_velia_request_intent.py tests/test_velia_answer_review.py tests/test_velia_flash_worker_start.py tests/test_velia_desktop_flash_readiness.py tests/test_velia_admin_proxy.py tests/test_velia_web_features.py
 
@@ -55,6 +58,7 @@ COPY --from=checked /app/velia_request_understanding.py /app/velia_request_under
 COPY --from=checked /app/desktop /app/desktop
 COPY desktop/scripts/probe-live-flash.mjs /app/desktop/scripts/probe-live-flash.mjs
 COPY desktop/src/config.mjs desktop/src/proxy.mjs /app/desktop/src/
+COPY third_party/replica-skill /app/third_party/replica-skill
 USER velia
 RUN node /opt/velia-qualification/harness/lib/bin.js --version
 EXPOSE 8080

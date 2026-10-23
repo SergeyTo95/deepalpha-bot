@@ -177,6 +177,14 @@ export function apiError(code) {
       browser_profile_capacity: "Достигнут лимит данных этого браузерного диалога. Создай новый диалог Agent; прежняя сессия сохранена.",
       browser_agent_disabled: "Browser Agent пока отключён.",
       invalid_browser_task: "Не удалось понять задачу для Browser Agent.",
+      invalid_project_stage: "Для этапов проекта используй Flash без голосового режима и вложений.",
+      project_workflow_not_found: "Этот разбор недоступен. Открой его через свой проект.",
+      project_workflow_unavailable: "Не удалось открыть материалы проекта. Повтори позже.",
+      project_stage_prerequisite: "Сначала выполни предыдущий этап в разделе «Проекты».",
+      project_reviews_required: "Добавь отзывы: HTTPS-ссылка, пробел, |, пробел и точный текст — по одному на строку.",
+      invalid_project_results: "Проверь формат: название | must/should/could | passed/partial/failed/not_run | HTTPS-ссылка или -.",
+      project_stage_input_too_large: "Сократи материалы этапа до 6000 символов.",
+      project_stage_too_many_rows: "За один этап можно обработать до 60 строк.",
     }[code] || "Не удалось выполнить запрос. Попробуй ещё раз."
   );
 }

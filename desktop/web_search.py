@@ -313,7 +313,7 @@ class WebSearch:
         return {**payload, "messages": [*payload["messages"][:-1],
             {**payload["messages"][-1], "content": interpreted_content(content)}]}
 
-    async def account_question(self, user, conversation, request_id, question, model, *, messages=None):
+    async def account_question(self, user, conversation, request_id, question, model, *, messages=None, search_query=None):
         if not self.store:
             raise SearchUnavailable()
         request_key = self.digest("request", user, conversation, request_id)
@@ -321,7 +321,8 @@ class WebSearch:
         try:
             result = await asyncio.to_thread(self.store.cached_search, request_key, query_hash)
             if result is None:
-                result = await self.plan([*(messages or []), {"role": "user", "content": question}])
+                result = ({**await self.search(search_query), "decision": "search"} if search_query is not None
+                    else await self.plan([*(messages or []), {"role": "user", "content": question}]))
             if result.get("decision") == "clarify":
                 augmented = clarification_content(question, result["clarification_span"],
                     result.get("clarification_candidate", ""))
