@@ -48,6 +48,13 @@
     ],
     "sha256": "2ce2abf55d09bb30f16ff84be6a287d4af8790032b5883fa84796f512add613d"
   },
+  "velia-quantum.yml": {
+    "group": "flash",
+    "steps": [
+      3
+    ],
+    "sha256": "d7f73788db1fc875d7daf26cf1788d28c9ead3d3ed3a892bd6ce843070bc48d8"
+  },
   "velia-research-center-stage1.yml": {
     "group": "backend",
     "steps": [
