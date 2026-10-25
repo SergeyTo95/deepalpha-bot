@@ -103,14 +103,19 @@ def _build_prompt_with_attachments(
         label = "USER" if role == "user" else "ASSISTANT"
         parts = [f"{label}: {content}" if content else f"{label}:"]
         if role == "user" and attachment_context:
+            from services.velia_attachment_context_service import _framed_attachment
+            marker = "ATTACHMENT_DATA_UNTRUSTED:\n"
+            bounded = _framed_attachment("Attached files", "text/plain", attachment_context,
+                max_chars - len(parts[0]) - len(marker) - 2)
             parts.append(
-                "ATTACHMENT_DATA_UNTRUSTED:\n" + attachment_context
+                marker + bounded
             )
         chunk = "\n".join(parts)
         if transcript and used_chars + len(chunk) > max_chars:
             break
         if len(chunk) > max_chars:
-            chunk = chunk[-max_chars:]
+            # An operator's context bound must never silently remove the question.
+            raise ValueError("chat_context_too_long")
         transcript.append(chunk)
         used_chars += len(chunk)
     transcript.reverse()
@@ -143,6 +148,7 @@ def install(chat_module: Any) -> None:
         chat_mode: str = "pro",
         on_delta: Any = None,
         on_reset: Any = None,
+        voice_turn: bool = False,
     ) -> Dict[str, Any]:
         if chat_mode not in {"pro", "flash", "quantum"}:
             return {"ok": False, "error": "invalid_chat_mode"}
@@ -156,7 +162,7 @@ def install(chat_module: Any) -> None:
             normalized_attachment_ids = normalize_attachment_ids(attachment_ids)
         except AttachmentError as exc:
             return {"ok": False, "error": exc.code}
-        if chat_mode == "quantum" and normalized_attachment_ids:
+        if chat_mode == "quantum" and normalized_attachment_ids and not quantum.attachments_available():
             return {"ok": False, "error": "quantum_attachments_unsupported"}
         if (
             chat_mode == "flash"
@@ -367,7 +373,7 @@ def install(chat_module: Any) -> None:
                 )
             elif chat_mode == "quantum":
                 generation = quantum.generate(chat_module._build_prompt(user_id, conversation_id),
-                    request_id=request_id, on_delta=on_delta)
+                    request_id=request_id, on_delta=on_delta, **({"voice_turn": True} if voice_turn else {}))
             else:
                 prompt = chat_module._build_prompt(user_id, conversation_id)
                 generation = chat_module.generate_velia_chat_result(

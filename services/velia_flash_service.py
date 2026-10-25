@@ -260,9 +260,15 @@ def build_prompt(chat_module, user_id, conversation_id):
                 chat_module._row_value(row, "attachment_context", 2, "") or ""
             ).strip()
             if attachment_context:
+                from services.velia_attachment_context_service import _framed_attachment
+                marker = "\n\nATTACHMENT_DATA_UNTRUSTED:\n"
+                limit = (bounded_int("VELIA_VOICE_CONTEXT_CHARS", 900, 500, 4000)
+                    if _voice_fast_enabled() else 2200)
+                attachment_context = _framed_attachment("Attached files", "text/plain", attachment_context,
+                    max(0, limit - len(content) - len(marker)))
                 content = (
                     content.rstrip()
-                    + "\n\nATTACHMENT_DATA_UNTRUSTED:\n"
+                    + marker
                     + attachment_context
                 )
         messages.append({"role": role, "content": content})
@@ -508,7 +514,7 @@ def dispatch_send(sender, user_id, conversation_id, content, *, chat_mode="pro",
     if chat_mode == "quantum":
         from services.velia_quantum_service import dispatch_send as quantum_send
         return quantum_send(user_id, conversation_id, content,
-            on_delta=on_delta, on_reset=on_reset, **kwargs)
+            on_delta=on_delta, on_reset=on_reset, voice_turn=voice_turn, **kwargs)
     if chat_mode != "flash":
         return {"ok": False, "error": "invalid_chat_mode"}
     if not available():
@@ -539,7 +545,7 @@ def dispatch_send(sender, user_id, conversation_id, content, *, chat_mode="pro",
         existing = chat._existing_request_result(cursor, user_id=user_id,
             conversation_id=conversation_id, idempotency_key=kwargs.get("idempotency_key", ""),
             chat_mode="flash")
-        if existing:
+        if existing and kwargs.get("attachment_ids") is None:
             return existing
         cursor.execute("SELECT pg_try_advisory_lock(hashtextextended('velia:flash:worker', 0))")
         global_lock = bool(_first_value(cursor.fetchone()))

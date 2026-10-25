@@ -14,26 +14,33 @@ from velia_quantum_provider import configuration, ERRORS, EXPERIENTIAL_URL, FREE
 
 
 def main():
+    voice = "--voice" in sys.argv
     config = configuration()
     if (config is None or config.provider != "experiential"
             or config.base_url != EXPERIENTIAL_URL or config.model != FREE_MODEL):
         print("VELIA_QUANTUM_LIVE_PROBE_FAILED quantum_unavailable", flush=True)
         return 1
     # This process-local bound never changes the running chat's output limit.
+    previous_limit = os.environ.get("VELIA_QUANTUM_MAX_OUTPUT_TOKENS")
     os.environ["VELIA_QUANTUM_MAX_OUTPUT_TOKENS"] = "1024"
     try:
         result = quantum.generate("Ответь одним словом: Готова.",
-            request_id="railway-quantum-release-probe")
+            request_id="railway-quantum-release-probe", **({"voice_turn": True} if voice else {}))
     except Exception:
         print("VELIA_QUANTUM_LIVE_PROBE_FAILED quantum_provider_error", flush=True)
         return 1
+    finally:
+        if previous_limit is None:
+            os.environ.pop("VELIA_QUANTUM_MAX_OUTPUT_TOKENS", None)
+        else:
+            os.environ["VELIA_QUANTUM_MAX_OUTPUT_TOKENS"] = previous_limit
     if (result.get("ok") is True and result.get("finish_reason") == "stop"
             and str(result.get("text") or "").strip()
             and result.get("provider") == "velia-quantum"
             and result.get("model") == "velia-quantum"
             and result.get("estimated_cost_usd") == 0
             and result.get("fallback_used") is False):
-        print("VELIA_QUANTUM_LIVE_PROBE_OK model=" + FREE_MODEL, flush=True)
+        print(("VELIA_QUANTUM_VOICE_PROBE_OK model=" if voice else "VELIA_QUANTUM_LIVE_PROBE_OK model=") + FREE_MODEL, flush=True)
         return 0
     reason = result.get("reason")
     print("VELIA_QUANTUM_LIVE_PROBE_FAILED " + (

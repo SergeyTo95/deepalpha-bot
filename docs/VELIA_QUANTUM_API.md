@@ -13,14 +13,6 @@ The original Qwen research/build branch and worker are not modified.
 
 Configure the account backend that serves the browser's identity authority:
 
-For the current Railway installation, the browser gateway in
-`melodious-radiance / deepalpha-bot-pr-577` authenticates users and stores their
-account chat through `https://deepalpha-bot-production.up.railway.app` in the
-`production` environment. That is the backend requiring this account integration
-and the key. The separate PR-577 account backend has another PostgreSQL database;
-deploying Quantum only there does not enable it for existing browser accounts.
-Preserve the gateway's identity origin and the existing production database.
-
 ```dotenv
 VELIA_QUANTUM_ENABLED=true
 VELIA_QUANTUM_PROVIDER=experiential
@@ -31,16 +23,68 @@ EXPLABS_API_KEY=<secret configured by the operator>
 
 `VELIA_QUANTUM_API_KEY` can replace `EXPLABS_API_KEY`. Keys for Flash, Kimi or any
 other provider are never reused. Configure the same route separately on the
-desktop gateway only if its direct `/desktop-api/v1/chat/completions` endpoint
-also needs Quantum. Saved browser conversations call the account backend.
+desktop gateway for Quantum's own retrieval planning and its direct
+`/desktop-api/v1/chat/completions` endpoint. A service-local Railway reference
+can supply the gateway credential without reading it back. Saved browser
+answers still call the production account backend and retain its history.
 
 The browser advertises Quantum only when the authenticated backend returns
-`features.chat_quantum=true`. It shows the provider attribution supplied by the
-backend, and retains the Quantum label when reloading stored messages.
-The server rechecks availability when sending a request. Guests and Browser
-Agent retain their existing Flash route. Medical `medical_no_search` requests
-retain their Flash-only restriction. This release accepts text; it rejects new
-Quantum attachments before upload/generation rather than silently using Pro.
+`features.chat_quantum=true`. It shows the supplied provider attribution and
+retains the Quantum label when reloading stored messages. The server rechecks
+availability on every request. Voice conversation, ordinary chat, medical
+document actions and Internet retrieval keep the explicitly selected model.
+Flash turns never invoke the optional Decision model; Quantum turns never
+invoke Flash or Decision. An unavailable selection fails without switching.
+Guests remain Flash-only. Browser Agent currently requires Flash; enabling it
+while Quantum is selected is refused without changing the user's model.
+
+## Selected-model voice and files
+
+Voice recognition and speech synthesis use the existing browser/configured
+speech engines. The selected language model prepares and answers the turn.
+The voice dialog displays its model. Voice turns can use the same model's
+Internet plan, keep source links, and request short spoken answers. Flash
+retains its 128-token voice fast path; Quantum uses a 1024-token bound because
+its reasoning and final answer share the upstream output budget.
+
+Enable `VELIA_FILE_ANALYST_ENABLED=true` and
+`VELIA_FLASH_ATTACHMENTS_ENABLED=true` on the account backend. The deployment
+includes Tesseract, Poppler and English/Russian/Turkish OCR data. TXT, MD, CSV,
+JSON, DOCX and text PDFs are decoded locally. Photos and scanned PDF pages use
+local OCR, not another language model. **This recognizes text; it does not
+provide general photo/scene understanding.** The UI labels image uploads as
+text recognition and explains unreadable images rather than invoking a vision
+provider. The selected Flash/Quantum model receives only extracted untrusted
+text and produces the answer. Original uploads retain the existing transient
+processing, quota, ownership, deletion and metadata contracts.
+
+Browser uploads must declare `X-Velia-Chat-Mode: flash|quantum|pro`. Flash and
+Quantum uploads require the authenticated backend's
+`features.chat_selected_model_inputs=true` capability, so an old backend cannot
+silently route them to its legacy file vision provider. New clients also check
+`quantum_attachments` before enabling Quantum files. Missing selection or an
+old backend fails closed. Strict uploads are forwarded to the separate native
+`/mobile-api/v1/conversations/{id}/attachments/selected` endpoint. Old replicas
+return 404 for this route, so a rolling deployment cannot accidentally invoke
+legacy vision after a capability read reached a newer replica. Legacy native
+clients without this header keep their
+existing attachment contract; the browser gateway requires an explicit mode.
+Upload idempotency is namespaced by mode. Turn replay compares explicit file
+sets, including empty sets. Long document context preserves the user's question
+and uses bounded, complete untrusted frames with an explicit truncation marker.
+
+`VELIA_FILE_OCR_LANGUAGES` defaults to `eng+rus+tur`.
+`VELIA_ATTACHMENTS_OCR_MAX_PAGES` defaults to 8 (range 1–20); text PDF page bounds
+remain separate. OCR subprocesses are limited to two concurrent jobs, with
+bounded execution and temporary files removed on completion/failure. Busy,
+missing, timed-out or unreadable OCR never triggers another model. Upload
+progress is visible, and cancelling keeps the same idempotency key for recovery.
+
+Deploy the account backend first, then the browser gateway. Keep existing
+release gates. `python ci/probe-selected-model-inputs.py` checks real local
+image/PDF OCR without external calls or user data. A one-time
+`python ci/probe-velia-quantum.py --voice` accepts the free Quantum voice path;
+remove that one-time API probe after acceptance to avoid recurring quota use.
 
 The Experiential adapter accepts only this exact host and `:free` model. A
 missing key, bad configuration, quota exhaustion, authentication failure,
@@ -92,19 +136,27 @@ Provider response data is bounded; separate reasoning and provider metadata are
 removed before browser delivery. This is an external inference route, so the
 provider processes the conversation text submitted to Quantum.
 
+Saved browser streams send bounded `progress` metadata during preparation,
+followed by ordinary answer deltas. Preparation heartbeats keep the connection
+live, and disconnecting cancels pending preparation and releases the gateway
+reservation. These events never become answer text or stored chat history.
+Unambiguous greetings, identity/capability questions and literal arithmetic can
+skip separate interpretation even in an existing conversation; the full
+history still reaches the selected answering model. All other Quantum turns
+use Quantum itself to select a validated retrieval/clarification plan. They
+never call the Flash interpreter, Flash worker or Decision router. Existing
+quoted-evidence validation, official-health domains and retrieval-failure
+handling are retained. A planned Internet turn can use one bounded Quantum
+planning call plus the answer call; there are no completion retries or model
+fallbacks. The gateway therefore uses the same configured Quantum provider
+contract as the answer backend. Automatic retrieval requires standard JSON
+tool calls; a text-only self-hosted runtime can be used with retrieval disabled.
+Timing logs contain only the model, phase durations and outcome, without
+submitted text, account identifiers or credentials.
+
 Before enabling, run provider/gateway/browser tests, PostgreSQL persistence and
 quota tests with a dedicated `VELIA_FLASH_TEST_DATABASE_URL`, then one live
 `:free` request using the operator's key. Confirm catalog visibility, reload,
 mode isolation and quota errors. Local fixture success does not establish live
 GLM quality, latency or free quota availability. Roll back by setting
 `VELIA_QUANTUM_ENABLED=false`; stored Quantum history remains readable.
-
-The existing verified Railway build runs the Quantum workflow against a fresh
-PostgreSQL database before producing an image, even when GitHub-hosted runners
-are unavailable. Preserve the existing receipt-verification pre-deploy command.
-For initial Experiential acceptance, append `python ci/probe-velia-quantum.py`
-to the account backend's pre-deploy commands. It sends one fixed synthetic text
-request to the exact free model with a process-local 1024-token output bound and
-does not write chat history. Only a success marker or a sanitized error code is
-logged. Failure prevents promotion of the release. Remove this explicit probe
-command after initial acceptance to avoid consuming quota on later deployments.

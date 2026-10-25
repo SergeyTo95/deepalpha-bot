@@ -491,7 +491,10 @@ def create_attachment_idempotently(
     filename: str,
     mime_type: str,
     content: bytes,
+    chat_mode: str = "pro",
 ) -> Dict[str, Any]:
+    if chat_mode not in {"pro", "flash", "quantum"}:
+        raise attachment_service.AttachmentError("invalid_chat_mode")
     key = normalize_upload_idempotency_key(idempotency_key)
     max_bytes = upload_service._env_int(
         "VELIA_ATTACHMENTS_MAX_BYTES",
@@ -508,7 +511,8 @@ def create_attachment_idempotently(
     preflight = upload_service._preflight_attachment(raw, mime_type)
     normalized_name = attachment_service.sanitize_filename(filename)
     digest = hashlib.sha256(raw).hexdigest()
-    attachment_id = _attachment_id(user_id, conversation_id, key)
+    attachment_id = _attachment_id(user_id, conversation_id,
+        f"{chat_mode}:{key}" if chat_mode != "pro" else key)
 
     existing = _existing_or_reserve(
         attachment_id=attachment_id,
@@ -524,13 +528,13 @@ def create_attachment_idempotently(
         return existing
 
     try:
-        inspected = attachment_service.inspect_attachment(
-            raw,
-            str(preflight["mime_type"]),
-            user_id=int(user_id),
-            conversation_id=str(conversation_id),
-            attachment_id=attachment_id,
-        )
+        if chat_mode in {"flash", "quantum"}:
+            from services.velia_attachment_text_service import inspect_text_attachment
+            inspected = inspect_text_attachment(raw, str(preflight["mime_type"]))
+        else:
+            inspected = attachment_service.inspect_attachment(
+                raw, str(preflight["mime_type"]), user_id=int(user_id),
+                conversation_id=str(conversation_id), attachment_id=attachment_id)
         return upload_service._complete_attachment(
             attachment_id=attachment_id,
             user_id=int(user_id),

@@ -24,6 +24,7 @@ RUN python /app/ci/railway-verified-ci.py medical-image --commit "$RAILWAY_GIT_C
 
 FROM postgres:16-bookworm AS validation-base
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv nodejs \\
+    tesseract-ocr tesseract-ocr-eng tesseract-ocr-rus tesseract-ocr-tur poppler-utils fonts-dejavu-core \\
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 

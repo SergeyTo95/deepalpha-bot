@@ -87,6 +87,24 @@ def test_disabled_quantum_and_unsupported_files_do_not_touch_database(enabled, m
     assert flash.dispatch_send(forbidden, 7, "conv", "hi", chat_mode="quantum")["error"] == "quantum_unavailable"
 
 
+def test_quantum_voice_uses_quantum_only_with_a_bounded_reasoning_budget(enabled, monkeypatch):
+    client = Client(Response())
+    monkeypatch.setattr(quantum.requests, "Session", lambda: client)
+    result = quantum.generate("Привет, Велия", voice_turn=True)
+    assert result["ok"] and result["model"]=="velia-quantum" and len(client.calls)==1
+    body=client.calls[0][1]["json"]
+    assert body["model"]=="glm-5.3-uncensored:free" and body["max_tokens"]==1024
+    assert "one or two complete short sentences" in body["messages"][0]["content"]
+    assert body["reasoning_effort"]=="low"
+
+
+def test_quantum_file_capability_tracks_local_file_processing(enabled, monkeypatch):
+    monkeypatch.setenv("VELIA_FILE_ANALYST_ENABLED","true")
+    assert quantum.public_capability()["chat_quantum_attachments"] is True
+    monkeypatch.setenv("VELIA_QUANTUM_ENABLED","false")
+    assert quantum.public_capability()["chat_quantum_attachments"] is False
+
+
 @pytest.mark.parametrize("provider,mode", [("velia-quantum", "quantum"), ("bonsai", "flash"), ("kimi", "pro"), (None, "pro")])
 def test_saved_mode_uses_stable_quantum_identity(provider, mode):
     row = {"provider": provider, "role": "assistant", "content": "answer"}
