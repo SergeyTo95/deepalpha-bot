@@ -180,7 +180,6 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
                 or ("web_search" in data and type(data["web_search"]) is not bool)
                 or ("voice_turn" in data and type(data["voice_turn"]) is not bool)
                 or ("medical_no_search" in data and type(data["medical_no_search"]) is not bool)
-                or (data.get("medical_no_search") and data.get("model") != FLASH_ID)
                 or data.get("model") not in {FLASH_ID, MODEL_ID, QUANTUM_ID}
                 or not isinstance(data.get("content"), str) or not data["content"].strip()
                 or len(data["content"]) > 12000 or not REQUEST_ID.fullmatch(str(data.get("idempotency_key", "")))):
@@ -190,7 +189,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
             return error("invalid_request", 400)
         if data["model"] == FLASH_ID and not flash_enabled():
             return error("flash_unavailable", 503)
-        if data["model"] == QUANTUM_ID and attachments:
+        if data["model"] == QUANTUM_ID and attachments and not request[ACCOUNT_SESSION].quantum_attachments:
             return error("quantum_attachments_unsupported", 400)
         session = request[ACCOUNT_SESSION]
         permission = await authorize_model(session.access, data["model"])
@@ -212,7 +211,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
 
         try:
             content, result = data["content"], None
-            if not data.get("medical_no_search") and not data.get("voice_turn") and ((web_search and web_search.available) or data.get("web_search")):
+            if not data.get("medical_no_search") and ((web_search and web_search.available) or data.get("web_search")):
                 if web_search is None:
                     raise SearchUnavailable()
                 status, previous = await relay(request, "GET", "/messages?limit=20")
@@ -238,7 +237,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
             await response.write(progress_event("generating"))
             source = upstream_stream("/mobile-api/v1/conversations/" + request.match_info["conversation_id"] + "/messages/stream",
                 token=session.access, data={"content": content, "chat_mode": "quantum" if data["model"] == QUANTUM_ID else "flash" if data["model"] == FLASH_ID else "pro",
-                    "idempotency_key": data["idempotency_key"], **({"voice_turn": True} if data.get("voice_turn") else {}), **({"attachment_ids": attachments} if attachments else {})})
+                    "idempotency_key": data["idempotency_key"], **({"voice_turn": True} if data.get("voice_turn") else {}), **({"attachment_ids": attachments} if "attachment_ids" in data else {})})
             stream = account_events(source, data["model"])
             if result:
                 await response.write(source_event(result))

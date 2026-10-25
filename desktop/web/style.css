@@ -710,6 +710,7 @@ span[data-icon] {
   line-height: 1.8;
   overflow-wrap: anywhere;
 }
+.voice-model { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
 .message-content p {
   margin: 0 0 12px;
 }

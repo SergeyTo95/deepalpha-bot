@@ -386,7 +386,7 @@ def test_medical_flash_request_never_uses_search_even_when_explicitly_requested(
                 await response.text()
             assert state['search_queries']==[]
             assert state['account_calls'][0]['content']==body['content']
-            for change in [{'medical_no_search':'true'},{'model':'velia-pro'}]:
+            for change in [{'medical_no_search':'true'}]:
                 async with client.post(server.make_url(f'/web-api/v1/conversations/{cid}/messages/stream'),headers=headers(cookie),json={**body,**change}) as response:
                     assert response.status==400
     asyncio.run(run())

@@ -200,6 +200,8 @@ class WebSearch:
         if model == QUANTUM_ID:
             from desktop.quantum_intent import understand_quantum
             return await understand_quantum(messages)
+        if model == "velia-flash":
+            return await understand(messages)
         from desktop.decision_router import try_direct
         decision = await try_direct(messages)
         if decision is not None:
@@ -208,7 +210,7 @@ class WebSearch:
 
     async def plan(self, messages, *, model=None):
         try:
-            decision = (await self._understand(messages, model=model) if model == QUANTUM_ID
+            decision = (await self._understand(messages, model=model) if model in {QUANTUM_ID, "velia-flash"}
                 else await self._understand(messages))
         except (ClientError, TimeoutError, OSError, ValueError, KeyError):
             raise UnderstandingUnavailable() from None

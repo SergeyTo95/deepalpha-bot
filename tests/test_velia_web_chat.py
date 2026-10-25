@@ -201,6 +201,10 @@ async def fixture(monkeypatch, **state):
     authority.router.add_get("/mobile-api/v1/conversations/{conversation_id}/messages", stored_messages)
     authority.router.add_delete("/mobile-api/v1/conversations/{conversation_id}", delete)
     authority.router.add_post("/mobile-api/v1/conversations/{conversation_id}/messages/stream", stored_send)
+    async def legacy_upload(request):
+        state.setdefault("legacy_upload_calls", []).append(request.path)
+        return web.json_response({"ok": True, "attachment": {"id": "legacy"}})
+    authority.router.add_post("/mobile-api/v1/conversations/{conversation_id}/attachments", legacy_upload)
     authority.router.add_post("/mobile-api/v1/auth/exchange", auth)
     authority.router.add_post("/mobile-api/v1/auth/refresh", auth)
     authority.router.add_post("/mobile-api/v1/auth/logout", logout)
@@ -287,7 +291,7 @@ def test_opaque_secure_cookie_and_no_authority_secrets(monkeypatch):
             cookie, result, wire = await login(server, client)
             assert all(value not in json.dumps(result) + wire for value in (TOKEN, REFRESH, "never-return-this", "authority_cookie"))
             assert all(flag in wire for flag in ("HttpOnly", "Secure", "SameSite=Lax", "Path=/"))
-            assert set(result) == {"ok", "account", "name", "models", "credits", "pro_locked_reason", "web_search", "browser_agent", "history_cache_key"}
+            assert set(result) == {"ok", "account", "name", "models", "credits", "pro_locked_reason", "web_search", "browser_agent", "history_cache_key", "selected_model_inputs"}
             assert result["browser_agent"] is True
             assert result["models"] == ["velia-pro", "velia-flash"]
             async with client.get(server.make_url("/web-api/v1/session"), headers=headers(cookie)) as response:
@@ -667,13 +671,14 @@ def test_browser_capacity_errors_are_allowlisted(monkeypatch, code, expected):
     asyncio.run(run())
 
 
-def test_voice_account_turn_skips_search_and_forwards_fast_path(monkeypatch):
-    class Store:
-        def initialize_search(self): pass
+def test_voice_account_turn_keeps_fast_reply_and_selected_search_policy(monkeypatch, tmp_path):
+    from desktop.guest_store import GuestStore
     async def run():
         old = str(uuid.uuid4())
         conversations = {old: {"conversation": {"id": old, "title": "Голос", "user_id": 7}, "messages": []}}
-        async with fixture(monkeypatch, conversations=conversations, with_search=True, guest_store=Store()) as (server, client, state):
+        async with fixture(monkeypatch, conversations=conversations, with_search=True,
+                intent={"action":"direct","quote":"","query":""},
+                guest_store=GuestStore(sqlite_path=tmp_path/"voice.db")) as (server, client, state):
             cookie, _, _ = await login(server, client)
             data={"model":"velia-flash","content":"Велия привет","idempotency_key":str(uuid.uuid4()),"voice_turn":True}
             async with client.post(server.make_url("/web-api/v1/conversations/"+old+"/messages/stream"),headers=headers(cookie),json=data) as response:

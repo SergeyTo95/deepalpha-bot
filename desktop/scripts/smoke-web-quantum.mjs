@@ -41,6 +41,7 @@ try {
   await page.locator('#send').click();
   await page.locator('.message-actions').waitFor();
   assert.equal(calls.at(-1).model, 'velia-quantum');
+  assert.match(await page.locator('.assistant .message-content').last().innerText(), /Я Велия/);
   assert.equal(await page.locator('.message-model').last().innerText(), 'QUANTUM');
   await page.reload();
   await page.locator('#model-label').filter({hasText: 'VELIA QUANTUM'}).waitFor();

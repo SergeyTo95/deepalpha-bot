@@ -45,6 +45,81 @@ def test_quantum_owns_interpretation_and_search_with_flash_unavailable(monkeypat
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("model", ["velia-flash", "velia-quantum"])
+@pytest.mark.parametrize("action", ["direct", "search"])
+def test_voice_and_files_follow_selected_model_without_decision_fallback(monkeypatch, tmp_path, model, action):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Selected chat used Decision or an unrelated model")
+    monkeypatch.setattr("desktop.decision_router.try_direct", forbidden)
+    if model=="velia-quantum": monkeypatch.setattr("desktop.web_search.understand", forbidden)
+    async def run():
+        async with fixture(monkeypatch, with_search=True, quantum_api=model=="velia-quantum",
+                without_flash=model=="velia-quantum", features={"chat_quantum":True,"chat_quantum_attachments":True},
+                intent={"action":action,"quote":"","query":"Python release" if action=="search" else ""},
+                guest_store=GuestStore(sqlite_path=tmp_path/"chosen-voice.db")) as (server, client, state):
+            cookie, profile, _=await login(server,client)
+            assert profile["quantum_attachments"] is True
+            async with client.post(server.make_url("/web-api/v1/conversations"),headers=headers(cookie),json={"title":"Selected voice"}) as response:
+                cid=(await response.json())["conversation"]["id"]
+            data={"content":"Найди текущую версию Python" if action=="search" else "Объясни двоичный поиск.",
+                "model":model,"idempotency_key":"selected-voice-001","voice_turn":True,"attachment_ids":[]}
+            async with client.post(server.make_url(f"/web-api/v1/conversations/{cid}/messages/stream"),headers=headers(cookie),json=data) as response:
+                wire=await response.text()
+                assert response.status==200 and "[DONE]" in wire
+                assert ("https://www.python.org/downloads/" in wire)==(action=="search")
+            request=state["account_calls"][-1]
+            assert request["chat_mode"]==model.removeprefix("velia-") and request["voice_turn"] is True
+            assert request["attachment_ids"]==[]
+            assert state["forbidden_model_calls"]==[] and state["agent_calls"]==[]
+            own=state["quantum_intent_payloads"] if model=="velia-quantum" else state["intent_payloads"]
+            other=state["intent_payloads"] if model=="velia-quantum" else state["quantum_intent_payloads"]
+            assert len(own)==1 and other==[]
+            data.update(content="Перескажи прикреплённый документ.", idempotency_key="selected-file-001",
+                medical_no_search=True, attachment_ids=["11111111-1111-1111-1111-111111111111"])
+            async with client.post(server.make_url(f"/web-api/v1/conversations/{cid}/messages/stream"),headers=headers(cookie),json=data) as response:
+                assert response.status==200 and "[DONE]" in await response.text()
+            assert state["account_calls"][-1]["chat_mode"]==model.removeprefix("velia-")
+            assert state["account_calls"][-1]["attachment_ids"]==data["attachment_ids"]
+            assert len(own)==1 and other==[]
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("mode", [None,"flash","quantum"])
+def test_file_upload_refuses_legacy_backend_instead_of_using_its_other_model(monkeypatch, mode):
+    from aiohttp import FormData
+    async def run():
+        async with fixture(monkeypatch, features={"chat_quantum":True,"chat_quantum_attachments":True}) as (server,client,state):
+            cookie,_,_=await login(server,client)
+            async with client.post(server.make_url("/web-api/v1/conversations"),headers=headers(cookie),json={"title":"Files"}) as response:
+                cid=(await response.json())["conversation"]["id"]
+            form=FormData();form.add_field("file",b"Invoice 42",filename="invoice.txt",content_type="text/plain")
+            extra={"X-Velia-Chat-Mode":mode} if mode else {}
+            async with client.post(server.make_url(f"/web-api/v1/features/conversations/{cid}/attachments"),
+                    headers=headers(cookie,**extra),data=form) as response:
+                assert response.status==(503 if mode else 409)
+                assert (await response.json())["error"]=="selected_model_files_unavailable"
+            assert state["account_calls"]==state["intent_payloads"]==state["quantum_intent_payloads"]==[]
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("mode", ["flash","quantum"])
+def test_rolling_backend_cannot_fall_back_to_legacy_file_vision(monkeypatch, mode):
+    from aiohttp import FormData
+    async def run():
+        async with fixture(monkeypatch, features={"chat_quantum":True,"chat_quantum_attachments":True,
+                "chat_selected_model_inputs":True}) as (server,client,state):
+            cookie,_,_=await login(server,client)
+            async with client.post(server.make_url("/web-api/v1/conversations"),headers=headers(cookie),json={"title":"Files"}) as response:
+                cid=(await response.json())["conversation"]["id"]
+            form=FormData();form.add_field("file",b"Invoice 42",filename="invoice.txt",content_type="text/plain")
+            async with client.post(server.make_url(f"/web-api/v1/features/conversations/{cid}/attachments"),
+                    headers=headers(cookie,**{"X-Velia-Chat-Mode":mode}),data=form) as response:
+                assert response.status==503
+                assert (await response.json())["error"]=="selected_model_files_unavailable"
+            assert state.get("legacy_upload_calls",[])==[]
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("status,code", [(429,"quantum_quota_exhausted"),(402,"quantum_access_required"),(503,"quantum_provider_error")])
 def test_quantum_preparation_failure_never_falls_back_or_generates(monkeypatch, tmp_path, status, code):
     async def run():

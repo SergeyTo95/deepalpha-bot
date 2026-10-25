@@ -82,12 +82,24 @@ const request = (path, data, signal) =>
 let selectedFiles = [];
 const fileTools=setupFileTools({toast});
 function clearFiles(){selectedFiles=[];$("attachment-input").value="";$("attachment-preview").replaceChildren();}
-function filePreview(){const target=$("attachment-preview");target.replaceChildren();selectedFiles.forEach((item,i)=>{const chip=document.createElement('div');chip.className='file-chip';const view=document.createElement('button');view.type='button';view.textContent=item.file.name+' · '+fileSize(item.file.size);view.onclick=()=>fileTools.previewFile(item.file).catch(()=>toast('Не удалось открыть файл.'));const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label','Удалить '+item.file.name);remove.onclick=()=>{selectedFiles.splice(i,1);filePreview();resizePrompt();};chip.append(view,remove);target.append(chip);});if(selectedFiles.length){const bar=document.createElement('div');bar.className='file-shortcuts';for(const [title,prompt] of [['Пересказать','Кратко перескажи содержание прикреплённых файлов.'],['Извлечь текст','Извлеки текст из прикреплённых файлов. Отметь неразборчивые места.'],['Проверить ошибки','Проверь прикреплённые файлы на ошибки и несоответствия.']]){const b=document.createElement('button');b.type='button';b.textContent=title;b.onclick=()=>{$('prompt').value=prompt;resizePrompt();$('prompt').focus();};bar.append(b);}target.append(bar);}}
-function addFiles(files){if(busy)return;if(model==="velia-quantum"){toast(apiError("quantum_attachments_unsupported"));return;}if(!profile){openAuth();return;}if(agentMode){toast('Для файлов выключи Agent и открой обычный диалог.');return;}try{const prepared=files.map(prepareFile);if(selectedFiles.length+prepared.length>4)throw new Error('Можно прикрепить до 4 файлов, по 15 МБ каждый.');selectedFiles.push(...prepared.map(file=>({file,key:crypto.randomUUID()})));filePreview();resizePrompt();}catch(e){toast(e.message);}}
+function filePreview(){const target=$("attachment-preview");target.replaceChildren();selectedFiles.forEach((item,i)=>{const chip=document.createElement('div');chip.className='file-chip';const view=document.createElement('button');view.type='button';view.textContent=item.file.name+' · '+fileSize(item.file.size)+(item.file.type.startsWith('image/')&&model!=="velia-pro"?' · Распознавание текста':'');view.onclick=()=>fileTools.previewFile(item.file).catch(()=>toast('Не удалось открыть файл.'));const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label','Удалить '+item.file.name);remove.onclick=()=>{selectedFiles.splice(i,1);filePreview();resizePrompt();};chip.append(view,remove);target.append(chip);});if(selectedFiles.length){const bar=document.createElement('div');bar.className='file-shortcuts';for(const [title,prompt] of [['Пересказать','Кратко перескажи содержание прикреплённых файлов.'],['Извлечь текст','Извлеки текст из прикреплённых файлов. Отметь неразборчивые места.'],['Проверить ошибки','Проверь прикреплённые файлы на ошибки и несоответствия.']]){const b=document.createElement('button');b.type='button';b.textContent=title;b.onclick=()=>{$('prompt').value=prompt;resizePrompt();$('prompt').focus();};bar.append(b);}target.append(bar);}}
+function addFiles(files) {
+  if (busy) return;
+  if (!profile) { openAuth(); return; }
+  if (model !== "velia-pro" && !profile.selected_model_inputs) { toast(apiError("selected_model_files_unavailable")); return; }
+  if (model === "velia-quantum" && !profile.quantum_attachments) { toast(apiError("quantum_attachments_unsupported")); return; }
+  if (agentMode) { toast('Для файлов выключи Agent и открой обычный диалог.'); return; }
+  try {
+    const prepared = files.map(prepareFile);
+    if (selectedFiles.length + prepared.length > 4) throw new Error('Можно прикрепить до 4 файлов, по 15 МБ каждый.');
+    selectedFiles.push(...prepared.map(file => ({file,key:crypto.randomUUID()})));
+    filePreview(); resizePrompt();
+  } catch (error) { toast(error.message); }
+}
 
 const current = () => chats.find((c) => c.id === currentId);
-const voice = setupVoice({busy:()=>busy, toast, send:text=>{if(agentMode)setAgentMode(false);setModel("velia-flash");$("prompt").value=text;return generate(false, true);}});
-const features = setupFeatures({onUnauthorized:()=>{lockHistory();profile=null;guest=null;notifyAuthChange('lock');render();openAuth();},signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,prepareMedicalChat:async prompt=>{if(busy)throw new Error('Дождись завершения ответа.');if(!profile?.models?.includes('velia-flash'))throw new Error('VELIA Flash сейчас недоступна.');setAgentMode(false);setModel('velia-flash');newChat();medicalDraftMode=true;$('prompt').value=prompt;resizePrompt();$('prompt').focus();toast('Прикрепи заключения и проверь текст перед отправкой.');},openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
+const voice = setupVoice({busy:()=>busy, toast, modelName:()=>MODELS[model], send:text=>{if(agentMode)setAgentMode(false);$("prompt").value=text;return generate(false, true);}});
+const features = setupFeatures({onUnauthorized:()=>{lockHistory();profile=null;guest=null;notifyAuthChange('lock');render();openAuth();},signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,prepareMedicalChat:async prompt=>{if(busy)throw new Error('Дождись завершения ответа.');if(!profile?.models?.includes(model))throw new Error('Выбранная модель сейчас недоступна.');setAgentMode(false);newChat();medicalDraftMode=true;$('prompt').value=prompt;resizePrompt();$('prompt').focus();toast('Прикрепи заключения и проверь текст перед отправкой.');},openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
 const browserStorage = { getItem: (key) => localStorage.getItem(key) };
 const localHistory = new LocalHistory(browserHistoryStore());
 const authChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('velia-auth-v1') : null;
@@ -148,8 +160,8 @@ function closeModels() {
   $("model-button").setAttribute("aria-expanded", "false");
 }
 function setModel(value) {
-  if (busy || !MODELS[value] || (profile && !profile.models.includes(value)) || (!profile && value !== "velia-flash")) return;
-  if (value === "velia-quantum" && selectedFiles.length) { toast(apiError("quantum_attachments_unsupported")); return; }
+  if (busy || !MODELS[value] || (!profile && value !== "velia-flash")) return;
+  if (value === "velia-quantum" && selectedFiles.length && !profile?.quantum_attachments) { toast(apiError("quantum_attachments_unsupported")); return; }
   model = value;
   $("model-label").textContent = MODELS[value];
   $("model-icon").innerHTML = icon(value === "velia-flash" ? "bolt" : value === "velia-quantum" ? "layers" : "spark");
@@ -167,8 +179,8 @@ function setModel(value) {
   closeModels();
 }
 function setAgentMode(value) {
-  const enabled = !!value && !!profile?.browser_agent;
-  if (enabled && model !== "velia-flash") setModel("velia-flash");
+  let enabled = !!value && !!profile?.browser_agent;
+  if (enabled && model !== "velia-flash") { toast("Браузерный Agent пока доступен с Flash. Выбранная модель сохранена."); enabled = false; }
   if (agentMode !== enabled && !busy) {
     currentId = null;
     render();
@@ -619,7 +631,7 @@ async function applyProfile(value) {
   const small = document.createElement("small");
   small.textContent = (Number.isInteger(value.credits) ? value.credits + " токенов · " : "") + "Выйти из аккаунта";
   $("account-label").append(small);
-  if (!value.models.includes(model)) model = value.models[0] || "velia-flash";
+  if (!value.models.includes(model)) toast("Выбранная модель сейчас недоступна. Выбери другую модель.");
   $("pro-description").textContent = value.pro_locked_reason ?
     apiError(value.pro_locked_reason) : "Доступен с токенами на балансе";
   $("quantum-description").textContent = value.models.includes("velia-quantum") ?
@@ -703,14 +715,15 @@ async function generate(retry = false, voiceTurn = false) {
       currentId = chat.id;
     }
     if(medicalDraftMode)chat.medicalNoSearch=true;
-    const attachments = [];
-    if (selectedFiles.length) {
+    const attachments = [], filesForTurn = selectedFiles.slice();
+    if (filesForTurn.length) {
       if (!profile || agentMode || !chat.remote) {toast("Для файлов открой обычный диалог после входа.");return;}
+      abort = new AbortController();
       setBusy(true);
-      try {for(const item of selectedFiles){const r=await featureRequest(`conversations/${chat.id}/attachments`,{method:"POST",file:item.file,key:item.key});attachments.push(r.attachment.id);fileTools.remember(r.attachment.id,item.file);}}
-      catch(error){toast(error.message);return;}finally{setBusy(false);}
+      try {for(const item of filesForTurn){$("generation-status").textContent="Читаю файл «"+item.file.name+"»…";const r=await featureRequest(`conversations/${chat.id}/attachments`,{method:"POST",file:item.file,key:item.key,chatModel:model,signal:abort.signal});attachments.push(r.attachment.id);fileTools.remember(r.attachment.id,item.file);}}
+      catch(error){toast(error.name==="AbortError"?"Отправка остановлена.":error.message);return;}finally{abort=null;setBusy(false);$("generation-status").textContent="";}
     }
-    chat.messages.push({ role: "user", content: text, attachmentIds:attachments, fileNames:selectedFiles.map(x=>x.file.name), requestId: crypto.randomUUID(),
+    chat.messages.push({ role: "user", content: text, attachmentIds:attachments, fileNames:filesForTurn.map(x=>x.file.name), requestId: crypto.randomUUID(),
       internet: !agentMode && internetAvailable, agent: agentMode });
     clearFiles();
     $("prompt").value = "";
@@ -722,8 +735,8 @@ async function generate(retry = false, voiceTurn = false) {
       idempotency_key: user.requestId || (user.requestId = crypto.randomUUID()), ...(user.attachmentIds?.length ? {attachment_ids:user.attachmentIds} : {})} : chatPayload(chat, selected),
     answer = { role: "assistant", content: "", model: selected, pending: true, agent: agentMode };
   if(chat.medicalNoSearch && !agentMode){payload.medical_no_search=true;payload.web_search=false;}
-  if (voiceTurn) {payload.voice_turn=true;payload.web_search=false;}
-  else if (!agentMode && internetAvailable && !chat.medicalNoSearch) payload.web_search = true;
+  if (voiceTurn) payload.voice_turn=true;
+  if (!agentMode && internetAvailable && !chat.medicalNoSearch) payload.web_search = true;
   chat.messages.push(answer);
   chat.updated = Date.now();
   abort = new AbortController();

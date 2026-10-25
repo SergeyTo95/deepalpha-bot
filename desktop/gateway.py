@@ -129,6 +129,21 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
 
     async def binary_upstream(request, path, token):
         headers = {'Authorization': 'Bearer ' + token}
+        if re.fullmatch(r'/mobile-api/v1/conversations/[A-Za-z0-9_-]{1,128}/attachments', path):
+            mode = request.headers.get('X-Velia-Chat-Mode')
+            if mode is None:
+                return json_response({'ok': False, 'error': 'selected_model_files_unavailable'}, 409)
+            if mode is not None:
+                if mode not in {'pro', 'flash', 'quantum'}:
+                    return json_response({'ok': False, 'error': 'invalid_chat_mode'}, 400)
+                permission = await authorize_model(token, 'velia-' + mode, files=True)
+                if permission:
+                    return json_response({'ok': False, 'error': permission[0]}, permission[1])
+                headers['X-Velia-Chat-Mode'] = mode
+                if mode in {'flash', 'quantum'}:
+                    # A capability read and upload may hit different rolling replicas.
+                    # Old backends have no such route, so they cannot run legacy vision.
+                    path += '/selected'
         if request.headers.get('Idempotency-Key'):
             key = request.headers['Idempotency-Key']
             if not re.fullmatch(r'[A-Za-z0-9:_-]{8,128}', key):
@@ -151,6 +166,8 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
             async with app[CLIENT].request(request.method, config.auth_origin + path,
                     headers=headers, data=body, allow_redirects=False,
                     timeout=ClientTimeout(total=180, sock_read=120)) as response:
+                if path.endswith('/attachments/selected') and response.status == 404:
+                    return json_response({'ok': False, 'error': 'selected_model_files_unavailable'}, 503)
                 if request.method != 'GET' or response.status != 200:
                     raw = await response.content.read(65537)
                     if len(raw) > 65536 or response.status not in {200, 201, 202, 400, 401, 403, 404, 409, 411, 413, 415, 422, 429, 500, 502, 503}:
@@ -185,7 +202,9 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
             raise AuthenticationUnavailable()
         features = result.get("features") if isinstance(result.get("features"), dict) else {}
         return {"user_id": user["id"], "name": str(user.get("first_name") or "Аккаунт VELIA")[:120],
+            "selected_model_inputs": features.get("chat_selected_model_inputs") is True,
             "quantum": features.get("chat_quantum") is True,
+            "quantum_attachments": features.get("chat_quantum_attachments") is True,
             "quantum_source": str(features.get("chat_quantum_source") or "")[:120]}
 
     async def account_balance(token):
@@ -195,10 +214,12 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
             raise AuthenticationUnavailable()
         return max(0, credits)
 
-    async def authorize_model(token, model):
-        if model == QUANTUM_ID:
+    async def authorize_model(token, model, *, files=False):
+        if model == QUANTUM_ID or files and model == "velia-flash":
             identity = await authenticate(token)
-            if not identity or not identity.get("quantum"):
+            if files and (not identity or not identity.get("selected_model_inputs")):
+                return "selected_model_files_unavailable", 503
+            if model == QUANTUM_ID and (not identity or not identity.get("quantum")):
                 return "quantum_unavailable", 503
         if model == "velia-pro":
             if await account_balance(token) <= 0:

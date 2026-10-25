@@ -32,7 +32,7 @@ export function speechChunks(text, limit = 240) {
   return chunks;
 }
 
-export function setupVoice({send, busy, toast}) {
+export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'}) {
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const synth = window.speechSynthesis;
   let recognition = null, active = false, pending = false, epoch = 0, timer = null, speechEpoch = 0;
@@ -44,6 +44,8 @@ export function setupVoice({send, busy, toast}) {
   const node = (tag, text, cls) => {const n = document.createElement(tag); if(text)n.textContent=text;if(cls)n.className=cls;return n;};
   const dialog = node('dialog', '', 'voice-dialog'); dialog.setAttribute('aria-labelledby','voice-title');
   const title = node('h2', 'Разговор с Велией'); title.id='voice-title';
+  const modelLabel = node('p', '', 'voice-model');
+  const show = () => { modelLabel.textContent = modelName(); loadCatalog(); dialog.showModal(); };
   const state = node('p', 'Нажми «Начать», чтобы включить микрофон.', 'voice-status'); state.setAttribute('role','status');
   const orb = node('div', 'V', 'voice-orb'); orb.setAttribute('aria-hidden','true');
   const transcript = node('details', '', 'voice-transcript');
@@ -72,7 +74,7 @@ export function setupVoice({send, busy, toast}) {
   }
   function voiceControl(){const label=node('label','Голос Велии','voice-profile'), select=node('select');select.setAttribute('aria-label','Голос');voiceSelectors.add(select);select.onchange=()=>{stop();voiceURI=select.value;save();refreshVoices();};label.append(select);return label;}
   const soundTest=node('button','Проверить звук','voice-sound-test');soundTest.onclick=()=>speak('Привет! Я Велия. Рада тебя слышать.');speechTests.add(soundTest);soundTest.disabled=!synth&&!voiceURI.startsWith('speechkit:');
-  dialog.append(title,orb,state,voiceControl(),voiceHint,soundTest,controls,transcript,node('p','Ответы сохраняются в диалоге.','voice-hint'));
+  dialog.append(title,modelLabel,orb,state,voiceControl(),voiceHint,soundTest,controls,transcript,node('p','Ответы сохраняются в диалоге.','voice-hint'));
   document.body.append(dialog);refreshVoices();synth?.addEventListener('voiceschanged',refreshVoices);
   const status = (text, phase='idle') => {state.textContent=text;dialog.dataset.phase=phase;start.textContent=active?'Пауза':'Начать';};
   const save=()=>{try {localStorage.setItem('velia-voice-language',language);localStorage.setItem('velia-voice-uri',voiceURI);localStorage.setItem('velia-voice-rate',String(rate));}catch{}};
@@ -145,7 +147,7 @@ export function setupVoice({send, busy, toast}) {
     for(const [id,name] of options){const o=node('option',name);o.value=id;languages.append(o);}languages.value=language;languages.onchange=()=>{stop();language=languages.value;save();refreshVoices();};label.append(languages);panel.append(label);
     const speed=node('label','Скорость речи'), select=node('select');select.setAttribute('aria-label','Скорость речи');for(const [value,name] of [[.8,'Медленнее'],[1,'Обычная'],[1.2,'Быстрее']]){const o=node('option',name);o.value=value;select.append(o);}select.value=String(rate);select.onchange=()=>{stop();rate=Number(select.value);save();};speed.append(select);panel.append(speed);
     const test=node('button','Послушать голос');speechTests.add(test);test.disabled=!synth&&!voiceURI.startsWith('speechkit:');test.onclick=()=>speak('Привет! Я Велия. Давай обсудим твою идею.');panel.append(test);
-    const open=node('button','Открыть голосовой разговор','feature-primary');open.onclick=()=>{loadCatalog();dialog.showModal();};open.disabled=!Recognition;panel.append(open);
+    const open=node('button','Открыть голосовой разговор','feature-primary');open.onclick=show;open.disabled=!Recognition;panel.append(open);
     if(!Recognition)panel.append(node('p','Этот браузер не поддерживает распознавание. Озвучивание ответов доступно отдельно.','feature-notice'));
   }
   document.addEventListener('visibilitychange',()=>{
@@ -153,5 +155,5 @@ export function setupVoice({send, busy, toast}) {
     if(document.hidden){if(pending){synth?.pause?.();remoteAudio?.pause();return;}stop();status('Разговор приостановлен: страница была свёрнута.');}
     else {synth?.resume?.();remoteAudio?.play().catch(()=>failure(true));if(deferredAnswer!==null){const answer=deferredAnswer;deferredAnswer=null;complete(answer);}else if(pending)update(streamText);pumpStream();}
   });
-  return {settings,update,complete,failure,speak,open:()=>{loadCatalog();dialog.showModal();},stop};
+  return {settings,update,complete,failure,speak,open:show,stop};
 }
