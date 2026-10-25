@@ -95,6 +95,10 @@ def test_quantum_voice_uses_quantum_only_with_a_bounded_reasoning_budget(enabled
     body=client.calls[0][1]["json"]
     assert body["model"]=="glm-5.3-uncensored:free" and body["max_tokens"]==1024
     assert "one or two complete short sentences" in body["messages"][0]["content"]
+    assert "рада тебя слышать" in body["messages"][0]["content"]
+    assert "Род собеседника не меняй" in body["messages"][0]["content"]
+    assert "распознавания речи" in body["messages"][0]["content"]
+    assert body["messages"][-1]["content"]=="Привет, Велия"
     assert body["reasoning_effort"]=="low"
 
 
