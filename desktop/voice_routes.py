@@ -5,7 +5,7 @@ import os
 import time
 import logging
 from collections import deque
-from aiohttp import ClientSession, ClientTimeout, ClientError, web
+from aiohttp import ClientSession, ClientTimeout, ClientError, ClientConnectionError, ClientResponseError, web
 from velia_desktop_routes import AuthenticationUnavailable
 
 VOICES = [{"voiceURI": "speechkit:" + key, "name": name, "lang": "ru-RU", "localService": False}
@@ -65,10 +65,13 @@ async def synthesize_edge(fields):
                     if not size:
                         raise edge_tts.exceptions.NoAudioReceived("empty_audio")
                     break
-                except edge_tts.exceptions.NoAudioReceived:
+                except (edge_tts.exceptions.NoAudioReceived, edge_tts.exceptions.WebSocketError,
+                        ClientConnectionError, ClientResponseError, asyncio.TimeoutError) as exc:
                     # This adapter has no per-call billing. Retry an empty result
-                    # once, with the same speaker, only before receiving audio.
-                    if attempt or size:
+                    # or transient connection failure once, with the same speaker,
+                    # only before receiving audio and within the shared deadline.
+                    if (attempt or size or isinstance(exc, ClientResponseError)
+                            and exc.status not in {408, 500, 502, 503, 504}):
                         raise
     except asyncio.CancelledError:
         raise

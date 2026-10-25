@@ -233,9 +233,13 @@ def test_treasurer_cannot_change_destination_or_create_unsafe_amount(result):
 
 def test_concurrent_http_starts_are_bounded_and_cleanup_persists_interruption(store):
     async def scenario():
-        gate=asyncio.Event();started=[]
+        gate=asyncio.Event();all_started=asyncio.Event();started=[]
         async def session_for(request):return SimpleNamespace(user_id=int(request.headers['X-Test-User']),access='private')
-        async def generate(session,*args):started.append(session.user_id);await gate.wait();return ROLE_OUTPUTS['manager']
+        async def generate(session,*args):
+            started.append(session.user_id)
+            if len(started)==4:all_started.set()
+            await gate.wait()
+            return ROLE_OUTPUTS['manager']
         async def unused(*args,**kwargs):raise AssertionError('external call')
         app=web.Application()
         setup_work_routes(app,store=store,generate=generate,session_for=session_for,same_origin=lambda _:True,
@@ -245,7 +249,8 @@ def test_concurrent_http_starts_are_bounded_and_cleanup_persists_interruption(st
         async with TestServer(app) as server,ClientSession() as client:
             replies=await asyncio.gather(*[client.post(server.make_url('/web-api/v1/work/jobs/'+id+'/run'),headers={'X-Test-User':str(user)},json={}) for user,id in enumerate(ids,1)])
             assert sorted(r.status for r in replies)==[202,202,202,202,429]
-            await asyncio.sleep(.05);assert len(started)==4
+            await asyncio.wait_for(all_started.wait(),timeout=5)
+            assert len(started)==4
         assert sum(store.workspace(u)['jobs'][0]['status']=='interrupted' for u in range(1,6))==4
     asyncio.run(scenario())
 

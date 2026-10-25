@@ -82,11 +82,20 @@ Voice playback prefetches only the next phrase while the current phrase is
 downloaded/played (at most two requests in flight). Stop, speaker changes and
 cancellation abort unused downloads; late results cannot start playback.
 Punctuation-only streamed tails never reach TTS. The unbilled Edge speech adapter
-may retry an empty-audio result once with the same voice, only before any audio
-bytes arrived, within the existing overall deadline. Paid speech adapters and
-language-model completions do not gain automatic retries. Model failures surface
-their existing localized reason in the voice window; speech failures keep the
-saved text and remain distinct from model failures.
+may retry an empty-audio result or transient connection/WebSocket/server failure
+once with the same voice, only before any audio bytes arrived, within the shared
+20-second deadline. Permanent HTTP errors and throttling do not retry. Paid speech
+adapters and language-model completions do not gain automatic retries.
+If speech still fails, the browser keeps the failed phrase and the incoming text
+tail. “Продолжить озвучку” retries from that phrase with the same speaker, without
+a new model request or replaying the spoken beginning. Stop, speaker/rate changes
+and account locking discard this recovery state. Model failures surface their
+existing localized reason in the voice window and clear speech recovery.
+
+The gateway build's concurrent-work test waits for its four accepted workers to
+actually start, with a bounded event wait, rather than assuming that 50 ms is
+enough on the builder. Its four-worker limit, rejection and cleanup assertions
+remain unchanged.
 
 The account stream reuses the Quantum capability freshly revalidated by that
 request's session middleware, removing a duplicate identity HTTP round trip.

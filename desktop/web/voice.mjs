@@ -44,7 +44,7 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'})
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const synth = window.speechSynthesis;
   let recognition = null, active = false, pending = false, epoch = 0, timer = null, speechEpoch = 0;
-  let speechTimer = null, currentUtterance = null, deferredAnswer = null, waitingTimer = null;
+  let speechTimer = null, currentUtterance = null, deferredAnswer = null, waitingTimer = null, speechPaused = false;
   let catalogLoaded=false,catalogRequest=null,remoteVoices=[],remoteAudio=null,remoteAbort=null,remoteURL=null;
   const audioJobs=new Set();
   let language = navigator.language || 'ru-RU', voiceURI = '', rate = 1;
@@ -64,6 +64,8 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'})
   captions.append(node('span','Ты'),heard,node('span','Велия'),reply);transcript.append(captions);
   const start = node('button','Начать'), close = node('button','Завершить');
   const controls=node('div','','voice-controls');controls.append(start,close);
+  const resumeSpeech=node('button','Продолжить озвучку','voice-resume');resumeSpeech.hidden=true;
+  resumeSpeech.onclick=()=>{if(!active||!speechPaused)return;speechPaused=false;resumeSpeech.hidden=true;speechEpoch++;pumpStream();};
   const voiceSelectors=new Set(), speechTests=new Set();
   const voiceHint=node('p','','voice-hint');
   const choices = () => availableVoices([...remoteVoices,...(synth?.getVoices()||[])],language);
@@ -89,7 +91,7 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'})
   }
   function primeNext(){
     const uri=effectiveURI();
-    if(active&&!streamBlocked&&!document.hidden&&currentUtterance&&streamQueue.length&&isRemoteVoice(uri)&&audioJobs.size<2)downloadPart(streamQueue[0],uri);
+    if(active&&!speechPaused&&!streamBlocked&&!document.hidden&&currentUtterance&&streamQueue.length&&isRemoteVoice(uri)&&audioJobs.size<2)downloadPart(streamQueue[0],uri);
   }
   async function playPart(part,done,fail){
     const uri=effectiveURI();
@@ -99,12 +101,12 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'})
   }
   function voiceControl(){const label=node('label','Голос Велии','voice-profile'), select=node('select');select.setAttribute('aria-label','Голос');voiceSelectors.add(select);select.onchange=()=>{stop();voiceURI=select.value;save();refreshVoices();};label.append(select);return label;}
   const soundTest=node('button','Проверить звук','voice-sound-test');soundTest.onclick=()=>speak('Привет! Я Велия. Рада тебя слышать.');speechTests.add(soundTest);soundTest.disabled=!canSpeak();
-  dialog.append(title,modelLabel,orb,state,voiceControl(),voiceHint,soundTest,controls,transcript,node('p','Ответы сохраняются в диалоге.','voice-hint'));
+  dialog.append(title,modelLabel,orb,state,voiceControl(),voiceHint,soundTest,resumeSpeech,controls,transcript,node('p','Ответы сохраняются в диалоге.','voice-hint'));
   document.body.append(dialog);refreshVoices();synth?.addEventListener('voiceschanged',refreshVoices);
   const status = (text, phase='idle') => {state.textContent=text;dialog.dataset.phase=phase;start.textContent=active?'Пауза':'Начать';};
   const save=()=>{try {localStorage.setItem('velia-voice-language',language);localStorage.setItem('velia-voice-uri',voiceURI);localStorage.setItem('velia-voice-rate',String(rate));}catch{}};
   let streamText='',streamCursor=0,streamQueue=[],streamDone=false,streamBlocked=false;
-  function stop(){cancelAudio();streamText='';streamCursor=0;streamQueue=[];streamDone=false;streamBlocked=false;clearTimeout(waitingTimer);if(pending)reply.textContent='Ответ появится в диалоге.';deferredAnswer=null;active=false;pending=false;epoch++;speechEpoch++;clearTimeout(timer);clearTimeout(speechTimer);currentUtterance=null;const old=recognition;recognition=null;old?.abort();synth?.cancel();status('Разговор на паузе.');}
+  function stop(){speechPaused=false;resumeSpeech.hidden=true;cancelAudio();streamText='';streamCursor=0;streamQueue=[];streamDone=false;streamBlocked=false;clearTimeout(waitingTimer);if(pending)reply.textContent='Ответ появится в диалоге.';deferredAnswer=null;active=false;pending=false;epoch++;speechEpoch++;clearTimeout(timer);clearTimeout(speechTimer);currentUtterance=null;const old=recognition;recognition=null;old?.abort();synth?.cancel();status('Разговор на паузе.');}
   close.onclick=()=>{stop();dialog.close();};dialog.addEventListener('cancel',stop);dialog.addEventListener('close',stop);
   function later(token, delay=400){clearTimeout(timer);timer=setTimeout(()=>{if(active&&token===epoch)listen();},delay);}
   function listen(){
@@ -133,13 +135,20 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'})
     };next();
   }
   function pumpStream(){
-    if(!active||streamBlocked||document.hidden)return;
+    if(!active||speechPaused||streamBlocked||document.hidden)return;
     if(currentUtterance){primeNext();return;}
     if(!streamQueue.length){if(streamDone){status('Жду твою реплику…','listening');later(epoch);}else status('Велия готовит продолжение…','thinking');return;}
     const part=streamQueue.shift(),token=speechEpoch;
     reply.textContent=part;status('Велия говорит…','speaking');
     const done=()=>{if(token!==speechEpoch)return;clearTimeout(speechTimer);currentUtterance=null;pumpStream();};
-    const fail=()=>{if(token!==speechEpoch)return;failure(true);status('Озвучивание прервалось. Ответ сохранён в диалоге.','error');};
+    const fail=()=>{
+      if(token!==speechEpoch)return;
+      // Keep the failed phrase and incoming answer tail. A user gesture can
+      // resume the same voice without another model request or replaying the start.
+      speechEpoch++;speechPaused=true;streamQueue.unshift(part);cancelAudio();
+      clearTimeout(speechTimer);clearTimeout(waitingTimer);clearTimeout(timer);currentUtterance=null;synth?.cancel();
+      resumeSpeech.hidden=false;status('Озвучка остановилась. Нажми «Продолжить озвучку».','error');
+    };
     speechTimer=setTimeout(fail,45000);playPart(part,done,fail);
     primeNext();
   }
@@ -147,7 +156,7 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'})
     if(!active||(!pending&&!final)||streamBlocked)return;
     text=String(text||'');
     if(streamCursor&&text.slice(0,streamCursor)!==streamText.slice(0,streamCursor)){
-      streamBlocked=true;streamQueue=[];speechEpoch++;cancelAudio();clearTimeout(speechTimer);currentUtterance=null;synth?.cancel();return;
+      streamBlocked=true;speechPaused=false;resumeSpeech.hidden=true;streamQueue=[];speechEpoch++;cancelAudio();clearTimeout(speechTimer);currentUtterance=null;synth?.cancel();return;
     }
     streamText=text;if(document.hidden)return;
     let cut;while((cut=speechReady(streamText.slice(streamCursor),final))>0){
@@ -165,7 +174,7 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'})
     if(!speechChunks(text).length){if(!String(text||'').trim())failure(true);else {streamDone=true;pending=false;pumpStream();}return;}
     update(text,true);pending=false;
   }
-  function failure(force=false,detail=''){clearTimeout(waitingTimer);if(pending||force){pending=false;deferredAnswer=null;reply.textContent=streamText||'Ответ не получен. Попробуй ещё раз.';active=false;speechEpoch++;cancelAudio();clearTimeout(speechTimer);currentUtterance=null;synth?.cancel();status(typeof detail==='string'&&detail.trim()?detail.slice(0,500):'Ответ не получен. Проверь диалог и нажми «Начать» для повтора.','error');}}
+  function failure(force=false,detail=''){clearTimeout(waitingTimer);if(pending||force){pending=false;deferredAnswer=null;speechPaused=false;resumeSpeech.hidden=true;reply.textContent=streamText||'Ответ не получен. Попробуй ещё раз.';active=false;speechEpoch++;cancelAudio();clearTimeout(speechTimer);currentUtterance=null;synth?.cancel();status(typeof detail==='string'&&detail.trim()?detail.slice(0,500):'Ответ не получен. Проверь диалог и нажми «Начать» для повтора.','error');}}
   function settings(parent){
     loadCatalog();
     parent.append(node('p','Распознавание работает через браузер. Для озвучивания доступны голоса устройства и подключённые онлайн-голоса; онлайн-озвучивание передаёт текст ответа сервису речи.','feature-notice'));

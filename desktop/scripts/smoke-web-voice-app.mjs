@@ -42,6 +42,17 @@ try{
  await page.evaluate(()=>recognizers.at(-1).onresult({results:[Object.assign([{transcript:'Как дела?'}],{isFinal:true})]}));
  await page.waitForFunction(()=>spoken.length>firstSpoken);
  const messages=calls.filter(c=>c.path.endsWith('/messages/stream'));assert.equal(messages.length,2);assert.equal(messages[0].path,messages[1].path);
+ // A speech engine failure exposes recovery in the real mobile browser layout.
+ await page.waitForFunction(()=>!document.querySelector('#prompt').disabled);
+ const failedText=await page.evaluate(()=>{window.beforeRecovery=spoken.length;const u=spoken.at(-1);u.onerror();return u.text;});
+ await page.getByRole('button',{name:'Продолжить озвучку',exact:true}).waitFor({state:'visible'});
+ await page.screenshot({path:output+'/voice-recovery.png'});
+ await page.getByRole('button',{name:'Продолжить озвучку',exact:true}).click();
+ await page.waitForFunction(()=>spoken.length>beforeRecovery);
+ assert.equal(await page.evaluate(()=>spoken.at(-1).text),failedText);
+ assert.equal(await page.evaluate(()=>spoken.at(-1).voice.voiceURI),'fixture-ru');
+ assert.equal(calls.filter(c=>c.path.endsWith('/messages/stream')).length,2);
+ assert.equal(await page.getByRole('button',{name:'Продолжить озвучку',exact:true}).isVisible(),false);
  await page.getByRole('button',{name:'Завершить',exact:true}).click();
  await page.setViewportSize({width:1440,height:960});
  await page.locator('#new-chat').click();
@@ -57,5 +68,5 @@ try{
  await page.reload();await page.locator('.message-files').filter({hasText:'invoice.txt'}).waitFor();
  assert.equal(await page.locator('#model-label').innerText(),selected==='velia-quantum'?'VELIA QUANTUM':'VELIA FLASH');
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({ok:true,model:selected,synthetic:true,checks:['selected voice model preserved','account voice fast flag','no browser task','real device voice','TTS output with selected profile','microphone resumes','same chat second turn','selected file upload and answer','file metadata after reload']}));
+ console.log(JSON.stringify({ok:true,model:selected,synthetic:true,checks:['selected voice model preserved','account voice fast flag','no browser task','real device voice','TTS output with selected profile','microphone resumes','same chat second turn','speech interruption resumes same phrase without model request','selected file upload and answer','file metadata after reload']}));
 }finally{await browser?.close();fixture.kill();}

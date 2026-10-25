@@ -2,7 +2,7 @@ import asyncio
 from types import SimpleNamespace
 import pytest
 import edge_tts
-from aiohttp import web, ClientSession
+from aiohttp import web, ClientSession, ClientConnectionError, ClientResponseError
 from aiohttp.test_utils import TestServer
 from desktop import voice_routes as routes
 
@@ -113,3 +113,52 @@ def test_empty_audio_retries_once_with_same_voice_without_switching_or_replaying
     monkeypatch.setattr(edge_tts,'Communicate',Partial)
     with pytest.raises(RuntimeError,match='^tts_unavailable$'):asyncio.run(routes.synthesize(data))
     assert len(calls)==1
+
+@pytest.mark.parametrize('error',[
+    ClientConnectionError('private network details'),
+    asyncio.TimeoutError(),
+    edge_tts.exceptions.WebSocketError('private websocket details'),
+    ClientResponseError(None,(),status=503,message='private upstream details'),
+])
+def test_transient_edge_errors_retry_once_before_audio_with_same_speaker(monkeypatch,error):
+    monkeypatch.setenv('VELIA_WEB_TTS_PROVIDER','edge')
+    calls=[]
+    class Speaker:
+        def __init__(self,*args,**kwargs):calls.append((args,kwargs))
+        async def stream(self):
+            if len(calls)==1:raise error
+            yield {'type':'audio','data':b'recovered-audio'}
+    monkeypatch.setattr(edge_tts,'Communicate',Speaker)
+    fields=routes.validate({'text':'Привет','voice':routes.EDGE_VOICES[2]['voiceURI'],'rate':1})
+    assert asyncio.run(routes.synthesize(fields))==b'recovered-audio'
+    assert len(calls)==2 and calls[0]==calls[1]
+    calls.clear()
+    class Unavailable(Speaker):
+        async def stream(self):
+            raise error
+            yield
+    monkeypatch.setattr(edge_tts,'Communicate',Unavailable)
+    with pytest.raises(RuntimeError,match='^tts_unavailable$'):asyncio.run(routes.synthesize(fields))
+    assert len(calls)==2
+    calls.clear()
+    class Partial(Speaker):
+        async def stream(self):
+            yield {'type':'audio','data':b'partial'}
+            raise error
+    monkeypatch.setattr(edge_tts,'Communicate',Partial)
+    with pytest.raises(RuntimeError,match='^tts_unavailable$'):asyncio.run(routes.synthesize(fields))
+    assert len(calls)==1
+
+@pytest.mark.parametrize('status',[400,401,403,429])
+def test_permanent_or_throttled_edge_errors_do_not_retry(monkeypatch,status):
+    monkeypatch.setenv('VELIA_WEB_TTS_PROVIDER','edge')
+    calls=[]
+    class Speaker:
+        def __init__(self,*args,**kwargs):calls.append(1)
+        async def stream(self):
+            raise ClientResponseError(None,(),status=status,message='private upstream details')
+            yield
+    monkeypatch.setattr(edge_tts,'Communicate',Speaker)
+    fields=routes.validate({'text':'Привет','voice':routes.EDGE_VOICES[2]['voiceURI'],'rate':1})
+    with pytest.raises(RuntimeError,match='^tts_unavailable$'):asyncio.run(routes.synthesize(fields))
+    assert calls==[1]

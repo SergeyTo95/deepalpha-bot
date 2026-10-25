@@ -73,4 +73,27 @@ const errorDialog=[...document.querySelectorAll('.voice-dialog')].at(-1);errorDi
 delayedRecognition.at(-1).onresult({results:[Object.assign([{transcript:'Привет'}],{isFinal:true})]});await tick();
 assert.equal(errorDialog.querySelector('.voice-status').textContent,'Quantum временно недоступна.');specific.stop();
 console.log(JSON.stringify({ok:true,synthetic:true,checks:['one phrase prefetch without duplicate download','ready audio reused on phrase boundary','stop aborts unused prefetch','late prefetch cannot play','specific model error stays visible']}));
+// A failed middle phrase keeps the incoming tail and resumes without a model call.
+const recoveries=[];let failedOnce=false,turns=0,finishResponse;
+globalThis.fetch=async(url,options)=>{
+  if(url.endsWith('/voices'))return {ok:true,json:async()=>({voices:neural})};
+  const data=JSON.parse(options.body);recoveries.push(data);
+  if(data.text==='Вторая фраза.'&&!failedOnce){failedOnce=true;return {ok:false,status:503};}
+  return {ok:true,blob:async()=>new Blob(['fixture'])};
+};
+let resumable;resumable=setupVoice({send:()=>{turns++;resumable.update('Первая фраза. Вторая фраза.');return new Promise(resolve=>{finishResponse=resolve;});},busy:()=>false,toast:()=>{}});resumable.open();
+const recoveryDialog=[...document.querySelectorAll('.voice-dialog')].at(-1),resumeButton=recoveryDialog.querySelector('.voice-resume');
+assert.equal(resumeButton.hidden,true);recoveryDialog.querySelector('.voice-controls button').click();
+delayedRecognition.at(-1).onresult({results:[Object.assign([{transcript:'Привет'}],{isFinal:true})]});await tick();
+assert.equal(recoveries.length,2);audios.at(-1).onended();await tick();
+assert.equal(resumeButton.hidden,false);assert.match(recoveryDialog.querySelector('.voice-status').textContent,/Продолжить озвучку/);
+const fullReply='Первая фраза. Вторая фраза. Третья фраза.';
+resumable.update(fullReply);resumable.complete(fullReply);finishResponse();await tick();
+assert.equal(recoveries.length,2);assert.equal(resumeButton.hidden,false);
+resumeButton.click();await tick();assert.equal(turns,1);assert.equal(resumeButton.hidden,true);
+assert.deepEqual(recoveries.map(x=>x.text),['Первая фраза.','Вторая фраза.','Вторая фраза.','Третья фраза.']);
+assert.equal(new Set(recoveries.map(x=>x.voice)).size,1);
+audios.at(-1).onended();await tick();assert.equal(recoveries.length,4);
+audios.at(-1).onended();resumable.stop();assert.equal(resumeButton.hidden,true);
+console.log(JSON.stringify({ok:true,synthetic:true,checks:['failed middle phrase retained','incoming answer tail retained during speech outage','resume uses same speaker','no replay of spoken beginning','no repeated model request','stop clears recovery']}));
 dom.window.close();
