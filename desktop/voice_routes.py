@@ -34,7 +34,7 @@ def validate(data):
     if not isinstance(data, dict) or set(data) != {"text", "voice", "rate"}:
         raise ValueError()
     text, voice, rate = data["text"], data["voice"], data["rate"]
-    if (not isinstance(text, str) or not text.strip() or len(text) > 500
+    if (not isinstance(text, str) or not any(c.isalnum() for c in text) or len(text) > 500
             or voice not in {v["voiceURI"] for v in voice_catalog()}
             or type(rate) not in {int, float} or not math.isfinite(rate) or not .7 <= rate <= 1.4):
         raise ValueError()
@@ -46,26 +46,38 @@ async def synthesize_edge(fields):
     # Fixed provider/allowlisted speakers; no client URL, credentials or SSML.
     import edge_tts
     started, first, chunks, size = time.monotonic(), None, [], 0
+    attempts = 0
     try:
         async with asyncio.timeout(20):
-            source = edge_tts.Communicate(fields["text"], fields["edge_voice"],
-                rate=fields["edge_rate"], connect_timeout=5, receive_timeout=10)
-            async for part in source.stream():
-                if part["type"] != "audio":
-                    continue
-                first = first or time.monotonic()
-                size += len(part["data"])
-                if size > 2 * 1024 * 1024:
-                    raise RuntimeError("tts_unavailable")
-                chunks.append(part["data"])
-        if not size:
-            raise RuntimeError("tts_unavailable")
+            for attempt in range(2):
+                attempts += 1
+                try:
+                    source = edge_tts.Communicate(fields["text"], fields["edge_voice"],
+                        rate=fields["edge_rate"], connect_timeout=5, receive_timeout=10)
+                    async for part in source.stream():
+                        if part["type"] != "audio":
+                            continue
+                        first = first or time.monotonic()
+                        size += len(part["data"])
+                        if size > 2 * 1024 * 1024:
+                            raise RuntimeError("tts_unavailable")
+                        chunks.append(part["data"])
+                    if not size:
+                        raise edge_tts.exceptions.NoAudioReceived("empty_audio")
+                    break
+                except edge_tts.exceptions.NoAudioReceived:
+                    # This adapter has no per-call billing. Retry an empty result
+                    # once, with the same speaker, only before receiving audio.
+                    if attempt or size:
+                        raise
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as exc:
+        LOG.warning("VELIA_WEB_TTS_FAILED provider=edge voice=%s kind=%s attempts=%d elapsed_ms=%d",
+            fields["edge_voice"], type(exc).__name__, attempts, round((time.monotonic()-started)*1000))
         raise RuntimeError("tts_unavailable") from None
-    LOG.info("VELIA_WEB_TTS_TIMING provider=edge voice=%s first_audio_ms=%d total_ms=%d",
-        fields["edge_voice"], round((first-started)*1000), round((time.monotonic()-started)*1000))
+    LOG.info("VELIA_WEB_TTS_TIMING provider=edge voice=%s first_audio_ms=%d total_ms=%d attempts=%d",
+        fields["edge_voice"], round((first-started)*1000), round((time.monotonic()-started)*1000), attempts)
     return b"".join(chunks)
 
 async def synthesize(fields):

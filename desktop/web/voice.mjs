@@ -37,7 +37,7 @@ export function speechChunks(text, limit = 240) {
     chunks.push(rest.slice(0, cut).trim()); rest = rest.slice(cut).trim();
   }
   if (rest) chunks.push(rest);
-  return chunks;
+  return chunks.filter(part=>/[\p{L}\p{N}]/u.test(part));
 }
 
 export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'}) {
@@ -46,6 +46,7 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'})
   let recognition = null, active = false, pending = false, epoch = 0, timer = null, speechEpoch = 0;
   let speechTimer = null, currentUtterance = null, deferredAnswer = null, waitingTimer = null;
   let catalogLoaded=false,catalogRequest=null,remoteVoices=[],remoteAudio=null,remoteAbort=null,remoteURL=null;
+  const audioJobs=new Set();
   let language = navigator.language || 'ru-RU', voiceURI = '', rate = 1;
   try {language = localStorage.getItem('velia-voice-language') || language; voiceURI = localStorage.getItem('velia-voice-uri') || ''; rate = Number(localStorage.getItem('velia-voice-rate')) || 1;} catch {}
   rate = Math.max(.7, Math.min(1.4, rate));
@@ -77,12 +78,24 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'})
     voiceHint.hidden=!voiceHint.textContent;
   }
   async function loadCatalog(){if(catalogRequest)return catalogRequest;catalogRequest=(async()=>{try{const response=await fetch('/web-api/v1/voice/voices',{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(5000)});if(!response.ok)return;const data=await response.json();catalogLoaded=true;remoteVoices=Array.isArray(data.voices)?data.voices.filter(v=>isRemoteVoice(v.voiceURI)):[];refreshVoices();}catch{}finally{catalogRequest=null;}})();return catalogRequest;}
-  function cancelAudio(){remoteAbort?.abort();remoteAbort=null;if(remoteAudio){remoteAudio.pause();remoteAudio.onended=null;remoteAudio.onerror=null;remoteAudio=null;}if(remoteURL){URL.revokeObjectURL(remoteURL);remoteURL=null;}}
+  function releasePlayback(){if(remoteAudio){remoteAudio.pause();remoteAudio.onended=null;remoteAudio.onerror=null;remoteAudio=null;}if(remoteURL){URL.revokeObjectURL(remoteURL);remoteURL=null;}}
+  function cancelAudio(){for(const job of audioJobs)job.controller.abort();audioJobs.clear();remoteAbort?.abort();remoteAbort=null;releasePlayback();}
+  function downloadPart(part,uri){
+    const existing=[...audioJobs].find(job=>job.part===part&&job.uri===uri&&job.rate===rate&&job.epoch===speechEpoch);
+    if(existing)return existing;
+    const job={part,uri,rate,epoch:speechEpoch,controller:new AbortController()};audioJobs.add(job);
+    job.ready=(async()=>{try{const response=await fetch('/web-api/v1/voice/speech',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Velia-Request':'1'},body:JSON.stringify({text:part,voice:uri,rate:job.rate}),signal:job.controller.signal});if(!response.ok)throw Error('tts_unavailable');const blob=await response.blob();if(blob.size>2*1024*1024)throw Error('tts_unavailable');return blob;}catch{return null;}})();
+    return job;
+  }
+  function primeNext(){
+    const uri=effectiveURI();
+    if(active&&!streamBlocked&&!document.hidden&&currentUtterance&&streamQueue.length&&isRemoteVoice(uri)&&audioJobs.size<2)downloadPart(streamQueue[0],uri);
+  }
   async function playPart(part,done,fail){
     const uri=effectiveURI();
     if(!isRemoteVoice(uri)){if(!synth){fail();return;}const u=new SpeechSynthesisUtterance(part);u.lang=language;u.rate=rate;u.pitch=1;u.volume=1;u.voice=voiceChoice(synth.getVoices(),language,uri);u.onend=done;u.onerror=fail;currentUtterance=u;try{synth.speak(u);}catch{fail();}return;}
-    const token=speechEpoch,controller=new AbortController();remoteAbort=controller;currentUtterance={};
-    try{const response=await fetch('/web-api/v1/voice/speech',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Velia-Request':'1'},body:JSON.stringify({text:part,voice:uri,rate}),signal:controller.signal});if(!response.ok)throw Error('tts_unavailable');const blob=await response.blob();if(token!==speechEpoch)return;remoteURL=URL.createObjectURL(blob);remoteAudio=new Audio(remoteURL);remoteAudio.onended=()=>{cancelAudio();done();};remoteAudio.onerror=()=>{cancelAudio();fail();};await remoteAudio.play();}catch(error){if(token===speechEpoch&&error.name!=='AbortError'){cancelAudio();fail();}}
+    const token=speechEpoch,job=downloadPart(part,uri);remoteAbort=job.controller;currentUtterance={};
+    try{const blob=await job.ready;audioJobs.delete(job);if(token!==speechEpoch)return;if(!blob)throw Error('tts_unavailable');remoteAbort=null;remoteURL=URL.createObjectURL(blob);remoteAudio=new Audio(remoteURL);remoteAudio.onended=()=>{releasePlayback();done();};remoteAudio.onerror=()=>{releasePlayback();fail();};await remoteAudio.play();}catch(error){if(token===speechEpoch&&error.name!=='AbortError'){cancelAudio();fail();}}
   }
   function voiceControl(){const label=node('label','Голос Велии','voice-profile'), select=node('select');select.setAttribute('aria-label','Голос');voiceSelectors.add(select);select.onchange=()=>{stop();voiceURI=select.value;save();refreshVoices();};label.append(select);return label;}
   const soundTest=node('button','Проверить звук','voice-sound-test');soundTest.onclick=()=>speak('Привет! Я Велия. Рада тебя слышать.');speechTests.add(soundTest);soundTest.disabled=!canSpeak();
@@ -120,13 +133,15 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'})
     };next();
   }
   function pumpStream(){
-    if(!active||streamBlocked||currentUtterance||document.hidden)return;
+    if(!active||streamBlocked||document.hidden)return;
+    if(currentUtterance){primeNext();return;}
     if(!streamQueue.length){if(streamDone){status('Жду твою реплику…','listening');later(epoch);}else status('Велия готовит продолжение…','thinking');return;}
     const part=streamQueue.shift(),token=speechEpoch;
     reply.textContent=part;status('Велия говорит…','speaking');
     const done=()=>{if(token!==speechEpoch)return;clearTimeout(speechTimer);currentUtterance=null;pumpStream();};
     const fail=()=>{if(token!==speechEpoch)return;failure(true);status('Озвучивание прервалось. Ответ сохранён в диалоге.','error');};
     speechTimer=setTimeout(fail,45000);playPart(part,done,fail);
+    primeNext();
   }
   function update(text,final=false){
     if(!active||(!pending&&!final)||streamBlocked)return;
@@ -150,7 +165,7 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'})
     if(!speechChunks(text).length){if(!String(text||'').trim())failure(true);else {streamDone=true;pending=false;pumpStream();}return;}
     update(text,true);pending=false;
   }
-  function failure(force=false){clearTimeout(waitingTimer);if(pending||force){pending=false;deferredAnswer=null;reply.textContent='Ответ не получен. Попробуй ещё раз.';active=false;speechEpoch++;cancelAudio();clearTimeout(speechTimer);currentUtterance=null;synth?.cancel();status('Ответ не получен. Проверь диалог и нажми «Начать» для повтора.','error');}}
+  function failure(force=false,detail=''){clearTimeout(waitingTimer);if(pending||force){pending=false;deferredAnswer=null;reply.textContent=streamText||'Ответ не получен. Попробуй ещё раз.';active=false;speechEpoch++;cancelAudio();clearTimeout(speechTimer);currentUtterance=null;synth?.cancel();status(typeof detail==='string'&&detail.trim()?detail.slice(0,500):'Ответ не получен. Проверь диалог и нажми «Начать» для повтора.','error');}}
   function settings(parent){
     loadCatalog();
     parent.append(node('p','Распознавание работает через браузер. Для озвучивания доступны голоса устройства и подключённые онлайн-голоса; онлайн-озвучивание передаёт текст ответа сервису речи.','feature-notice'));

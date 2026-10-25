@@ -102,6 +102,7 @@ def test_simple_voice_turn_uses_one_native_answer_without_planning_or_history_re
             prior=[{"role":"user","content":"Мой рассказ про лес.","status":"completed"},
                 {"role":"assistant","content":"Поняла.","status":"completed"}]
             state["conversations"][cid]["messages"]=list(prior)
+            identities_before=sum(row['path']=='/mobile-api/v1/me' for row in state['seen'])
             async with client.post(server.make_url(f"/web-api/v1/conversations/{cid}/messages/stream"),headers=headers(cookie),
                     json={"content":question,"model":model,"idempotency_key":"direct-voice-001","voice_turn":True,"web_search":True}) as response:
                 assert response.status==200 and "[DONE]" in await response.text()
@@ -109,6 +110,7 @@ def test_simple_voice_turn_uses_one_native_answer_without_planning_or_history_re
             assert state["account_calls"][0]["chat_mode"]==model.removeprefix("velia-")
             assert state["account_calls"][0]["voice_turn"] is True
             assert state["account_calls"][0]["content"]==question
+            assert sum(row['path']=='/mobile-api/v1/me' for row in state['seen'])==identities_before+1
             assert state["conversations"][cid]["messages"][:2]==prior
             assert state["intent_payloads"]==state["quantum_intent_payloads"]==state["search_queries"]==[]
     asyncio.run(run())
@@ -199,6 +201,46 @@ def test_quantum_plan_rejects_invalid_provider_results_without_retry(monkeypatch
             assert error.value.code==("quantum_provider_error" if case=="redirect" else "quantum_invalid_response")
         assert calls==["/v1/chat/completions"]
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('finish',['tool_calls','stop'])
+@pytest.mark.parametrize('argument_format',['json','object'])
+@pytest.mark.parametrize('quote',['',None])
+def test_complete_quantum_tool_envelopes_accept_null_optional_metadata_without_a_second_call(monkeypatch, finish, argument_format,quote):
+    import json
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+    from desktop.quantum_intent import understand_quantum
+    from desktop.request_intent import FULL_TOOL
+    async def run():
+        calls=[]
+        async def provider(request):
+            calls.append(await request.json())
+            args={'action':'direct','quote':quote,'query':None,'candidate':None,'source_scope':None,'task_query':None,'context':[]}
+            return web.json_response({'choices':[{'finish_reason':finish,'message':{'tool_calls':[{'type':'function','function':{
+                'name':'understand_request','arguments':json.dumps(args) if argument_format=='json' else args}}]}}]})
+        app=web.Application();app.router.add_post('/v1/chat/completions',provider)
+        async with TestServer(app) as server:
+            for key,value in {'VELIA_QUANTUM_ENABLED':'true','VELIA_QUANTUM_PROVIDER':'self_hosted',
+                    'VELIA_QUANTUM_BASE_URL':str(server.make_url('/v1')),'VELIA_QUANTUM_MODEL':'owned',
+                    'VELIA_QUANTUM_API_KEY':'fixture'}.items():monkeypatch.setenv(key,value)
+            assert await understand_quantum([{'role':'user','content':'Объясни двоичный поиск.'}])=={'action':'direct','query':'','context':[]}
+        assert len(calls)==1 and calls[0]['tools']==[FULL_TOOL]
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('args',[
+    {'action':'search','quote':'','query':None},
+    {'action':'direct','quote':'диабет','candidate':'рак','query':''},
+    {'action':'direct','quote':'','query':'','context':[{'quote':'астма','kind':'condition','status':'stated'}]},
+    {'action':'direct','quote':'','query':'','source_scope':'official_health'},
+    {'action':'direct','quote':'','query':'','unknown':'field'},
+])
+def test_quantum_envelope_compatibility_does_not_repair_queries_quotes_or_medical_evidence(args):
+    from desktop.quantum_intent import planning_decision
+    result={'choices':[{'finish_reason':'stop','message':{'tool_calls':[{'function':{
+        'name':'understand_request','arguments':args}}]}}]}
+    with pytest.raises(ValueError):planning_decision(result,'Расскажи про лес.')
 
 
 def test_quantum_medical_search_preserves_official_sources_without_flash(monkeypatch,tmp_path):

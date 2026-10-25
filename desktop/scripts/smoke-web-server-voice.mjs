@@ -58,4 +58,19 @@ const startButton=[...document.querySelectorAll('.voice-dialog')].at(-1).querySe
 const recognizer=delayedRecognition.at(-1);recognizer.onresult({results:[Object.assign([{transcript:'Расскажи историю'}],{isFinal:true})]});
 assert.equal(submissions,1);recognizer.onend();assert.equal(submissions,1);immediate.stop();women.stop();
 console.log(JSON.stringify({ok:true,synthetic:true,checks:['three distinct female provider IDs','remote selection without device TTS','final recognition submits before delayed onend','late onend cannot duplicate request']}));
+// At most one next phrase downloads while the current one downloads/plays.
+const downloads=[];globalThis.fetch=async(url,options)=>{if(url.endsWith('/voices'))return {ok:true,json:async()=>({voices:neural})};return new Promise(resolve=>downloads.push({data:JSON.parse(options.body),signal:options.signal,resolve:()=>resolve({ok:true,blob:async()=>new Blob(['fixture'])})}));};
+const audioStart=audios.length;let prefetched;
+prefetched=setupVoice({send:async()=>{const text='Первая фраза. Вторая фраза. Третья фраза.';prefetched.update(text);prefetched.complete(text);},busy:()=>false,toast:()=>{}});prefetched.open();
+[...document.querySelectorAll('.voice-dialog')].at(-1).querySelector('.voice-controls button').click();
+delayedRecognition.at(-1).onresult({results:[Object.assign([{transcript:'Привет'}],{isFinal:true})]});await tick();
+assert.deepEqual(downloads.map(x=>x.data.text),['Первая фраза.','Вторая фраза.']);
+downloads[0].resolve();downloads[1].resolve();await tick();assert.equal(audios.length,audioStart+1);
+audios.at(-1).onended();await tick();assert.equal(audios.length,audioStart+2);assert.equal(downloads[2].data.text,'Третья фраза.');
+prefetched.stop();assert.ok(downloads[2].signal.aborted);downloads[2].resolve();await tick();assert.equal(audios.length,audioStart+2);
+let specific;specific=setupVoice({send:async()=>specific.failure(false,'Quantum временно недоступна.'),busy:()=>false,toast:()=>{}});specific.open();
+const errorDialog=[...document.querySelectorAll('.voice-dialog')].at(-1);errorDialog.querySelector('.voice-controls button').click();
+delayedRecognition.at(-1).onresult({results:[Object.assign([{transcript:'Привет'}],{isFinal:true})]});await tick();
+assert.equal(errorDialog.querySelector('.voice-status').textContent,'Quantum временно недоступна.');specific.stop();
+console.log(JSON.stringify({ok:true,synthetic:true,checks:['one phrase prefetch without duplicate download','ready audio reused on phrase boundary','stop aborts unused prefetch','late prefetch cannot play','specific model error stays visible']}));
 dom.window.close();

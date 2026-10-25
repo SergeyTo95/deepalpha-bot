@@ -12,7 +12,8 @@ _GREETINGS = frozenset({'привет','здравствуйте','здравс�
 _IDENTITY = frozenset({'кто ты','ты кто','как тебя зовут','что ты умеешь','что умеешь',
     'что ты можешь','кто ты и что ты умеешь','кто ты и что умеешь','ты тут','ты здесь','ты работаешь',
     'who are you','what can you do','who are you and what can you do',
-    'what is your name','are you there','sen kimsin','neler yapabilirsin',
+    'what is your name','are you there','can you hear me','ты меня слышишь','ты меня понимаешь',
+    'велия ты меня слышишь','велия ты здесь','ты умеешь разговаривать','sen kimsin','neler yapabilirsin',
     'adın ne','orada mısın'})
 _ARITHMETIC = re.compile(r'\d{1,12}(?:\s*[+*×]\s*\d{1,12}){1,4}\s*=?')
 _TRANSLATION = re.compile(r'^(?:переведи(?: этот текст)? на (?:английский|русский|турецкий|немецкий|французский|испанский|китайский)(?: язык)?|translate(?: this text)? (?:into|to) (?:english|russian|turkish|german|french|spanish|chinese))\s*:\s*\S',re.I)

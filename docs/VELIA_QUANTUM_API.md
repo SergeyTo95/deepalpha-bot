@@ -78,6 +78,35 @@ Remove that extra command after successful release; preserve the existing Browse
 Agent pre-deploy gate. Only the three bounded timing loggers are enabled in the
 gateway entry point; they log model/voice IDs, timings and outcomes, not content.
 
+Voice playback prefetches only the next phrase while the current phrase is
+downloaded/played (at most two requests in flight). Stop, speaker changes and
+cancellation abort unused downloads; late results cannot start playback.
+Punctuation-only streamed tails never reach TTS. The unbilled Edge speech adapter
+may retry an empty-audio result once with the same voice, only before any audio
+bytes arrived, within the existing overall deadline. Paid speech adapters and
+language-model completions do not gain automatic retries. Model failures surface
+their existing localized reason in the voice window; speech failures keep the
+saved text and remain distinct from model failures.
+
+The account stream reuses the Quantum capability freshly revalidated by that
+request's session middleware, removing a duplicate identity HTTP round trip.
+Native availability, ownership and quota checks remain independent. Quantum
+planning sends the complete annotated function schema on its single request.
+Complete tool envelopes with `stop` or `tool_calls` are accepted only with one
+correct named call and validated arguments. Object arguments and absent/null
+optional metadata are normalized without repairing searches, proposed term
+changes or medical evidence. Truncated, malformed, extra-field and invented-span
+responses still fail closed. Failure telemetry includes a bounded stage/code,
+never submitted text or raw provider bodies.
+
+For a one-time voice release gate use
+`python -m desktop.probe_quantum_independence --voice`: three fixed synthetic
+planning cases (direct, current-information search, official medical scope),
+Flash/Decision forbidden, and a fixed Ava synthesis request. It writes no account
+history and makes no search-provider request. Only the exact free Quantum route
+is accepted. Remove the extra probe after successful release, retaining the
+existing Browser Agent gate.
+
 Enable `VELIA_FILE_ANALYST_ENABLED=true` and
 `VELIA_FLASH_ATTACHMENTS_ENABLED=true` on the account backend. The deployment
 includes Tesseract, Poppler and English/Russian/Turkish OCR data. TXT, MD, CSV,

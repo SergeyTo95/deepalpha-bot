@@ -838,7 +838,7 @@ async function generate(retry = false, voiceTurn = false) {
     }
     voice.complete(answer.content);
   } catch (error) {
-    voice.failure();
+    voice.failure(false,error.name==="AbortError"?"Ответ остановлен. Нажми «Начать», чтобы продолжить.":error.message);
     if (error.name === "AbortError") answer.stopped = true;
     else {
       answer.failed =

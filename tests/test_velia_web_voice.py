@@ -7,6 +7,7 @@ from aiohttp.test_utils import TestServer
 from desktop import voice_routes as routes
 
 @pytest.mark.parametrize('data', [None, {}, {'text':'','voice':'speechkit:jane','rate':1},
+    {'text':'... —','voice':'speechkit:jane','rate':1},
     {'text':'hello','voice':'speechkit:unknown','rate':1},
     {'text':'hello','voice':'speechkit:jane','rate':True},
     {'text':'hello','voice':'speechkit:jane','rate':float('nan')},
@@ -91,3 +92,24 @@ def test_neural_empty_oversized_and_provider_errors_are_safe(monkeypatch,kind):
     monkeypatch.setattr(edge_tts,'Communicate',Speaker)
     with pytest.raises(RuntimeError,match='^tts_unavailable$'):
         asyncio.run(routes.synthesize(routes.validate({'text':'Привет','voice':routes.EDGE_VOICES[0]['voiceURI'],'rate':1})))
+
+def test_empty_audio_retries_once_with_same_voice_without_switching_or_replaying_partial_audio(monkeypatch):
+    monkeypatch.setenv('VELIA_WEB_TTS_PROVIDER','edge')
+    calls=[]
+    class Speaker:
+        def __init__(self,text,voice,**kwargs):calls.append((text,voice,kwargs))
+        async def stream(self):
+            if len(calls)==1:raise edge_tts.exceptions.NoAudioReceived('private provider details')
+            yield {'type':'audio','data':b'recovered-audio'}
+    monkeypatch.setattr(edge_tts,'Communicate',Speaker)
+    data=routes.validate({'text':'Привет','voice':routes.EDGE_VOICES[2]['voiceURI'],'rate':1})
+    assert asyncio.run(routes.synthesize(data))==b'recovered-audio'
+    assert len(calls)==2 and calls[0]==calls[1]
+    calls.clear()
+    class Partial(Speaker):
+        async def stream(self):
+            yield {'type':'audio','data':b'partial'}
+            raise edge_tts.exceptions.NoAudioReceived('private provider details')
+    monkeypatch.setattr(edge_tts,'Communicate',Partial)
+    with pytest.raises(RuntimeError,match='^tts_unavailable$'):asyncio.run(routes.synthesize(data))
+    assert len(calls)==1

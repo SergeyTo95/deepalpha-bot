@@ -192,7 +192,10 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
         if data["model"] == QUANTUM_ID and attachments and not request[ACCOUNT_SESSION].quantum_attachments:
             return error("quantum_attachments_unsupported", 400)
         session = request[ACCOUNT_SESSION]
-        permission = await authorize_model(session.access, data["model"])
+        # session_for just revalidated this account and refreshed capabilities.
+        # The native generator independently enforces availability and quotas.
+        permission = ((None if session.quantum else ("quantum_unavailable", 503))
+            if data["model"] == QUANTUM_ID else await authorize_model(session.access, data["model"]))
         if permission:
             return error(*permission)
         failure = handlers["reserve"](session.user_id)
@@ -202,9 +205,11 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
         source = stream = preparation = None
         started = time.monotonic()
         prepared_at = first_text_at = None
-        outcome = "error"
+        outcome, failure_code = "error", "none"
 
         async def stream_error(code):
+            nonlocal failure_code
+            failure_code = code
             with suppress(ClientError, ConnectionResetError, RuntimeError, OSError):
                 await response.write(("data: " + json.dumps({"error": {"message": code}}) + "\n\n").encode())
                 await response.write_eof()
@@ -248,6 +253,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
                     first_text_at = time.monotonic()
                 if b'"error":' in chunk:
                     outcome = "model_error"
+                    failure_code = "native_model_error"
                 await response.write(chunk)
             await response.write_eof()
             if outcome != "model_error":
@@ -257,6 +263,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
             outcome = "cancelled"
             raise
         except QuantumError as exc:
+            failure_code = exc.code
             if response.prepared:
                 await stream_error(exc.code)
                 return response
@@ -270,6 +277,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
             await stream_error(code)
             return response
         except (AuthenticationUnavailable, ClientError, TimeoutError, ValueError, OSError, StopAsyncIteration):
+            failure_code = "account_service_unavailable"
             if response.prepared:
                 await stream_error("account_service_unavailable")
                 return response
@@ -280,10 +288,10 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
                 with suppress(asyncio.CancelledError, Exception):
                     await preparation
             finished = time.monotonic()
-            LOG.info("VELIA_ACCOUNT_RESPONSE_TIMING model=%s voice=%s prepare_ms=%d first_text_ms=%d total_ms=%d outcome=%s",
+            LOG.info("VELIA_ACCOUNT_RESPONSE_TIMING model=%s voice=%s prepare_ms=%d first_text_ms=%d total_ms=%d outcome=%s code=%s",
                 data["model"], bool(data.get("voice_turn")), round(((prepared_at or finished) - started) * 1000),
                 round((first_text_at - started) * 1000) if first_text_at is not None else -1,
-                round((finished - started) * 1000), outcome)
+                round((finished - started) * 1000), outcome, failure_code)
             try:
                 if stream is not None:
                     await stream.aclose()

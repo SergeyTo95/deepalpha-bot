@@ -14,6 +14,11 @@ test('empty reply and unclosed code are handled safely',()=>{
   assert.deepEqual(speechChunks('  '),[]);assert.deepEqual(speechChunks('```js\nprivate()'),['Код сохранён в диалоге.']);
   assert.ok(speechChunks('x'.repeat(900)).every(x=>x.length<=240));
 });
+test('punctuation-only streamed tails never trigger speech synthesis',()=>{
+ for(const text of ['...', ' — ', ',;:', '😊!', '   .'])assert.deepEqual(speechChunks(text),[]);
+ assert.deepEqual(speechChunks('125 рублей.'),['125 рублей.']);
+ assert.deepEqual(speechChunks('Привет.'),['Привет.']);
+});
 
 test('voice inventory is language scoped, deduplicated and represents real voices',()=>{
  const voices=[{name:'English',lang:'en-US',voiceURI:'en'}, {name:'Russian',lang:'ru-RU',voiceURI:'ru',localService:true}, {name:'Same',lang:'ru-RU',voiceURI:'ru'}];
