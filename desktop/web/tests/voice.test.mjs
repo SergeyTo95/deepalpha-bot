@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {speechChunks,availableVoices,voiceChoice,speechReady,isRemoteVoice} from '../voice.mjs';
+import {speechChunks,availableVoices,voiceChoice,speechReady,isRemoteVoice,recognitionLanguage,isVoiceEndCommand} from '../voice.mjs';
+test('recognition follows the saved call language then the page rather than phone locale',()=>{
+ assert.equal(recognitionLanguage('', 'ru', 'en-US'),'ru-RU');
+ assert.equal(recognitionLanguage('tr-TR', 'ru', 'en-US'),'tr-TR');
+ assert.equal(recognitionLanguage('', '', 'de-DE'),'de-DE');
+ assert.equal(recognitionLanguage('', '', ''),'ru-RU');
+});
+test('only an explicit whole utterance ends the call',()=>{
+ for(const text of ['Велия, закончи разговор!','Заверши разговор, пожалуйста.','Пока!','Velia, end the call.','Görüşmeyi bitir.'])assert.equal(isVoiceEndCommand(text),true,text);
+ for(const text of ['Не завершай разговор','Как завершить разговор?','Она сказала пока','Объясни слово пока','Привет','Закончи рассказ','Велия, расскажи как отключиться'])assert.equal(isVoiceEndCommand(text),false,text);
+});
 test('long speech is bounded and preserves all plain words',()=>{
   const text=Array.from({length:200},(_,i)=>`слово${i}`).join(' ');
   const chunks=speechChunks(text);

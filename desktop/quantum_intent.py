@@ -10,6 +10,17 @@ from services.velia_structured_output import strict_json_loads
 from velia_quantum_provider import QuantumError, configuration, payload, response_error
 
 LOG = logging.getLogger(__name__)
+PLANNING_INSTRUCTION = INSTRUCTION + (
+    " Перед вызовом инструмента проверь аргументы: все поля схемы обязательны. "
+    "quote и context[].quote копируй дословно из ПОСЛЕДНЕГО сообщения, включая "
+    "падеж и отрицание; не подставляй словарную форму вместо цитаты. "
+    "Например, в 'Как начать бегать при диабете?' цитата состояния, если оно "
+    "нужно в context, — 'диабете', а не 'диабет'. Это вопрос, а не подтверждение "
+    "личного диагноза: status=unspecified. Если исправление не нужно, "
+    "quote='', candidate=''. Для медицинских рекомендаций action=search, "
+    "source_scope=official_health; query и task_query — непустые поисковые строки. "
+    "Не меняй смысл и не добавляй отсутствующие факты ради заполнения схемы."
+)
 
 def planning_decision(result, question):
     """Accept complete provider envelopes; keep the existing evidence validator."""
@@ -61,7 +72,7 @@ async def understand_quantum(messages):
         raise QuantumError("quantum_invalid_response")
     while len(history) > 1 and sum(len(m.get("content") or "") for m in history[:-1]) > 6000:
         history.pop(0)
-    body = payload(config, [{"role": "system", "content": INSTRUCTION}] + history,
+    body = payload(config, [{"role": "system", "content": PLANNING_INSTRUCTION}] + history,
         max_tokens=1024, tools=[FULL_TOOL], tool_choice="required")
     started = time.monotonic()
     phase, outcome = "transport", "error"

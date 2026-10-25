@@ -92,6 +92,32 @@ a new model request or replaying the spoken beginning. Stop, speaker/rate change
 and account locking discard this recovery state. Model failures surface their
 existing localized reason in the voice window and clear speech recovery.
 
+The call starts from the user's existing microphone/open-call gesture; there is
+no second Start button. The dialog has a close icon, model/status, speaker and
+explicit recognition-language selectors. End/Start/subtitle controls and the
+sound-test action are absent from the call; sound testing remains in settings.
+An explicit whole-utterance command such as “Велия, закончи разговор” closes the
+call locally while listening, without a language-model request. Quoted commands,
+negations and questions about ending a call do not trigger it. Recovery controls
+appear only after errors. Closing, stopping or locking cancels pending recognition
+and speech; returning from the background can resume only an already-open call,
+never a call explicitly stopped or locked.
+
+Recognition follows the saved call language, then the page language, then the
+device locale. Continuous recognition accumulates final segments and waits
+450 ms without an interim tail before submitting once; a delayed recognizer
+shutdown cannot submit twice. A remaining unconfirmed tail is not sent as an
+incomplete question. These changes do not replace the browser STT service or prove
+real-device transcription accuracy. Raw audio and transcripts are not added to
+operational logs.
+
+The native Quantum voice prompt explicitly requires feminine Russian self-reference
+('рада тебя слышать', 'поняла', 'готова помочь'), including when an older reply used
+the wrong gender. It preserves the user's own gender and asks the same selected
+model to resolve imperfect dictation from recent context before asking one short
+clarifying question. This is an instruction, not a post-processing replacement
+of quoted or user text; unit payload tests do not guarantee generated wording.
+
 The gateway build's concurrent-work test waits for its four accepted workers to
 actually start, with a bounded event wait, rather than assuming that 50 ms is
 enough on the builder. Its four-worker limit, rejection and cleanup assertions
@@ -115,6 +141,10 @@ Flash/Decision forbidden, and a fixed Ava synthesis request. It writes no accoun
 history and makes no search-provider request. Only the exact free Quantum route
 is accepted. Remove the extra probe after successful release, retaining the
 existing Browser Agent gate.
+The complete planning schema remains strict. An additional self-check instruction
+emphasizes exact inflected context evidence and nonempty medical search fields.
+Probe failure metadata includes grounded-span flags and field counts without raw
+arguments. A failed live medical-planning gate is never bypassed to release the UI.
 
 Enable `VELIA_FILE_ANALYST_ENABLED=true` and
 `VELIA_FLASH_ATTACHMENTS_ENABLED=true` on the account backend. The deployment

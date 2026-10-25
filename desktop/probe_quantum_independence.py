@@ -9,7 +9,7 @@ from desktop import decision_router, request_intent, web_search, quantum_intent
 from velia_quantum_provider import FREE_MODEL, configuration
 
 
-def response_shape(result):
+def response_shape(result, question=''):
     """Only structural metadata from a fixed synthetic probe, never model text."""
     try:
         choice=result['choices'][0];call=choice['message']['tool_calls'][0]['function']
@@ -20,7 +20,13 @@ def response_shape(result):
             'null_fields':sorted(k for k in known if k in args and args[k] is None),
             'unknown_fields':len(set(args)-known),
             'action':args.get('action') if args.get('action') in {'direct','search','clarify'} else 'other',
-            'context_items':len(args['context']) if isinstance(args.get('context'),list) else -1}
+            'context_items':len(args['context']) if isinstance(args.get('context'),list) else -1,
+            'quote_exact':isinstance(args.get('quote'),str) and (not args['quote'] or args['quote'] in question),
+            'candidate_empty':args.get('candidate')=='',
+            'scope':args.get('source_scope') if args.get('source_scope') in {'general','official_health'} else 'other',
+            'query_words':len(args['query'].split()) if isinstance(args.get('query'),str) else -1,
+            'task_words':len(args['task_query'].split()) if isinstance(args.get('task_query'),str) else -1,
+            'context_exact':[isinstance(v,dict) and isinstance(v.get('quote'),str) and bool(v['quote']) and v['quote'] in question for v in args.get('context',[])][:6] if isinstance(args.get('context'),list) else []}
     except Exception:
         return {'envelope':'invalid'}
 
@@ -47,7 +53,7 @@ async def run(*, voice=False):
         def observe(result, question):
             try:return original(result,question)
             except Exception:
-                print('VELIA_QUANTUM_PLAN_SHAPE '+json.dumps(response_shape(result)),flush=True)
+                print('VELIA_QUANTUM_PLAN_SHAPE '+json.dumps(response_shape(result,question)),flush=True)
                 raise
         quantum_intent.planning_decision=observe
         cases=[('direct','Объясни разницу между списком и множеством.'),

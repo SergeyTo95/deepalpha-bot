@@ -243,6 +243,27 @@ def test_quantum_envelope_compatibility_does_not_repair_queries_quotes_or_medica
     with pytest.raises(ValueError):planning_decision(result,'Расскажи про лес.')
 
 
+def test_medical_planning_requires_exact_inflected_evidence_and_logs_only_structure():
+    from desktop.quantum_intent import planning_decision
+    from desktop.probe_quantum_independence import response_shape
+    import json
+    question='Как безопасно снизить вес при астме?'
+    args={'action':'search','quote':'','candidate':'','query':'healthy weight loss with asthma',
+        'source_scope':'official_health','task_query':'healthy weight loss advice',
+        'context':[{'quote':'астме','kind':'condition','status':'unspecified'}]}
+    result={'choices':[{'finish_reason':'tool_calls','message':{'tool_calls':[{'function':{
+        'name':'understand_request','arguments':args}}]}}]}
+    decision=planning_decision(result,question)
+    assert decision['query']=='healthy weight loss advice' and decision['source_scope']=='official_health'
+    assert decision['context']==[{'span':[30,35],'kind':'condition','status':'unspecified'}]
+    assert response_shape(result,question)['context_exact']==[True]
+    args['context'][0]['quote']='астма'
+    with pytest.raises(ValueError):planning_decision(result,question)
+    shape=response_shape(result,question)
+    assert shape['context_exact']==[False]
+    assert 'астма' not in json.dumps(shape,ensure_ascii=False) and 'healthy' not in json.dumps(shape)
+
+
 def test_quantum_medical_search_preserves_official_sources_without_flash(monkeypatch,tmp_path):
     async def run():
         plan={"action":"search","quote":"","candidate":"","query":"healthy weight loss with asthma",

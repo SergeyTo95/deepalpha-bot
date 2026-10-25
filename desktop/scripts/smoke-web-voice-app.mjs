@@ -27,7 +27,11 @@ try{
  await page.setViewportSize({width:393,height:710});await page.locator('#voice-open').click();
  assert.equal(await page.locator('.voice-dialog [aria-label="Голос"] option').count(),2);
  await page.locator('.voice-dialog').getByLabel('Голос',{exact:true}).selectOption('fixture-ru');
- await page.getByRole('button',{name:'Начать',exact:true}).click();
+ assert.equal(await page.getByRole('button',{name:'Начать',exact:true}).count(),0);
+ assert.equal(await page.getByRole('button',{name:'Завершить',exact:true}).count(),0);
+ assert.equal(await page.getByText('Субтитры',{exact:true}).count(),0);
+ assert.equal(await page.locator('.voice-dialog').getByLabel('Язык разговора',{exact:true}).inputValue(),'ru-RU');
+ await page.evaluate(()=>{window.startedRecognizers=recognizers.length;});
  await page.evaluate(()=>recognizers.at(-1).onresult({results:[Object.assign([{transcript:'Велия, привет'}],{isFinal:true})]}));
  await page.waitForFunction(()=>spoken.length>0);
  assert.equal(await page.locator('#agent-toggle').getAttribute('aria-pressed'),'false');
@@ -37,7 +41,7 @@ try{
  assert.equal(await page.evaluate(()=>spoken.at(-1).voice.voiceURI),'fixture-ru');
  assert.ok(await page.evaluate(()=>unlocks>=1));
  await page.screenshot({path:output+'/voice-reply.png'});
- assert.equal(await page.evaluate(()=>firstSpeechBeforeComplete),true);await page.waitForFunction(()=>!document.querySelector('#prompt').disabled);await page.evaluate(()=>{for(let i=0;i<30;i++){const u=spoken.at(-1);if(u===window.lastSpoken)break;window.lastSpoken=u;u.onend();}window.firstSpoken=spoken.length;});await page.waitForFunction(()=>recognizers.length===2);
+ assert.equal(await page.evaluate(()=>firstSpeechBeforeComplete),true);await page.waitForFunction(()=>!document.querySelector('#prompt').disabled);await page.evaluate(()=>{for(let i=0;i<30;i++){const u=spoken.at(-1);if(u===window.lastSpoken)break;window.lastSpoken=u;u.onend();}window.firstSpoken=spoken.length;});await page.waitForFunction(()=>recognizers.length===startedRecognizers+1);
  // A second turn uses the same ordinary account conversation.
  await page.evaluate(()=>recognizers.at(-1).onresult({results:[Object.assign([{transcript:'Как дела?'}],{isFinal:true})]}));
  await page.waitForFunction(()=>spoken.length>firstSpoken);
@@ -53,7 +57,12 @@ try{
  assert.equal(await page.evaluate(()=>spoken.at(-1).voice.voiceURI),'fixture-ru');
  assert.equal(calls.filter(c=>c.path.endsWith('/messages/stream')).length,2);
  assert.equal(await page.getByRole('button',{name:'Продолжить озвучку',exact:true}).isVisible(),false);
- await page.getByRole('button',{name:'Завершить',exact:true}).click();
+ await page.evaluate(()=>{for(let i=0;i<30;i++){const u=spoken.at(-1);if(u===window.lastSpoken)break;window.lastSpoken=u;u.onend();}});
+ await page.waitForFunction(()=>recognizers.length===startedRecognizers+2);
+ await page.evaluate(()=>recognizers.at(-1).onresult({results:[Object.assign([{transcript:'Велия закончи разговор'}],{isFinal:true})]}));
+ await page.locator('.voice-dialog').waitFor({state:'hidden'});
+ assert.equal(calls.filter(c=>c.path.endsWith('/messages/stream')).length,2);
+ await page.locator('#voice-open').click();await page.getByRole('button',{name:'Закрыть разговор',exact:true}).click();
  await page.setViewportSize({width:1440,height:960});
  await page.locator('#new-chat').click();
  await page.setViewportSize({width:393,height:710});
@@ -68,5 +77,5 @@ try{
  await page.reload();await page.locator('.message-files').filter({hasText:'invoice.txt'}).waitFor();
  assert.equal(await page.locator('#model-label').innerText(),selected==='velia-quantum'?'VELIA QUANTUM':'VELIA FLASH');
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({ok:true,model:selected,synthetic:true,checks:['selected voice model preserved','account voice fast flag','no browser task','real device voice','TTS output with selected profile','microphone resumes','same chat second turn','speech interruption resumes same phrase without model request','selected file upload and answer','file metadata after reload']}));
+ console.log(JSON.stringify({ok:true,model:selected,synthetic:true,checks:['automatic call start','obsolete controls removed','explicit call language','selected voice model preserved','account voice fast flag','no browser task','real device voice','TTS output with selected profile','microphone resumes','same chat second turn','speech interruption resumes same phrase without model request','spoken end command','close icon','selected file upload and answer','file metadata after reload']}));
 }finally{await browser?.close();fixture.kill();}
