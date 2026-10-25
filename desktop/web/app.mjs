@@ -746,20 +746,38 @@ async function generate(retry = false, voiceTurn = false) {
           ? "Flash готовит ответ. Первый запрос может занять несколько минут."
           : "Велия работает над ответом…";
   }, 20000);
-  let paintFrame = null, textPainted = false;
+  const revealDuration = 180,
+    reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+  let paintFrame = null, displayed = "", revealFrom = 0,
+    revealStarted = 0, finishPaint = null;
   const article = $("messages").lastElementChild,
     contentNode = article.querySelector(".message-content"),
     conversationScroll = $("conversation-scroll");
-  const paint = () => {
+  const paint = (time = performance.now(), flush = false) => {
+    if (paintFrame !== null) cancelAnimationFrame(paintFrame);
     paintFrame = null;
+    const progress = flush || reducedMotion.matches || document.hidden
+      ? 1 : Math.min(1, (time - revealStarted) / revealDuration);
+    let end = Math.ceil(revealFrom + (answer.content.length - revealFrom) * progress);
+    // Keep UTF-16 pairs intact while revealing multilingual text and emoji.
+    if (end < answer.content.length && /[\uDC00-\uDFFF]/.test(answer.content[end])) end++;
+    displayed = answer.content.slice(0, end);
     const shouldScroll = conversationScroll.scrollHeight - conversationScroll.scrollTop - conversationScroll.clientHeight < 180;
-    contentNode.innerHTML = renderMarkdown(answer.content);
-    textPainted = true;
+    contentNode.innerHTML = renderMarkdown(displayed);
     if (shouldScroll) scrollDown(true);
+    if (displayed !== answer.content) paintFrame = requestAnimationFrame(paint);
+    else finishPaint?.();
   };
   const queuePaint = () => {
-    // Show the first text immediately; later bursts share a browser frame.
-    if (!textPainted) paint();
+    const append = answer.content.startsWith(displayed);
+    revealFrom = displayed.length;
+    revealStarted = performance.now();
+    if (!append || reducedMotion.matches || document.hidden) paint(revealStarted, true);
+    else if (!displayed) {
+      // First words are immediate; a burst catches up within a fraction of a second.
+      revealFrom = Math.min(24, answer.content.length);
+      paint(revealStarted);
+    }
     else if (paintFrame === null) paintFrame = requestAnimationFrame(paint);
   };
   try {
@@ -826,6 +844,14 @@ async function generate(retry = false, voiceTurn = false) {
       }
     }
   } finally {
+    if (paintFrame !== null) {
+      if (answer.stopped || answer.failed || reducedMotion.matches || document.hidden) paint(performance.now(), true);
+      else await new Promise(resolve => {
+        // Background tabs may suspend animation frames; completion must stay bounded.
+        const timer = setTimeout(() => paint(performance.now(), true), revealDuration + 32);
+        finishPaint = () => { clearTimeout(timer); finishPaint = null; resolve(); };
+      });
+    }
     if (paintFrame !== null) cancelAnimationFrame(paintFrame);
     clearTimeout(slowTimer);
     clearTimeout(voiceTimeout);
