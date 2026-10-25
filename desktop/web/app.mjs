@@ -732,13 +732,16 @@ async function generate(retry = false, voiceTurn = false) {
   render();
   scrollDown(true);
   save();
+  let preparationStage = "";
   $("generation-status").textContent = agentMode
     ? "VELIA Agent открывает браузер…"
-    : internetAvailable ? "Ищу информацию в интернете…" : "Велия готовит ответ…";
+    : "Велия готовит ответ…";
   slowTimer = setTimeout(() => {
     $("generation-status").textContent =
       agentMode
         ? "VELIA Agent выполняет задачу в браузере. Сложные действия могут занять несколько минут."
+        : preparationStage === "understanding"
+          ? "Велия разбирает вопрос…"
         : selected === "velia-flash"
           ? "Flash готовит ответ. Первый запрос может занять несколько минут."
           : "Велия работает над ответом…";
@@ -782,6 +785,7 @@ async function generate(retry = false, voiceTurn = false) {
     }
     const result = await readCompletion(response, (content) => {
       answer.content = content;
+      if (content) clearTimeout(slowTimer);
       if (voiceTurn) voice.update(content);
       $("generation-status").textContent = "";
       queuePaint();
@@ -794,6 +798,10 @@ async function generate(retry = false, voiceTurn = false) {
       if (sources) article.append(sources);
       $("generation-status").textContent = "Велия изучает источники…";
       scheduleSave();
+    }, (stage) => {
+      preparationStage = stage;
+      if (!answer.content) $("generation-status").textContent = stage === "understanding"
+        ? "Велия разбирает вопрос…" : "Велия готовит ответ…";
     });
     answer.finish = result.finish;
     }

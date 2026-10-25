@@ -205,7 +205,7 @@ export function safeSearch(value) {
   }
   return {sources, retrieved_at: typeof value?.retrieved_at === "string" ? value.retrieved_at.slice(0, 40) : ""};
 }
-export async function readCompletion(response, onText, onSearch = () => {}) {
+export async function readCompletion(response, onText, onSearch = () => {}, onProgress = () => {}) {
   if (!response.ok) {
     let data;
     try {
@@ -251,6 +251,7 @@ export async function readCompletion(response, onText, onSearch = () => {}) {
       throw new Error(apiError("stream_incomplete"));
     }
     if (event.error) throw new Error(apiError(event.error.message || event.error));
+    if (["understanding", "generating"].includes(event.progress)) onProgress(event.progress);
     if (event.web_search) {
       search = safeSearch(event.web_search);
       onSearch(search);

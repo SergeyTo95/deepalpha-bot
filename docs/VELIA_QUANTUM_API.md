@@ -84,6 +84,17 @@ Provider response data is bounded; separate reasoning and provider metadata are
 removed before browser delivery. This is an external inference route, so the
 provider processes the conversation text submitted to Quantum.
 
+Saved browser streams send bounded `progress` metadata during preparation,
+followed by ordinary answer deltas. Preparation heartbeats keep the connection
+live, and disconnecting cancels pending preparation and releases the gateway
+reservation. These events never become answer text or stored chat history.
+Unambiguous greetings, identity/capability questions and literal arithmetic can
+skip the separate Flash interpreter even in an existing conversation; the full
+history still reaches the selected answering model. Mixed, contextual, medical
+and current-information requests keep the existing interpretation/retrieval
+path. Timing logs contain only the model, phase durations and outcome, without
+submitted text, account identifiers or credentials.
+
 Before enabling, run provider/gateway/browser tests, PostgreSQL persistence and
 quota tests with a dedicated `VELIA_FLASH_TEST_DATABASE_URL`, then one live
 `:free` request using the operator's key. Confirm catalog visibility, reload,

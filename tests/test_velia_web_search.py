@@ -4,6 +4,7 @@ import json
 import pytest
 from desktop.guest_store import GuestStore
 from desktop.web_search import MARKER, public_url
+from desktop.web_search import WebSearch, UnderstandingUnavailable
 from test_velia_web_chat import fixture, login, headers
 from test_velia_web_guest import BODY as GUEST_BODY, guest, guest_headers
 
@@ -11,6 +12,125 @@ from test_velia_web_guest import BODY as GUEST_BODY, guest, guest_headers
 # now be routed directly without a model-based planner.
 SEARCH_QUESTION = "Найди актуальную информацию о Python."
 BODY = {**GUEST_BODY, "messages": [{"role": "user", "content": SEARCH_QUESTION}]}
+
+
+@pytest.mark.parametrize("question", ["Привет!", "Кто ты и что умеешь?", "Who are you?"])
+def test_short_quantum_turn_with_history_does_not_wait_for_flash_planner(monkeypatch, tmp_path, question):
+    async def run():
+        async with fixture(monkeypatch, with_search=True, intent_status=503,
+                features={"chat_quantum":True}, guest_store=GuestStore(sqlite_path=tmp_path/"direct.db")) as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            async with client.post(server.make_url("/web-api/v1/conversations"), headers=headers(cookie),
+                    json={"title":"Existing conversation"}) as response:
+                cid=(await response.json())["conversation"]["id"]
+            previous=[{"role":"user","content":"У меня астма.","status":"completed"},
+                {"role":"assistant","content":"Поняла.","status":"completed"}]
+            state["conversations"][cid]["messages"]=list(previous)
+            async with client.post(server.make_url(f"/web-api/v1/conversations/{cid}/messages/stream"),
+                    headers=headers(cookie), json={"content":question,"model":"velia-quantum","idempotency_key":"quantum-direct-01"}) as response:
+                assert response.status==200 and "[DONE]" in await response.text()
+            assert state["intent_payloads"]==state["search_queries"]==[]
+            assert state["account_calls"][-1]["content"]==question
+            assert state["account_calls"][-1]["chat_mode"]=="quantum"
+            assert state["conversations"][cid]["messages"][:2]==previous
+    asyncio.run(run())
+
+
+def test_account_stream_announces_preparation_before_model_start_and_keeps_connection_live(monkeypatch, tmp_path, caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger="desktop.account_routes")
+    async def run():
+        started, release = asyncio.Event(), asyncio.Event()
+        async def prepare(self, user, conversation, request_id, question, model, **kwargs):
+            started.set()
+            await release.wait()
+            return question, None
+        monkeypatch.setattr(WebSearch, "account_question", prepare)
+        monkeypatch.setattr("desktop.account_routes._PREPARATION_HEARTBEAT_SECONDS", 0.01)
+        async with fixture(monkeypatch, with_search=True, features={"chat_quantum":True},
+                guest_store=GuestStore(sqlite_path=tmp_path/"progress.db")) as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            async with client.post(server.make_url("/web-api/v1/conversations"), headers=headers(cookie),
+                    json={"title":"Progress"}) as response:
+                cid = (await response.json())["conversation"]["id"]
+            async def send():
+                return await client.post(server.make_url(f"/web-api/v1/conversations/{cid}/messages/stream"),
+                    headers=headers(cookie), json={"content":"Private test question", "model":"velia-quantum", "idempotency_key":"progress-test-01"})
+            pending = asyncio.create_task(send())
+            try:
+                await asyncio.wait_for(started.wait(), 1)
+                response = await asyncio.wait_for(pending, 1)
+                assert response.status == 200
+                first = await asyncio.wait_for(response.content.readuntil(b"\n\n"), 1)
+                assert b'"progress": "understanding"' in first
+                assert state["account_calls"] == []
+                assert await asyncio.wait_for(response.content.readuntil(b"\n\n"), 1) == b": ping\n\n"
+                release.set()
+                wire = await asyncio.wait_for(response.text(), 1)
+                assert "[DONE]" in wire and '"progress": "generating"' in wire
+                assert state["account_calls"][-1]["chat_mode"] == "quantum"
+                response.close()
+            finally:
+                release.set()
+                if not pending.done():
+                    pending.cancel()
+    asyncio.run(run())
+    timing = [record.message for record in caplog.records if "VELIA_ACCOUNT_RESPONSE_TIMING" in record.message]
+    assert timing and "first_text_ms=" in timing[-1]
+    assert "Private test question" not in " ".join(timing)
+
+
+def test_account_preparation_error_never_generates_or_exposes_internal_error(monkeypatch, tmp_path):
+    async def prepare(*args, **kwargs):
+        raise UnderstandingUnavailable()
+    monkeypatch.setattr(WebSearch, "account_question", prepare)
+    async def run():
+        async with fixture(monkeypatch, with_search=True,
+                guest_store=GuestStore(sqlite_path=tmp_path/"failure.db")) as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            async with client.post(server.make_url("/web-api/v1/conversations"), headers=headers(cookie),
+                    json={"title":"Failure"}) as response:
+                cid = (await response.json())["conversation"]["id"]
+            async with client.post(server.make_url(f"/web-api/v1/conversations/{cid}/messages/stream"),
+                    headers=headers(cookie), json={"content":"Question", "model":"velia-flash", "idempotency_key":"progress-error-01"}) as response:
+                wire = await response.text()
+                assert response.status == 200 and "request_understanding_unavailable" in wire
+                assert "[DONE]" not in wire and state["account_calls"] == []
+    asyncio.run(run())
+
+
+def test_disconnected_client_cancels_preparation_and_releases_reservation(monkeypatch, tmp_path):
+    async def run():
+        started, cancelled = asyncio.Event(), asyncio.Event()
+        async def prepare(*args, **kwargs):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+        monkeypatch.setattr(WebSearch, "account_question", prepare)
+        monkeypatch.setattr("desktop.account_routes._PREPARATION_HEARTBEAT_SECONDS", 0.01)
+        async with fixture(monkeypatch, with_search=True,
+                guest_store=GuestStore(sqlite_path=tmp_path/"cancel.db")) as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            async with client.post(server.make_url("/web-api/v1/conversations"), headers=headers(cookie),
+                    json={"title":"Cancel"}) as response:
+                cid = (await response.json())["conversation"]["id"]
+            endpoint=server.make_url(f"/web-api/v1/conversations/{cid}/messages/stream")
+            data={"content":"Question", "model":"velia-flash", "idempotency_key":"progress-cancel-01"}
+            response=await client.post(endpoint, headers=headers(cookie), json=data)
+            await asyncio.wait_for(started.wait(), 1)
+            await response.content.readuntil(b"\n\n")
+            response.close()
+            await asyncio.wait_for(cancelled.wait(), 1)
+            assert state["account_calls"] == []
+            async def ready(self, user, conversation, request_id, question, model, **kwargs):
+                return question, None
+            monkeypatch.setattr(WebSearch, "account_question", ready)
+            async with client.post(endpoint, headers=headers(cookie), json={**data,"idempotency_key":"progress-cancel-02"}) as response:
+                assert response.status == 200 and "[DONE]" in await response.text()
+                assert len(state["account_calls"]) == 1
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("action", ["direct", "search"])

@@ -107,9 +107,18 @@ def test_ambiguous_medical_current_and_general_questions_keep_the_full_planner(q
     from desktop.direct_tasks import direct_task
     assert asyncio.run(direct_task([{'role':'user','content':question}])) is None
 
-def test_direct_tasks_do_not_discard_existing_conversation_context():
+@pytest.mark.parametrize('question',['Привет!','Кто ты?','Привет, что ты умеешь?','Who are you?','Merhaba, sen kimsin?','2+2'])
+def test_self_contained_turn_skips_planner_without_discarding_conversation_context(question):
     from desktop.direct_tasks import direct_task
-    messages=[{'role':'user','content':'У меня астма.'},{'role':'assistant','content':'Поняла.'},{'role':'user','content':'Привет!'}]
+    messages=[{'role':'user','content':'У меня астма.'},{'role':'assistant','content':'Поняла.'},{'role':'user','content':question}]
+    before=copy.deepcopy(messages)
+    assert asyncio.run(direct_task(messages)) == {'action':'direct','query':'','context':[]}
+    assert messages == before
+
+@pytest.mark.parametrize('question',['Привет, как лечить астму?','Кто ты и какая сейчас погода?','Сократи его','Как мне похудеть?'])
+def test_context_dependent_and_mixed_requests_retain_full_interpretation(question):
+    from desktop.direct_tasks import direct_task
+    messages=[{'role':'user','content':'У меня астма.'},{'role':'assistant','content':'Поняла.'},{'role':'user','content':question}]
     assert asyncio.run(direct_task(messages)) is None
 
 def test_explicit_text_task_keeps_unknown_spelling_on_full_path(monkeypatch):
