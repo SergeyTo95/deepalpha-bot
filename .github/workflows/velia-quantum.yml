@@ -1,5 +1,17 @@
 name: VELIA Quantum
 on:
+  push:
+    branches: [feature/turbo-short-term-btc, feature/velia-desktop-harness, feature/velia-quantum-account-api]
+    paths:
+      - 'velia_quantum_provider.py'
+      - 'services/velia*chat*'
+      - 'services/velia_quantum_service.py'
+      - 'services/velia_flash_service.py'
+      - 'services/velia_mobile*'
+      - 'velia_mobile_routes.py'
+      - 'ci/probe-velia-quantum.py'
+      - 'tests/test_velia_quantum*.py'
+      - '.github/workflows/velia-quantum.yml'
   pull_request:
     paths:
       - 'velia_quantum_provider.py'
@@ -9,6 +21,7 @@ on:
       - 'services/velia_flash_service.py'
       - 'services/velia_mobile_hardening_service.py'
       - 'velia_mobile_routes.py'
+      - 'ci/probe-velia-quantum.py'
       - 'tests/test_velia_quantum*.py'
       - '.github/workflows/velia-quantum.yml'
 permissions:
@@ -36,4 +49,4 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install pytest requests psycopg2-binary python-dotenv aiohttp tonsdk cryptography pillow pypdf python-multipart
-      - run: python -m pytest -q tests/test_velia_quantum_provider.py tests/test_velia_quantum_chat.py tests/test_velia_flash.py tests/test_velia_chat_service.py tests/test_velia_mobile_hardening_service.py tests/test_velia_chat_streaming_runtime_patch.py
+      - run: python -m pytest -q tests/test_velia_quantum_provider.py tests/test_velia_quantum_chat.py tests/test_velia_quantum_probe.py tests/test_velia_flash.py tests/test_velia_chat_service.py tests/test_velia_mobile_hardening_service.py tests/test_velia_chat_streaming_runtime_patch.py

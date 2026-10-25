@@ -90,3 +90,13 @@ quota tests with a dedicated `VELIA_FLASH_TEST_DATABASE_URL`, then one live
 mode isolation and quota errors. Local fixture success does not establish live
 GLM quality, latency or free quota availability. Roll back by setting
 `VELIA_QUANTUM_ENABLED=false`; stored Quantum history remains readable.
+
+The existing verified Railway build runs the Quantum workflow against a fresh
+PostgreSQL database before producing an image, even when GitHub-hosted runners
+are unavailable. Preserve the existing receipt-verification pre-deploy command.
+For initial Experiential acceptance, append `python ci/probe-velia-quantum.py`
+to the account backend's pre-deploy commands. It sends one fixed synthetic text
+request to the exact free model with a process-local 1024-token output bound and
+does not write chat history. Only a success marker or a sanitized error code is
+logged. Failure prevents promotion of the release. Remove this explicit probe
+command after initial acceptance to avoid consuming quota on later deployments.
