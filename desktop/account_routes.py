@@ -211,7 +211,9 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
 
         try:
             content, result = data["content"], None
-            if not data.get("medical_no_search") and ((web_search and web_search.available) or data.get("web_search")):
+            from desktop.direct_tasks import simple_direct_task
+            voice_direct = data.get("voice_turn") and simple_direct_task(content) is not None
+            if not voice_direct and not data.get("medical_no_search") and ((web_search and web_search.available) or data.get("web_search")):
                 if web_search is None:
                     raise SearchUnavailable()
                 status, previous = await relay(request, "GET", "/messages?limit=20")
@@ -278,8 +280,8 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
                 with suppress(asyncio.CancelledError, Exception):
                     await preparation
             finished = time.monotonic()
-            LOG.info("VELIA_ACCOUNT_RESPONSE_TIMING model=%s prepare_ms=%d first_text_ms=%d total_ms=%d outcome=%s",
-                data["model"], round(((prepared_at or finished) - started) * 1000),
+            LOG.info("VELIA_ACCOUNT_RESPONSE_TIMING model=%s voice=%s prepare_ms=%d first_text_ms=%d total_ms=%d outcome=%s",
+                data["model"], bool(data.get("voice_turn")), round(((prepared_at or finished) - started) * 1000),
                 round((first_text_at - started) * 1000) if first_text_at is not None else -1,
                 round((finished - started) * 1000), outcome)
             try:

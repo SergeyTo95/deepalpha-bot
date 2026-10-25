@@ -43,4 +43,19 @@ const soundButton=[...document.querySelector('#settings').querySelectorAll('butt
 assert.equal(soundButton.disabled,false);soundButton.click();await tick();
 assert.equal(requests.at(-1).data.voice,'speechkit:jane');onlineOnly.stop();
 console.log(JSON.stringify({ok:true,synthetic:true,checks:['persisted remote voice','three catalog voices','phrase playback','emoji silent','microphone resumes','abort late download','speaker ID changes','device voice retained','online speech without device TTS']}));
+onlineOnly.stop();localStorage.removeItem('velia-voice-uri');
+const neural=['ru-RU-SvetlanaNeural','en-US-EmmaMultilingualNeural','en-US-AvaMultilingualNeural'].map((id,i)=>({voiceURI:'edge:'+id,name:['Светлана','Эмма','Ава'][i],lang:'ru-RU',gender:'female'}));
+globalThis.fetch=async(url,options)=>{if(url.endsWith('/voices'))return {ok:true,json:async()=>({voices:neural})};requests.push({data:JSON.parse(options.body),options});return {ok:true,blob:async()=>new Blob(['fixture'])};};
+const women=setupVoice({send:async()=>{},busy:()=>false,toast:()=>{}});
+document.querySelector('#settings').replaceChildren();women.settings(document.querySelector('#settings'));await tick();
+const femaleSelect=document.querySelector('#settings select');
+for(const v of neural){femaleSelect.value=v.voiceURI;femaleSelect.dispatchEvent(new window.Event('change'));women.speak('Другой женский голос.');await tick();assert.equal(requests.at(-1).data.voice,v.voiceURI);women.stop();}
+// A slow recognizer shutdown cannot delay the one request after final text.
+window.speechSynthesis={getVoices:()=>[],addEventListener(){},speak(){},cancel(){}};
+const delayedRecognition=[];window.SpeechRecognition=class{constructor(){delayedRecognition.push(this);}start(){}stop(){}abort(){}};
+let submissions=0;const immediate=setupVoice({send:()=>{submissions++;return new Promise(()=>{});},busy:()=>false,toast:()=>{}});immediate.open();
+const startButton=[...document.querySelectorAll('.voice-dialog')].at(-1).querySelector('.voice-controls button');startButton.click();
+const recognizer=delayedRecognition.at(-1);recognizer.onresult({results:[Object.assign([{transcript:'Расскажи историю'}],{isFinal:true})]});
+assert.equal(submissions,1);recognizer.onend();assert.equal(submissions,1);immediate.stop();women.stop();
+console.log(JSON.stringify({ok:true,synthetic:true,checks:['three distinct female provider IDs','remote selection without device TTS','final recognition submits before delayed onend','late onend cannot duplicate request']}));
 dom.window.close();

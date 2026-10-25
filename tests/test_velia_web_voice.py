@@ -1,6 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 import pytest
+import edge_tts
 from aiohttp import web, ClientSession
 from aiohttp.test_utils import TestServer
 from desktop import voice_routes as routes
@@ -54,3 +55,39 @@ def test_voice_routes_auth_config_cancellation_and_errors(monkeypatch):
                 assert (await client.post(speech,json=data,headers=headers)).status==200
             assert (await client.post(speech,json=data,headers=headers)).status==429
     asyncio.run(scenario())
+
+def test_neural_catalog_has_three_distinct_female_speakers_and_no_paid_route(monkeypatch):
+    monkeypatch.setenv('VELIA_WEB_TTS_PROVIDER','edge')
+    monkeypatch.delenv('VELIA_SPEECHKIT_API_KEY',raising=False)
+    catalog=routes.voice_catalog()
+    assert len({v['voiceURI'] for v in catalog})==3
+    assert all(v['gender']=='female' for v in catalog)
+    seen=[]
+    class Speaker:
+        def __init__(self,text,voice,**kwargs):seen.append((text,voice,kwargs))
+        async def stream(self):
+            yield {'type':'WordBoundary','text':'ignored'}
+            yield {'type':'audio','data':seen[-1][1].encode()}
+    monkeypatch.setattr(edge_tts,'Communicate',Speaker)
+    async def run():
+        for voice in catalog:
+            fields=routes.validate({'text':'Привет!','voice':voice['voiceURI'],'rate':1.2})
+            assert await routes.synthesize(fields)==voice['voiceURI'].split(':',1)[1].encode()
+        assert len({v[1] for v in seen})==3
+        assert all(v[2]['rate']=='+20%' for v in seen)
+    asyncio.run(run())
+    for voice in ['edge:ru-RU-DmitryNeural','edge:ru-RU-DariyaNeural','speechkit:jane','https://evil.example/voice']:
+        with pytest.raises(ValueError):routes.validate({'text':'Привет','voice':voice,'rate':1})
+
+@pytest.mark.parametrize('kind',['empty','large','failure'])
+def test_neural_empty_oversized_and_provider_errors_are_safe(monkeypatch,kind):
+    monkeypatch.setenv('VELIA_WEB_TTS_PROVIDER','edge')
+    class Speaker:
+        def __init__(self,*args,**kwargs):pass
+        async def stream(self):
+            if kind=='failure':raise Exception('provider secret must never leak')
+            if kind=='large':yield {'type':'audio','data':b'x'*(2*1024*1024+1)}
+            yield {'type':'WordBoundary'}
+    monkeypatch.setattr(edge_tts,'Communicate',Speaker)
+    with pytest.raises(RuntimeError,match='^tts_unavailable$'):
+        asyncio.run(routes.synthesize(routes.validate({'text':'Привет','voice':routes.EDGE_VOICES[0]['voiceURI'],'rate':1})))

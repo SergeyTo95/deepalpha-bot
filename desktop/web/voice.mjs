@@ -1,8 +1,11 @@
-// Device voices must represent actual engine voices, not renamed aliases.
+// Every choice represents an actual engine voice, never a renamed pitch alias.
+const REMOTE_VOICES = new Set(['speechkit:jane','speechkit:omazh','speechkit:marina',
+ 'edge:ru-RU-SvetlanaNeural','edge:en-US-EmmaMultilingualNeural','edge:en-US-AvaMultilingualNeural']);
+export const isRemoteVoice = uri => REMOTE_VOICES.has(uri);
 export function availableVoices(voices, language) {
  const code=language.toLowerCase().split('-')[0], seen=new Set();
- return voices.filter(v=>v.lang.toLowerCase().split('-')[0]===code && v.voiceURI && !seen.has(v.voiceURI) && seen.add(v.voiceURI))
-   .sort((a,b)=>Number(b.localService)-Number(a.localService)||a.name.localeCompare(b.name));
+ return voices.filter(v=>[v.lang,...(v.languages||[])].some(lang=>lang?.toLowerCase().split('-')[0]===code) && v.voiceURI && !seen.has(v.voiceURI) && seen.add(v.voiceURI))
+   .sort((a,b)=>Number(isRemoteVoice(a.voiceURI))-Number(isRemoteVoice(b.voiceURI))||Number(!!b.recommended)-Number(!!a.recommended)||Number(b.gender==='female')-Number(a.gender==='female')||Number(!!b.localService)-Number(!!a.localService)||a.name.localeCompare(b.name));
 }
 export function voiceChoice(voices, language, uri) {
  return voices.find(v=>v.voiceURI===uri)||availableVoices(voices,language)[0]||null;
@@ -11,7 +14,12 @@ export function speechReady(text, final=false) {
  if(final)return text.length;
  if(text.includes('```'))return 0;
  const match=/[.!?](?=\s|$)/.exec(text);
- return match?match.index+1:0;
+ if(match)return match.index+1;
+ // Start at a complete clause/word rather than wait for a long sentence.
+ const clause=/[,;:](?=\s)/g;let next;
+ while((next=clause.exec(text)))if(next.index>=40)return next.index+1;
+ if(text.length>=120){const cut=text.lastIndexOf(' ',120);if(cut>=40)return cut+1;}
+ return 0;
 }
 // Keep spoken replies short enough for device speech engines without changing chat text.
 export function speechChunks(text, limit = 240) {
@@ -37,7 +45,7 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'})
   const synth = window.speechSynthesis;
   let recognition = null, active = false, pending = false, epoch = 0, timer = null, speechEpoch = 0;
   let speechTimer = null, currentUtterance = null, deferredAnswer = null, waitingTimer = null;
-  let catalogLoaded=false,remoteVoices=[],remoteAudio=null,remoteAbort=null,remoteURL=null;
+  let catalogLoaded=false,catalogRequest=null,remoteVoices=[],remoteAudio=null,remoteAbort=null,remoteURL=null;
   let language = navigator.language || 'ru-RU', voiceURI = '', rate = 1;
   try {language = localStorage.getItem('velia-voice-language') || language; voiceURI = localStorage.getItem('velia-voice-uri') || ''; rate = Number(localStorage.getItem('velia-voice-rate')) || 1;} catch {}
   rate = Math.max(.7, Math.min(1.4, rate));
@@ -57,23 +65,27 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'})
   const controls=node('div','','voice-controls');controls.append(start,close);
   const voiceSelectors=new Set(), speechTests=new Set();
   const voiceHint=node('p','','voice-hint');
+  const choices = () => availableVoices([...remoteVoices,...(synth?.getVoices()||[])],language);
+  const effectiveURI = () => voiceURI || choices()[0]?.voiceURI || '';
+  const canSpeak = () => !!synth || isRemoteVoice(effectiveURI());
   function refreshVoices(){
-    const choices=availableVoices([...remoteVoices,...(synth?.getVoices()||[])],language);
-    if(voiceURI&&!choices.some(v=>v.voiceURI===voiceURI)&&(!voiceURI.startsWith('speechkit:')||catalogLoaded))voiceURI='';
-    for(const select of voiceSelectors){if(!select.isConnected&&select.dataset.mounted){voiceSelectors.delete(select);continue;}select.replaceChildren();const def=node('option','Автоматически');def.value='';select.append(def);for(const v of choices){const o=node('option',v.name+' · '+v.lang+(v.voiceURI.startsWith('speechkit:')?' · Онлайн':''));o.value=v.voiceURI;select.append(o);}select.value=voiceURI;select.dataset.mounted='true';}
-    for(const b of speechTests) b.disabled=!synth&&!voiceURI.startsWith('speechkit:');
-    voiceHint.textContent=choices.length===1?'На этом устройстве доступен один голос для выбранного языка.':choices.length===0?'Используется голос браузера по умолчанию.':'';
+    const list=choices();
+    if(voiceURI&&!list.some(v=>v.voiceURI===voiceURI)&&(!isRemoteVoice(voiceURI)||catalogLoaded))voiceURI='';
+    for(const select of voiceSelectors){if(!select.isConnected&&select.dataset.mounted){voiceSelectors.delete(select);continue;}select.replaceChildren();const def=node('option','Автоматически'+(list[0]?' — '+list[0].name:''));def.value='';select.append(def);for(const v of list){const o=node('option',v.name+' · '+(v.languages?'Мультиязычный':v.lang)+(isRemoteVoice(v.voiceURI)?' · Онлайн':'')+(v.gender==='female'?' · Женский':''));o.value=v.voiceURI;select.append(o);}select.value=voiceURI;select.dataset.mounted='true';}
+    for(const b of speechTests) b.disabled=!canSpeak();
+    voiceHint.textContent=remoteVoices.length?'Онлайн-голоса дают одинаковый тембр на разных устройствах. Голос телефона обычно запускается быстрее.':list.length===1?'Для выбранного языка доступен один голос.':list.length===0?'Используется голос браузера по умолчанию.':'';
     voiceHint.hidden=!voiceHint.textContent;
   }
-  async function loadCatalog(){try{const response=await fetch('/web-api/v1/voice/voices',{credentials:'same-origin',cache:'no-store'});if(!response.ok)return;const data=await response.json();catalogLoaded=true;remoteVoices=Array.isArray(data.voices)?data.voices.filter(v=>v.lang==='ru-RU'&&/^speechkit:(jane|omazh|marina)$/.test(v.voiceURI)):[];refreshVoices();}catch{}}
+  async function loadCatalog(){if(catalogRequest)return catalogRequest;catalogRequest=(async()=>{try{const response=await fetch('/web-api/v1/voice/voices',{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(5000)});if(!response.ok)return;const data=await response.json();catalogLoaded=true;remoteVoices=Array.isArray(data.voices)?data.voices.filter(v=>isRemoteVoice(v.voiceURI)):[];refreshVoices();}catch{}finally{catalogRequest=null;}})();return catalogRequest;}
   function cancelAudio(){remoteAbort?.abort();remoteAbort=null;if(remoteAudio){remoteAudio.pause();remoteAudio.onended=null;remoteAudio.onerror=null;remoteAudio=null;}if(remoteURL){URL.revokeObjectURL(remoteURL);remoteURL=null;}}
   async function playPart(part,done,fail){
-    if(!voiceURI.startsWith('speechkit:')){if(!synth){fail();return;}const u=new SpeechSynthesisUtterance(part);u.lang=language;u.rate=rate;u.pitch=1;u.volume=1;u.voice=voiceChoice(synth.getVoices(),language,voiceURI);u.onend=done;u.onerror=fail;currentUtterance=u;try{synth.speak(u);}catch{fail();}return;}
+    const uri=effectiveURI();
+    if(!isRemoteVoice(uri)){if(!synth){fail();return;}const u=new SpeechSynthesisUtterance(part);u.lang=language;u.rate=rate;u.pitch=1;u.volume=1;u.voice=voiceChoice(synth.getVoices(),language,uri);u.onend=done;u.onerror=fail;currentUtterance=u;try{synth.speak(u);}catch{fail();}return;}
     const token=speechEpoch,controller=new AbortController();remoteAbort=controller;currentUtterance={};
-    try{const response=await fetch('/web-api/v1/voice/speech',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Velia-Request':'1'},body:JSON.stringify({text:part,voice:voiceURI,rate}),signal:controller.signal});if(!response.ok)throw Error('tts_unavailable');const blob=await response.blob();if(token!==speechEpoch)return;remoteURL=URL.createObjectURL(blob);remoteAudio=new Audio(remoteURL);remoteAudio.onended=()=>{cancelAudio();done();};remoteAudio.onerror=()=>{cancelAudio();fail();};await remoteAudio.play();}catch(error){if(token===speechEpoch&&error.name!=='AbortError'){cancelAudio();fail();}}
+    try{const response=await fetch('/web-api/v1/voice/speech',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Velia-Request':'1'},body:JSON.stringify({text:part,voice:uri,rate}),signal:controller.signal});if(!response.ok)throw Error('tts_unavailable');const blob=await response.blob();if(token!==speechEpoch)return;remoteURL=URL.createObjectURL(blob);remoteAudio=new Audio(remoteURL);remoteAudio.onended=()=>{cancelAudio();done();};remoteAudio.onerror=()=>{cancelAudio();fail();};await remoteAudio.play();}catch(error){if(token===speechEpoch&&error.name!=='AbortError'){cancelAudio();fail();}}
   }
   function voiceControl(){const label=node('label','Голос Велии','voice-profile'), select=node('select');select.setAttribute('aria-label','Голос');voiceSelectors.add(select);select.onchange=()=>{stop();voiceURI=select.value;save();refreshVoices();};label.append(select);return label;}
-  const soundTest=node('button','Проверить звук','voice-sound-test');soundTest.onclick=()=>speak('Привет! Я Велия. Рада тебя слышать.');speechTests.add(soundTest);soundTest.disabled=!synth&&!voiceURI.startsWith('speechkit:');
+  const soundTest=node('button','Проверить звук','voice-sound-test');soundTest.onclick=()=>speak('Привет! Я Велия. Рада тебя слышать.');speechTests.add(soundTest);soundTest.disabled=!canSpeak();
   dialog.append(title,modelLabel,orb,state,voiceControl(),voiceHint,soundTest,controls,transcript,node('p','Ответы сохраняются в диалоге.','voice-hint'));
   document.body.append(dialog);refreshVoices();synth?.addEventListener('voiceschanged',refreshVoices);
   const status = (text, phase='idle') => {state.textContent=text;dialog.dataset.phase=phase;start.textContent=active?'Пауза':'Начать';};
@@ -89,15 +101,16 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'})
     let final='', interim='', failed=false;
     status('Слушаю тебя…','listening');
     const valid=()=>active&&token===epoch&&recognition===r;
-    r.onresult=e=>{if(!valid())return;final='';interim='';for(const result of Array.from(e.results)){if(result.isFinal)final+=result[0].transcript+' ';else interim+=result[0].transcript+' ';}heard.textContent=(final+interim).trim()||'Слушаю…';if(final.trim())r.stop?.();};
+    r.onresult=e=>{if(!valid())return;final='';interim='';for(const result of Array.from(e.results)){if(result.isFinal)final+=result[0].transcript+' ';else interim+=result[0].transcript+' ';}heard.textContent=(final+interim).trim()||'Слушаю…';if(final.trim()){finishTurn();r.stop?.();}};
     r.onerror=e=>{if(!valid())return;if(e.error==='no-speech')return;failed=true;active=false;status(({ 'not-allowed':'Разреши микрофон в настройках сайта и нажми «Начать».', 'service-not-allowed':'Браузер запретил распознавание речи.', 'audio-capture':'Микрофон не найден или занят другим приложением.', network:'Сервис распознавания недоступен. Проверь соединение.', 'language-not-supported':'Этот язык не поддерживается распознаванием браузера.' })[e.error]||'Не удалось распознать речь. Нажми «Начать» для повтора.','error');};
-    r.onend=async()=>{if(!valid())return;recognition=null;if(failed)return;const text=final.trim();if(!text){status('Жду твою реплику…','listening');later(token,800);return;}pending=true;streamText='';streamCursor=0;streamQueue=[];streamDone=false;streamBlocked=false;heard.textContent=text;reply.textContent='Готовлю ответ…';status('Велия готовит ответ…','thinking');waitingTimer=setTimeout(()=>{if(pending&&active)status('Ответ задерживается. Запрос ещё выполняется…','thinking');},20000);try{await send(text);if(pending&&deferredAnswer===null&&active&&token===epoch)failure();}catch{if(token===epoch)failure();}};
+    async function finishTurn(){if(!valid())return;recognition=null;if(failed)return;const text=final.trim();if(!text){status('Жду твою реплику…','listening');later(token,800);return;}pending=true;streamText='';streamCursor=0;streamQueue=[];streamDone=false;streamBlocked=false;heard.textContent=text;reply.textContent='Готовлю ответ…';status('Велия готовит ответ…','thinking');waitingTimer=setTimeout(()=>{if(pending&&active)status('Ответ задерживается. Запрос ещё выполняется…','thinking');},20000);try{await send(text);if(pending&&deferredAnswer===null&&active&&token===epoch)failure();}catch{if(token===epoch)failure();}}
+    r.onend=finishTurn;
     try{r.start();}catch{recognition=null;active=false;status('Микрофон недоступен. Проверь разрешение и повтори.','error');}
   }
   start.onclick=()=>{if(active){stop();return;}if(!Recognition){toast('Распознавание речи недоступно. Попробуй Chrome или Edge.');return;}if(busy()){toast('Дождись завершения ответа.');return;}stop();if(synth){const unlock=new SpeechSynthesisUtterance('.');unlock.volume=0;unlock.lang=language;synth.speak(unlock);synth.resume?.();}active=true;listen();};
   function speak(text, resume=false){
     if(!resume)stop();
-    if(!synth&&!voiceURI.startsWith('speechkit:')){if(resume){active=false;status('Озвучивание недоступно. Ответ сохранён в диалоге.','error');}else toast('Озвучивание недоступно в этом браузере.');return;}
+    if(!canSpeak()){if(resume){active=false;status('Озвучивание недоступно. Ответ сохранён в диалоге.','error');}else toast('Озвучивание недоступно в этом браузере.');return;}
     const token=++speechEpoch, conversation=epoch, chunks=speechChunks(text);let index=0;synth?.cancel();
     const next=()=>{if(token!==speechEpoch)return;clearTimeout(speechTimer);currentUtterance=null;if(index>=chunks.length){if(resume&&active&&conversation===epoch){status('Жду твою реплику…','listening');later(conversation);}return;}
       const part=chunks[index++];
@@ -146,7 +159,7 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'})
     const options=[['ru-RU','Русский'],['en-US','English'],['tr-TR','Türkçe'],['de-DE','Deutsch'],['fr-FR','Français'],['es-ES','Español']];if(!options.some(([id])=>id===language))options.push([language,language]);
     for(const [id,name] of options){const o=node('option',name);o.value=id;languages.append(o);}languages.value=language;languages.onchange=()=>{stop();language=languages.value;save();refreshVoices();};label.append(languages);panel.append(label);
     const speed=node('label','Скорость речи'), select=node('select');select.setAttribute('aria-label','Скорость речи');for(const [value,name] of [[.8,'Медленнее'],[1,'Обычная'],[1.2,'Быстрее']]){const o=node('option',name);o.value=value;select.append(o);}select.value=String(rate);select.onchange=()=>{stop();rate=Number(select.value);save();};speed.append(select);panel.append(speed);
-    const test=node('button','Послушать голос');speechTests.add(test);test.disabled=!synth&&!voiceURI.startsWith('speechkit:');test.onclick=()=>speak('Привет! Я Велия. Давай обсудим твою идею.');panel.append(test);
+    const test=node('button','Послушать голос');speechTests.add(test);test.disabled=!canSpeak();test.onclick=()=>speak('Привет! Я Велия. Давай обсудим твою идею.');panel.append(test);
     const open=node('button','Открыть голосовой разговор','feature-primary');open.onclick=show;open.disabled=!Recognition;panel.append(open);
     if(!Recognition)panel.append(node('p','Этот браузер не поддерживает распознавание. Озвучивание ответов доступно отдельно.','feature-notice'));
   }

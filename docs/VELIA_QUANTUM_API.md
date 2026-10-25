@@ -47,6 +47,37 @@ Internet plan, keep source links, and request short spoken answers. Flash
 retains its 128-token voice fast path; Quantum uses a 1024-token bound because
 its reasoning and final answer share the upstream output budget.
 
+Self-contained voice greetings, casual check-ins, literal arithmetic and clearly
+creative story requests skip browser history retrieval and model-based planning;
+the native selected-model answer still uses its existing conversation history.
+Current facts, sourced stories, mixed requests and medical questions retain
+their normal selected-model retrieval path. Final speech recognition submits
+immediately without waiting for a delayed engine shutdown event. Playback can
+start at a complete clause or bounded word boundary in a long streamed sentence.
+
+Browser voice output is a separate speech adapter, independent of the selected
+language model. `VELIA_WEB_TTS_PROVIDER=edge` enables three actual female speaker
+IDs: Svetlana (Russian), Emma and Ava (multilingual, including Russian). They are
+distinct upstream voices, not pitch aliases of the seven Android device presets.
+The existing SpeechKit adapter stays opt-in and needs its own key. No paid speech
+adapter is activated automatically. Edge uses an online consumer speech service
+through the pinned `edge-tts` adapter, not a contractual Azure Speech API; remote
+availability and startup latency can vary. The fast device voice remains the
+automatic default when available, and the user can explicitly select each neural
+voice. Text is sent to that speech provider only when a remote voice is selected.
+Voice errors retain the saved answer and do not silently switch the speaker.
+No voice model packs are repeatedly downloaded. The three remote speakers were
+confirmed against the live provider inventory and synthesized with Russian
+synthetic text. See the [adapter](https://github.com/rany2/edge-tts) and
+[voice language metadata](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support).
+
+`python -m desktop.probe_web_voice` is a one-time deployment acceptance for the
+configured online speech provider: fixed synthetic text, verified female speaker
+inventory, bounded MP3 audio and timings without submitted user text or keys.
+Remove that extra command after successful release; preserve the existing Browser
+Agent pre-deploy gate. Only the three bounded timing loggers are enabled in the
+gateway entry point; they log model/voice IDs, timings and outcomes, not content.
+
 Enable `VELIA_FILE_ANALYST_ENABLED=true` and
 `VELIA_FLASH_ATTACHMENTS_ENABLED=true` on the account backend. The deployment
 includes Tesseract, Poppler and English/Russian/Turkish OCR data. TXT, MD, CSV,

@@ -84,6 +84,36 @@ def test_voice_and_files_follow_selected_model_without_decision_fallback(monkeyp
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("model", ["velia-flash", "velia-quantum"])
+@pytest.mark.parametrize("question", ["Как дела?", "Расскажи какую-нибудь интересную историю без разницы какую"])
+def test_simple_voice_turn_uses_one_native_answer_without_planning_or_history_restore(monkeypatch, tmp_path, model, question):
+    from desktop.web_search import WebSearch
+    def forbidden(*args, **kwargs):
+        pytest.fail("Self-contained voice turn waited for preparation")
+    monkeypatch.setattr(WebSearch,"account_question",forbidden)
+    monkeypatch.setattr(WebSearch,"restore_messages",forbidden)
+    async def run():
+        async with fixture(monkeypatch,with_search=True,quantum_api=model=="velia-quantum",
+                without_flash=model=="velia-quantum",features={"chat_quantum":True},
+                guest_store=GuestStore(sqlite_path=tmp_path/"direct-voice.db")) as (server,client,state):
+            cookie,_,_=await login(server,client)
+            async with client.post(server.make_url("/web-api/v1/conversations"),headers=headers(cookie),json={"title":"Voice"}) as response:
+                cid=(await response.json())["conversation"]["id"]
+            prior=[{"role":"user","content":"Мой рассказ про лес.","status":"completed"},
+                {"role":"assistant","content":"Поняла.","status":"completed"}]
+            state["conversations"][cid]["messages"]=list(prior)
+            async with client.post(server.make_url(f"/web-api/v1/conversations/{cid}/messages/stream"),headers=headers(cookie),
+                    json={"content":question,"model":model,"idempotency_key":"direct-voice-001","voice_turn":True,"web_search":True}) as response:
+                assert response.status==200 and "[DONE]" in await response.text()
+            assert len(state["account_calls"])==1
+            assert state["account_calls"][0]["chat_mode"]==model.removeprefix("velia-")
+            assert state["account_calls"][0]["voice_turn"] is True
+            assert state["account_calls"][0]["content"]==question
+            assert state["conversations"][cid]["messages"][:2]==prior
+            assert state["intent_payloads"]==state["quantum_intent_payloads"]==state["search_queries"]==[]
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("mode", [None,"flash","quantum"])
 def test_file_upload_refuses_legacy_backend_instead_of_using_its_other_model(monkeypatch, mode):
     from aiohttp import FormData

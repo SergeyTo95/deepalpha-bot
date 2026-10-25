@@ -8,7 +8,7 @@ import re
 from desktop.spelling_hints import spelling_hints
 
 _GREETINGS = frozenset({'привет','здравствуйте','здравствуй','доброе утро','добрый день',
-    'добрый вечер','hello','hi','good morning','merhaba','selam'})
+    'добрый вечер','как дела','как настроение','hello','hi','good morning','how are you','merhaba','selam','nasılsın'})
 _IDENTITY = frozenset({'кто ты','ты кто','как тебя зовут','что ты умеешь','что умеешь',
     'что ты можешь','кто ты и что ты умеешь','кто ты и что умеешь','ты тут','ты здесь','ты работаешь',
     'who are you','what can you do','who are you and what can you do',
@@ -17,6 +17,22 @@ _IDENTITY = frozenset({'кто ты','ты кто','как тебя зовут',
 _ARITHMETIC = re.compile(r'\d{1,12}(?:\s*[+*×]\s*\d{1,12}){1,4}\s*=?')
 _TRANSLATION = re.compile(r'^(?:переведи(?: этот текст)? на (?:английский|русский|турецкий|немецкий|французский|испанский|китайский)(?: язык)?|translate(?: this text)? (?:into|to) (?:english|russian|turkish|german|french|spanish|chinese))\s*:\s*\S',re.I)
 _EDIT = re.compile(r'^(?:сократи (?:этот )?текст|исправь пунктуацию|shorten (?:this )?text|correct punctuation)\s*:\s*\S',re.I)
+_ANY_STORY = re.compile(r'^(?:расскажи(?: мне)? (?:какую[ -]нибудь |любую |интересную |короткую |небольшую |смешную )*(?:историю|сказку)(?: без разницы какую)?|tell me (?:a |any )?(?:short |interesting |bedtime )?story)[.!?… ]*$', re.I)
+_FICTION = re.compile(r'^(?:придумай|сочини|выдумай)(?: мне)? (?:короткую |небольшую |смешную )?(?:сказку|выдуманную историю)(?:\s|[.!?…]|$)', re.I)
+_FACT_REQUEST = re.compile(r'найди|проверь|источник|ссылк|новост|сегодня|сейчас|реальн|историческ|факт|погод|лекарств|дозиров|лечени|симптом|интернет', re.I)
+
+def simple_direct_task(content):
+    """Only self-contained, non-retrieval tasks; history still reaches the answer."""
+    if not isinstance(content, str):
+        return None
+    text = content.strip()
+    clauses = [" ".join(part.split()) for part in re.split(r'[.!?…,\n]+', text.casefold()) if part.strip()]
+    if (clauses and all(part in _GREETINGS or part in _IDENTITY for part in clauses)
+            or _ARITHMETIC.fullmatch(text)
+            or len(text) <= 1000 and not _FACT_REQUEST.search(text)
+                and (_ANY_STORY.fullmatch(text) or _FICTION.match(text))):
+        return {'action':'direct','query':'','context':[]}
+    return None
 
 async def direct_task(messages):
     history=[m for m in messages if m.get('role') in {'user','assistant'}]
@@ -28,10 +44,9 @@ async def direct_task(messages):
     text=content.strip()
     # Only complete, self-contained clauses may skip interpretation. The full
     # conversation is still passed unchanged to the answering model.
-    clauses=[" ".join(part.split()) for part in re.split(r'[.!?…,\n]+',text.casefold()) if part.strip()]
-    if (clauses and all(part in _GREETINGS or part in _IDENTITY for part in clauses)
-            or _ARITHMETIC.fullmatch(text)):
-        return {'action':'direct','query':'','context':[]}
+    direct = simple_direct_task(text)
+    if direct is not None:
+        return direct
     if len(history)!=1:
         return None
     if _TRANSLATION.match(text) or _EDIT.match(text):
