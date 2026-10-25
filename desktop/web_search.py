@@ -11,6 +11,7 @@ import re
 from urllib.parse import urlsplit
 from aiohttp import ClientError, ClientSession, ClientTimeout, DummyCookieJar, web
 from desktop.request_intent import understand
+from velia_quantum_provider import MODEL_ID as QUANTUM_ID, QuantumError
 from velia_request_understanding import (CLARIFICATION_MARKER, RESTORATION_MARKER,
     clarification_content, clarification_reply, restoration_content, interpreted_content)
 
@@ -191,20 +192,24 @@ class WebSearch:
         return hmac.new(self.secret, json.dumps(["velia-search", *parts], ensure_ascii=False).encode(),
             hashlib.sha256).hexdigest()
 
-    async def _understand(self, messages):
+    async def _understand(self, messages, *, model=None):
         from desktop.direct_tasks import direct_task
         direct = await direct_task(messages)
         if direct is not None:
             return direct
+        if model == QUANTUM_ID:
+            from desktop.quantum_intent import understand_quantum
+            return await understand_quantum(messages)
         from desktop.decision_router import try_direct
         decision = await try_direct(messages)
         if decision is not None:
             return decision
         return await understand(messages)
 
-    async def plan(self, messages):
+    async def plan(self, messages, *, model=None):
         try:
-            decision = await self._understand(messages)
+            decision = (await self._understand(messages, model=model) if model == QUANTUM_ID
+                else await self._understand(messages))
         except (ClientError, TimeoutError, OSError, ValueError, KeyError):
             raise UnderstandingUnavailable() from None
         result = {"results": [], "retrieved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -304,7 +309,8 @@ class WebSearch:
     async def enrich(self, request, payload):
         if not request.get(SEARCH):
             return payload
-        result = await self.plan(payload["messages"])
+        from desktop.web_routes import WEB_MODEL
+        result = await self.plan(payload["messages"], model=request.get(WEB_MODEL, payload.get("model")))
         if result["decision"] == "clarify":
             content = clarification_content(payload["messages"][-1]["content"], result["clarification_span"],
                 result.get("clarification_candidate", ""))
@@ -329,7 +335,7 @@ class WebSearch:
         try:
             result = await asyncio.to_thread(self.store.cached_search, request_key, query_hash)
             if result is None:
-                result = await self.plan([*(messages or []), {"role": "user", "content": question}])
+                result = await self.plan([*(messages or []), {"role": "user", "content": question}], model=model)
             if result.get("decision") == "clarify":
                 augmented = clarification_content(question, result["clarification_span"],
                     result.get("clarification_candidate", ""))
@@ -342,7 +348,7 @@ class WebSearch:
             await asyncio.to_thread(self.store.remember_search, request_key, query_hash,
                 self.digest("context", user, conversation, augmented), len(question), result)
             return augmented, result if result["results"] else None
-        except web.HTTPException:
+        except (web.HTTPException, QuantumError):
             raise
         except Exception:
             raise SearchUnavailable() from None

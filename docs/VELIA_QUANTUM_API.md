@@ -23,8 +23,10 @@ EXPLABS_API_KEY=<secret configured by the operator>
 
 `VELIA_QUANTUM_API_KEY` can replace `EXPLABS_API_KEY`. Keys for Flash, Kimi or any
 other provider are never reused. Configure the same route separately on the
-desktop gateway only if its direct `/desktop-api/v1/chat/completions` endpoint
-also needs Quantum. Saved browser conversations call the account backend.
+desktop gateway for Quantum's own retrieval planning and its direct
+`/desktop-api/v1/chat/completions` endpoint. A service-local Railway reference
+can supply the gateway credential without reading it back. Saved browser
+answers still call the production account backend and retain its history.
 
 The browser advertises Quantum only when the authenticated backend returns
 `features.chat_quantum=true`. It shows the provider attribution supplied by the
@@ -89,10 +91,17 @@ followed by ordinary answer deltas. Preparation heartbeats keep the connection
 live, and disconnecting cancels pending preparation and releases the gateway
 reservation. These events never become answer text or stored chat history.
 Unambiguous greetings, identity/capability questions and literal arithmetic can
-skip the separate Flash interpreter even in an existing conversation; the full
-history still reaches the selected answering model. Mixed, contextual, medical
-and current-information requests keep the existing interpretation/retrieval
-path. Timing logs contain only the model, phase durations and outcome, without
+skip separate interpretation even in an existing conversation; the full
+history still reaches the selected answering model. All other Quantum turns
+use Quantum itself to select a validated retrieval/clarification plan. They
+never call the Flash interpreter, Flash worker or Decision router. Existing
+quoted-evidence validation, official-health domains and retrieval-failure
+handling are retained. A planned Internet turn can use one bounded Quantum
+planning call plus the answer call; there are no completion retries or model
+fallbacks. The gateway therefore uses the same configured Quantum provider
+contract as the answer backend. Automatic retrieval requires standard JSON
+tool calls; a text-only self-hosted runtime can be used with retrieval disabled.
+Timing logs contain only the model, phase durations and outcome, without
 submitted text, account identifiers or credentials.
 
 Before enabling, run provider/gateway/browser tests, PostgreSQL persistence and

@@ -8,7 +8,7 @@ import time
 from aiohttp import ClientError, web
 from velia_desktop_routes import AuthenticationUnavailable, FLASH_ID, MODEL_ID, flash_enabled
 from desktop.web_search import SearchUnavailable, SearchTooLong, UnderstandingUnavailable, source_event
-from velia_quantum_provider import ERRORS as QUANTUM_ERRORS, MODEL_ID as QUANTUM_ID
+from velia_quantum_provider import ERRORS as QUANTUM_ERRORS, MODEL_ID as QUANTUM_ID, QuantumError
 
 ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 REQUEST_ID = re.compile(r"[A-Za-z0-9:_-]{8,128}\Z")
@@ -255,6 +255,11 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
         except asyncio.CancelledError:
             outcome = "cancelled"
             raise
+        except QuantumError as exc:
+            if response.prepared:
+                await stream_error(exc.code)
+                return response
+            return error(exc.code, exc.status)
         except (SearchUnavailable, SearchTooLong, UnderstandingUnavailable) as exc:
             if not response.prepared:
                 raise

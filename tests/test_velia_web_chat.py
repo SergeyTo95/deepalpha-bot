@@ -28,6 +28,8 @@ async def fixture(monkeypatch, **state):
     state["search_queries"] = []
     state["search_payloads"] = []
     state["intent_payloads"] = []
+    state["quantum_intent_payloads"] = []
+    state["forbidden_model_calls"] = []
     state["review_payloads"] = []
     state["agent_calls"] = []
     state["takeover_calls"] = []
@@ -104,13 +106,18 @@ async def fixture(monkeypatch, **state):
     async def tokenize(request):
         return web.json_response({"tokens": [1] * state["tokens"]})
     async def model(request):
-        assert request.headers.get("Authorization") == "Bearer fixture-provider-key"
         data = await request.json()
+        is_quantum = data.get("model") == "owned-quantum"
+        assert request.headers.get("Authorization") == ("Bearer fixture-quantum-key" if is_quantum else "Bearer fixture-provider-key")
+        if state.get("without_flash") and not is_quantum:
+            state["forbidden_model_calls"].append(data.get("model"))
+            raise web.HTTPInternalServerError()
         if data.get("tools", [{}])[0].get("function", {}).get("name") == "understand_request":
-            state["intent_payloads"].append(data)
+            plans = state["quantum_intent_payloads"] if is_quantum else state["intent_payloads"]
+            plans.append(data)
             defaults = state.get("intent", {"action": "search", "quote": "", "query": data["messages"][-1]["content"][:400]})
             sequence = state.get("intent_results")
-            args = sequence[min(len(state["intent_payloads"]) - 1, len(sequence) - 1)] if sequence else defaults
+            args = sequence[min(len(plans) - 1, len(sequence) - 1)] if sequence else defaults
             if state.get("intent_status"):
                 return web.json_response({"error": "fixture failure"}, status=state["intent_status"])
             return web.json_response({"choices": [{"message": {"tool_calls": [{"type": "function", "id": "intent-1",
@@ -219,6 +226,15 @@ async def fixture(monkeypatch, **state):
             "https://deepalpha-ai.com",
             agent_origin=str(source.make_url("/")).rstrip("/"),
         )
+        if state.get("quantum_api"):
+            for key, value in {"VELIA_QUANTUM_ENABLED":"true", "VELIA_QUANTUM_PROVIDER":"self_hosted",
+                    "VELIA_QUANTUM_MODEL":"owned-quantum", "VELIA_QUANTUM_BASE_URL":str(source.make_url("/v1")),
+                    "VELIA_QUANTUM_API_KEY":"fixture-quantum-key"}.items():
+                monkeypatch.setenv(key, value)
+        if state.get("without_flash"):
+            monkeypatch.setenv("VELIA_DESKTOP_FLASH_ENABLED", "false")
+            for key in ("VELIA_DESKTOP_FLASH_API_KEY", "VELIA_DESKTOP_FLASH_BASE_URL"):
+                monkeypatch.delenv(key, raising=False)
         search_service = WebSearch(provider="tavily", api_key="fixture-search-key",
             endpoint=str(source.make_url("/search")), store=state["guest_store"]) if state.get("with_search") else None
         async with TestServer(create_app(config, guest_store=state.get("guest_store"),
