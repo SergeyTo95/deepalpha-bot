@@ -505,6 +505,10 @@ def dispatch_send(sender, user_id, conversation_id, content, *, chat_mode="pro",
                   voice_turn=False, on_delta=None, on_reset=None, **kwargs):
     if chat_mode == "pro":
         return sender(user_id, conversation_id, content, **kwargs)
+    if chat_mode == "quantum":
+        from services.velia_quantum_service import dispatch_send as quantum_send
+        return quantum_send(user_id, conversation_id, content,
+            on_delta=on_delta, on_reset=on_reset, **kwargs)
     if chat_mode != "flash":
         return {"ok": False, "error": "invalid_chat_mode"}
     if not available():
