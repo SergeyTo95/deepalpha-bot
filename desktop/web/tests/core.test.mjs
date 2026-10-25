@@ -6,7 +6,15 @@ import {
   chatPayload,
   loadChats,
   safeSearch,
+  MODELS,
+  apiError,
 } from "../core.mjs";
+
+test("Quantum history retains its mode and quota failures remain actionable", () => {
+  assert.equal(MODELS["velia-quantum"], "VELIA QUANTUM");
+  assert.match(apiError("quantum_quota_exhausted"), /Бесплатная квота Quantum/);
+  assert.match(apiError("quantum_unavailable"), /Quantum/);
+});
 
 test("untrusted markup, attributes, fenced languages and links cannot inject HTML", () => {
   const html = renderMarkdown(

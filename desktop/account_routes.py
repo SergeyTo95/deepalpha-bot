@@ -4,6 +4,7 @@ import re
 from aiohttp import ClientError, web
 from velia_desktop_routes import AuthenticationUnavailable, FLASH_ID, MODEL_ID, flash_enabled
 from desktop.web_search import SearchUnavailable, source_event
+from velia_quantum_provider import ERRORS as QUANTUM_ERRORS, MODEL_ID as QUANTUM_ID
 
 ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 REQUEST_ID = re.compile(r"[A-Za-z0-9:_-]{8,128}\Z")
@@ -11,6 +12,7 @@ ERRORS = {"conversation_not_found", "generation_in_progress", "flash_busy", "fla
     "flash_context_too_long", "flash_timeout", "flash_provider_error", "flash_invalid_response",
     "velia_chat_disabled", "pro_tokens_required", "token_balance_unavailable",
     "idempotency_mode_mismatch", "user_daily_limit_exceeded", "global_daily_limit_exceeded"}
+ERRORS |= QUANTUM_ERRORS
 
 
 def conversation(value):
@@ -169,7 +171,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
                 or ("voice_turn" in data and type(data["voice_turn"]) is not bool)
                 or ("medical_no_search" in data and type(data["medical_no_search"]) is not bool)
                 or (data.get("medical_no_search") and data.get("model") != FLASH_ID)
-                or data.get("model") not in {FLASH_ID, MODEL_ID}
+                or data.get("model") not in {FLASH_ID, MODEL_ID, QUANTUM_ID}
                 or not isinstance(data.get("content"), str) or not data["content"].strip()
                 or len(data["content"]) > 12000 or not REQUEST_ID.fullmatch(str(data.get("idempotency_key", "")))):
             return error("invalid_request", 400)
@@ -178,6 +180,8 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
             return error("invalid_request", 400)
         if data["model"] == FLASH_ID and not flash_enabled():
             return error("flash_unavailable", 503)
+        if data["model"] == QUANTUM_ID and attachments:
+            return error("quantum_attachments_unsupported", 400)
         session = request[ACCOUNT_SESSION]
         permission = await authorize_model(session.access, data["model"])
         if permission:
@@ -203,7 +207,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
                     request.match_info["conversation_id"], data["idempotency_key"], content, data["model"],
                     messages=[{"role": m["role"], "content": m.get("content") or ""} for m in history])
             source = upstream_stream("/mobile-api/v1/conversations/" + request.match_info["conversation_id"] + "/messages/stream",
-                token=session.access, data={"content": content, "chat_mode": "flash" if data["model"] == FLASH_ID else "pro",
+                token=session.access, data={"content": content, "chat_mode": "quantum" if data["model"] == QUANTUM_ID else "flash" if data["model"] == FLASH_ID else "pro",
                     "idempotency_key": data["idempotency_key"], **({"voice_turn": True} if data.get("voice_turn") else {}), **({"attachment_ids": attachments} if attachments else {})})
             stream = account_events(source, data["model"])
             first = await anext(stream)

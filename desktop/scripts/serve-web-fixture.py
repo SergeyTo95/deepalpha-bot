@@ -24,7 +24,7 @@ async def main():
     async def health(request):
         return web.json_response({"ok": True, "enabled": True})
     async def me(request):
-        return web.json_response({"ok": True, "user": {"id": user_id}}) if request.headers.get("Authorization") == "Bearer " + access else web.json_response({"ok": False}, status=401)
+        return web.json_response({"ok": True, "user": {"id": user_id}, "features": {"chat_quantum": os.getenv("VELIA_FIXTURE_QUANTUM") == "true", "chat_quantum_source": "GLM-5.3 через Experiential"}}) if request.headers.get("Authorization") == "Bearer " + access else web.json_response({"ok": False}, status=401)
     async def auth(request):
         return web.json_response({"ok": True, "access_token": access, "refresh_token": refresh, "access_expires_in": 900})
     async def logout(request):

@@ -83,7 +83,7 @@ let selectedFiles = [];
 const fileTools=setupFileTools({toast});
 function clearFiles(){selectedFiles=[];$("attachment-input").value="";$("attachment-preview").replaceChildren();}
 function filePreview(){const target=$("attachment-preview");target.replaceChildren();selectedFiles.forEach((item,i)=>{const chip=document.createElement('div');chip.className='file-chip';const view=document.createElement('button');view.type='button';view.textContent=item.file.name+' · '+fileSize(item.file.size);view.onclick=()=>fileTools.previewFile(item.file).catch(()=>toast('Не удалось открыть файл.'));const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label','Удалить '+item.file.name);remove.onclick=()=>{selectedFiles.splice(i,1);filePreview();resizePrompt();};chip.append(view,remove);target.append(chip);});if(selectedFiles.length){const bar=document.createElement('div');bar.className='file-shortcuts';for(const [title,prompt] of [['Пересказать','Кратко перескажи содержание прикреплённых файлов.'],['Извлечь текст','Извлеки текст из прикреплённых файлов. Отметь неразборчивые места.'],['Проверить ошибки','Проверь прикреплённые файлы на ошибки и несоответствия.']]){const b=document.createElement('button');b.type='button';b.textContent=title;b.onclick=()=>{$('prompt').value=prompt;resizePrompt();$('prompt').focus();};bar.append(b);}target.append(bar);}}
-function addFiles(files){if(busy)return;if(!profile){openAuth();return;}if(agentMode){toast('Для файлов выключи Agent и открой обычный диалог.');return;}try{const prepared=files.map(prepareFile);if(selectedFiles.length+prepared.length>4)throw new Error('Можно прикрепить до 4 файлов, по 15 МБ каждый.');selectedFiles.push(...prepared.map(file=>({file,key:crypto.randomUUID()})));filePreview();resizePrompt();}catch(e){toast(e.message);}}
+function addFiles(files){if(busy)return;if(model==="velia-quantum"){toast(apiError("quantum_attachments_unsupported"));return;}if(!profile){openAuth();return;}if(agentMode){toast('Для файлов выключи Agent и открой обычный диалог.');return;}try{const prepared=files.map(prepareFile);if(selectedFiles.length+prepared.length>4)throw new Error('Можно прикрепить до 4 файлов, по 15 МБ каждый.');selectedFiles.push(...prepared.map(file=>({file,key:crypto.randomUUID()})));filePreview();resizePrompt();}catch(e){toast(e.message);}}
 
 const current = () => chats.find((c) => c.id === currentId);
 const voice = setupVoice({busy:()=>busy, toast, send:text=>{if(agentMode)setAgentMode(false);setModel("velia-flash");$("prompt").value=text;return generate(false, true);}});
@@ -149,15 +149,17 @@ function closeModels() {
 }
 function setModel(value) {
   if (busy || !MODELS[value] || (profile && !profile.models.includes(value)) || (!profile && value !== "velia-flash")) return;
+  if (value === "velia-quantum" && selectedFiles.length) { toast(apiError("quantum_attachments_unsupported")); return; }
   model = value;
   $("model-label").textContent = MODELS[value];
-  $("model-icon").innerHTML = icon(value === "velia-flash" ? "bolt" : "spark");
+  $("model-icon").innerHTML = icon(value === "velia-flash" ? "bolt" : value === "velia-quantum" ? "layers" : "spark");
   for (const option of document.querySelectorAll("[data-model]")) {
     option.setAttribute(
       "aria-selected",
       String(option.dataset.model === value),
     );
     option.disabled = (agentMode && option.dataset.model !== "velia-flash") || (profile ? !profile.models.includes(option.dataset.model) : option.dataset.model !== "velia-flash");
+    option.setAttribute("aria-disabled", String(option.disabled));
   }
   try {
     localStorage.setItem("velia-web-model", value);
@@ -261,7 +263,7 @@ function messageNode(message, index) {
     heading.innerHTML = '<img src="/web/favicon.svg" alt="">VELIA';
     const badge = document.createElement("span");
     badge.className = "message-model";
-    badge.textContent = message.agent ? "AGENT" : message.model === "velia-flash" ? "FLASH" : "PRO";
+    badge.textContent = message.agent ? "AGENT" : message.model === "velia-flash" ? "FLASH" : message.model === "velia-quantum" ? "QUANTUM" : "PRO";
     heading.append(badge);
     article.append(heading);
   }
@@ -527,7 +529,7 @@ async function openChat(chat, background = false) {
         role: m.role, content: m.content || "",
         attachmentIds: m.attachments?.map(a=>a.id) || previous[i]?.attachmentIds || [], fileNames: m.attachments?.map(a=>a.name).filter(Boolean) || previous[i]?.fileNames || [],
         requestId: previous[i]?.role === m.role && previous[i]?.content === m.content ? previous[i]?.requestId : undefined,
-        model: m.chat_mode === "flash" ? "velia-flash" : "velia-pro",
+        model: m.chat_mode === "quantum" ? "velia-quantum" : m.chat_mode === "flash" ? "velia-flash" : "velia-pro",
         pending: m.status === "pending",
         failed: m.status === "error" ? "Не удалось получить ответ. Можно повторить запрос." : undefined,
         internet: m.web_search === true,
@@ -620,6 +622,8 @@ async function applyProfile(value) {
   if (!value.models.includes(model)) model = value.models[0] || "velia-flash";
   $("pro-description").textContent = value.pro_locked_reason ?
     apiError(value.pro_locked_reason) : "Доступен с токенами на балансе";
+  $("quantum-description").textContent = value.models.includes("velia-quantum") ?
+    "Сложные вопросы · " + (value.quantum_source || "Экспериментальная модель") : "Скоро · в разработке";
   setModel(model);
   render();
   syncHistory();
@@ -645,6 +649,7 @@ function applyGuest(value) {
   $("history-state").textContent = "Гостевая история только до закрытия вкладки";
   $("account-label").innerHTML = "Войти в VELIA<small>Синхронизация истории и доступ к PRO</small>";
   $("pro-description").textContent = "Войди в аккаунт с токенами для PRO";
+  $("quantum-description").textContent = "Скоро · в разработке";
   $("guest-notice").hidden = false;
   $("guest-counter").textContent = value.remaining > 0 ? "Без регистрации · осталось " + value.remaining + " из 30 сообщений" : "30 гостевых сообщений использованы. Войди, чтобы продолжить.";
   save(); render();

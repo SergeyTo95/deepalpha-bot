@@ -2,6 +2,7 @@ export const MODELS = Object.freeze(
   Object.assign(Object.create(null), {
     "velia-pro": "VELIA PRO",
     "velia-flash": "VELIA FLASH",
+    "velia-quantum": "VELIA QUANTUM",
   }),
 );
 export const escapeHTML = (value) =>
@@ -154,6 +155,17 @@ export function apiError(code) {
       flash_context_too_long:
         "Для Flash этот диалог слишком длинный. Начни новый диалог или выбери PRO.",
       flash_unavailable: "Flash сейчас недоступен. Повтори запрос позже.",
+      quantum_unavailable: "Quantum сейчас недоступна. Выбери Flash или попробуй позже.",
+      quantum_access_required: "Quantum пока не активирована. Сейчас можно пользоваться Flash.",
+      quantum_quota_exhausted: "Бесплатная квота Quantum исчерпана. Можно выбрать Flash или попробовать позже.",
+      quantum_busy: "Quantum сейчас занята. Попробуй чуть позже.",
+      quantum_timeout: "Quantum не успела ответить. Попробуй ещё раз.",
+      quantum_provider_error: "Сервис Quantum временно недоступен. Попробуй позже.",
+      quantum_invalid_response: "Ответ Quantum прервался. Можно повторить запрос.",
+      quantum_context_too_long: "Для Quantum этот диалог слишком большой. Начни новый диалог.",
+      quantum_attachments_unsupported: "Для файлов выбери Flash или PRO. Quantum пока работает с текстом.",
+      quantum_daily_user_limit_exceeded: "Дневной лимит Quantum исчерпан. Пока можно выбрать Flash.",
+      quantum_daily_global_limit_exceeded: "Дневной лимит Quantum исчерпан. Пока можно выбрать Flash.",
       model_unavailable: "Выбранный режим сейчас недоступен.",
       request_already_running:
         "Предыдущий ответ ещё формируется. Дождись его завершения.",

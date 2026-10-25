@@ -18,6 +18,7 @@ from aiohttp import ClientError, ClientSession, ClientTimeout, DummyCookieJar, T
 from velia_desktop_routes import AuthenticationUnavailable, setup_velia_desktop_routes
 from desktop.web_routes import prepare_web_payload, public_web_stream, setup_web_routes
 from desktop.admin_proxy import setup_owner_admin_proxy
+from velia_quantum_provider import MODEL_ID as QUANTUM_ID
 
 MAX_AUTH_BODY = 16 * 1024
 MAX_AUTH_RESPONSE = 64 * 1024
@@ -182,7 +183,10 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
         if (status != 200 or result.get("ok") is not True or not isinstance(user, dict)
                 or type(user.get("id")) is not int or user["id"] <= 0):
             raise AuthenticationUnavailable()
-        return {"user_id": user["id"], "name": str(user.get("first_name") or "Аккаунт VELIA")[:120]}
+        features = result.get("features") if isinstance(result.get("features"), dict) else {}
+        return {"user_id": user["id"], "name": str(user.get("first_name") or "Аккаунт VELIA")[:120],
+            "quantum": features.get("chat_quantum") is True,
+            "quantum_source": str(features.get("chat_quantum_source") or "")[:120]}
 
     async def account_balance(token):
         status, result = await upstream("GET", "/mobile-api/v1/economy/me", token=token)
@@ -192,6 +196,10 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
         return max(0, credits)
 
     async def authorize_model(token, model):
+        if model == QUANTUM_ID:
+            identity = await authenticate(token)
+            if not identity or not identity.get("quantum"):
+                return "quantum_unavailable", 503
         if model == "velia-pro":
             if await account_balance(token) <= 0:
                 return "pro_tokens_required", 402

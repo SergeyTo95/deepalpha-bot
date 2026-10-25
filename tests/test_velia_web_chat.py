@@ -47,7 +47,8 @@ async def fixture(monkeypatch, **state):
         state["seen"].append({"path": request.path, "cookie": request.headers.get("Cookie")})
         if not state["validity"] or request.headers.get("Authorization") not in {"Bearer " + TOKEN, "Bearer " + ROTATED}:
             return web.json_response({"ok": False}, status=401)
-        return web.json_response({"ok": True, "user": {"id": state["user_id"]}})
+        return web.json_response({"ok": True, "user": {"id": state["user_id"]},
+            "features": state.get("features", {})})
     async def auth(request):
         data = await request.json()
         state["seen"].append({"path": request.path, "data": data, "cookie": request.headers.get("Cookie")})
@@ -233,6 +234,35 @@ async def login(server, client):
     async with client.post(server.make_url("/web-api/v1/auth/exchange"), headers=headers(), json={"pairing_code": CODE}) as response:
         assert response.status == 200
         return response.cookies[COOKIE].value, await response.json(), response.headers["Set-Cookie"]
+
+
+def test_quantum_account_routing_history_and_capability_revocation(monkeypatch):
+    async def run():
+        async with fixture(monkeypatch, credits=0, features={"chat_quantum": True,
+                "chat_quantum_source": "GLM-5.3 через Experiential"}) as (server, client, state):
+            cookie, profile, _ = await login(server, client)
+            assert "velia-quantum" in profile["models"] and "velia-pro" not in profile["models"]
+            assert profile["quantum_source"] == "GLM-5.3 через Experiential"
+            async with client.post(server.make_url("/web-api/v1/conversations"), headers=headers(cookie),
+                    json={"title": "Quantum test"}) as response:
+                cid = (await response.json())["conversation"]["id"]
+            endpoint = server.make_url("/web-api/v1/conversations/" + cid + "/messages/stream")
+            data = {"content": "Составь план", "model": "velia-quantum", "idempotency_key": "quantum-test-1"}
+            async with client.post(endpoint, headers=headers(cookie), json=data) as response:
+                text = await response.text()
+                assert response.status == 200 and "velia-quantum" in text and "[DONE]" in text
+                assert "private-provider" not in text
+            assert state["account_calls"][-1]["chat_mode"] == "quantum"
+            async with client.get(server.make_url("/web-api/v1/conversations/" + cid + "/messages"),
+                    headers=headers(cookie)) as response:
+                saved = (await response.json())["messages"]
+                assert saved[-1]["chat_mode"] == "quantum"
+            state["features"]["chat_quantum"] = False
+            async with client.post(endpoint, headers=headers(cookie), json={**data, "idempotency_key": "quantum-test-2"}) as response:
+                assert response.status == 503
+                assert (await response.json())["error"] == "quantum_unavailable"
+            assert len(state["account_calls"]) == 1
+    asyncio.run(run())
 
 
 def test_opaque_secure_cookie_and_no_authority_secrets(monkeypatch):
