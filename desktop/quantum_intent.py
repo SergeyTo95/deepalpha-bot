@@ -7,34 +7,25 @@ import time
 from aiohttp import ClientError, ClientSession, ClientTimeout, DummyCookieJar
 from desktop.request_intent import INSTRUCTION, FULL_TOOL, parse_decision
 from services.velia_structured_output import strict_json_loads
-from velia_quantum_provider import QuantumError, configuration, payload, response_error, verify_zero_spend_async
+from velia_quantum_provider import (QuantumError, configuration, payload, response_error,
+    verify_zero_spend_async, provider_error_details)
 
 LOG = logging.getLogger(__name__)
-PROVIDER_ERROR_CODES = frozenset({
-    "invalid_key", "model_not_granted", "model_location_not_supported",
-    "insufficient_quota", "rate_limit_exceeded", "free_limit_reached",
-    "free_tier_requires_payment", "model_requires_payment", "model_requires_purchase",
-    "card_required", "email_unverified", "org_under_review", "unavailable_route",
-    "unsupported_capability", "unsupported_parameter", "invalid_parameter",
-    "capability_requires_payment", "capability_requires_purchase", "provider_internal",
-    "all_routes_failed", "gateway_draining", "deadline_exceeded", "internal_error",
-})
-
-
-async def provider_error_code(response):
-    """Read a bounded, allowlisted code; never retain provider messages or bodies."""
+async def read_provider_error(response):
+    """Read only enough error data to identify a stable code and quota prefix."""
     raw = bytearray()
     try:
         async for chunk in response.content.iter_chunked(2048):
             raw.extend(chunk)
             if len(raw) > 8192:
-                return "oversized_error"
-        body = strict_json_loads(raw.decode("utf-8"))
-        error = body.get("error") if isinstance(body, dict) else None
-        code = error.get("code") if isinstance(error, dict) else None
-        return code if isinstance(code, str) and code in PROVIDER_ERROR_CODES else "unknown_error"
+                return "oversized_error", "none"
+        return provider_error_details(raw)
     except (ClientError, TimeoutError, ValueError, TypeError, UnicodeDecodeError):
-        return "unreadable_error"
+        return "unreadable_error", "none"
+
+
+async def provider_error_code(response):
+    return (await read_provider_error(response))[0]
 
 PLANNING_INSTRUCTION = INSTRUCTION + (
     " Перед вызовом инструмента проверь аргументы: все поля схемы обязательны. "
@@ -120,8 +111,9 @@ async def understand_quantum(messages):
             async with client.post(config.base_url + "/chat/completions", json=body,
                     headers={"Authorization": "Bearer " + config.api_key}, allow_redirects=False) as response:
                 if response.status != 200:
-                    code = await provider_error_code(response)
-                    LOG.warning("VELIA_QUANTUM_HTTP_REJECTED status=%d provider_code=%s", response.status, code)
+                    code, reason = await read_provider_error(response)
+                    LOG.warning("VELIA_QUANTUM_HTTP_REJECTED status=%d provider_code=%s quota_reason=%s",
+                        response.status, code, reason)
                     raise response_error(response.status)
                 if "application/json" not in response.headers.get("Content-Type", ""):
                     raise QuantumError("quantum_invalid_response")

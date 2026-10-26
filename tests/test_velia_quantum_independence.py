@@ -487,8 +487,14 @@ def test_access_diagnostic_never_sends_an_unresolved_railway_reference(monkeypat
     assert 'unresolved_key_reference' in output and 'deepalpha-bot' not in output
 
 
-@pytest.mark.parametrize('status,code',[(401,'invalid_key'),(403,'model_not_granted')])
-def test_planning_logs_exact_provider_rejection_without_secrets_or_a_retry(monkeypatch,caplog,status,code):
+@pytest.mark.parametrize('status,code,message,public_code,reason',[
+    (401,'invalid_key','private provider body','quantum_unavailable','none'),
+    (403,'model_not_granted','private provider body','quantum_unavailable','none'),
+    (402,'card_required','private provider body','quantum_access_required','none'),
+    (429,'insufficient_quota','key_daily_cap: private provider body','quantum_quota_exhausted','key_daily_cap'),
+    (429,'insufficient_quota','free_limit_reached: private provider body','quantum_quota_exhausted','free_limit_reached'),
+])
+def test_planning_logs_exact_provider_rejection_without_secrets_or_a_retry(monkeypatch,caplog,status,code,message,public_code,reason):
     from aiohttp import web
     from aiohttp.test_utils import TestServer
     from desktop.quantum_intent import understand_quantum
@@ -497,17 +503,17 @@ def test_planning_logs_exact_provider_rejection_without_secrets_or_a_retry(monke
     async def run():
         async def provider(request):
             seen.append(request.method)
-            return web.json_response({'error':{'code':code,'message':'private provider body'}},status=status)
+            return web.json_response({'error':{'code':code,'message':message}},status=status)
         app=web.Application();app.router.add_post('/v1/chat/completions',provider)
         async with TestServer(app) as server:
             for key,value in {'VELIA_QUANTUM_ENABLED':'true','VELIA_QUANTUM_PROVIDER':'self_hosted',
                     'VELIA_QUANTUM_BASE_URL':str(server.make_url('/v1')),'VELIA_QUANTUM_MODEL':'owned',
                     'VELIA_QUANTUM_API_KEY':'private-fixture-key'}.items():monkeypatch.setenv(key,value)
             with pytest.raises(QuantumError) as error:await understand_quantum([{'role':'user','content':'private-user-question'}])
-            assert error.value.code=='quantum_unavailable'
+            assert error.value.code==public_code
     asyncio.run(run())
     assert seen==['POST']
-    assert f'status={status} provider_code={code}' in caplog.text
+    assert f'status={status} provider_code={code} quota_reason={reason}' in caplog.text
     assert 'private' not in caplog.text
 
 
