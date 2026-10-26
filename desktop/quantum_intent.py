@@ -7,7 +7,7 @@ import time
 from aiohttp import ClientError, ClientSession, ClientTimeout, DummyCookieJar
 from desktop.request_intent import INSTRUCTION, FULL_TOOL, parse_decision
 from services.velia_structured_output import strict_json_loads
-from velia_quantum_provider import QuantumError, configuration, payload, response_error
+from velia_quantum_provider import QuantumError, configuration, payload, response_error, verify_zero_spend_async
 
 LOG = logging.getLogger(__name__)
 PROVIDER_ERROR_CODES = frozenset({
@@ -116,6 +116,7 @@ async def understand_quantum(messages):
     try:
         async with ClientSession(timeout=ClientTimeout(total=45, connect=5, sock_read=40),
                 cookie_jar=DummyCookieJar(), trust_env=False) as client:
+            await verify_zero_spend_async(client, config)
             async with client.post(config.base_url + "/chat/completions", json=body,
                     headers={"Authorization": "Bearer " + config.api_key}, allow_redirects=False) as response:
                 if response.status != 200:

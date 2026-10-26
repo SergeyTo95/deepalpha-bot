@@ -17,7 +17,7 @@ Configure the account backend that serves the browser's identity authority:
 VELIA_QUANTUM_ENABLED=true
 VELIA_QUANTUM_PROVIDER=experiential
 VELIA_QUANTUM_BASE_URL=https://api.experientiallabs.ai/v1
-VELIA_QUANTUM_MODEL=glm-5.3-uncensored:free
+VELIA_QUANTUM_MODEL=glm-5.3-uncensored
 EXPLABS_API_KEY=<secret configured by the operator>
 ```
 
@@ -138,19 +138,21 @@ For a one-time voice release gate use
 `python -m desktop.probe_quantum_independence --voice`: three fixed synthetic
 planning cases (direct, current-information search, official medical scope),
 Flash/Decision forbidden, and a fixed Ava synthesis request. It writes no account
-history and makes no search-provider request. Only the exact free Quantum route
+history and makes no search-provider request. Only the exact canonical Quantum route with a verified $0 key-spend cap
 is accepted. Remove the extra probe after successful release, retaining the
 existing Browser Agent gate.
 
-`python -m desktop.probe_quantum_independence --access` performs one bounded,
-authenticated `GET /v1/models` with the runtime's selected key. It makes no
+`python -m desktop.probe_quantum_independence --access` performs bounded,
+authenticated reads of `/v1/models` and `/api/v1/key` with the runtime's selected
+key. It makes no
 completion, search or billing call. Run it before the expensive release gates to
 distinguish local unresolved references, HTTP 401 `invalid_key`, HTTP 403 model
 entitlement and other allowlisted provider errors. Output contains only status,
 allowlisted error code, source variable name, coarse key-format category and two
 known-model membership flags; it never prints keys, fingerprints, provider messages,
-raw bodies or other catalog IDs. A canonical model listing alone does not establish
-`:free` availability: the original three-case free-only voice gate is still required.
+raw bodies or other catalog IDs. A canonical model listing alone does not establish free billing: the probe also
+requires the presented key's explicit $0 spend cap, and the original three-case
+zero-spend-guarded voice gate is still required.
 The catalog's JSON parser uses the same 1 MiB limit as its streaming reader;
 the shared model-decision parser retains its separate 64 KiB default. Invalid
 catalog JSON, invalid list envelopes and oversized bodies have distinct fixed
@@ -207,11 +209,34 @@ image/PDF OCR without external calls or user data. A one-time
 `python ci/probe-velia-quantum.py --voice` accepts the free Quantum voice path;
 remove that one-time API probe after acceptance to avoid recurring quota use.
 
-The Experiential adapter accepts only this exact host and `:free` model. A
-missing key, bad configuration, quota exhaustion, authentication failure,
-redirect, truncated stream or empty answer never switches to a paid model or
-another provider. There are no automatic completion retries. The provider's
-account/card verification and quota eligibility must be completed separately.
+The Experiential adapter pins the documented canonical ID
+`glm-5.3-uncensored`. The old `glm-5.3-uncensored:free` alias returned HTTP 403
+`model_not_granted` and must not be assumed to exist because historical calls
+were free. The billing label in Logs does not establish a different model ID.
+
+Before every external completion, all three transports (account generation,
+browser planning and direct desktop requests) authenticate a read of
+`GET https://api.experientiallabs.ai/api/v1/key` using that exact runtime key.
+Only an explicit numeric `data.limit` equal to zero admits generation: the key
+must have a hard $0 daily platform-spend cap set in Experiential's key settings.
+Null/missing/unlimited/positive/string/bool/ambiguous metadata, read failures,
+redirects and oversized responses fail closed as `quantum_free_guard_required`
+without a completion POST. No cap or credential is written by this code. Key
+metadata is capped at 8 KiB and never logged; decimal parsing avoids rounding a
+small positive cap to zero. Reads use a 10-second async deadline or bounded
+native socket/read deadlines. Native reads consume small chunks so a slow body
+cannot continually reset the application's elapsed-time check.
+
+Keep the provider-side $0 cap in force. It is the billing enforcement; the
+application revalidates the cap without caching it. A free promotion's current
+eligibility must still be established by a successful live request and a zero
+charged-credit entry. If the provider cannot serve the request for free, the
+spending cap blocks it. Renaming a model never establishes free eligibility.
+Requests also set one total physical attempt and disable provider fallback via
+`gateway.retry` / `gateway.routing`. A missing key, bad configuration, quota
+exhaustion, authentication failure, redirect, truncated stream or empty answer
+never switches models or credentials. Self-hosted configurations make no
+Experiential account/billing read. Existing account checks and counters remain.
 
 ## Switch to a VELIA-hosted model
 
@@ -277,7 +302,8 @@ submitted text, account identifiers or credentials.
 
 Before enabling, run provider/gateway/browser tests, PostgreSQL persistence and
 quota tests with a dedicated `VELIA_FLASH_TEST_DATABASE_URL`, then one live
-`:free` request using the operator's key. Confirm catalog visibility, reload,
+zero-spend-guarded canonical request using the operator's key. Confirm the $0
+key limit, catalog visibility, zero charged credits in the provider ledger, reload,
 mode isolation and quota errors. Local fixture success does not establish live
 GLM quality, latency or free quota availability. Roll back by setting
 `VELIA_QUANTUM_ENABLED=false`; stored Quantum history remains readable.

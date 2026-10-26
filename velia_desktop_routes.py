@@ -352,6 +352,8 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                         return payload
                 if is_flash:
                     await check_flash_context(client, endpoint, headers, payload)
+                if quantum_config:
+                    await quantum.verify_zero_spend_async(client, quantum_config)
                 async with client.post(endpoint + ("/v1/chat/completions" if is_flash else "/chat/completions"), json=payload,
                                        headers=headers,
                                        allow_redirects=False) as upstream:

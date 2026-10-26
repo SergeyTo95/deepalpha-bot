@@ -156,6 +156,7 @@ export function apiError(code) {
         "Для Flash этот диалог слишком длинный. Начни новый диалог или выбери PRO.",
       flash_unavailable: "Flash сейчас недоступен. Повтори запрос позже.",
       quantum_unavailable: "Quantum сейчас недоступна. Выбери Flash или попробуй позже.",
+      quantum_free_guard_required: "Бесплатный доступ Quantum сейчас не подтверждён. Попробуй позже.",
       quantum_access_required: "Quantum пока не активирована. Сейчас можно пользоваться Flash.",
       quantum_quota_exhausted: "Бесплатная квота Quantum исчерпана. Можно выбрать Flash или попробовать позже.",
       quantum_busy: "Quantum сейчас занята. Попробуй чуть позже.",

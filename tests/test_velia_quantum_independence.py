@@ -354,7 +354,7 @@ def test_access_diagnostic_is_one_read_and_exposes_only_allowlisted_codes(monkey
                 status=status,headers={'Location':'/must-not-follow'} if status==307 else {})
         app=web.Application();app.router.add_route('*','/{tail:.*}',models)
         async with TestServer(app) as server:
-            base=str(server.make_url('/v1'));monkeypatch.setattr(probe,'EXPERIENTIAL_URL',base)
+            base=str(server.make_url('/v1'));monkeypatch.setattr(probe,'EXPERIENTIAL_URL',base);monkeypatch.setattr('velia_quantum_provider.KEY_INFO_URL',str(server.make_url('/api/v1/key')))
             monkeypatch.setenv('VELIA_QUANTUM_API_KEY',key)
             config=SimpleNamespace(provider='experiential',base_url=base,model=probe.FREE_MODEL,api_key=key)
             with pytest.raises(RuntimeError,match='quantum_access_failed'):await probe.check_access(config)
@@ -379,11 +379,11 @@ def test_access_diagnostic_authenticates_without_assuming_free_alias_is_listed(m
         async def models(request):
             seen.append(request.method)
             return web.json_response({'data':[{'id':'glm-5.3-uncensored'},{'id':'private-owned-model'}]})
-        app=web.Application();app.router.add_get('/v1/models',models)
+        app=web.Application();app.router.add_get('/v1/models',models);app.router.add_get('/api/v1/key',_zero_spend_key_response)
         monkeypatch.delenv('VELIA_QUANTUM_API_KEY',raising=False)
         monkeypatch.setenv('VELIA_QUANTUM_API_KEY' if dedicated else 'EXPLABS_API_KEY',key)
         async with TestServer(app) as server:
-            base=str(server.make_url('/v1'));monkeypatch.setattr(probe,'EXPERIENTIAL_URL',base)
+            base=str(server.make_url('/v1'));monkeypatch.setattr(probe,'EXPERIENTIAL_URL',base);monkeypatch.setattr('velia_quantum_provider.KEY_INFO_URL',str(server.make_url('/api/v1/key')))
             await probe.check_access(SimpleNamespace(provider='experiential',base_url=base,model=probe.FREE_MODEL,api_key=key))
     asyncio.run(run())
     output=capsys.readouterr().out;record=json.loads(output.removeprefix('VELIA_QUANTUM_ACCESS '))
@@ -415,10 +415,10 @@ def test_access_diagnostic_accepts_a_streamed_catalog_larger_than_decision_json(
             for start in range(0,len(raw),4093):await response.write(raw[start:start+4093])
             await response.write_eof()
             return response
-        app=web.Application();app.router.add_get('/v1/models',models)
+        app=web.Application();app.router.add_get('/v1/models',models);app.router.add_get('/api/v1/key',_zero_spend_key_response)
         monkeypatch.setenv('VELIA_QUANTUM_API_KEY',key)
         async with TestServer(app) as server:
-            base=str(server.make_url('/v1'));monkeypatch.setattr(probe,'EXPERIENTIAL_URL',base)
+            base=str(server.make_url('/v1'));monkeypatch.setattr(probe,'EXPERIENTIAL_URL',base);monkeypatch.setattr('velia_quantum_provider.KEY_INFO_URL',str(server.make_url('/api/v1/key')))
             await probe.check_access(SimpleNamespace(provider='experiential',base_url=base,model=probe.FREE_MODEL,api_key=key))
     asyncio.run(run())
     output=capsys.readouterr().out;record=json.loads(output.removeprefix('VELIA_QUANTUM_ACCESS '))
@@ -460,10 +460,10 @@ def test_access_catalog_budget_and_strict_json_remain_enforced(monkeypatch,capsy
         async def models(request):
             seen.append(request.method)
             return web.Response(body=raw,content_type='application/json')
-        app=web.Application();app.router.add_get('/v1/models',models)
+        app=web.Application();app.router.add_get('/v1/models',models);app.router.add_get('/api/v1/key',_zero_spend_key_response)
         monkeypatch.setenv('VELIA_QUANTUM_API_KEY',key)
         async with TestServer(app) as server:
-            base=str(server.make_url('/v1'));monkeypatch.setattr(probe,'EXPERIENTIAL_URL',base)
+            base=str(server.make_url('/v1'));monkeypatch.setattr(probe,'EXPERIENTIAL_URL',base);monkeypatch.setattr('velia_quantum_provider.KEY_INFO_URL',str(server.make_url('/api/v1/key')))
             config=SimpleNamespace(provider='experiential',base_url=base,model=probe.FREE_MODEL,api_key=key)
             if case=='exact_limit':await probe.check_access(config)
             else:
@@ -509,3 +509,8 @@ def test_planning_logs_exact_provider_rejection_without_secrets_or_a_retry(monke
     assert seen==['POST']
     assert f'status={status} provider_code={code}' in caplog.text
     assert 'private' not in caplog.text
+
+
+async def _zero_spend_key_response(request):
+    from aiohttp import web
+    return web.json_response({'data':{'limit':0}})

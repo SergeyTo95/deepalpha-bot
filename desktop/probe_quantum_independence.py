@@ -9,7 +9,7 @@ import time
 from aiohttp import ClientSession, ClientTimeout, DummyCookieJar
 from desktop import decision_router, request_intent, web_search, quantum_intent
 from services.velia_structured_output import strict_json_loads
-from velia_quantum_provider import EXPERIENTIAL_URL, FREE_MODEL, configuration
+from velia_quantum_provider import EXPERIENTIAL_URL, FREE_MODEL, configuration, QuantumError, verify_zero_spend_async
 
 MODELS_MAX_BYTES = 1024 * 1024
 
@@ -54,10 +54,13 @@ async def check_access(config):
                     record['provider_code']='invalid_models_envelope'
                     raise RuntimeError('quantum_access_failed')
                 ids={row['id'] for row in body['data'] if isinstance(row,dict) and isinstance(row.get('id'),str)}
-                record.update(ok=True,provider_code='none',
-                    base_model_listed=FREE_MODEL.removesuffix(':free') in ids,free_alias_listed=FREE_MODEL in ids)
-                # /models may list only the canonical base slug. Do not infer
-                # free-route access from this read: the existing :free gate follows.
+                record.update(base_model_listed=FREE_MODEL in ids,
+                    free_alias_listed=FREE_MODEL+':free' in ids)
+                record['provider_code']='zero_spend_guard_required'
+                await verify_zero_spend_async(client,config)
+                record.update(ok=True,provider_code='none',zero_spend_key=True)
+    except QuantumError:
+        raise RuntimeError('quantum_access_failed') from None
     finally:
         print('VELIA_QUANTUM_ACCESS '+json.dumps(record),flush=True)
 
