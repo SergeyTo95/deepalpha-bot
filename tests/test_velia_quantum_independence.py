@@ -393,6 +393,88 @@ def test_access_diagnostic_authenticates_without_assuming_free_alias_is_listed(m
     assert key not in output and 'private-owned-model' not in output
 
 
+def test_access_diagnostic_accepts_a_streamed_catalog_larger_than_decision_json(monkeypatch,capsys):
+    import json
+    from types import SimpleNamespace
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+    from desktop import probe_quantum_independence as probe
+    from services.velia_structured_output import strict_json_loads
+    key='xpl_'+'3'*40;seen=[]
+    raw=json.dumps({'data':[{'id':'glm-5.3-uncensored','description':'Описание '*10000},
+        {'id':'private-owned-model','description':'private catalog body '+key}]},ensure_ascii=False).encode()
+    assert 65536<len(raw)<1024*1024
+    # The shared model-decision limit must remain small; only the catalog gets
+    # the larger budget already enforced by the HTTP reader.
+    with pytest.raises(ValueError):strict_json_loads(raw.decode())
+    async def run():
+        async def models(request):
+            seen.append((request.method,request.path))
+            response=web.StreamResponse(headers={'Content-Type':'application/json'})
+            await response.prepare(request)
+            for start in range(0,len(raw),4093):await response.write(raw[start:start+4093])
+            await response.write_eof()
+            return response
+        app=web.Application();app.router.add_get('/v1/models',models)
+        monkeypatch.setenv('VELIA_QUANTUM_API_KEY',key)
+        async with TestServer(app) as server:
+            base=str(server.make_url('/v1'));monkeypatch.setattr(probe,'EXPERIENTIAL_URL',base)
+            await probe.check_access(SimpleNamespace(provider='experiential',base_url=base,model=probe.FREE_MODEL,api_key=key))
+    asyncio.run(run())
+    output=capsys.readouterr().out;record=json.loads(output.removeprefix('VELIA_QUANTUM_ACCESS '))
+    assert seen==[('GET','/v1/models')]
+    assert record['ok'] and record['status']==200 and record['provider_code']=='none'
+    assert record['base_model_listed'] and not record['free_alias_listed']
+    assert key not in output and 'private' not in output and 'Описание' not in output
+
+
+@pytest.mark.parametrize('case,expected',[
+    ('exact_limit','none'),
+    ('oversized','models_response_too_large'),
+    ('malformed','invalid_models_json'),
+    ('duplicate_keys','invalid_models_json'),
+    ('nonfinite','invalid_models_json'),
+    ('invalid_utf8','invalid_models_json'),
+    ('array','invalid_models_envelope'),
+    ('missing_data','invalid_models_envelope'),
+])
+def test_access_catalog_budget_and_strict_json_remain_enforced(monkeypatch,capsys,case,expected):
+    import json
+    from types import SimpleNamespace
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+    from desktop import probe_quantum_independence as probe
+    key='xpl_'+'4'*40;seen=[]
+    if case in {'exact_limit','oversized'}:
+        prefix=b'{"data":[],"description":"';suffix=b'"}'
+        size=1024*1024+(case=='oversized')
+        raw=prefix+b'x'*(size-len(prefix)-len(suffix))+suffix
+    else:
+        raw={'malformed':b'{"private":"private catalog body"',
+            'duplicate_keys':b'{"data":[],"data":[]}',
+            'nonfinite':b'{"data":[],"price":NaN}',
+            'invalid_utf8':b'{"data":[],"description":"\xff"}',
+            'array':b'[]','missing_data':b'{"models":[]}'
+        }[case]
+    async def run():
+        async def models(request):
+            seen.append(request.method)
+            return web.Response(body=raw,content_type='application/json')
+        app=web.Application();app.router.add_get('/v1/models',models)
+        monkeypatch.setenv('VELIA_QUANTUM_API_KEY',key)
+        async with TestServer(app) as server:
+            base=str(server.make_url('/v1'));monkeypatch.setattr(probe,'EXPERIENTIAL_URL',base)
+            config=SimpleNamespace(provider='experiential',base_url=base,model=probe.FREE_MODEL,api_key=key)
+            if case=='exact_limit':await probe.check_access(config)
+            else:
+                with pytest.raises(RuntimeError,match='quantum_access_failed'):await probe.check_access(config)
+    asyncio.run(run())
+    output=capsys.readouterr().out;record=json.loads(output.removeprefix('VELIA_QUANTUM_ACCESS '))
+    assert seen==['GET'] and record['status']==200
+    assert record['ok']==(case=='exact_limit') and record['provider_code']==expected
+    assert key not in output and 'private' not in output and 'description' not in output
+
+
 def test_access_diagnostic_never_sends_an_unresolved_railway_reference(monkeypatch,capsys):
     from types import SimpleNamespace
     from desktop import probe_quantum_independence as probe

@@ -11,6 +11,8 @@ from desktop import decision_router, request_intent, web_search, quantum_intent
 from services.velia_structured_output import strict_json_loads
 from velia_quantum_provider import EXPERIENTIAL_URL, FREE_MODEL, configuration
 
+MODELS_MAX_BYTES = 1024 * 1024
+
 
 async def check_access(config):
     """One authenticated read, no model generation, billing, or secret output."""
@@ -38,9 +40,18 @@ async def check_access(config):
                 raw=bytearray()
                 async for chunk in response.content.iter_chunked(8192):
                     raw.extend(chunk)
-                    if len(raw)>1024*1024:raise RuntimeError('quantum_access_failed')
-                body=strict_json_loads(raw.decode('utf-8'))
+                    if len(raw)>MODELS_MAX_BYTES:
+                        record['provider_code']='models_response_too_large'
+                        raise RuntimeError('quantum_access_failed')
+                try:
+                    # A catalog is larger than a model's tool arguments. Match
+                    # the HTTP read budget without changing decision validation.
+                    body=strict_json_loads(raw.decode('utf-8'),max_bytes=MODELS_MAX_BYTES)
+                except ValueError:
+                    record['provider_code']='invalid_models_json'
+                    raise RuntimeError('quantum_access_failed') from None
                 if not isinstance(body,dict) or not isinstance(body.get('data'),list):
+                    record['provider_code']='invalid_models_envelope'
                     raise RuntimeError('quantum_access_failed')
                 ids={row['id'] for row in body['data'] if isinstance(row,dict) and isinstance(row.get('id'),str)}
                 record.update(ok=True,provider_code='none',
