@@ -93,6 +93,38 @@ def test_failures_never_retry_or_persist_partial_reasoning(enabled, monkeypatch,
     assert len(client.calls) == 1 and not result["fallback_used"]
 
 
+@pytest.mark.parametrize('status,code,message,reason', [
+    (402, 'card_required', 'private provider body', 'none'),
+    (402, 'email_unverified', 'private provider body', 'none'),
+    (402, 'free_tier_requires_payment', 'private provider body', 'none'),
+    (429, 'insufficient_quota', 'key_daily_cap: private provider body', 'key_daily_cap'),
+    (429, 'insufficient_quota', 'insufficient_credits: private provider body', 'insufficient_credits'),
+    (429, 'insufficient_quota', 'free_limit_reached: private provider body', 'free_limit_reached'),
+])
+def test_native_rejection_logs_safe_reason_without_retry(enabled, monkeypatch, caplog, status, code, message, reason):
+    raw = json.dumps({'error': {'code': code, 'message': message}}).encode()
+    client = Client(Response(status, raw))
+    monkeypatch.setattr(quantum.requests, 'Session', lambda: client)
+    result = quantum.generate('private user prompt', voice_turn=True)
+    assert not result['ok'] and result['reason'] == ('quantum_access_required' if status == 402 else 'quantum_quota_exhausted')
+    assert len(client.guard_calls) == len(client.calls) == 1 and not result['fallback_used']
+    assert f'status={status} provider_code={code} quota_reason={reason}' in caplog.text
+    assert 'private' not in caplog.text and 'quantum-test-secret' not in caplog.text
+
+
+@pytest.mark.parametrize('raw,expected', [
+    (b'private error body', 'unreadable_error'),
+    (b'x' * 8193, 'oversized_error'),
+])
+def test_native_unreadable_rejection_keeps_original_http_error(enabled, monkeypatch, caplog, raw, expected):
+    client = Client(Response(402, raw))
+    monkeypatch.setattr(quantum.requests, 'Session', lambda: client)
+    result = quantum.generate('private user prompt')
+    assert not result['ok'] and result['reason'] == 'quantum_access_required'
+    assert len(client.calls) == 1 and f'provider_code={expected}' in caplog.text
+    assert 'private' not in caplog.text
+
+
 def test_disabled_quantum_and_unsupported_files_do_not_touch_database(enabled, monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("disabled or unsupported request reached a database/provider")

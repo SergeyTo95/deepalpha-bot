@@ -2,6 +2,38 @@ import json
 
 import pytest
 
+
+@pytest.mark.parametrize('code,message,expected', [
+    ('insufficient_quota', 'key_daily_cap: private account data', ('insufficient_quota', 'key_daily_cap')),
+    ('insufficient_quota', 'insufficient_credits private account data', ('insufficient_quota', 'insufficient_credits')),
+    ('insufficient_quota', 'free_limit_reached: private account data', ('insufficient_quota', 'free_limit_reached')),
+    ('rate_limit_exceeded', 'org_token_rate_limit_day: private account data', ('rate_limit_exceeded', 'org_token_rate_limit_day')),
+    ('free_tier_requires_payment', 'private account data', ('free_tier_requires_payment', 'none')),
+    ('card_required', 'private account data', ('card_required', 'none')),
+    ('email_unverified', 'private account data', ('email_unverified', 'none')),
+    ('org_under_review', 'private account data', ('org_under_review', 'none')),
+    ('insufficient_quota', 'key_daily_cap_private_secret', ('insufficient_quota', 'none')),
+    ('insufficient_quota', 'private text mentions key_daily_cap', ('insufficient_quota', 'none')),
+    ('private-code', 'key_daily_cap: private account data', ('unknown_error', 'none')),
+    (['insufficient_quota'], 'key_daily_cap', ('unknown_error', 'none')),
+])
+def test_provider_diagnostic_returns_only_fixed_codes_and_quota_prefixes(code, message, expected):
+    raw = json.dumps({'error': {'code': code, 'message': message}}).encode()
+    assert quantum.provider_error_details(raw) == expected
+
+
+@pytest.mark.parametrize('raw,expected', [
+    (b'private HTML', ('unreadable_error', 'none')),
+    (b'{"error":{"code":"card_required","code":"invalid_key"}}', ('unreadable_error', 'none')),
+    (b'{"error":{"code":"card_required"},"number":NaN}', ('unreadable_error', 'none')),
+    (b'\xff', ('unreadable_error', 'none')),
+    (b'x' * 8193, ('oversized_error', 'none')),
+    (b'[]', ('unknown_error', 'none')),
+    (b'{"error":null}', ('unknown_error', 'none')),
+])
+def test_provider_diagnostic_rejects_malformed_or_oversized_bodies(raw, expected):
+    assert quantum.provider_error_details(raw) == expected
+
 import velia_quantum_provider as quantum
 
 

@@ -27,6 +27,54 @@ ERRORS = frozenset({"quantum_unavailable", "quantum_quota_exhausted", "quantum_a
     "quantum_invalid_response", "quantum_context_too_long",
     "quantum_attachments_unsupported", "quantum_daily_user_limit_exceeded",
     "quantum_daily_global_limit_exceeded", "quantum_free_guard_required"})
+PROVIDER_ERROR_CODES = frozenset({
+    "invalid_key", "model_not_granted", "model_location_not_supported",
+    "insufficient_quota", "rate_limit_exceeded", "free_limit_reached",
+    "free_tier_requires_payment", "model_requires_payment", "model_requires_purchase",
+    "card_required", "email_unverified", "org_under_review", "unavailable_route",
+    "unsupported_capability", "unsupported_parameter", "invalid_parameter",
+    "capability_requires_payment", "capability_requires_purchase", "provider_internal",
+    "all_routes_failed", "gateway_draining", "deadline_exceeded", "internal_error",
+})
+PROVIDER_QUOTA_REASONS = frozenset({
+    "key_daily_cap", "insufficient_credits", "free_limit_reached", "promo_byok_only",
+    "org_rate_limit", "org_token_rate_limit", "org_token_rate_limit_hour",
+    "org_token_rate_limit_day",
+})
+
+
+def provider_error_details(raw):
+    """Return fixed diagnostic tokens only, never provider prose or account data."""
+    def unique(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("duplicate_key")
+            result[key] = value
+        return result
+
+    def finite(_value):
+        raise ValueError("nonfinite")
+
+    try:
+        if not isinstance(raw, (bytes, bytearray)):
+            return "unreadable_error", "none"
+        if len(raw) > 8192:
+            return "oversized_error", "none"
+        body = json.loads(raw.decode("utf-8"), object_pairs_hook=unique, parse_constant=finite)
+        error = body.get("error") if isinstance(body, dict) else None
+        code = error.get("code") if isinstance(error, dict) else None
+        if not isinstance(code, str) or code not in PROVIDER_ERROR_CODES:
+            return "unknown_error", "none"
+        reason = "none"
+        message = error.get("message")
+        if code in {"insufficient_quota", "rate_limit_exceeded", "free_limit_reached"} and isinstance(message, str):
+            prefix = re.match(r"([a-z_]+)(?=$|[\s:])", message.lstrip())
+            if prefix and prefix[1] in PROVIDER_QUOTA_REASONS:
+                reason = prefix[1]
+        return code, reason
+    except (ValueError, TypeError, RecursionError, OverflowError):
+        return "unreadable_error", "none"
 
 
 def bounded_int(name, default, minimum, maximum):

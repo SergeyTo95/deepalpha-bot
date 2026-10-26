@@ -5,9 +5,25 @@ import logging
 import requests
 from velia_request_understanding import understanding_instruction
 from velia_quantum_provider import (MODEL_ID, PROVIDER_ID, QuantumError, StreamDecoder,
-    available, bounded_int, configuration, payload, response_error, verify_zero_spend)
+    available, bounded_int, configuration, payload, response_error, verify_zero_spend,
+    provider_error_details)
 
 LOG = logging.getLogger(__name__)
+
+
+def _provider_error_details(response):
+    raw = bytearray()
+    deadline = time.monotonic() + 3
+    try:
+        for chunk in response.iter_content(1):
+            raw.extend(chunk)
+            if len(raw) > 8192:
+                return "oversized_error", "none"
+            if time.monotonic() >= deadline:
+                return "unreadable_error", "none"
+        return provider_error_details(raw)
+    except (requests.RequestException, OSError, ValueError, TypeError):
+        return "unreadable_error", "none"
 
 
 def public_capability():
@@ -65,7 +81,9 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False):
                     headers={"Authorization": "Bearer " + config.api_key},
                     timeout=(5, 60) if voice_turn else (10, 120), stream=True, allow_redirects=False) as response:
                 if response.status_code != 200:
-                    LOG.warning('VELIA_QUANTUM_HTTP_REJECTED phase=answer status=%d',response.status_code)
+                    code, reason = _provider_error_details(response)
+                    LOG.warning('VELIA_QUANTUM_HTTP_REJECTED phase=answer status=%d provider_code=%s quota_reason=%s',
+                        response.status_code, code, reason)
                     raise response_error(response.status_code)
                 if "text/event-stream" not in response.headers.get("Content-Type", ""):
                     raise QuantumError("quantum_invalid_response")
