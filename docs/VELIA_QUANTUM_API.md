@@ -141,6 +141,18 @@ Flash/Decision forbidden, and a fixed Ava synthesis request. It writes no accoun
 history and makes no search-provider request. Only the exact free Quantum route
 is accepted. Remove the extra probe after successful release, retaining the
 existing Browser Agent gate.
+
+`python -m desktop.probe_quantum_independence --access` performs one bounded,
+authenticated `GET /v1/models` with the runtime's selected key. It makes no
+completion, search or billing call. Run it before the expensive release gates to
+distinguish local unresolved references, HTTP 401 `invalid_key`, HTTP 403 model
+entitlement and other allowlisted provider errors. Output contains only status,
+allowlisted error code, source variable name, coarse key-format category and two
+known-model membership flags; it never prints keys, fingerprints, provider messages,
+raw bodies or other catalog IDs. A canonical model listing alone does not establish
+`:free` availability: the original three-case free-only voice gate is still required.
+Planning rejections also log the safe HTTP status/provider code while keeping the
+existing public error mapping, no retry and no alternate paid/model route.
 The complete planning schema remains strict. An additional self-check instruction
 emphasizes exact inflected context evidence and nonempty medical search fields.
 Probe failure metadata includes grounded-span flags and field counts without raw

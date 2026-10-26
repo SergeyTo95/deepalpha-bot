@@ -2,11 +2,53 @@
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 
+from aiohttp import ClientSession, ClientTimeout, DummyCookieJar
 from desktop import decision_router, request_intent, web_search, quantum_intent
-from velia_quantum_provider import FREE_MODEL, configuration
+from services.velia_structured_output import strict_json_loads
+from velia_quantum_provider import EXPERIENTIAL_URL, FREE_MODEL, configuration
+
+
+async def check_access(config):
+    """One authenticated read, no model generation, billing, or secret output."""
+    if (config is None or config.provider != "experiential"
+            or config.base_url != EXPERIENTIAL_URL or config.model != FREE_MODEL):
+        print('VELIA_QUANTUM_ACCESS '+json.dumps({'ok':False,'status':0,'provider_code':'invalid_local_config'}),flush=True)
+        raise RuntimeError('quantum_free_configuration_missing')
+    source='VELIA_QUANTUM_API_KEY' if os.getenv('VELIA_QUANTUM_API_KEY','').strip() else 'EXPLABS_API_KEY'
+    shape=('unresolved_reference' if '${{' in config.api_key else
+        'expected' if re.fullmatch(r'xpl_[0-9a-f]{40}',config.api_key) else 'unexpected')
+    record={'ok':False,'status':0,'provider_code':'not_received','key_source':source,'key_shape':shape}
+    try:
+        if shape=='unresolved_reference':
+            record['provider_code']='unresolved_key_reference'
+            raise RuntimeError('quantum_access_failed')
+        async with ClientSession(timeout=ClientTimeout(total=10,connect=3),
+                cookie_jar=DummyCookieJar(),trust_env=False) as client:
+            async with client.get(config.base_url+'/models',
+                    headers={'Authorization':'Bearer '+config.api_key},allow_redirects=False) as response:
+                record['status']=response.status
+                if response.status!=200:
+                    record['provider_code']=await quantum_intent.provider_error_code(response)
+                    raise RuntimeError('quantum_access_failed')
+                record['provider_code']='invalid_models_response'
+                raw=bytearray()
+                async for chunk in response.content.iter_chunked(8192):
+                    raw.extend(chunk)
+                    if len(raw)>1024*1024:raise RuntimeError('quantum_access_failed')
+                body=strict_json_loads(raw.decode('utf-8'))
+                if not isinstance(body,dict) or not isinstance(body.get('data'),list):
+                    raise RuntimeError('quantum_access_failed')
+                ids={row['id'] for row in body['data'] if isinstance(row,dict) and isinstance(row.get('id'),str)}
+                record.update(ok=True,provider_code='none',
+                    base_model_listed=FREE_MODEL.removesuffix(':free') in ids,free_alias_listed=FREE_MODEL in ids)
+                # /models may list only the canonical base slug. Do not infer
+                # free-route access from this read: the existing :free gate follows.
+    finally:
+        print('VELIA_QUANTUM_ACCESS '+json.dumps(record),flush=True)
 
 
 def response_shape(result, question=''):
@@ -31,7 +73,7 @@ def response_shape(result, question=''):
         return {'envelope':'invalid'}
 
 
-async def run(*, voice=False):
+async def run(*, voice=False, access_only=False):
     def forbidden(*args, **kwargs):
         raise RuntimeError("quantum_touched_another_model")
     # Process-local changes cannot affect the following gateway process.
@@ -44,8 +86,8 @@ async def run(*, voice=False):
     web_search.understand = forbidden
     decision_router.try_direct = forbidden
     config = configuration()
-    if config is None or config.provider != "experiential" or config.model != FREE_MODEL:
-        raise RuntimeError("quantum_free_configuration_missing")
+    await check_access(config)
+    if access_only:return
     started = time.monotonic()
     cases=[('direct','Составь короткий план вымышленного рассказа о дружбе робота и птицы.')]
     if voice:
@@ -80,7 +122,7 @@ async def run(*, voice=False):
 
 if __name__ == "__main__":
     try:
-        asyncio.run(run(voice='--voice' in sys.argv))
+        asyncio.run(run(voice='--voice' in sys.argv,access_only='--access' in sys.argv))
     except Exception:
         print("VELIA_QUANTUM_INDEPENDENCE_FAILED", flush=True)
         raise SystemExit(1) from None

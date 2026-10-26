@@ -328,3 +328,102 @@ def test_quantum_medical_search_preserves_official_sources_without_flash(monkeyp
             assert state["intent_payloads"]==state["forbidden_model_calls"]==[]
             assert "астма" in state["account_calls"][-1]["content"]
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('status,code,expected',[
+    (401,'invalid_key','invalid_key'),
+    (403,'model_not_granted','model_not_granted'),
+    (403,'model_location_not_supported','model_location_not_supported'),
+    (402,'free_tier_requires_payment','free_tier_requires_payment'),
+    (429,'free_limit_reached','free_limit_reached'),
+    (403,'private-provider-secret','unknown_error'),
+    (307,'invalid_key','invalid_key'),
+])
+def test_access_diagnostic_is_one_read_and_exposes_only_allowlisted_codes(monkeypatch,capsys,status,code,expected):
+    import json
+    from types import SimpleNamespace
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+    from desktop import probe_quantum_independence as probe
+    seen=[];key='xpl_'+'1'*40
+    async def run():
+        async def models(request):
+            seen.append((request.method,request.path))
+            assert request.headers['Authorization']=='Bearer '+key
+            return web.json_response({'error':{'code':code,'message':'private provider body '+key}},
+                status=status,headers={'Location':'/must-not-follow'} if status==307 else {})
+        app=web.Application();app.router.add_route('*','/{tail:.*}',models)
+        async with TestServer(app) as server:
+            base=str(server.make_url('/v1'));monkeypatch.setattr(probe,'EXPERIENTIAL_URL',base)
+            monkeypatch.setenv('VELIA_QUANTUM_API_KEY',key)
+            config=SimpleNamespace(provider='experiential',base_url=base,model=probe.FREE_MODEL,api_key=key)
+            with pytest.raises(RuntimeError,match='quantum_access_failed'):await probe.check_access(config)
+    asyncio.run(run())
+    output=capsys.readouterr().out
+    assert seen==[('GET','/v1/models')]
+    record=json.loads(output.removeprefix('VELIA_QUANTUM_ACCESS '))
+    assert record=={'ok':False,'status':status,'provider_code':expected,
+        'key_source':'VELIA_QUANTUM_API_KEY','key_shape':'expected'}
+    assert key not in output and 'private' not in output
+
+
+@pytest.mark.parametrize('dedicated',[True,False])
+def test_access_diagnostic_authenticates_without_assuming_free_alias_is_listed(monkeypatch,capsys,dedicated):
+    import json
+    from types import SimpleNamespace
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+    from desktop import probe_quantum_independence as probe
+    seen=[];key='xpl_'+'2'*40
+    async def run():
+        async def models(request):
+            seen.append(request.method)
+            return web.json_response({'data':[{'id':'glm-5.3-uncensored'},{'id':'private-owned-model'}]})
+        app=web.Application();app.router.add_get('/v1/models',models)
+        monkeypatch.delenv('VELIA_QUANTUM_API_KEY',raising=False)
+        monkeypatch.setenv('VELIA_QUANTUM_API_KEY' if dedicated else 'EXPLABS_API_KEY',key)
+        async with TestServer(app) as server:
+            base=str(server.make_url('/v1'));monkeypatch.setattr(probe,'EXPERIENTIAL_URL',base)
+            await probe.check_access(SimpleNamespace(provider='experiential',base_url=base,model=probe.FREE_MODEL,api_key=key))
+    asyncio.run(run())
+    output=capsys.readouterr().out;record=json.loads(output.removeprefix('VELIA_QUANTUM_ACCESS '))
+    assert seen==['GET'] and record['ok'] and record['status']==200
+    assert record['base_model_listed'] and not record['free_alias_listed']
+    assert record['key_source']==('VELIA_QUANTUM_API_KEY' if dedicated else 'EXPLABS_API_KEY')
+    assert key not in output and 'private-owned-model' not in output
+
+
+def test_access_diagnostic_never_sends_an_unresolved_railway_reference(monkeypatch,capsys):
+    from types import SimpleNamespace
+    from desktop import probe_quantum_independence as probe
+    def forbidden(*args,**kwargs):pytest.fail('unresolved reference reached HTTP')
+    monkeypatch.setattr(probe,'ClientSession',forbidden)
+    config=SimpleNamespace(provider='experiential',base_url=probe.EXPERIENTIAL_URL,
+        model=probe.FREE_MODEL,api_key='${{deepalpha-bot.EXPLABS_API_KEY}}')
+    with pytest.raises(RuntimeError,match='quantum_access_failed'):asyncio.run(probe.check_access(config))
+    output=capsys.readouterr().out
+    assert 'unresolved_key_reference' in output and 'deepalpha-bot' not in output
+
+
+@pytest.mark.parametrize('status,code',[(401,'invalid_key'),(403,'model_not_granted')])
+def test_planning_logs_exact_provider_rejection_without_secrets_or_a_retry(monkeypatch,caplog,status,code):
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+    from desktop.quantum_intent import understand_quantum
+    from velia_quantum_provider import QuantumError
+    seen=[]
+    async def run():
+        async def provider(request):
+            seen.append(request.method)
+            return web.json_response({'error':{'code':code,'message':'private provider body'}},status=status)
+        app=web.Application();app.router.add_post('/v1/chat/completions',provider)
+        async with TestServer(app) as server:
+            for key,value in {'VELIA_QUANTUM_ENABLED':'true','VELIA_QUANTUM_PROVIDER':'self_hosted',
+                    'VELIA_QUANTUM_BASE_URL':str(server.make_url('/v1')),'VELIA_QUANTUM_MODEL':'owned',
+                    'VELIA_QUANTUM_API_KEY':'private-fixture-key'}.items():monkeypatch.setenv(key,value)
+            with pytest.raises(QuantumError) as error:await understand_quantum([{'role':'user','content':'private-user-question'}])
+            assert error.value.code=='quantum_unavailable'
+    asyncio.run(run())
+    assert seen==['POST']
+    assert f'status={status} provider_code={code}' in caplog.text
+    assert 'private' not in caplog.text
