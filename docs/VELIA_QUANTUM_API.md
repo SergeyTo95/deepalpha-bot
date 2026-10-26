@@ -145,6 +145,12 @@ The complete planning schema remains strict. An additional self-check instructio
 emphasizes exact inflected context evidence and nonempty medical search fields.
 Probe failure metadata includes grounded-span flags and field counts without raw
 arguments. A failed live medical-planning gate is never bypassed to release the UI.
+For complete direct/search envelopes with an explicitly empty correction candidate,
+an omitted empty quote is treated as no proposed correction. General search can
+omit an empty auxiliary task query because retrieval uses the unchanged nonempty
+query. This does not fill/rewrite search text or accept an ungrounded correction;
+empty medical task queries and invalid evidence still fail validation. This covers
+the structural failure observed in the `491d937` current-information release probe.
 
 Enable `VELIA_FILE_ANALYST_ENABLED=true` and
 `VELIA_FLASH_ATTACHMENTS_ENABLED=true` on the account backend. The deployment

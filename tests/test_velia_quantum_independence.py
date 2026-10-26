@@ -229,6 +229,47 @@ def test_complete_quantum_tool_envelopes_accept_null_optional_metadata_without_a
     asyncio.run(run())
 
 
+@pytest.mark.parametrize('task',['',None,'  '])
+def test_general_search_accepts_omitted_empty_quote_without_changing_retrieval(monkeypatch,tmp_path,task):
+    async def run():
+        plan={'action':'search','candidate':'','query':'latest stable Python version',
+            'source_scope':'general','task_query':task,'context':[]}
+        async with fixture(monkeypatch,with_search=True,quantum_api=True,without_flash=True,
+                features={'chat_quantum':True},intent=plan,
+                search_response={'results':[{'title':'Python releases','url':'https://www.python.org/downloads/',
+                    'content':'Stable release information.'}]},
+                guest_store=GuestStore(sqlite_path=tmp_path/'omitted-quote.db')) as (server,client,state):
+            cookie,_,_=await login(server,client)
+            async with client.post(server.make_url('/web-api/v1/conversations'),headers=headers(cookie),json={'title':'Versions'}) as response:
+                cid=(await response.json())['conversation']['id']
+            async with client.post(server.make_url(f'/web-api/v1/conversations/{cid}/messages/stream'),headers=headers(cookie),
+                    json={'content':'Найди последнюю стабильную версию Python.','model':'velia-quantum',
+                        'idempotency_key':'empty-metadata-search'}) as response:
+                assert response.status==200 and '[DONE]' in await response.text()
+            assert state['search_queries']==['latest stable Python version']
+            assert len(state['quantum_intent_payloads'])==1 and len(state['account_calls'])==1
+            assert state['account_calls'][0]['chat_mode']=='quantum'
+            assert state['intent_payloads']==state['forbidden_model_calls']==[]
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('overrides',[
+    {'candidate':'different term'},
+    {'query':''},
+    {'query':None},
+    {'source_scope':'official_health','task_query':''},
+    {'source_scope':'official_health','task_query':None},
+    {'context':[{'quote':'invented condition','kind':'condition','status':'stated'}]},
+])
+def test_empty_general_metadata_compatibility_still_rejects_invalid_plans(overrides):
+    from desktop.quantum_intent import planning_decision
+    args={'action':'search','candidate':'','query':'latest stable Python version',
+        'source_scope':'general','task_query':'','context':[],**overrides}
+    result={'choices':[{'finish_reason':'tool_calls','message':{'tool_calls':[{'function':{
+        'name':'understand_request','arguments':args}}]}}]}
+    with pytest.raises((ValueError,TypeError)):planning_decision(result,'Найди последнюю стабильную версию Python.')
+
+
 @pytest.mark.parametrize('args',[
     {'action':'search','quote':'','query':None},
     {'action':'direct','quote':'диабет','candidate':'рак','query':''},

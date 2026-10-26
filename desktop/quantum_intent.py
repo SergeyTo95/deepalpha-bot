@@ -45,6 +45,11 @@ def planning_decision(result, question):
     # Never repair a search query, a quoted term, or a medical evidence span.
     args = dict(args)
     direct = args.get("action") in {"direct", "clarify"}
+    if (args.get("action") in {"direct", "search"} and "quote" not in args
+            and args.get("candidate", "missing") in (None, "")):
+        # Explicitly no correction: an omitted empty quote changes no evidence
+        # or user text. A nonempty candidate still requires an exact quote.
+        args["quote"] = ""
     if (args.get("action") in {"direct", "search"} and "quote" in args
             and args["quote"] is None and args.get("candidate") in {None, ""}):
         args["quote"] = ""
@@ -53,6 +58,12 @@ def planning_decision(result, question):
     for field in ("source_scope", "task_query"):
         if direct and args.get(field, "missing") in {None, ""}:
             args.pop(field, None)
+    if args.get("action") == "search" and args.get("source_scope") == "general":
+        task = args.get("task_query", "missing")
+        if task is None or isinstance(task, str) and not task.strip():
+            # General retrieval already uses the validated query. Medical task
+            # queries retain their separate mandatory validation when present.
+            args.pop("task_query", None)
     if args.get("quote") == "" and args.get("candidate", "missing") is None:
         args.pop("candidate", None)
     safe = {"choices": [{"message": {"tool_calls": [{"function": {
