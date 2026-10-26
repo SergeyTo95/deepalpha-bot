@@ -1,10 +1,13 @@
 """Account-persisted Quantum chat, independent of the selected model host."""
 import time
 import os
+import logging
 import requests
 from velia_request_understanding import understanding_instruction
 from velia_quantum_provider import (MODEL_ID, PROVIDER_ID, QuantumError, StreamDecoder,
-    available, bounded_int, configuration, payload, response_error)
+    available, bounded_int, configuration, payload, response_error, verify_zero_spend)
+
+LOG = logging.getLogger(__name__)
 
 
 def public_capability():
@@ -57,10 +60,12 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False):
         deadline = time.monotonic() + (75 if voice_turn else 300)
         with requests.Session() as client:
             client.trust_env = False
+            verify_zero_spend(client, config)
             with client.post(config.base_url + "/chat/completions", json=body,
                     headers={"Authorization": "Bearer " + config.api_key},
                     timeout=(5, 60) if voice_turn else (10, 120), stream=True, allow_redirects=False) as response:
                 if response.status_code != 200:
+                    LOG.warning('VELIA_QUANTUM_HTTP_REJECTED phase=answer status=%d',response.status_code)
                     raise response_error(response.status_code)
                 if "text/event-stream" not in response.headers.get("Content-Type", ""):
                     raise QuantumError("quantum_invalid_response")

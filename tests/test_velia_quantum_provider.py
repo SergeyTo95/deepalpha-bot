@@ -31,7 +31,7 @@ def test_external_free_only_and_no_other_model_credentials(enabled, monkeypatch)
 
 @pytest.mark.parametrize("name,value", [
     ("VELIA_QUANTUM_ENABLED", "false"), ("VELIA_QUANTUM_PROVIDER", "unknown"),
-    ("VELIA_QUANTUM_MODEL", "glm-5.3-uncensored"),
+    ("VELIA_QUANTUM_MODEL", "glm-5.3-uncensored:free"),
     ("VELIA_QUANTUM_MODEL", "glm-5.3-uncensored:free-other"),
     ("VELIA_QUANTUM_BASE_URL", "https://evil.example/v1"),
     ("VELIA_QUANTUM_BASE_URL", "http://api.experientiallabs.ai/v1"),
@@ -103,3 +103,20 @@ def test_nonstream_result_hides_reasoning_and_rejects_empty_answers():
     assert "private" not in json.dumps(result)
     with pytest.raises(quantum.QuantumError):
         quantum.public_result({"choices": [{"message": {"content": "", "reasoning_content": "PRIVATE"}}]})
+
+
+@pytest.mark.parametrize('raw', [b'{"data":{"limit":0}}', b'{"data":{"limit":0.0}}'])
+def test_explicit_zero_daily_spend_cap_is_required(raw):
+    quantum.require_zero_spend_key(raw)
+
+
+@pytest.mark.parametrize('raw', [
+    b'{"data":{"limit":null}}', b'{"data":{"limit":1}}', b'{"data":{"limit":-1}}',
+    b'{"data":{"limit":false}}', b'{"data":{"limit":"0"}}', b'{"data":{"limit":1e-4000}}',
+    b'{"data":{"limit":0,"limit":null}}', b'{"data":{"limit":NaN}}',
+    b'{"data":{"limit_remaining":0}}', b'{"limit":0}', b'[]', b'not json',
+    b'{"data":{"limit":0,"label":"'+b'x'*8192+b'"}}',
+])
+def test_nonzero_unknown_or_ambiguous_caps_never_allow_inference(raw):
+    with pytest.raises(quantum.QuantumError,match='quantum_free_guard_required'):
+        quantum.require_zero_spend_key(raw)

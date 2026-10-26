@@ -28,8 +28,10 @@ class Response:
 
 
 class Client:
-    def __init__(self, response):
+    def __init__(self, response, guard_response=None):
         self.response, self.calls = response, []
+        self.guard_response = guard_response if guard_response is not None else Response(body=b'{"data":{"limit":0}}')
+        self.guard_calls = []
         self.trust_env = True
 
     def __enter__(self):
@@ -43,6 +45,12 @@ class Client:
         if isinstance(self.response, Exception):
             raise self.response
         return self.response
+
+    def get(self, url, **kwargs):
+        self.guard_calls.append((url, kwargs))
+        if isinstance(self.guard_response, Exception):
+            raise self.guard_response
+        return self.guard_response
 
 
 def test_account_generation_free_route_preserves_user_text_and_streams(enabled, monkeypatch):
@@ -58,10 +66,17 @@ def test_account_generation_free_route_preserves_user_text_and_streams(enabled, 
     assert len(client.calls) == 1 and not client.trust_env
     url, kwargs = client.calls[0]
     assert url == "https://api.experientiallabs.ai/v1/chat/completions"
-    assert kwargs["json"]["model"] == "glm-5.3-uncensored:free"
+    assert kwargs["json"]["model"] == "glm-5.3-uncensored"
     assert kwargs["json"]["messages"][-1]["content"] == question
     assert kwargs["json"]["reasoning_effort"] == "low"
     assert not kwargs["allow_redirects"]
+    assert len(client.guard_calls)==1
+    guard_url,guard=client.guard_calls[0]
+    assert guard_url=='https://api.experientiallabs.ai/api/v1/key'
+    assert guard['headers']['Authorization']==kwargs['headers']['Authorization'] and guard['allow_redirects'] is False
+    assert guard['headers']['Cache-Control']=='no-cache'
+    assert kwargs['json']['gateway']['retry']['max_total_attempts']==1
+    assert kwargs['json']['gateway']['routing']['allow_fallbacks'] is False
 
 
 @pytest.mark.parametrize("response,code", [(Response(429), "quantum_quota_exhausted"),
@@ -93,13 +108,42 @@ def test_quantum_voice_uses_quantum_only_with_a_bounded_reasoning_budget(enabled
     result = quantum.generate("Привет, Велия", voice_turn=True)
     assert result["ok"] and result["model"]=="velia-quantum" and len(client.calls)==1
     body=client.calls[0][1]["json"]
-    assert body["model"]=="glm-5.3-uncensored:free" and body["max_tokens"]==1024
+    assert body["model"]=="glm-5.3-uncensored" and body["max_tokens"]==1024
     assert "one or two complete short sentences" in body["messages"][0]["content"]
     assert "рада тебя слышать" in body["messages"][0]["content"]
     assert "Род собеседника не меняй" in body["messages"][0]["content"]
     assert "распознавания речи" in body["messages"][0]["content"]
     assert body["messages"][-1]["content"]=="Привет, Велия"
     assert body["reasoning_effort"]=="low"
+
+
+@pytest.mark.parametrize('guard',[
+    Response(body=b'{"data":{"limit":null}}'),
+    Response(body=b'{"data":{"limit":1,"label":"private label"}}'),
+    Response(body=b'{"data":{"limit":false}}'),
+    Response(body=b'{"data":{"limit_remaining":0}}'),
+    Response(body=b'{"data":{"limit":0,"limit":10}}'),
+    Response(body=b'x'*8193),Response(body=b'invalid private body'),
+    Response(401),Response(403),Response(307),requests.Timeout(),
+])
+def test_native_never_posts_without_a_verified_zero_spend_key(enabled,monkeypatch,caplog,guard):
+    client=Client(Response(),guard_response=guard)
+    monkeypatch.setattr(quantum.requests,'Session',lambda:client)
+    result=quantum.generate('private user prompt')
+    assert not result['ok'] and result['reason']=='quantum_free_guard_required'
+    assert len(client.guard_calls)==1 and client.calls==[]
+    assert 'private' not in caplog.text and 'quantum-test-secret' not in caplog.text
+    assert not result['fallback_used']
+
+
+def test_own_model_does_not_depend_on_experiential_budget_reads(enabled,monkeypatch):
+    client=Client(Response(),guard_response=AssertionError('own model contacted Experiential'))
+    monkeypatch.setattr(quantum.requests,'Session',lambda:client)
+    monkeypatch.setenv('VELIA_QUANTUM_PROVIDER','self_hosted')
+    monkeypatch.setenv('VELIA_QUANTUM_MODEL','owned-model')
+    monkeypatch.setenv('VELIA_QUANTUM_BASE_URL','http://worker.railway.internal:8080/v1')
+    assert quantum.generate('hello')['ok']
+    assert client.guard_calls==[] and len(client.calls)==1
 
 
 def test_quantum_file_capability_tracks_local_file_processing(enabled, monkeypatch):

@@ -1,24 +1,32 @@
 """Quantum's provider boundary, shared by account chat and the desktop gateway.
 
 Clients use velia-quantum / chat_mode=quantum. Only operator configuration knows
-the upstream model. Experiential is deliberately free-only; there is no retry,
+the upstream model. Experiential requires a verified zero-spend key; there is no retry,
 provider fallback, or use of another model's credentials.
 """
 from dataclasses import dataclass, field
+from decimal import Decimal
+import asyncio
 import json
+import logging
 import os
 import re
+import time
 from urllib.parse import urlsplit
 
 MODEL_ID = "velia-quantum"
 PROVIDER_ID = "velia-quantum"
-FREE_MODEL = "glm-5.3-uncensored:free"
+# Historical export name: the $0 key cap enforces free access, not a suffix.
+FREE_MODEL = "glm-5.3-uncensored"
 EXPERIENTIAL_URL = "https://api.experientiallabs.ai/v1"
+KEY_INFO_URL = "https://api.experientiallabs.ai/api/v1/key"
+KEY_INFO_MAX_BYTES = 8192
+LOG = logging.getLogger(__name__)
 ERRORS = frozenset({"quantum_unavailable", "quantum_quota_exhausted", "quantum_access_required",
     "quantum_busy", "quantum_timeout", "quantum_provider_error",
     "quantum_invalid_response", "quantum_context_too_long",
     "quantum_attachments_unsupported", "quantum_daily_user_limit_exceeded",
-    "quantum_daily_global_limit_exceeded"})
+    "quantum_daily_global_limit_exceeded", "quantum_free_guard_required"})
 
 
 def bounded_int(name, default, minimum, maximum):
@@ -66,8 +74,8 @@ def configuration():
     if (not valid or not key or any(c in key for c in "\r\n")
             or not re.fullmatch(r"[A-Za-z0-9_./:+-]{1,200}", model)):
         return None
-    # A typo must never turn the free promotion into a paid request, or send
-    # the Experiential key to a different endpoint.
+    # Pin the documented canonical ID. Every Experiential transport must verify
+    # the presented key's hard $0 spending cap before any completion request.
     if external and (base != EXPERIENTIAL_URL or model != FREE_MODEL):
         return None
     if not external and url.hostname == "api.experientiallabs.ai":
@@ -84,6 +92,79 @@ class QuantumError(Exception):
     def __init__(self, code, status=502):
         self.code, self.status = code, status
         super().__init__(code)
+
+
+def require_zero_spend_key(raw):
+    """Only an explicit numeric zero cap is safe; null is unlimited, not zero."""
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError('duplicate_key')
+            result[key] = value
+        return result
+
+    def constant(_value):
+        raise ValueError('nonfinite')
+
+    try:
+        if not isinstance(raw, (bytes, bytearray)) or len(raw) > KEY_INFO_MAX_BYTES:
+            raise ValueError('invalid_key_metadata')
+        body = json.loads(raw.decode('utf-8'), parse_float=Decimal,
+            parse_constant=constant, object_pairs_hook=pairs)
+        cap = body['data']['limit']
+        if isinstance(cap, bool) or not isinstance(cap, (int, Decimal)) or cap != 0:
+            raise ValueError('zero_spend_cap_required')
+    except (ValueError, TypeError, KeyError, RecursionError, OverflowError):
+        raise QuantumError('quantum_free_guard_required', 503) from None
+
+
+async def verify_zero_spend_async(client, config):
+    if config.provider != 'experiential':
+        return
+    status = 0
+    async def read():
+        nonlocal status
+        async with client.get(KEY_INFO_URL, headers={'Authorization':'Bearer '+config.api_key,'Cache-Control':'no-cache'},
+                allow_redirects=False) as response:
+            status = response.status
+            if status != 200:
+                raise QuantumError('quantum_free_guard_required', 503)
+            raw = bytearray()
+            async for chunk in response.content.iter_chunked(2048):
+                raw.extend(chunk)
+                if len(raw) > KEY_INFO_MAX_BYTES:
+                    raise QuantumError('quantum_free_guard_required', 503)
+            require_zero_spend_key(raw)
+    try:
+        await asyncio.wait_for(read(), timeout=10)
+    except Exception:
+        LOG.warning('VELIA_QUANTUM_FREE_GUARD ok=false status=%d', status)
+        raise QuantumError('quantum_free_guard_required', 503) from None
+    LOG.info('VELIA_QUANTUM_FREE_GUARD ok=true status=%d', status)
+
+
+def verify_zero_spend(client, config):
+    if config.provider != 'experiential':
+        return
+    status = 0
+    deadline = time.monotonic() + 10
+    try:
+        with client.get(KEY_INFO_URL, headers={'Authorization':'Bearer '+config.api_key,'Cache-Control':'no-cache'},
+                timeout=(3, 7), stream=True, allow_redirects=False) as response:
+            status = response.status_code
+            if status != 200:
+                raise QuantumError('quantum_free_guard_required', 503)
+            raw = bytearray()
+            for chunk in response.iter_content(1):
+                raw.extend(chunk)
+                if len(raw) > KEY_INFO_MAX_BYTES or time.monotonic() >= deadline:
+                    raise QuantumError('quantum_free_guard_required', 503)
+            require_zero_spend_key(raw)
+    except Exception:
+        LOG.warning('VELIA_QUANTUM_FREE_GUARD ok=false status=%d', status)
+        raise QuantumError('quantum_free_guard_required', 503) from None
+    LOG.info('VELIA_QUANTUM_FREE_GUARD ok=true status=%d', status)
 
 
 def response_error(status):
@@ -104,6 +185,8 @@ def payload(config, messages, *, stream=False, max_tokens=None, tools=None, tool
         "max_tokens": min(config.max_tokens, max_tokens or config.max_tokens)}
     if config.provider == "experiential":
         result["reasoning_effort"] = "low"
+        result["gateway"] = {"retry":{"max_attempts_per_route":1,"max_total_attempts":1},
+            "routing":{"allow_fallbacks":False}}
     if tools:
         result["tools"] = tools
     if tool_choice is not None:
