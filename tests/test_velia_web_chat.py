@@ -28,6 +28,8 @@ async def fixture(monkeypatch, **state):
     state["search_queries"] = []
     state["search_payloads"] = []
     state["intent_payloads"] = []
+    state["quantum_intent_payloads"] = []
+    state["forbidden_model_calls"] = []
     state["review_payloads"] = []
     state["agent_calls"] = []
     state["takeover_calls"] = []
@@ -47,7 +49,8 @@ async def fixture(monkeypatch, **state):
         state["seen"].append({"path": request.path, "cookie": request.headers.get("Cookie")})
         if not state["validity"] or request.headers.get("Authorization") not in {"Bearer " + TOKEN, "Bearer " + ROTATED}:
             return web.json_response({"ok": False}, status=401)
-        return web.json_response({"ok": True, "user": {"id": state["user_id"]}})
+        return web.json_response({"ok": True, "user": {"id": state["user_id"]},
+            "features": state.get("features", {})})
     async def auth(request):
         data = await request.json()
         state["seen"].append({"path": request.path, "data": data, "cookie": request.headers.get("Cookie")})
@@ -103,13 +106,18 @@ async def fixture(monkeypatch, **state):
     async def tokenize(request):
         return web.json_response({"tokens": [1] * state["tokens"]})
     async def model(request):
-        assert request.headers.get("Authorization") == "Bearer fixture-provider-key"
         data = await request.json()
+        is_quantum = data.get("model") == "owned-quantum"
+        assert request.headers.get("Authorization") == ("Bearer fixture-quantum-key" if is_quantum else "Bearer fixture-provider-key")
+        if state.get("without_flash") and not is_quantum:
+            state["forbidden_model_calls"].append(data.get("model"))
+            raise web.HTTPInternalServerError()
         if data.get("tools", [{}])[0].get("function", {}).get("name") == "understand_request":
-            state["intent_payloads"].append(data)
+            plans = state["quantum_intent_payloads"] if is_quantum else state["intent_payloads"]
+            plans.append(data)
             defaults = state.get("intent", {"action": "search", "quote": "", "query": data["messages"][-1]["content"][:400]})
             sequence = state.get("intent_results")
-            args = sequence[min(len(state["intent_payloads"]) - 1, len(sequence) - 1)] if sequence else defaults
+            args = sequence[min(len(plans) - 1, len(sequence) - 1)] if sequence else defaults
             if state.get("intent_status"):
                 return web.json_response({"error": "fixture failure"}, status=state["intent_status"])
             return web.json_response({"choices": [{"message": {"tool_calls": [{"type": "function", "id": "intent-1",
@@ -193,6 +201,10 @@ async def fixture(monkeypatch, **state):
     authority.router.add_get("/mobile-api/v1/conversations/{conversation_id}/messages", stored_messages)
     authority.router.add_delete("/mobile-api/v1/conversations/{conversation_id}", delete)
     authority.router.add_post("/mobile-api/v1/conversations/{conversation_id}/messages/stream", stored_send)
+    async def legacy_upload(request):
+        state.setdefault("legacy_upload_calls", []).append(request.path)
+        return web.json_response({"ok": True, "attachment": {"id": "legacy"}})
+    authority.router.add_post("/mobile-api/v1/conversations/{conversation_id}/attachments", legacy_upload)
     authority.router.add_post("/mobile-api/v1/auth/exchange", auth)
     authority.router.add_post("/mobile-api/v1/auth/refresh", auth)
     authority.router.add_post("/mobile-api/v1/auth/logout", logout)
@@ -218,6 +230,15 @@ async def fixture(monkeypatch, **state):
             "https://deepalpha-ai.com",
             agent_origin=str(source.make_url("/")).rstrip("/"),
         )
+        if state.get("quantum_api"):
+            for key, value in {"VELIA_QUANTUM_ENABLED":"true", "VELIA_QUANTUM_PROVIDER":"self_hosted",
+                    "VELIA_QUANTUM_MODEL":"owned-quantum", "VELIA_QUANTUM_BASE_URL":str(source.make_url("/v1")),
+                    "VELIA_QUANTUM_API_KEY":"fixture-quantum-key"}.items():
+                monkeypatch.setenv(key, value)
+        if state.get("without_flash"):
+            monkeypatch.setenv("VELIA_DESKTOP_FLASH_ENABLED", "false")
+            for key in ("VELIA_DESKTOP_FLASH_API_KEY", "VELIA_DESKTOP_FLASH_BASE_URL"):
+                monkeypatch.delenv(key, raising=False)
         search_service = WebSearch(provider="tavily", api_key="fixture-search-key",
             endpoint=str(source.make_url("/search")), store=state["guest_store"]) if state.get("with_search") else None
         async with TestServer(create_app(config, guest_store=state.get("guest_store"),
@@ -235,13 +256,42 @@ async def login(server, client):
         return response.cookies[COOKIE].value, await response.json(), response.headers["Set-Cookie"]
 
 
+def test_quantum_account_routing_history_and_capability_revocation(monkeypatch):
+    async def run():
+        async with fixture(monkeypatch, credits=0, features={"chat_quantum": True,
+                "chat_quantum_source": "GLM-5.3 через Experiential"}) as (server, client, state):
+            cookie, profile, _ = await login(server, client)
+            assert "velia-quantum" in profile["models"] and "velia-pro" not in profile["models"]
+            assert profile["quantum_source"] == "GLM-5.3 через Experiential"
+            async with client.post(server.make_url("/web-api/v1/conversations"), headers=headers(cookie),
+                    json={"title": "Quantum test"}) as response:
+                cid = (await response.json())["conversation"]["id"]
+            endpoint = server.make_url("/web-api/v1/conversations/" + cid + "/messages/stream")
+            data = {"content": "Составь план", "model": "velia-quantum", "idempotency_key": "quantum-test-1"}
+            async with client.post(endpoint, headers=headers(cookie), json=data) as response:
+                text = await response.text()
+                assert response.status == 200 and "velia-quantum" in text and "[DONE]" in text
+                assert "private-provider" not in text
+            assert state["account_calls"][-1]["chat_mode"] == "quantum"
+            async with client.get(server.make_url("/web-api/v1/conversations/" + cid + "/messages"),
+                    headers=headers(cookie)) as response:
+                saved = (await response.json())["messages"]
+                assert saved[-1]["chat_mode"] == "quantum"
+            state["features"]["chat_quantum"] = False
+            async with client.post(endpoint, headers=headers(cookie), json={**data, "idempotency_key": "quantum-test-2"}) as response:
+                assert response.status == 503
+                assert (await response.json())["error"] == "quantum_unavailable"
+            assert len(state["account_calls"]) == 1
+    asyncio.run(run())
+
+
 def test_opaque_secure_cookie_and_no_authority_secrets(monkeypatch):
     async def run():
         async with fixture(monkeypatch) as (server, client, state):
             cookie, result, wire = await login(server, client)
             assert all(value not in json.dumps(result) + wire for value in (TOKEN, REFRESH, "never-return-this", "authority_cookie"))
             assert all(flag in wire for flag in ("HttpOnly", "Secure", "SameSite=Lax", "Path=/"))
-            assert set(result) == {"ok", "account", "name", "models", "credits", "pro_locked_reason", "web_search", "browser_agent", "history_cache_key"}
+            assert set(result) == {"ok", "account", "name", "models", "credits", "pro_locked_reason", "web_search", "browser_agent", "history_cache_key", "selected_model_inputs"}
             assert result["browser_agent"] is True
             assert result["models"] == ["velia-pro", "velia-flash"]
             async with client.get(server.make_url("/web-api/v1/session"), headers=headers(cookie)) as response:
@@ -621,13 +671,14 @@ def test_browser_capacity_errors_are_allowlisted(monkeypatch, code, expected):
     asyncio.run(run())
 
 
-def test_voice_account_turn_skips_search_and_forwards_fast_path(monkeypatch):
-    class Store:
-        def initialize_search(self): pass
+def test_voice_account_turn_keeps_fast_reply_and_selected_search_policy(monkeypatch, tmp_path):
+    from desktop.guest_store import GuestStore
     async def run():
         old = str(uuid.uuid4())
         conversations = {old: {"conversation": {"id": old, "title": "Голос", "user_id": 7}, "messages": []}}
-        async with fixture(monkeypatch, conversations=conversations, with_search=True, guest_store=Store()) as (server, client, state):
+        async with fixture(monkeypatch, conversations=conversations, with_search=True,
+                intent={"action":"direct","quote":"","query":""},
+                guest_store=GuestStore(sqlite_path=tmp_path/"voice.db")) as (server, client, state):
             cookie, _, _ = await login(server, client)
             data={"model":"velia-flash","content":"Велия привет","idempotency_key":str(uuid.uuid4()),"voice_turn":True}
             async with client.post(server.make_url("/web-api/v1/conversations/"+old+"/messages/stream"),headers=headers(cookie),json=data) as response:

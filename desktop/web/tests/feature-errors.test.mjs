@@ -27,3 +27,16 @@ test('closing a section cancels its request without becoming a network error',as
   await assert.rejects(request,{name:'AbortError'});
  });
 });
+test('file uploads explicitly select their chat model and OCR failures remain actionable',async()=>{
+ const file=new File(['Invoice 42'],'invoice.txt',{type:'text/plain'});
+ for(const [chatModel,mode] of [['velia-flash','flash'],['velia-quantum','quantum']]) {
+  await withFetch(async(_url,options)=>{
+   assert.equal(options.headers['X-Velia-Chat-Mode'],mode);
+   assert.equal(await options.body.get('file').text(),'Invoice 42');
+   return Response.json({ok:true,attachment:{id:'file'}});
+  },()=>featureRequest('conversations/id/attachments',{method:'POST',file,chatModel}));
+ }
+ await withFetch(async()=>Response.json({ok:false,error:'image_has_no_readable_text'},{status:422}),async()=>{
+  await assert.rejects(featureRequest('conversations/id/attachments',{method:'POST',file,chatModel:'velia-quantum'}),/распознать текст/);
+ });
+});

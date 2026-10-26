@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {speechChunks,availableVoices,voiceChoice,speechReady} from '../voice.mjs';
+import {speechChunks,availableVoices,voiceChoice,speechReady,isRemoteVoice,recognitionLanguage,isVoiceEndCommand} from '../voice.mjs';
+test('recognition follows the saved call language then the page rather than phone locale',()=>{
+ assert.equal(recognitionLanguage('', 'ru', 'en-US'),'ru-RU');
+ assert.equal(recognitionLanguage('tr-TR', 'ru', 'en-US'),'tr-TR');
+ assert.equal(recognitionLanguage('', '', 'de-DE'),'de-DE');
+ assert.equal(recognitionLanguage('', '', ''),'ru-RU');
+});
+test('only an explicit whole utterance ends the call',()=>{
+ for(const text of ['Велия, закончи разговор!','Заверши разговор, пожалуйста.','Пока!','Velia, end the call.','Görüşmeyi bitir.'])assert.equal(isVoiceEndCommand(text),true,text);
+ for(const text of ['Не завершай разговор','Как завершить разговор?','Она сказала пока','Объясни слово пока','Привет','Закончи рассказ','Велия, расскажи как отключиться'])assert.equal(isVoiceEndCommand(text),false,text);
+});
 test('long speech is bounded and preserves all plain words',()=>{
   const text=Array.from({length:200},(_,i)=>`слово${i}`).join(' ');
   const chunks=speechChunks(text);
@@ -13,6 +23,11 @@ test('speech removes code and URLs while retaining link captions',()=>{
 test('empty reply and unclosed code are handled safely',()=>{
   assert.deepEqual(speechChunks('  '),[]);assert.deepEqual(speechChunks('```js\nprivate()'),['Код сохранён в диалоге.']);
   assert.ok(speechChunks('x'.repeat(900)).every(x=>x.length<=240));
+});
+test('punctuation-only streamed tails never trigger speech synthesis',()=>{
+ for(const text of ['...', ' — ', ',;:', '😊!', '   .'])assert.deepEqual(speechChunks(text),[]);
+ assert.deepEqual(speechChunks('125 рублей.'),['125 рублей.']);
+ assert.deepEqual(speechChunks('Привет.'),['Привет.']);
 });
 
 test('voice inventory is language scoped, deduplicated and represents real voices',()=>{
@@ -35,4 +50,22 @@ test('streaming releases complete phrases and holds code and unfinished words',(
  assert.equal(speechReady('Думаю над ответом'),0);
  assert.equal(speechReady('```js\ncode();'),0);
  assert.equal(speechReady('Хвост',true),5);
+});
+test('long streamed sentences start at a complete word or clause',()=>{
+ const text='Могу рассказать небольшую выдуманную историю, в которой героиня нашла необычное письмо';
+ assert.equal(text.slice(0,speechReady(text)),'Могу рассказать небольшую выдуманную историю,');
+ const long='Это длинный ответ без точки '+('содержательное слово '.repeat(8));
+ const cut=speechReady(long);assert.ok(cut>40&&cut<=121);assert.equal(long[cut-1],' ');
+ assert.equal(speechReady('Незаконченное сло'),0);
+});
+test('real female neural speakers are distinct and multilingual without replacing a fast device default',()=>{
+ const voices=[{voiceURI:'device',name:'Device',lang:'ru-RU',localService:true},
+  {voiceURI:'edge:ru-RU-SvetlanaNeural',name:'Светлана',lang:'ru-RU',gender:'female',recommended:true},
+  {voiceURI:'edge:en-US-EmmaMultilingualNeural',name:'Эмма',lang:'en-US',languages:['ru-RU','tr-TR'],gender:'female'},
+  {voiceURI:'edge:en-US-AvaMultilingualNeural',name:'Ава',lang:'en-US',languages:['ru-RU','tr-TR'],gender:'female'}];
+ assert.equal(voiceChoice(voices,'ru-RU','').voiceURI,'device');
+ assert.equal(availableVoices(voices,'ru-RU').length,4);
+ assert.equal(availableVoices(voices,'tr-TR').length,2);
+ assert.equal(voiceChoice(voices,'ru-RU',voices[2].voiceURI).name,'Эмма');
+ assert.ok(isRemoteVoice(voices[1].voiceURI));assert.equal(isRemoteVoice('edge:ru-RU-DmitryNeural'),false);
 });

@@ -98,6 +98,23 @@ def test_clear_greetings_and_literal_arithmetic_do_not_need_a_planner(question):
     assert asyncio.run(direct_task([{'role':'user','content':question}])) == {'action':'direct','query':'','context':[]}
 
 @pytest.mark.parametrize('question',[
+    'Расскажи какую-нибудь интересную историю без разницы какую',
+    'Придумай сказку про волшебный лес.', 'Tell me a bedtime story', 'Как дела?',
+])
+def test_self_contained_creative_voice_turns_need_no_second_model_request(question):
+    from desktop.direct_tasks import simple_direct_task
+    assert simple_direct_task(question) == {'action':'direct','query':'','context':[]}
+
+@pytest.mark.parametrize('question',[
+    'Расскажи реальную историю', 'Расскажи историю болезни',
+    'Расскажи историю, найди источники', 'Придумай сказку и проверь погоду',
+    'Придумай сказку про дозировку лекарств', 'Какая сегодня погода?',
+])
+def test_facts_and_mixed_creative_requests_cannot_skip_search_planning(question):
+    from desktop.direct_tasks import simple_direct_task
+    assert simple_direct_task(question) is None
+
+@pytest.mark.parametrize('question',[
     'Что нового сегодня?','Найди новости','Как похудеть при астме?',
     'У меня гестамин эпное','Что значит 120/80?','120/80','2026-10-13',
     'Объясни разницу между браузером и облаком','Может это болезнь?',
@@ -107,9 +124,18 @@ def test_ambiguous_medical_current_and_general_questions_keep_the_full_planner(q
     from desktop.direct_tasks import direct_task
     assert asyncio.run(direct_task([{'role':'user','content':question}])) is None
 
-def test_direct_tasks_do_not_discard_existing_conversation_context():
+@pytest.mark.parametrize('question',['Привет!','Кто ты?','Привет, что ты умеешь?','Who are you?','Merhaba, sen kimsin?','2+2'])
+def test_self_contained_turn_skips_planner_without_discarding_conversation_context(question):
     from desktop.direct_tasks import direct_task
-    messages=[{'role':'user','content':'У меня астма.'},{'role':'assistant','content':'Поняла.'},{'role':'user','content':'Привет!'}]
+    messages=[{'role':'user','content':'У меня астма.'},{'role':'assistant','content':'Поняла.'},{'role':'user','content':question}]
+    before=copy.deepcopy(messages)
+    assert asyncio.run(direct_task(messages)) == {'action':'direct','query':'','context':[]}
+    assert messages == before
+
+@pytest.mark.parametrize('question',['Привет, как лечить астму?','Кто ты и какая сейчас погода?','Сократи его','Как мне похудеть?'])
+def test_context_dependent_and_mixed_requests_retain_full_interpretation(question):
+    from desktop.direct_tasks import direct_task
+    messages=[{'role':'user','content':'У меня астма.'},{'role':'assistant','content':'Поняла.'},{'role':'user','content':question}]
     assert asyncio.run(direct_task(messages)) is None
 
 def test_explicit_text_task_keeps_unknown_spelling_on_full_path(monkeypatch):

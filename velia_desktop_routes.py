@@ -13,10 +13,12 @@ from urllib.parse import urlsplit
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
 from velia_request_understanding import understanding_messages
+import velia_quantum_provider as quantum
 
 MAX_BODY = 1024 * 1024
 MODEL_ID = "velia-pro"
 FLASH_ID = "velia-flash"
+QUANTUM_ID = quantum.MODEL_ID
 
 
 def flash_endpoint():
@@ -153,7 +155,7 @@ class AuthenticationUnavailable(Exception):
 
 
 def validate_payload(data):
-    if not isinstance(data, dict) or data.get("model") not in {MODEL_ID, FLASH_ID}:
+    if not isinstance(data, dict) or data.get("model") not in {MODEL_ID, FLASH_ID, QUANTUM_ID}:
         raise ValueError("unsupported_model")
     messages = data.get("messages")
     if not isinstance(messages, list) or not 1 <= len(messages) <= 256:
@@ -181,8 +183,9 @@ def validate_payload(data):
                 or not isinstance(tool.get("function"), dict)
                 or not isinstance(tool["function"].get("name"), str)):
             raise ValueError("invalid_tools")
-    limit = data.get("max_completion_tokens", data.get("max_tokens", 4096))
-    if type(limit) is not int or not 1 <= limit <= 4096:
+    output_limit = 8192 if data["model"] == QUANTUM_ID else 4096
+    limit = data.get("max_completion_tokens", data.get("max_tokens", output_limit))
+    if type(limit) is not int or not 1 <= limit <= output_limit:
         raise ValueError("invalid_output_limit")
     if type(data.get("stream", False)) is not bool:
         raise ValueError("invalid_stream")
@@ -200,6 +203,11 @@ def validate_payload(data):
                       reasoning_format="deepseek", thinking_budget_tokens=0, parallel_tool_calls=False)
         if not tools:
             result["presence_penalty"] = 0.0
+    elif data["model"] == QUANTUM_ID:
+        config = quantum.configuration()
+        if config is None:
+            raise quantum.QuantumError("quantum_unavailable", 503)
+        result = quantum.payload(config, result["messages"], stream=result["stream"], max_tokens=limit)
     elif result["model"].lower().startswith("kimi-k3"):
         effort = os.getenv("VELIA_DESKTOP_REASONING_EFFORT", "low")
         result["reasoning_effort"] = effort if effort in {"low", "medium", "high"} else "low"
@@ -277,6 +285,8 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
         ]
         if flash_enabled():
             catalog.append({"id": FLASH_ID, "object": "model", "owned_by": "velia"})
+        if quantum.available() and await model_permission(request, QUANTUM_ID) is None:
+            catalog.append({"id": QUANTUM_ID, "object": "model", "owned_by": "velia"})
         return web.json_response({"object": "list", "data": catalog}, headers={"Cache-Control": "no-store"})
 
     async def complete(request):
@@ -303,16 +313,21 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
             if isinstance(data, dict) and data.get("model") == FLASH_ID and not flash_enabled():
                 return error("flash_unavailable", 503)
             payload = validate_payload(data)
+        except quantum.QuantumError as exc:
+            return error(exc.code, exc.status)
         except (ValueError, TypeError, UnicodeDecodeError) as exc:
             return error(str(exc) if str(exc) in {"unsupported_model", "invalid_messages", "text_only_preview",
                          "invalid_tools", "invalid_output_limit", "invalid_stream", "invalid_tool_choice",
                          "invalid_tool_calls", "invalid_tool_arguments"}
                          else "invalid_json", 400)
         is_flash = data["model"] == FLASH_ID
+        quantum_config = quantum.configuration() if data["model"] == QUANTUM_ID else None
+        if data["model"] == QUANTUM_ID and quantum_config is None:
+            return error("quantum_unavailable", 503)
         failure = await model_permission(request, data["model"])
         if failure is not None:
             return failure
-        key = os.getenv("VELIA_DESKTOP_FLASH_API_KEY" if is_flash else "KIMI_API_KEY", "").strip()
+        key = quantum_config.api_key if quantum_config else os.getenv("VELIA_DESKTOP_FLASH_API_KEY" if is_flash else "KIMI_API_KEY", "").strip()
         if not key:
             return error("model_unavailable", 503)
         # Body reading yields: repeat admission immediately before reserving.
@@ -325,9 +340,11 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
             return failure
         response = None
         try:
-            timeout = ClientTimeout(total=360, sock_read=300) if is_flash else ClientTimeout(total=180, sock_read=90)
+            timeout = ClientTimeout(total=360, sock_read=300) if is_flash or quantum_config else ClientTimeout(total=180, sock_read=90)
             async with ClientSession(timeout=timeout) as client:
                 endpoint = flash_endpoint() if is_flash else os.getenv("KIMI_BASE_URL", "https://api.moonshot.ai/v1").rstrip("/")
+                if quantum_config:
+                    endpoint = quantum_config.base_url
                 headers = {"Authorization": "Bearer " + key}
                 if enrich_payload is not None:
                     payload = await enrich_payload(request, payload)
@@ -335,10 +352,15 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                         return payload
                 if is_flash:
                     await check_flash_context(client, endpoint, headers, payload)
+                if quantum_config:
+                    await quantum.verify_zero_spend_async(client, quantum_config)
                 async with client.post(endpoint + ("/v1/chat/completions" if is_flash else "/chat/completions"), json=payload,
                                        headers=headers,
                                        allow_redirects=False) as upstream:
                     if upstream.status != 200:
+                        if quantum_config:
+                            failure = quantum.response_error(upstream.status)
+                            return error(failure.code, failure.status)
                         return error("model_request_failed", 502)
                     if payload["stream"]:
                         if "text/event-stream" not in upstream.headers.get("Content-Type", ""):
@@ -346,18 +368,25 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                         response = web.StreamResponse(headers={"Content-Type": "text/event-stream",
                             "Cache-Control": "no-store", "X-Accel-Buffering": "no"})
                         await response.prepare(request)
-                        stream = filter_stream(request, upstream.content) if filter_stream else upstream.content.iter_chunked(65536)
+                        content = quantum.PublicContent(upstream.content) if quantum_config else upstream.content
+                        stream = filter_stream(request, content) if filter_stream else content.iter_chunked(65536)
                         async for chunk in stream:
                             await response.write(chunk)
                         await response.write_eof()
                         return response
-                    result = await upstream.json()
+                    result = await quantum.read_result(upstream.content) if quantum_config else await upstream.json()
                     if not isinstance(result, dict) or not isinstance(result.get("choices"), list):
                         return error("invalid_model_response", 502)
                     result["model"] = data["model"]
                     return web.json_response(result, headers={"Cache-Control": "no-store"})
         except FlashContextTooLong:
             return error("flash_context_too_long", 400)
+        except quantum.QuantumError as exc:
+            if response is not None and response.prepared:
+                await response.write(("data: " + json.dumps({"error": {"message": exc.code}}) + "\n\n").encode())
+                await response.write_eof()
+                return response
+            return error(exc.code, exc.status)
         except (TimeoutError, OSError, ClientError, ValueError):
             if response is not None and response.prepared:
                 response.force_close()

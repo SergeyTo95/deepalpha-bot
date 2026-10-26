@@ -2,6 +2,7 @@ export const MODELS = Object.freeze(
   Object.assign(Object.create(null), {
     "velia-pro": "VELIA PRO",
     "velia-flash": "VELIA FLASH",
+    "velia-quantum": "VELIA QUANTUM",
   }),
 );
 export const escapeHTML = (value) =>
@@ -154,6 +155,25 @@ export function apiError(code) {
       flash_context_too_long:
         "Для Flash этот диалог слишком длинный. Начни новый диалог или выбери PRO.",
       flash_unavailable: "Flash сейчас недоступен. Повтори запрос позже.",
+      quantum_unavailable: "Quantum сейчас недоступна. Выбери Flash или попробуй позже.",
+      quantum_free_guard_required: "Бесплатный доступ Quantum сейчас не подтверждён. Попробуй позже.",
+      quantum_access_required: "Quantum пока не активирована. Сейчас можно пользоваться Flash.",
+      quantum_quota_exhausted: "Бесплатная квота Quantum исчерпана. Можно выбрать Flash или попробовать позже.",
+      quantum_busy: "Quantum сейчас занята. Попробуй чуть позже.",
+      quantum_timeout: "Quantum не успела ответить. Попробуй ещё раз.",
+      quantum_provider_error: "Сервис Quantum временно недоступен. Попробуй позже.",
+      quantum_invalid_response: "Ответ Quantum прервался. Можно повторить запрос.",
+      quantum_context_too_long: "Для Quantum этот диалог слишком большой. Начни новый диалог.",
+      quantum_attachments_unsupported: "Чтение файлов для Quantum ещё не включено на сервере.",
+      selected_model_files_unavailable: "Чтение файлов выбранной моделью сейчас недоступно. Попробуй позже.",
+      image_has_no_readable_text: "На фото не удалось распознать текст. Для описания предметов и сцен нужна модель зрения.",
+      document_has_no_readable_text: "В документе не найден читаемый текст. Отправь более чёткий скан или вставь текст в сообщение.",
+      attachment_ocr_unavailable: "Распознавание текста сейчас недоступно. Можно вставить текст в сообщение.",
+      attachment_ocr_timeout: "Распознавание заняло слишком много времени. Отправь более чёткий снимок или меньше страниц.",
+      attachment_ocr_failed: "Не удалось распознать текст. Попробуй более чёткий снимок.",
+      document_ocr_too_many_pages: "В скане слишком много страниц для распознавания. Раздели документ на части.",
+      quantum_daily_user_limit_exceeded: "Дневной лимит Quantum исчерпан. Пока можно выбрать Flash.",
+      quantum_daily_global_limit_exceeded: "Дневной лимит Quantum исчерпан. Пока можно выбрать Flash.",
       model_unavailable: "Выбранный режим сейчас недоступен.",
       request_already_running:
         "Предыдущий ответ ещё формируется. Дождись его завершения.",
@@ -193,7 +213,7 @@ export function safeSearch(value) {
   }
   return {sources, retrieved_at: typeof value?.retrieved_at === "string" ? value.retrieved_at.slice(0, 40) : ""};
 }
-export async function readCompletion(response, onText, onSearch = () => {}) {
+export async function readCompletion(response, onText, onSearch = () => {}, onProgress = () => {}) {
   if (!response.ok) {
     let data;
     try {
@@ -239,6 +259,7 @@ export async function readCompletion(response, onText, onSearch = () => {}) {
       throw new Error(apiError("stream_incomplete"));
     }
     if (event.error) throw new Error(apiError(event.error.message || event.error));
+    if (["understanding", "generating"].includes(event.progress)) onProgress(event.progress);
     if (event.web_search) {
       search = safeSearch(event.web_search);
       onSearch(search);

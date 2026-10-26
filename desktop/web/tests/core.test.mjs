@@ -6,7 +6,16 @@ import {
   chatPayload,
   loadChats,
   safeSearch,
+  MODELS,
+  apiError,
 } from "../core.mjs";
+
+test("Quantum history retains its mode and quota failures remain actionable", () => {
+  assert.equal(MODELS["velia-quantum"], "VELIA QUANTUM");
+  assert.match(apiError("quantum_quota_exhausted"), /Бесплатная квота Quantum/);
+  assert.match(apiError("quantum_unavailable"), /Quantum/);
+  assert.match(apiError("quantum_free_guard_required"), /Бесплатный доступ Quantum/);
+});
 
 test("untrusted markup, attributes, fenced languages and links cannot inject HTML", () => {
   const html = renderMarkdown(
@@ -45,6 +54,18 @@ function response(text, chunkSize = 1) {
     { headers: { "content-type": "text/event-stream" } },
   );
 }
+test("preparation progress is separate from answer text and rejects unknown stages", async () => {
+  const stages = [], visible = [];
+  const frames = [
+    {progress:"understanding"}, {progress:"private-provider-detail"},
+    {progress:"generating"}, {choices:[{delta:{content:"Готова"},finish_reason:"stop"}]},
+  ].map(event => "data: " + JSON.stringify(event) + "\n\n").join("");
+  const result = await readCompletion(response(frames + "data: [DONE]\n\n"),
+    value => visible.push(value), () => {}, stage => stages.push(stage));
+  assert.deepEqual(stages, ["understanding", "generating"]);
+  assert.equal(result.text, "Готова");
+  assert.equal(visible.at(-1), "Готова");
+});
 test("search sources survive streaming and unsafe source links are ignored", async () => {
   const sources = {sources:[{title:"Python",url:"https://www.python.org/"},{title:"bad",url:"javascript:alert(1)"}],
     retrieved_at:"2026-10-03T20:00:00Z", provider:"private", api_key:"private"};

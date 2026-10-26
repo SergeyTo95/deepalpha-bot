@@ -710,6 +710,7 @@ span[data-icon] {
   line-height: 1.8;
   overflow-wrap: anywhere;
 }
+.voice-model { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
 .message-content p {
   margin: 0 0 12px;
 }
@@ -1436,7 +1437,9 @@ dialog::backdrop {
 .voice-hint { font-size: 12px; margin-bottom: 0; }
 
 /* Compact voice call: transcript is optional, controls stay immediately visible. */
-.voice-dialog { width: min(420px, calc(100vw - 32px)); padding: 24px; text-align: center; }
+.voice-dialog { position: relative; width: min(420px, calc(100vw - 32px)); padding: 32px 24px 24px; text-align: center; }
+.voice-dialog .voice-close { position: absolute; top: 4px; right: 4px; width: 44px; height: 44px; padding: 0; margin: 0; min-height: 44px; border: 0; border-radius: 50%; background: transparent; color: var(--soft); font-size: 28px; line-height: 1; }
+.voice-dialog .voice-close:hover { color: var(--text); background: var(--hover); }
 .voice-dialog h2 { font-size: 20px; margin: 0; }
 .voice-orb { margin: 24px auto 16px; width: 96px; height: 96px; }
 .voice-status { min-height: 40px; margin: 12px 0; font-size: 15px; line-height: 1.4; }

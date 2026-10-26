@@ -3,28 +3,89 @@ import asyncio
 import math
 import os
 import time
+import logging
 from collections import deque
-from aiohttp import ClientSession, ClientTimeout, ClientError, web
+from aiohttp import ClientSession, ClientTimeout, ClientError, ClientConnectionError, ClientResponseError, web
 from velia_desktop_routes import AuthenticationUnavailable
 
 VOICES = [{"voiceURI": "speechkit:" + key, "name": name, "lang": "ru-RU", "localService": False}
           for key, name in [("jane", "Джейн"), ("omazh", "Омаж"), ("marina", "Марина")]]
 ENDPOINT = "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize"
+LOG = logging.getLogger(__name__)
+LANGUAGES = ["ru-RU", "en-US", "tr-TR", "de-DE", "fr-FR", "es-ES"]
+EDGE_VOICES = [
+    {"voiceURI": "edge:ru-RU-SvetlanaNeural", "name": "Светлана", "lang": "ru-RU",
+     "gender": "female", "recommended": True, "localService": False},
+    *[{"voiceURI": "edge:en-US-" + key + "MultilingualNeural", "name": name,
+       "lang": "en-US", "languages": LANGUAGES, "gender": "female", "localService": False}
+      for key, name in [("Emma", "Эмма"), ("Ava", "Ава")]],
+]
 
 def enabled():
-    return os.getenv("VELIA_WEB_TTS_PROVIDER") == "speechkit" and bool(os.getenv("VELIA_SPEECHKIT_API_KEY"))
+    return (os.getenv("VELIA_WEB_TTS_PROVIDER") == "edge"
+        or os.getenv("VELIA_WEB_TTS_PROVIDER") == "speechkit" and bool(os.getenv("VELIA_SPEECHKIT_API_KEY")))
+
+def voice_catalog():
+    if not enabled():
+        return []
+    return EDGE_VOICES if os.getenv("VELIA_WEB_TTS_PROVIDER") == "edge" else VOICES
 
 def validate(data):
     if not isinstance(data, dict) or set(data) != {"text", "voice", "rate"}:
         raise ValueError()
     text, voice, rate = data["text"], data["voice"], data["rate"]
-    if (not isinstance(text, str) or not text.strip() or len(text) > 500
-            or voice not in {v["voiceURI"] for v in VOICES}
+    if (not isinstance(text, str) or not any(c.isalnum() for c in text) or len(text) > 500
+            or voice not in {v["voiceURI"] for v in voice_catalog()}
             or type(rate) not in {int, float} or not math.isfinite(rate) or not .7 <= rate <= 1.4):
         raise ValueError()
+    if voice.startswith("edge:"):
+        return {"text": text, "edge_voice": voice.split(":", 1)[1], "edge_rate": f"{round((rate-1)*100):+d}%"}
     return {"text": text, "voice": voice.split(":", 1)[1], "speed": str(rate), "lang": "ru-RU", "format": "mp3"}
 
+async def synthesize_edge(fields):
+    # Fixed provider/allowlisted speakers; no client URL, credentials or SSML.
+    import edge_tts
+    started, first, chunks, size = time.monotonic(), None, [], 0
+    attempts = 0
+    try:
+        async with asyncio.timeout(20):
+            for attempt in range(2):
+                attempts += 1
+                try:
+                    source = edge_tts.Communicate(fields["text"], fields["edge_voice"],
+                        rate=fields["edge_rate"], connect_timeout=5, receive_timeout=10)
+                    async for part in source.stream():
+                        if part["type"] != "audio":
+                            continue
+                        first = first or time.monotonic()
+                        size += len(part["data"])
+                        if size > 2 * 1024 * 1024:
+                            raise RuntimeError("tts_unavailable")
+                        chunks.append(part["data"])
+                    if not size:
+                        raise edge_tts.exceptions.NoAudioReceived("empty_audio")
+                    break
+                except (edge_tts.exceptions.NoAudioReceived, edge_tts.exceptions.WebSocketError,
+                        ClientConnectionError, ClientResponseError, asyncio.TimeoutError) as exc:
+                    # This adapter has no per-call billing. Retry an empty result
+                    # or transient connection failure once, with the same speaker,
+                    # only before receiving audio and within the shared deadline.
+                    if (attempt or size or isinstance(exc, ClientResponseError)
+                            and exc.status not in {408, 500, 502, 503, 504}):
+                        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        LOG.warning("VELIA_WEB_TTS_FAILED provider=edge voice=%s kind=%s attempts=%d elapsed_ms=%d",
+            fields["edge_voice"], type(exc).__name__, attempts, round((time.monotonic()-started)*1000))
+        raise RuntimeError("tts_unavailable") from None
+    LOG.info("VELIA_WEB_TTS_TIMING provider=edge voice=%s first_audio_ms=%d total_ms=%d attempts=%d",
+        fields["edge_voice"], round((first-started)*1000), round((time.monotonic()-started)*1000), attempts)
+    return b"".join(chunks)
+
 async def synthesize(fields):
+    if "edge_voice" in fields:
+        return await synthesize_edge(fields)
     # No redirects: the server key must only reach the documented fixed endpoint.
     async with ClientSession(timeout=ClientTimeout(total=15)) as client:
         async with client.post(ENDPOINT, data=fields, allow_redirects=False,
@@ -48,7 +109,7 @@ def setup_voice_routes(app, *, session_for, same_origin, json_response):
         try:
             if not await session_for(request):
                 return json_response({"error": "unauthorized"}, 401)
-            return json_response({"voices": VOICES if enabled() else []})
+            return json_response({"voices": voice_catalog()})
         except AuthenticationUnavailable:
             return json_response({"error": "authentication_unavailable"}, 503)
     async def speech(request):

@@ -7,6 +7,10 @@ on:
     paths:
       - 'desktop/**'
       - 'velia_desktop_routes.py'
+      - 'velia_quantum_provider.py'
+      - 'tests/test_velia_quantum_provider.py'
+      - 'tests/test_velia_quantum_gateway.py'
+      - 'tests/test_velia_quantum_independence.py'
       - 'velia_request_understanding.py'
       - 'tests/test_velia_request_understanding.py'
       - 'tests/test_velia_request_intent.py'
@@ -16,6 +20,10 @@ on:
     paths:
       - 'desktop/**'
       - 'velia_desktop_routes.py'
+      - 'velia_quantum_provider.py'
+      - 'tests/test_velia_quantum_provider.py'
+      - 'tests/test_velia_quantum_gateway.py'
+      - 'tests/test_velia_quantum_independence.py'
       - 'velia_request_understanding.py'
       - 'tests/test_velia_request_understanding.py'
       - 'tests/test_velia_request_intent.py'
@@ -41,7 +49,8 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install pytest -r desktop/requirements-gateway.txt
-      - run: python -m pytest tests/test_velia_desktop_gateway.py tests/test_velia_request_understanding.py tests/test_velia_request_intent.py -q
+      - run: python -m pytest tests/test_velia_quantum_provider.py tests/test_velia_quantum_gateway.py tests/test_velia_quantum_independence.py tests/test_velia_web_chat.py tests/test_velia_desktop_gateway.py tests/test_velia_request_understanding.py tests/test_velia_request_intent.py -q
+      - run: node --test desktop/web/tests/*.test.mjs
       - run: npm test
         working-directory: desktop
       - run: node --check src/main.mjs

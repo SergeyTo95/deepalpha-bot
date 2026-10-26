@@ -20,11 +20,12 @@ async def main():
         "messages": [{"role": "user", "content": "Моя прежняя идея", "status": "completed"},
             {"role": "assistant", "content": "Я помню твою идею", "status": "completed", "chat_mode": "flash"}]}}
     requests = {}
+    uploaded = {}
     access, refresh = "va_" + "a" * 48, "vr_" + "r" * 48
     async def health(request):
         return web.json_response({"ok": True, "enabled": True})
     async def me(request):
-        return web.json_response({"ok": True, "user": {"id": user_id}}) if request.headers.get("Authorization") == "Bearer " + access else web.json_response({"ok": False}, status=401)
+        return web.json_response({"ok": True, "user": {"id": user_id}, "features": {"chat_selected_model_inputs": True, "chat_quantum": os.getenv("VELIA_FIXTURE_QUANTUM") == "true", "chat_quantum_attachments": os.getenv("VELIA_FIXTURE_QUANTUM") == "true", "chat_quantum_source": "GLM-5.3 через Experiential"}}) if request.headers.get("Authorization") == "Bearer " + access else web.json_response({"ok": False}, status=401)
     async def auth(request):
         return web.json_response({"ok": True, "access_token": access, "refresh_token": refresh, "access_expires_in": 900})
     async def logout(request):
@@ -67,7 +68,8 @@ async def main():
         if not duplicate:
             calls.append(data["chat_mode"])
             answer = {"role": "assistant", "content": text, "chat_mode": data["chat_mode"], "status": "completed"}
-            value["messages"].extend([{"role": "user", "content": data["content"], "status": "completed"}, answer])
+            value["messages"].extend([{"role": "user", "content": data["content"], "status": "completed",
+                "attachments": [uploaded[key] for key in data.get("attachment_ids", [])]}, answer])
             requests[data["idempotency_key"]] = answer
         response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
         await response.prepare(request)
@@ -84,6 +86,15 @@ async def main():
         return response
     async def template(request):
         return web.json_response({"prompt": "fixture"})
+    async def upload(request):
+        reader = await request.multipart()
+        field = await reader.next()
+        await field.read()
+        item = {"id": str(uuid.uuid4()), "name": field.filename,
+            "mime_type": field.headers.get("Content-Type", "text/plain"), "kind": "document", "status": "ready",
+            "processing_mode": request.headers.get("X-Velia-Chat-Mode")}
+        uploaded[item["id"]] = item
+        return web.json_response({"ok": True, "attachment": item}, status=201)
     async def tokenize(request):
         return web.json_response({"tokens": [1, 2, 3]})
     async def model(request):
@@ -124,6 +135,9 @@ async def main():
     authority.router.add_get("/mobile-api/v1/conversations/{conversation_id}/messages", stored_messages)
     authority.router.add_delete("/mobile-api/v1/conversations/{conversation_id}", stored_delete)
     authority.router.add_post("/mobile-api/v1/conversations/{conversation_id}/messages/stream", stored_send)
+    authority.router.add_post("/mobile-api/v1/conversations/{conversation_id}/attachments", upload)
+    authority.router.add_post("/mobile-api/v1/conversations/{conversation_id}/attachments/selected", upload)
+    authority.router.add_get("/__fixture/uploads", lambda request: web.json_response({"modes":[item["processing_mode"] for item in uploaded.values()]}))
     authority.router.add_post("/mobile-api/v1/auth/exchange", auth)
     authority.router.add_post("/mobile-api/v1/auth/refresh", auth)
     authority.router.add_post("/mobile-api/v1/auth/logout", logout)
@@ -141,6 +155,10 @@ async def main():
         VELIA_DESKTOP_FLASH_ENABLED="true", VELIA_DESKTOP_FLASH_API_KEY="fixture",
         VELIA_DESKTOP_FLASH_BASE_URL="http://127.0.0.1:18181")
     os.environ["VELIA_WEB_GUEST_ENABLED"] = "true"
+    if os.getenv("VELIA_FIXTURE_QUANTUM") == "true":
+        os.environ.update(VELIA_QUANTUM_ENABLED="true", VELIA_QUANTUM_PROVIDER="self_hosted",
+            VELIA_QUANTUM_BASE_URL="http://127.0.0.1:18181/v1", VELIA_QUANTUM_MODEL="fixture-quantum",
+            VELIA_QUANTUM_API_KEY="fixture-quantum-key")
     temp = tempfile.TemporaryDirectory(prefix="velia-guest-fixture-")
     store = GuestStore(sqlite_path=temp.name + "/guest.sqlite")
     search = WebSearch(provider="tavily", api_key="fixture-search-key",

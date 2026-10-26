@@ -1,4 +1,4 @@
-import {renderMarkdown} from './core.mjs';
+import {renderMarkdown, apiError} from './core.mjs';
 import {mountWork} from './work.mjs';
 
 export const SECTIONS = Object.freeze([
@@ -18,7 +18,7 @@ export function mediaPath(value) {
     return '/web-api/v1/features/' + (match ? 'media/' + match[1] + '/' + match[2] : 'studio-assets/' + ref[1]) + '/content' + u.search;
   } catch { return null; }
 }
-export async function featureRequest(path, {method = 'GET', data, file, digest, key, signal} = {}) {
+export async function featureRequest(path, {method = 'GET', data, file, digest, key, signal, chatModel} = {}) {
   const headers = method === 'GET' ? {} : {'X-Velia-Request': '1'};
   let body;
   if (file) {
@@ -26,6 +26,11 @@ export async function featureRequest(path, {method = 'GET', data, file, digest, 
     else {body = new FormData(); body.append('file', file);}
   } else if (method !== 'GET') {headers['Content-Type'] = 'application/json'; body = JSON.stringify(data || {});}
   if (key) headers['Idempotency-Key'] = key;
+  if (file && chatModel) {
+    const mode = {'velia-flash':'flash','velia-quantum':'quantum','velia-pro':'pro'}[chatModel];
+    if (typeof mode !== 'string') throw new Error('Выбранная модель недоступна.');
+    headers['X-Velia-Chat-Mode'] = mode;
+  }
   const controller = new AbortController();
   const abort = () => controller.abort(signal?.reason);
   if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, {once:true});
@@ -44,7 +49,10 @@ export async function featureRequest(path, {method = 'GET', data, file, digest, 
         403:'Это действие недоступно для твоего аккаунта.',404:'Материал не найден. Обнови список.',
         409:'Данные уже изменились. Обнови раздел и повтори действие.',413:'Файл слишком большой. Выбери файл меньшего размера.',
         429:'Слишком много запросов. Подожди немного и повтори.',503:'Раздел временно недоступен. Попробуй позже.'};
-      const error = new Error(messages[response.status] || 'Не удалось выполнить действие. Проверь введённые данные и повтори.');
+      const fileErrors = ['selected_model_files_unavailable','image_has_no_readable_text','document_has_no_readable_text','attachment_ocr_unavailable',
+        'attachment_ocr_timeout','attachment_ocr_failed','document_ocr_too_many_pages'];
+      const error = new Error(fileErrors.includes(result.error) ? apiError(result.error)
+        : messages[response.status] || 'Не удалось выполнить действие. Проверь введённые данные и повтори.');
       error.code = result.error; error.status = response.status; throw error;
     }
     return result;

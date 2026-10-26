@@ -9,6 +9,7 @@ from collections import deque
 import asyncio
 from dataclasses import dataclass
 import json
+import logging
 import os
 import re
 import time
@@ -18,6 +19,7 @@ from aiohttp import ClientError, ClientSession, ClientTimeout, DummyCookieJar, T
 from velia_desktop_routes import AuthenticationUnavailable, setup_velia_desktop_routes
 from desktop.web_routes import prepare_web_payload, public_web_stream, setup_web_routes
 from desktop.admin_proxy import setup_owner_admin_proxy
+from velia_quantum_provider import MODEL_ID as QUANTUM_ID
 
 MAX_AUTH_BODY = 16 * 1024
 MAX_AUTH_RESPONSE = 64 * 1024
@@ -128,6 +130,21 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
 
     async def binary_upstream(request, path, token):
         headers = {'Authorization': 'Bearer ' + token}
+        if re.fullmatch(r'/mobile-api/v1/conversations/[A-Za-z0-9_-]{1,128}/attachments', path):
+            mode = request.headers.get('X-Velia-Chat-Mode')
+            if mode is None:
+                return json_response({'ok': False, 'error': 'selected_model_files_unavailable'}, 409)
+            if mode is not None:
+                if mode not in {'pro', 'flash', 'quantum'}:
+                    return json_response({'ok': False, 'error': 'invalid_chat_mode'}, 400)
+                permission = await authorize_model(token, 'velia-' + mode, files=True)
+                if permission:
+                    return json_response({'ok': False, 'error': permission[0]}, permission[1])
+                headers['X-Velia-Chat-Mode'] = mode
+                if mode in {'flash', 'quantum'}:
+                    # A capability read and upload may hit different rolling replicas.
+                    # Old backends have no such route, so they cannot run legacy vision.
+                    path += '/selected'
         if request.headers.get('Idempotency-Key'):
             key = request.headers['Idempotency-Key']
             if not re.fullmatch(r'[A-Za-z0-9:_-]{8,128}', key):
@@ -150,6 +167,8 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
             async with app[CLIENT].request(request.method, config.auth_origin + path,
                     headers=headers, data=body, allow_redirects=False,
                     timeout=ClientTimeout(total=180, sock_read=120)) as response:
+                if path.endswith('/attachments/selected') and response.status == 404:
+                    return json_response({'ok': False, 'error': 'selected_model_files_unavailable'}, 503)
                 if request.method != 'GET' or response.status != 200:
                     raw = await response.content.read(65537)
                     if len(raw) > 65536 or response.status not in {200, 201, 202, 400, 401, 403, 404, 409, 411, 413, 415, 422, 429, 500, 502, 503}:
@@ -182,7 +201,12 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
         if (status != 200 or result.get("ok") is not True or not isinstance(user, dict)
                 or type(user.get("id")) is not int or user["id"] <= 0):
             raise AuthenticationUnavailable()
-        return {"user_id": user["id"], "name": str(user.get("first_name") or "Аккаунт VELIA")[:120]}
+        features = result.get("features") if isinstance(result.get("features"), dict) else {}
+        return {"user_id": user["id"], "name": str(user.get("first_name") or "Аккаунт VELIA")[:120],
+            "selected_model_inputs": features.get("chat_selected_model_inputs") is True,
+            "quantum": features.get("chat_quantum") is True,
+            "quantum_attachments": features.get("chat_quantum_attachments") is True,
+            "quantum_source": str(features.get("chat_quantum_source") or "")[:120]}
 
     async def account_balance(token):
         status, result = await upstream("GET", "/mobile-api/v1/economy/me", token=token)
@@ -191,7 +215,13 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
             raise AuthenticationUnavailable()
         return max(0, credits)
 
-    async def authorize_model(token, model):
+    async def authorize_model(token, model, *, files=False):
+        if model == QUANTUM_ID or files and model == "velia-flash":
+            identity = await authenticate(token)
+            if files and (not identity or not identity.get("selected_model_inputs")):
+                return "selected_model_files_unavailable", 503
+            if model == QUANTUM_ID and (not identity or not identity.get("quantum")):
+                return "quantum_unavailable", 503
         if model == "velia-pro":
             if await account_balance(token) <= 0:
                 return "pro_tokens_required", 402
@@ -463,5 +493,8 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.WARNING)
+    for name in ("desktop.account_routes", "desktop.quantum_intent", "desktop.voice_routes"):
+        logging.getLogger(name).setLevel(logging.INFO)
     web.run_app(create_app(), host="0.0.0.0", port=int(os.getenv("PORT", "8080")), access_log=None,
                 handler_cancellation=True)

@@ -1,9 +1,14 @@
 """Bounded, same-origin access to the signed-in account's existing chat store."""
+import asyncio
+from contextlib import suppress
 import json
+import logging
 import re
+import time
 from aiohttp import ClientError, web
 from velia_desktop_routes import AuthenticationUnavailable, FLASH_ID, MODEL_ID, flash_enabled
-from desktop.web_search import SearchUnavailable, source_event
+from desktop.web_search import SearchUnavailable, SearchTooLong, UnderstandingUnavailable, source_event
+from velia_quantum_provider import ERRORS as QUANTUM_ERRORS, MODEL_ID as QUANTUM_ID, QuantumError
 
 ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 REQUEST_ID = re.compile(r"[A-Za-z0-9:_-]{8,128}\Z")
@@ -11,6 +16,13 @@ ERRORS = {"conversation_not_found", "generation_in_progress", "flash_busy", "fla
     "flash_context_too_long", "flash_timeout", "flash_provider_error", "flash_invalid_response",
     "velia_chat_disabled", "pro_tokens_required", "token_balance_unavailable",
     "idempotency_mode_mismatch", "user_daily_limit_exceeded", "global_daily_limit_exceeded"}
+ERRORS |= QUANTUM_ERRORS
+LOG = logging.getLogger(__name__)
+_PREPARATION_HEARTBEAT_SECONDS = 8.0
+
+
+def progress_event(stage):
+    return ("data: " + json.dumps({"progress": stage}) + "\n\n").encode()
 
 
 def conversation(value):
@@ -168,8 +180,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
                 or ("web_search" in data and type(data["web_search"]) is not bool)
                 or ("voice_turn" in data and type(data["voice_turn"]) is not bool)
                 or ("medical_no_search" in data and type(data["medical_no_search"]) is not bool)
-                or (data.get("medical_no_search") and data.get("model") != FLASH_ID)
-                or data.get("model") not in {FLASH_ID, MODEL_ID}
+                or data.get("model") not in {FLASH_ID, MODEL_ID, QUANTUM_ID}
                 or not isinstance(data.get("content"), str) or not data["content"].strip()
                 or len(data["content"]) > 12000 or not REQUEST_ID.fullmatch(str(data.get("idempotency_key", "")))):
             return error("invalid_request", 400)
@@ -178,18 +189,36 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
             return error("invalid_request", 400)
         if data["model"] == FLASH_ID and not flash_enabled():
             return error("flash_unavailable", 503)
+        if data["model"] == QUANTUM_ID and attachments and not request[ACCOUNT_SESSION].quantum_attachments:
+            return error("quantum_attachments_unsupported", 400)
         session = request[ACCOUNT_SESSION]
-        permission = await authorize_model(session.access, data["model"])
+        # session_for just revalidated this account and refreshed capabilities.
+        # The native generator independently enforces availability and quotas.
+        permission = ((None if session.quantum else ("quantum_unavailable", 503))
+            if data["model"] == QUANTUM_ID else await authorize_model(session.access, data["model"]))
         if permission:
             return error(*permission)
         failure = handlers["reserve"](session.user_id)
         if failure is not None:
             return failure
         response = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-store", "X-Accel-Buffering": "no"})
-        source = stream = None
+        source = stream = preparation = None
+        started = time.monotonic()
+        prepared_at = first_text_at = None
+        outcome, failure_code = "error", "none"
+
+        async def stream_error(code):
+            nonlocal failure_code
+            failure_code = code
+            with suppress(ClientError, ConnectionResetError, RuntimeError, OSError):
+                await response.write(("data: " + json.dumps({"error": {"message": code}}) + "\n\n").encode())
+                await response.write_eof()
+
         try:
             content, result = data["content"], None
-            if not data.get("medical_no_search") and not data.get("voice_turn") and ((web_search and web_search.available) or data.get("web_search")):
+            from desktop.direct_tasks import simple_direct_task
+            voice_direct = data.get("voice_turn") and simple_direct_task(content) is not None
+            if not voice_direct and not data.get("medical_no_search") and ((web_search and web_search.available) or data.get("web_search")):
                 if web_search is None:
                     raise SearchUnavailable()
                 status, previous = await relay(request, "GET", "/messages?limit=20")
@@ -199,28 +228,70 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
                     if v.get("role") in {"user", "assistant"}]
                 history = await web_search.restore_messages(session.user_id,
                     request.match_info["conversation_id"], history)
-                content, result = await web_search.account_question(session.user_id,
+                await response.prepare(request)
+                await response.write(progress_event("understanding"))
+                preparation = asyncio.create_task(web_search.account_question(session.user_id,
                     request.match_info["conversation_id"], data["idempotency_key"], content, data["model"],
-                    messages=[{"role": m["role"], "content": m.get("content") or ""} for m in history])
+                    messages=[{"role": m["role"], "content": m.get("content") or ""} for m in history]))
+                while not preparation.done():
+                    done, _ = await asyncio.wait({preparation}, timeout=_PREPARATION_HEARTBEAT_SECONDS)
+                    if not done:
+                        await response.write(b": ping\n\n")
+                content, result = await preparation
+            prepared_at = time.monotonic()
+            if not response.prepared:
+                await response.prepare(request)
+            await response.write(progress_event("generating"))
             source = upstream_stream("/mobile-api/v1/conversations/" + request.match_info["conversation_id"] + "/messages/stream",
-                token=session.access, data={"content": content, "chat_mode": "flash" if data["model"] == FLASH_ID else "pro",
-                    "idempotency_key": data["idempotency_key"], **({"voice_turn": True} if data.get("voice_turn") else {}), **({"attachment_ids": attachments} if attachments else {})})
+                token=session.access, data={"content": content, "chat_mode": "quantum" if data["model"] == QUANTUM_ID else "flash" if data["model"] == FLASH_ID else "pro",
+                    "idempotency_key": data["idempotency_key"], **({"voice_turn": True} if data.get("voice_turn") else {}), **({"attachment_ids": attachments} if "attachment_ids" in data else {})})
             stream = account_events(source, data["model"])
-            first = await anext(stream)
-            await response.prepare(request)
             if result:
                 await response.write(source_event(result))
-            await response.write(first)
             async for chunk in stream:
+                if first_text_at is None and b'"content":' in chunk:
+                    first_text_at = time.monotonic()
+                if b'"error":' in chunk:
+                    outcome = "model_error"
+                    failure_code = "native_model_error"
                 await response.write(chunk)
             await response.write_eof()
+            if outcome != "model_error":
+                outcome = "complete"
+            return response
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        except QuantumError as exc:
+            failure_code = exc.code
+            if response.prepared:
+                await stream_error(exc.code)
+                return response
+            return error(exc.code, exc.status)
+        except (SearchUnavailable, SearchTooLong, UnderstandingUnavailable) as exc:
+            if not response.prepared:
+                raise
+            code = ("request_understanding_unavailable" if isinstance(exc, UnderstandingUnavailable)
+                else "web_search_context_too_long" if isinstance(exc, SearchTooLong)
+                else "web_search_unavailable")
+            await stream_error(code)
             return response
         except (AuthenticationUnavailable, ClientError, TimeoutError, ValueError, OSError, StopAsyncIteration):
+            failure_code = "account_service_unavailable"
             if response.prepared:
-                response.force_close()
+                await stream_error("account_service_unavailable")
                 return response
             return error("account_service_unavailable", 503)
         finally:
+            if preparation is not None and not preparation.done():
+                preparation.cancel()
+                with suppress(asyncio.CancelledError, Exception):
+                    await preparation
+            finished = time.monotonic()
+            LOG.info("VELIA_ACCOUNT_RESPONSE_TIMING model=%s voice=%s prepare_ms=%d first_text_ms=%d total_ms=%d outcome=%s code=%s",
+                data["model"], bool(data.get("voice_turn")), round(((prepared_at or finished) - started) * 1000),
+                round((first_text_at - started) * 1000) if first_text_at is not None else -1,
+                round((finished - started) * 1000), outcome, failure_code)
             try:
                 if stream is not None:
                     await stream.aclose()

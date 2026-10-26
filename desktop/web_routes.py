@@ -13,6 +13,7 @@ import time
 from aiohttp import web
 from cryptography.fernet import Fernet, InvalidToken
 from velia_desktop_routes import AuthenticationUnavailable, FLASH_ID, MODEL_ID, flash_enabled
+from velia_quantum_provider import MODEL_ID as QUANTUM_ID
 from velia_request_understanding import understanding_instruction
 from desktop.web_search import SEARCH, SOURCES, source_event
 
@@ -39,7 +40,7 @@ def prepare_web_payload(request, data, *, search_enabled=False):
     if (not isinstance(data, dict) or set(data) - {"model", "messages", "stream", "web_search", "voice_turn"}
             or ("web_search" in data and type(data["web_search"]) is not bool)
             or ("voice_turn" in data and type(data["voice_turn"]) is not bool)
-            or data.get("model") not in {FLASH_ID, MODEL_ID} or data.get("stream") is not True):
+            or data.get("model") not in {FLASH_ID, MODEL_ID, QUANTUM_ID} or data.get("stream") is not True):
         raise ValueError("invalid_messages")
     messages = data.get("messages")
     if (not isinstance(messages, list) or not 1 <= len(messages) <= 128
@@ -51,10 +52,10 @@ def prepare_web_payload(request, data, *, search_enabled=False):
         raise ValueError("invalid_messages")
     request[WEB_MODEL] = data["model"]
     voice_turn = bool(data.get("voice_turn"))
-    request[SEARCH] = not voice_turn and (search_enabled or bool(data.get("web_search")))
+    request[SEARCH] = search_enabled or bool(data.get("web_search"))
     return {**{key: value for key, value in data.items() if key not in {"web_search", "voice_turn"}},
-            "messages": [{"role": "system", "content": PERSONA + (" Это голосовой разговор. Ответь естественно, 1–2 законченными короткими фразами. Без Markdown. У тебя нет свежих веб-источников для этой реплики." if voice_turn else "")}] + messages,
-            "max_tokens": 128 if voice_turn else 512 if data["model"] == FLASH_ID else 4096}
+            "messages": [{"role": "system", "content": PERSONA + (" Это голосовой разговор. Ответь естественно, 1–2 законченными короткими фразами. Без Markdown. Используй свежие факты только при наличии переданных веб-источников." if voice_turn else "")}] + messages,
+            "max_tokens": (1024 if data["model"] == QUANTUM_ID else 128) if voice_turn else 512 if data["model"] == FLASH_ID else 8192 if data["model"] == QUANTUM_ID else 4096}
 
 
 async def public_web_stream(request, source):
@@ -122,6 +123,10 @@ class Session:
     access_until: float
     expires: float
     name: str = "Аккаунт VELIA"
+    quantum: bool = False
+    quantum_source: str = ""
+    quantum_attachments: bool = False
+    selected_model_inputs: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
@@ -205,6 +210,10 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
                 sessions.pop(key, None)
                 return None
             session.name = identity.get("name", "Аккаунт VELIA")
+            session.quantum = identity.get("quantum") is True
+            session.quantum_source = identity.get("quantum_source", "")
+            session.quantum_attachments = identity.get("quantum_attachments") is True
+            session.selected_model_inputs = identity.get("selected_model_inputs") is True
         request[WEB_SESSION] = session
         return session
     async def profile(session):
@@ -218,10 +227,13 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
                 ("velia-local-history-v1:" + origin + ":" + str(session.user_id)).encode(),
                 hashlib.sha256).hexdigest(), "name": session.name, "credits": credits,
             "web_search": bool(web_search and web_search.available),
+            "selected_model_inputs": session.selected_model_inputs,
             "browser_agent": browser_agent_run is not None,
+            **({"quantum_source": session.quantum_source, "quantum_attachments": session.quantum_attachments} if session.quantum else {}),
             "pro_locked_reason": None if credits and credits > 0 else
                 "pro_tokens_required" if credits is not None else "token_balance_unavailable",
-            "models": ([MODEL_ID] if credits and credits > 0 else []) + ([FLASH_ID] if flash_enabled() else [])}
+            "models": ([MODEL_ID] if credits and credits > 0 else []) + ([FLASH_ID] if flash_enabled() else [])
+                + ([QUANTUM_ID] if session.quantum else [])}
     async def current(request):
         try:
             session = await session_for(request)
@@ -269,6 +281,10 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             session = Session(secrets.token_urlsafe(32), result["access_token"], result["refresh_token"], device,
                 identity["user_id"], time.time() + result["access_expires_in"], time.time() + LIFETIME)
             session.name = identity.get("name", "Аккаунт VELIA")
+            session.quantum = identity.get("quantum") is True
+            session.quantum_source = identity.get("quantum_source", "")
+            session.quantum_attachments = identity.get("quantum_attachments") is True
+            session.selected_model_inputs = identity.get("selected_model_inputs") is True
             previous = decode(request)
             if previous:
                 sessions.pop(previous.id, None)
