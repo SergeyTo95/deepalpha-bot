@@ -201,6 +201,7 @@ async def _create_attachment_recoverably(
     filename: str,
     mime_type: str,
     content: bytes,
+    chat_mode: str = "pro",
 ) -> Dict[str, Any]:
     # The worker survives handler cancellation. A retry with the same key
     # deterministically recovers the same ready attachment, including the
@@ -214,6 +215,7 @@ async def _create_attachment_recoverably(
             filename=filename,
             mime_type=mime_type,
             content=content,
+            **({"chat_mode": chat_mode} if chat_mode != "pro" else {}),
         )
     )
     try:
@@ -251,6 +253,18 @@ def setup_velia_mobile_attachment_routes(app: web.Application) -> None:
                 status=404,
             )
         try:
+            chat_mode = request.headers.get("X-Velia-Chat-Mode", "pro")
+            if request.path.endswith("/attachments/selected") and chat_mode not in {"flash", "quantum"}:
+                raise AttachmentError("invalid_chat_mode")
+            if chat_mode not in {"pro", "flash", "quantum"}:
+                raise AttachmentError("invalid_chat_mode")
+            if chat_mode in {"flash", "quantum"}:
+                from services import velia_flash_service, velia_quantum_service
+                service = velia_quantum_service if chat_mode == "quantum" else velia_flash_service
+                if not service.available():
+                    raise AttachmentError(chat_mode + "_unavailable", status=503)
+                if not service.attachments_available():
+                    raise AttachmentError(chat_mode + "_attachments_unsupported", status=503)
             idempotency_key = normalize_upload_idempotency_key(
                 str(request.headers.get("Idempotency-Key") or "")
             )
@@ -262,6 +276,7 @@ def setup_velia_mobile_attachment_routes(app: web.Application) -> None:
                 filename=filename,
                 mime_type=mime_type,
                 content=content,
+                **({"chat_mode": chat_mode} if chat_mode != "pro" else {}),
             )
         except AttachmentError as exc:
             return _error_response(exc)
@@ -357,6 +372,10 @@ def setup_velia_mobile_attachment_routes(app: web.Application) -> None:
 
     app.router.add_post(
         "/mobile-api/v1/conversations/{conversation_id}/attachments",
+        handle_attachment_create,
+    )
+    app.router.add_post(
+        "/mobile-api/v1/conversations/{conversation_id}/attachments/selected",
         handle_attachment_create,
     )
     app.router.add_get(

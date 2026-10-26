@@ -305,18 +305,23 @@ def replace_blocking_message_handler(app: web.Application, routes_module: Any) -
             "idempotency_attachment_mismatch",
             "idempotency_mode_mismatch",
             "flash_busy",
+            "quantum_busy",
         } or result.get("pending"):
             status = 409
-        elif error.endswith("limit_exceeded"):
+        elif error.endswith("limit_exceeded") or error == "quantum_quota_exhausted":
             status = 429
         elif error in {
             "velia_chat_disabled",
             "velia_file_analyst_disabled",
             "flash_unavailable",
+            "quantum_unavailable",
+            "quantum_access_required",
+            "quantum_free_guard_required",
         }:
             status = 503
         elif error in {
             "flash_timeout", "flash_provider_error", "flash_invalid_response",
+            "quantum_timeout", "quantum_provider_error", "quantum_invalid_response",
             "timeout",
             "connection_error",
             "rate_limit",
