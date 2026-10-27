@@ -84,9 +84,9 @@ def test_voice_and_files_follow_selected_model_without_decision_fallback(monkeyp
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("model", ["velia-flash", "velia-quantum"])
+@pytest.mark.parametrize("model,voice", [("velia-flash",True),("velia-quantum",True),("velia-quantum",False)])
 @pytest.mark.parametrize("question", ["Как дела?", "Расскажи какую-нибудь интересную историю без разницы какую", "Привет Виля", "Велия, привет", "ау"])
-def test_simple_voice_turn_uses_one_native_answer_without_planning_or_history_restore(monkeypatch, tmp_path, model, question):
+def test_simple_turn_uses_one_native_answer_without_planning_or_history_restore(monkeypatch, tmp_path, model, voice, question):
     from desktop.web_search import WebSearch
     def forbidden(*args, **kwargs):
         pytest.fail("Self-contained voice turn waited for preparation")
@@ -104,11 +104,11 @@ def test_simple_voice_turn_uses_one_native_answer_without_planning_or_history_re
             state["conversations"][cid]["messages"]=list(prior)
             identities_before=sum(row['path']=='/mobile-api/v1/me' for row in state['seen'])
             async with client.post(server.make_url(f"/web-api/v1/conversations/{cid}/messages/stream"),headers=headers(cookie),
-                    json={"content":question,"model":model,"idempotency_key":"direct-voice-001","voice_turn":True,"web_search":True}) as response:
+                    json={"content":question,"model":model,"idempotency_key":"direct-voice-001","voice_turn":voice,"web_search":True}) as response:
                 assert response.status==200 and "[DONE]" in await response.text()
             assert len(state["account_calls"])==1
             assert state["account_calls"][0]["chat_mode"]==model.removeprefix("velia-")
-            assert state["account_calls"][0]["voice_turn"] is True
+            assert state["account_calls"][0].get("voice_turn",False) is voice
             assert state["account_calls"][0]["content"]==question
             assert sum(row['path']=='/mobile-api/v1/me' for row in state['seen'])==identities_before+1
             assert state["conversations"][cid]["messages"][:2]==prior

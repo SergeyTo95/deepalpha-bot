@@ -217,8 +217,8 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
         try:
             content, result = data["content"], None
             from desktop.direct_tasks import simple_direct_task
-            voice_direct = data.get("voice_turn") and simple_direct_task(content) is not None
-            if not voice_direct and not data.get("medical_no_search") and ((web_search and web_search.available) or data.get("web_search")):
+            direct_turn = (data.get("voice_turn") or data["model"] == QUANTUM_ID) and not attachments and simple_direct_task(content) is not None
+            if not direct_turn and not data.get("medical_no_search") and ((web_search and web_search.available) or data.get("web_search")):
                 if web_search is None:
                     raise SearchUnavailable()
                 status, previous = await relay(request, "GET", "/messages?limit=20")
