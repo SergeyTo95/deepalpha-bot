@@ -198,3 +198,24 @@ def test_message_route_offloads_blocking_generation_to_thread(monkeypatch):
     _, args, kwargs = to_thread_calls[0]
     assert args == (7, "conv", "hello")
     assert kwargs == {"idempotency_key": "request-123"}
+
+
+def test_provider_spend_cap_is_not_exposed_as_daily_message_limit(monkeypatch):
+    route = _FakeRoute()
+    app = _FakeApp(route)
+
+    async def read_json(_request):
+        return {"content": "hello", "chat_mode": "quantum"}
+
+    monkeypatch.setattr(hardening, "dispatch_send", lambda *a, **k: {"ok": False, "error": "quantum_spend_cap_reached"})
+    routes_module = SimpleNamespace(
+        _mobile_api_available=lambda: True,
+        _require_mobile_auth=lambda request: {"user_id": 7},
+        _read_json=read_json,
+        _json_response=lambda data, status=200: {"data": data, "status": status},
+        send_message=lambda *a, **k: None,
+    )
+    request = SimpleNamespace(headers={"Idempotency-Key": "request-123"}, match_info={"conversation_id": "conv"})
+    hardening.replace_blocking_message_handler(app, routes_module)
+    result = asyncio.run(route._handler(request))
+    assert result == {"status": 503, "data": {"ok": False, "error": "quantum_spend_cap_reached"}}

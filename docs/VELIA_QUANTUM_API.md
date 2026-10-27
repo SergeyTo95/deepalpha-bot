@@ -82,9 +82,27 @@ progress is visible, and cancelling keeps the same idempotency key for recovery.
 
 Deploy the account backend first, then the browser gateway. Keep existing
 release gates. `python ci/probe-selected-model-inputs.py` checks real local
-image/PDF OCR without external calls or user data. A one-time
-`python ci/probe-velia-quantum.py --voice` accepts the free Quantum voice path;
-remove that one-time API probe after acceptance to avoid recurring quota use.
+image/PDF OCR without external calls or user data. Use
+`python ci/probe-velia-quantum.py --config-only` in the recurring pre-deploy
+command (the versioned entry point is `sh ci/railway-predeploy.sh`): it
+checks disabled/enabled configuration locally, makes no external
+request, and never claims the provider is available. Malformed enabled
+configuration still fails deployment. Keep all verified-build, Flash and OCR
+checks in the existing release command.
+
+`python ci/probe-velia-quantum.py --voice` is an explicit, one-time live
+acceptance check, not a recurring deployment gate. It still fails on provider
+rejection, paid/unverified keys, incomplete answers and unexpected exceptions.
+An exhausted provider allowance must not prevent an unrelated backend update.
+Runtime completion requests still require the exact key's hard $0 cap; a
+configuration-only deployment check never bypasses that guard.
+
+A provider rejection `429 insufficient_quota` with `key_daily_cap` is exposed
+as `quantum_spend_cap_reached` (HTTP 503), separately from application daily
+message limits and generic upstream quota exhaustion. It can occur before any
+successful message, including when a zero-dollar spending cap blocks a request.
+The adapter never raises the cap, retries on another model/key, or exposes the
+provider's raw account information.
 
 The Experiential adapter pins the documented canonical ID
 `glm-5.3-uncensored`. The old `glm-5.3-uncensored:free` alias returned HTTP 403

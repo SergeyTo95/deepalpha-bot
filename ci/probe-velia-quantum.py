@@ -1,4 +1,4 @@
-"""One bounded, free-only live acceptance request; no chat or database writes.
+"""Offline deployment check or explicit, bounded live Quantum acceptance.
 
 Run explicitly in the account service's pre-deploy environment. Only a fixed
 status is logged: never credentials, model output or exception messages.
@@ -13,7 +13,30 @@ from services import velia_quantum_service as quantum
 from velia_quantum_provider import configuration, ERRORS, EXPERIENTIAL_URL, FREE_MODEL
 
 
+def check_configuration():
+    """Validate startup configuration without depending on provider availability.
+
+    Runtime generation still verifies the exact key's hard zero-spend cap
+    before every completion. This check does not claim live/free availability.
+    """
+    enabled = os.getenv("VELIA_QUANTUM_ENABLED", "").strip().lower() in {"true", "1", "yes", "on"}
+    if not enabled:
+        print("VELIA_QUANTUM_CONFIG_DISABLED", flush=True)
+        return 0
+    config = configuration()
+    if config is None:
+        print("VELIA_QUANTUM_CONFIG_FAILED quantum_unavailable", flush=True)
+        return 1
+    print("VELIA_QUANTUM_CONFIG_OK provider=" + config.provider, flush=True)
+    return 0
+
+
 def main():
+    if "--config-only" in sys.argv:
+        if "--voice" in sys.argv:
+            print("VELIA_QUANTUM_CONFIG_FAILED incompatible_probe_modes", flush=True)
+            return 1
+        return check_configuration()
     voice = "--voice" in sys.argv
     config = configuration()
     if (config is None or config.provider != "experiential"

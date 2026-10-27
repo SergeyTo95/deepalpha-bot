@@ -106,7 +106,9 @@ def test_native_rejection_logs_safe_reason_without_retry(enabled, monkeypatch, c
     client = Client(Response(status, raw))
     monkeypatch.setattr(quantum.requests, 'Session', lambda: client)
     result = quantum.generate('private user prompt', voice_turn=True)
-    assert not result['ok'] and result['reason'] == ('quantum_access_required' if status == 402 else 'quantum_quota_exhausted')
+    expected = ('quantum_access_required' if status == 402 else
+                'quantum_spend_cap_reached' if reason == 'key_daily_cap' else 'quantum_quota_exhausted')
+    assert not result['ok'] and result['reason'] == expected
     assert len(client.guard_calls) == len(client.calls) == 1 and not result['fallback_used']
     assert f'status={status} provider_code={code} quota_reason={reason}' in caplog.text
     assert 'private' not in caplog.text and 'quantum-test-secret' not in caplog.text

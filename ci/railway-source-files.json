@@ -183,6 +183,7 @@
   "ci/probe-velia-flash.py",
   "ci/probe-velia-quantum.py",
   "ci/railway-ci-manifest.json",
+  "ci/railway-predeploy.sh",
   "ci/railway-source-files.json",
   "ci/railway-verified-ci.py",
   "ci/render-verified-dockerfile.py",

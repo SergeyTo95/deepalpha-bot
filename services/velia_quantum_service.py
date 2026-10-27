@@ -84,7 +84,7 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False):
                     code, reason = _provider_error_details(response)
                     LOG.warning('VELIA_QUANTUM_HTTP_REJECTED phase=answer status=%d provider_code=%s quota_reason=%s',
                         response.status_code, code, reason)
-                    raise response_error(response.status_code)
+                    raise response_error(response.status_code, provider_code=code, quota_reason=reason)
                 if "text/event-stream" not in response.headers.get("Content-Type", ""):
                     raise QuantumError("quantum_invalid_response")
                 for chunk in response.iter_content(256):

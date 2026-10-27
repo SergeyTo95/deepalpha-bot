@@ -317,6 +317,7 @@ def replace_blocking_message_handler(app: web.Application, routes_module: Any) -
             "quantum_unavailable",
             "quantum_access_required",
             "quantum_free_guard_required",
+            "quantum_spend_cap_reached",
         }:
             status = 503
         elif error in {

@@ -152,3 +152,16 @@ def test_explicit_zero_daily_spend_cap_is_required(raw):
 def test_nonzero_unknown_or_ambiguous_caps_never_allow_inference(raw):
     with pytest.raises(quantum.QuantumError,match='quantum_free_guard_required'):
         quantum.require_zero_spend_key(raw)
+
+
+@pytest.mark.parametrize('status,code,reason,expected', [
+    (429, 'insufficient_quota', 'key_daily_cap', 'quantum_spend_cap_reached'),
+    (429, 'insufficient_quota', 'insufficient_credits', 'quantum_quota_exhausted'),
+    (429, 'rate_limit_exceeded', 'key_daily_cap', 'quantum_quota_exhausted'),
+    (401, 'insufficient_quota', 'key_daily_cap', 'quantum_unavailable'),
+])
+def test_spending_cap_classification_requires_exact_provider_rejection(status, code, reason, expected):
+    error = quantum.response_error(status, provider_code=code, quota_reason=reason)
+    assert error.code == expected
+    if expected == 'quantum_spend_cap_reached':
+        assert error.status == 503

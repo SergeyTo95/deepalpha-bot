@@ -65,3 +65,75 @@ def test_exception_is_not_logged_or_retried(enabled, monkeypatch, capsys):
     monkeypatch.setattr(probe.quantum, "generate", generate)
     assert probe.main() == 1 and len(calls) == 1
     assert "private" not in capsys.readouterr().out
+
+
+def test_offline_deploy_check_never_calls_provider_even_when_quota_is_unavailable(enabled, monkeypatch, capsys):
+    monkeypatch.setattr(probe.sys, "argv", ["probe-velia-quantum.py", "--config-only"])
+    monkeypatch.setattr(probe.quantum, "generate", lambda *a, **k: pytest.fail("deployment called inference"))
+    assert probe.main() == 0
+    output = capsys.readouterr().out
+    assert output.strip() == "VELIA_QUANTUM_CONFIG_OK provider=experiential"
+    assert "LIVE_PROBE_OK" not in output and "VOICE_PROBE_OK" not in output
+
+
+def test_offline_deploy_accepts_disabled_optional_quantum(monkeypatch, capsys):
+    monkeypatch.setattr(probe.sys, "argv", ["probe-velia-quantum.py", "--config-only"])
+    monkeypatch.delenv("VELIA_QUANTUM_ENABLED", raising=False)
+    monkeypatch.setattr(probe.quantum, "generate", lambda *a, **k: pytest.fail("disabled model called"))
+    assert probe.main() == 0
+    assert "CONFIG_DISABLED" in capsys.readouterr().out
+
+
+def test_offline_deploy_still_rejects_invalid_enabled_configuration(enabled, monkeypatch, capsys):
+    monkeypatch.setattr(probe.sys, "argv", ["probe-velia-quantum.py", "--config-only"])
+    monkeypatch.setenv("VELIA_QUANTUM_BASE_URL", "https://evil.example/v1")
+    monkeypatch.setattr(probe.quantum, "generate", lambda *a, **k: pytest.fail("bad configuration called"))
+    assert probe.main() == 1
+    assert "CONFIG_FAILED quantum_unavailable" in capsys.readouterr().out
+
+
+def test_explicit_live_acceptance_does_not_treat_spending_rejection_as_success(enabled, monkeypatch, capsys):
+    monkeypatch.setattr(probe.sys, "argv", ["probe-velia-quantum.py", "--voice"])
+    monkeypatch.setattr(probe.quantum, "generate", lambda *a, **k: {"ok": False, "reason": "quantum_spend_cap_reached"})
+    assert probe.main() == 1
+    assert "LIVE_PROBE_FAILED quantum_spend_cap_reached" in capsys.readouterr().out
+
+
+def test_offline_and_live_modes_cannot_be_combined(enabled, monkeypatch):
+    monkeypatch.setattr(probe.sys, "argv", ["probe-velia-quantum.py", "--config-only", "--voice"])
+    monkeypatch.setattr(probe.quantum, "generate", lambda *a, **k: pytest.fail("ambiguous mode called model"))
+    assert probe.main() == 1
+
+
+def test_offline_deploy_accepts_valid_owned_model_without_external_call(enabled, monkeypatch, capsys):
+    monkeypatch.setattr(probe.sys, "argv", ["probe-velia-quantum.py", "--config-only"])
+    monkeypatch.setenv("VELIA_QUANTUM_PROVIDER", "self_hosted")
+    monkeypatch.setenv("VELIA_QUANTUM_MODEL", "velia-owned")
+    monkeypatch.setenv("VELIA_QUANTUM_BASE_URL", "http://quantum.railway.internal:8080/v1")
+    monkeypatch.setattr(probe.quantum, "generate", lambda *a, **k: pytest.fail("offline check called owned model"))
+    assert probe.main() == 0
+    assert "CONFIG_OK provider=self_hosted" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("verification_exit", [0, 42])
+def test_release_shell_preserves_required_checks_and_fails_before_later_checks(tmp_path, verification_exit):
+    import os
+    import subprocess
+    binary = tmp_path / "python"
+    log = tmp_path / "commands.log"
+    binary.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$VELIA_CHECK_LOG"\n'
+                      'if [ "$1" = "ci/railway-verified-ci.py" ]; then exit "$VELIA_VERIFY_EXIT"; fi\n')
+    binary.chmod(0o755)
+    result = subprocess.run(["sh", str(Path(__file__).resolve().parents[1] / "ci/railway-predeploy.sh")],
+        env={**os.environ, "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
+             "VELIA_CHECK_LOG": str(log), "VELIA_VERIFY_EXIT": str(verification_exit)},
+        capture_output=True, timeout=5)
+    calls = log.read_text().splitlines()
+    assert result.returncode == verification_exit
+    assert calls[0] == "ci/railway-verified-ci.py verify"
+    if verification_exit:
+        assert len(calls) == 1
+    else:
+        assert calls[1] == "ci/probe-velia-flash.py"
+        assert "public_capability" in calls[2]
+        assert calls[3:] == ["ci/probe-selected-model-inputs.py", "ci/probe-velia-quantum.py --config-only"]
