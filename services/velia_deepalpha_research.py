@@ -89,14 +89,14 @@ def _search(query):
         key = os.getenv("WEB_SEARCH_API_KEY", "").strip()
         if not key or provider not in {"tavily", "serper", "bing"}:
             raise ValueError("research_search_configuration_unavailable")
-        from services.web_search_service import _env_int
+        from services.web_search_service import _env_int, authorize_search, tavily_payload
         limit = max(1, min(5, _env_int("WEB_SEARCH_MAX_RESULTS", 5)))
         timeout = max(1, min(15, _env_int("WEB_SEARCH_TIMEOUT", 15)))
+        authorize_search(provider, key)
         if provider == "tavily":
             body = json.loads(_fetch("https://api.tavily.com/search",
                 headers={"Authorization": "Bearer " + key}, timeout=timeout,
-                json_body={"query": query, "max_results": limit, "search_depth": "basic",
-                           "auto_parameters": False, "include_answer": False, "include_raw_content": False}))
+                json_body=tavily_payload(query, limit)))
             rows = body.get("results", []) if isinstance(body, dict) else []
         elif provider == "serper":
             body = json.loads(_fetch("https://google.serper.dev/search",
@@ -115,7 +115,8 @@ def _search(query):
                  "coverage": "search_excerpt"}
                 for r in rows[:limit] if isinstance(r, dict)]
     key = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
-    if key:
+    from services.velia_free_api_budget_service import free_only
+    if key and not free_only():
         body = json.loads(_fetch("https://api.search.brave.com/res/v1/web/search",
             params={"q": query, "count": 5, "text_decorations": "false", "safesearch": "moderate"},
             headers={"Accept": "application/json", "X-Subscription-Token": key}))

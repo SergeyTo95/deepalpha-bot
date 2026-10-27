@@ -269,6 +269,8 @@ def main() -> None:
     setup_velia_developer_routes(deepalpha_web.app, velia_mobile_routes_module)
     setup_velia_software_factory_routes(deepalpha_web.app, velia_mobile_routes_module)
     setup_velia_agent_routes(deepalpha_web.app, velia_mobile_routes_module)
+    from services.velia_free_tools_routes import setup_free_tools_routes
+    setup_free_tools_routes(deepalpha_web.app, velia_mobile_routes_module)
     install_velia_telegram_connect_page(
         deepalpha_web.app,
         web_user_resolver,

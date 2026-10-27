@@ -23,6 +23,14 @@
     ],
     "sha256": "bebe6ea806929d2b5dabc78621326ad4065b4d85ec8f5e59cd241bb97a8e92cd"
   },
+  "velia-free-integrations.yml": {
+    "group": "backend",
+    "steps": [
+      3,
+      4
+    ],
+    "sha256": "8ade4a8dc01f76cde9e6f5383b6585bbc65972778d85d93dda56ee0b06de6f8e"
+  },
   "velia-medical-radar.yml": {
     "group": "backend",
     "steps": [

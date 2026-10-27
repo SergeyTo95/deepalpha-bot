@@ -67,6 +67,7 @@ def test_provider_responses_are_bounded_and_closed(monkeypatch, method):
     ("bing", {"webPages": {"value": [{"name": "Report", "snippet": "Evidence", "url": "https://example.com/report"}] * 6}}),
 ])
 def test_research_reuses_configured_search_once_with_bounded_results(monkeypatch, provider, payload):
+    monkeypatch.setenv("VELIA_FREE_APIS_ONLY", "false")
     monkeypatch.setenv("LIVE_WEB_RESEARCH_ENABLED", "true")
     monkeypatch.setenv("WEB_SEARCH_PROVIDER", provider)
     monkeypatch.setenv("WEB_SEARCH_API_KEY", "test-key")
@@ -90,6 +91,7 @@ def test_research_reuses_configured_search_once_with_bounded_results(monkeypatch
 
 
 def test_failed_configured_search_does_not_start_fallback(monkeypatch):
+    monkeypatch.setenv("VELIA_FREE_APIS_ONLY", "false")
     monkeypatch.setenv("LIVE_WEB_RESEARCH_ENABLED", "true")
     monkeypatch.setenv("WEB_SEARCH_PROVIDER", "tavily")
     monkeypatch.setenv("WEB_SEARCH_API_KEY", "test-key")

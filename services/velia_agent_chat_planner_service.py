@@ -49,6 +49,10 @@ _STATUS_RE = re.compile(
 )
 
 _TOOL_ARGUMENT_GUIDANCE: Dict[str, Dict[str, str]] = {
+    "velia.knowledge.search": {"query": "required query up to 500 chars", "language": "required Wikipedia edition code such as ru, en, tr, de, ar, zh, es, hi"},
+    "velia.papers.search": {"query": "required bibliographic query up to 500 chars; returns metadata, not full papers"},
+    "velia.calculate": {"expression": "required numeric expression, max 256 chars, + - * / ** and parentheses; exponent integer -12..12"},
+    "velia.web.search": {"query": "required web search query in the user language, max 2000 chars"},
     "velia.echo": {"text": "bounded text to return"},
     "velia.tasks.list": {"limit": "optional integer 1..100"},
     "velia.tasks.create_draft": {

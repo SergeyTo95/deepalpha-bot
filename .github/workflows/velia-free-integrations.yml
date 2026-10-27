@@ -1,0 +1,47 @@
+name: Velia free utility APIs
+on:
+  push:
+    branches: [feature/turbo-short-term-btc, feature/velia-quantum-production-api, feature/velia-free-integrations]
+  pull_request:
+    paths:
+      - 'services/velia_free*'
+      - 'services/velia_calculator_service.py'
+      - 'services/velia_speech_service.py'
+      - 'services/velia_open_knowledge_service.py'
+      - 'services/web_search_service.py'
+      - 'services/velia_deepalpha_research.py'
+      - 'services/velia_agent*'
+      - 'run_web_process.py'
+      - 'tests/test_velia_free*'
+      - '.github/workflows/velia-free-integrations.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: velia_free_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/velia_free_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt pytest pytest-asyncio
+      - run: >-
+          python -m pytest -q tests/test_velia_free_integrations.py
+          tests/test_velia_free_api_budget_postgres.py
+          tests/test_velia_agent_runtime_service.py tests/test_velia_agent_routes.py
+      - run: python -m compileall -q services run_web_process.py
