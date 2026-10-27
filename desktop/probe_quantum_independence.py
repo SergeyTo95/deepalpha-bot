@@ -9,13 +9,19 @@ import time
 from aiohttp import ClientSession, ClientTimeout, DummyCookieJar
 from desktop import decision_router, request_intent, web_search, quantum_intent
 from services.velia_structured_output import strict_json_loads
-from velia_quantum_provider import EXPERIENTIAL_URL, FREE_MODEL, EXPERIENTIAL_MODELS, configuration, QuantumError, verify_zero_spend_async
+from velia_quantum_provider import EXPERIENTIAL_URL, FREE_MODEL, EXPERIENTIAL_MODELS, configuration, QuantumError, verify_zero_spend_async, require_free_zai
 
 MODELS_MAX_BYTES = 1024 * 1024
 
 
 async def check_access(config):
     """One authenticated read, no model generation, billing, or secret output."""
+    if config is not None and config.provider == "zai":
+        require_free_zai(config)
+        # No documented model-catalog endpoint: actual access is verified by
+        # the following planning calls, never inferred from a local key shape.
+        print('VELIA_QUANTUM_ACCESS_NOT_PROBED provider=zai', flush=True)
+        return
     if (config is None or config.provider != "experiential"
             or config.base_url != EXPERIENTIAL_URL or config.model not in EXPERIENTIAL_MODELS):
         print('VELIA_QUANTUM_ACCESS '+json.dumps({'ok':False,'status':0,'provider_code':'invalid_local_config'}),flush=True)
@@ -116,7 +122,10 @@ async def run(*, voice=False, access_only=False, config_only=False):
     decision_router.try_direct = forbidden
     config = configuration()
     await check_access(config)
-    if access_only:return
+    if access_only:
+        if config.provider == "zai":
+            raise RuntimeError("quantum_live_probe_required")
+        return
     started = time.monotonic()
     cases=[('direct','Составь короткий план вымышленного рассказа о дружбе робота и птицы.')]
     if voice:
@@ -145,7 +154,7 @@ async def run(*, voice=False, access_only=False, config_only=False):
         audio=await synthesize(validate({'text':'Привет! Я Велия.','voice':'edge:en-US-AvaMultilingualNeural','rate':1}))
         if len(audio)<1000:raise RuntimeError('voice_audio_unavailable')
         print('VELIA_VOICE_PIPELINE_OK '+json.dumps({'bytes':len(audio),'synthesis_ms':round((time.monotonic()-turn)*1000),'flash_calls':0}),flush=True)
-    print("VELIA_QUANTUM_INDEPENDENCE_OK " + json.dumps({"model":FREE_MODEL,
+    print("VELIA_QUANTUM_INDEPENDENCE_OK " + json.dumps({"model":config.model,
         "flash_calls":0,"elapsed_ms":round((time.monotonic()-started)*1000)}), flush=True)
 
 

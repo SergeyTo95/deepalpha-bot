@@ -37,6 +37,89 @@ def test_provider_diagnostic_rejects_malformed_or_oversized_bodies(raw, expected
 import velia_quantum_provider as quantum
 
 
+def test_zai_uses_its_own_key_endpoint_and_free_model(enabled, monkeypatch):
+    monkeypatch.setenv("VELIA_QUANTUM_PROVIDER", "zai")
+    config = quantum.configuration()
+    assert config.base_url == quantum.ZAI_URL
+    assert config.model == "glm-4.7-flash"
+    assert config.source == "GLM-4.7-Flash через Z.ai"
+    sent = quantum.payload(config, [{"role": "user", "content": "こんにちは"}],
+        tools=[{"type": "function", "function": {"name": "read"}}], tool_choice="required")
+    assert sent["thinking"] == {"type": "disabled"}
+    assert sent["tool_choice"] == "auto"
+    assert "gateway" not in sent and "reasoning_effort" not in sent
+    monkeypatch.delenv("VELIA_QUANTUM_API_KEY")
+    monkeypatch.setenv("EXPLABS_API_KEY", "aggregator-key-must-not-be-used")
+    monkeypatch.setenv("KIMI_API_KEY", "other-key-must-not-be-used")
+    assert quantum.configuration() is None
+
+
+@pytest.mark.parametrize("name,value", [
+    ("VELIA_QUANTUM_MODEL", "glm-4.7-flashx"),
+    ("VELIA_QUANTUM_MODEL", "glm-5.3"),
+    ("VELIA_QUANTUM_MODEL", "glm-4.7-flash:free"),
+    ("VELIA_QUANTUM_BASE_URL", quantum.EXPERIENTIAL_URL),
+    ("VELIA_QUANTUM_BASE_URL", "https://api.z.ai/api/coding/paas/v4"),
+    ("VELIA_QUANTUM_BASE_URL", "https://evil.example/api/paas/v4"),
+    ("VELIA_QUANTUM_API_KEY", "${{missing.KEY}}"),
+])
+def test_zai_rejects_paid_models_wrong_hosts_and_unresolved_keys(enabled, monkeypatch, name, value):
+    monkeypatch.setenv("VELIA_QUANTUM_PROVIDER", "zai")
+    monkeypatch.setenv(name, value)
+    assert quantum.configuration() is None
+
+
+def test_zai_cannot_enable_billed_builtin_tools(enabled, monkeypatch):
+    monkeypatch.setenv("VELIA_QUANTUM_PROVIDER", "zai")
+    with pytest.raises(quantum.QuantumError, match="quantum_free_guard_required"):
+        quantum.payload(quantum.configuration(), [{"role": "user", "content": "search"}],
+            tools=[{"type": "web_search", "web_search": {"enable": True}}])
+
+
+@pytest.mark.parametrize("failure", [None, "denied", "plain_text", "truncated"])
+def test_zai_migration_proves_tools_and_stream_without_claiming_metered_cost(enabled, monkeypatch, capsys, failure):
+    import asyncio
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+    seen = []
+    async def run():
+        async def completion(request):
+            body = await request.json()
+            seen.append(body)
+            assert body["model"] == "glm-4.7-flash"
+            assert body["thinking"] == {"type": "disabled"} and "gateway" not in body
+            assert request.headers["Authorization"] == "Bearer quantum-test-secret"
+            if failure == "denied":
+                return web.json_response({"error": {"code": "private", "message": "private"}}, status=403)
+            if not body["stream"]:
+                assert body["tool_choice"] == "auto"
+                if failure == "plain_text":
+                    return web.json_response({"choices": [{"finish_reason": "stop", "message": {"content": "15"}}]})
+                return web.json_response({"usage": {"total_tokens": 20}, "choices": [{"finish_reason": "tool_calls",
+                    "message": {"tool_calls": [{"function": {"name": "report_sum", "arguments": {"sum": 15}}}]}}]})
+            return web.Response(body=wire(done=failure != "truncated"), content_type="text/event-stream")
+        app = web.Application()
+        app.router.add_post("/api/paas/v4/chat/completions", completion)
+        async with TestServer(app) as server:
+            monkeypatch.setattr(quantum, "ZAI_URL", str(server.make_url("/api/paas/v4")))
+            monkeypatch.setenv("VELIA_QUANTUM_PROVIDER", "zai")
+            monkeypatch.setenv("VELIA_QUANTUM_BASE_URL", quantum.ZAI_URL)
+            if failure:
+                with pytest.raises((quantum.QuantumError, KeyError)):
+                    await quantum.probe_free_core()
+            else:
+                await quantum.probe_free_core()
+    asyncio.run(run())
+    assert len(seen) == (1 if failure in {"denied", "plain_text"} else 2)
+    output = capsys.readouterr().out
+    assert "quantum-test-secret" not in output and "private" not in output
+    if not failure:
+        report = json.loads(output.removeprefix("VELIA_QUANTUM_FREE_ACCEPTED "))
+        assert report["ok"] and report["tool_call"] and report["stream"]
+        assert report["pricing_basis"] == "zai_published_free_model"
+        assert "reported_cost_usd" not in report
+
+
 @pytest.fixture
 def enabled(monkeypatch):
     for name in ("VELIA_QUANTUM_PROVIDER", "VELIA_QUANTUM_MODEL", "VELIA_QUANTUM_BASE_URL"):
@@ -228,3 +311,16 @@ def test_explicit_zero_daily_spend_cap_is_required(raw):
 def test_nonzero_unknown_or_ambiguous_caps_never_allow_inference(raw):
     with pytest.raises(quantum.QuantumError,match='quantum_free_guard_required'):
         quantum.require_zero_spend_key(raw)
+
+
+@pytest.mark.parametrize('status,code,reason,expected', [
+    (429, 'insufficient_quota', 'key_daily_cap', 'quantum_spend_cap_reached'),
+    (429, 'insufficient_quota', 'insufficient_credits', 'quantum_quota_exhausted'),
+    (429, 'rate_limit_exceeded', 'key_daily_cap', 'quantum_quota_exhausted'),
+    (401, 'insufficient_quota', 'key_daily_cap', 'quantum_unavailable'),
+])
+def test_spending_cap_classification_requires_exact_provider_rejection(status, code, reason, expected):
+    error = quantum.response_error(status, provider_code=code, quota_reason=reason)
+    assert error.code == expected
+    if expected == 'quantum_spend_cap_reached':
+        assert error.status == 503

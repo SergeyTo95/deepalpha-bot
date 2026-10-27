@@ -8,6 +8,53 @@ from velia_desktop_routes import setup_velia_desktop_routes, validate_payload
 from test_velia_quantum_provider import enabled, wire
 
 
+@pytest.mark.parametrize("target", ["planner", "desktop", "desktop_stream"])
+def test_zai_browser_paths_use_only_free_model_and_documented_tool_mode(enabled, monkeypatch, target):
+    from desktop.quantum_intent import understand_quantum
+    seen = []
+    async def run():
+        async def provider(request):
+            body = await request.json()
+            seen.append(body)
+            assert request.headers["Authorization"] == "Bearer quantum-test-secret"
+            assert body["model"] == "glm-4.7-flash" and body["thinking"] == {"type": "disabled"}
+            assert "gateway" not in body and "reasoning_effort" not in body
+            if body.get("tools"):
+                assert body["tool_choice"] == "auto"
+                plan = {"action": "direct", "quote": "", "candidate": "", "query": "",
+                    "source_scope": "general", "task_query": "", "context": []}
+                return web.json_response({"choices": [{"finish_reason": "tool_calls", "message": {"tool_calls": [
+                    {"type": "function", "function": {"name": "understand_request", "arguments": plan}}]}}]})
+            if body.get("stream"):
+                return web.Response(body=wire(), content_type="text/event-stream")
+            return web.json_response({"choices": [{"message": {"content": "Поняла"}, "finish_reason": "stop"}]})
+        upstream = web.Application()
+        upstream.router.add_post("/api/paas/v4/chat/completions", provider)
+        async with TestServer(upstream) as host:
+            base = str(host.make_url("/api/paas/v4"))
+            monkeypatch.setattr(quantum, "ZAI_URL", base)
+            monkeypatch.setenv("VELIA_QUANTUM_PROVIDER", "zai")
+            monkeypatch.setenv("VELIA_QUANTUM_BASE_URL", base)
+            if target == "planner":
+                assert (await understand_quantum([{"role": "user", "content": "説明してください"}]))["action"] == "direct"
+            else:
+                monkeypatch.setenv("VELIA_DESKTOP_API_ENABLED", "true")
+                monkeypatch.setenv("VELIA_DESKTOP_PREVIEW_USER_IDS", "7")
+                app = web.Application()
+                setup_velia_desktop_routes(app, lambda _: {"user_id": 7})
+                async with TestServer(app) as server, ClientSession() as client:
+                    async with client.post(server.make_url("/desktop-api/v1/chat/completions"),
+                            headers={"Authorization": "Bearer va_test"}, json={"model": quantum.MODEL_ID,
+                                "stream": target == "desktop_stream", "messages": [{"role": "user", "content": "こんにちは"}]}) as response:
+                        assert response.status == 200
+                        if target == "desktop_stream":
+                            assert "Поняла" in await response.text()
+                        else:
+                            assert (await response.json())["choices"][0]["message"]["content"] == "Поняла"
+        assert len(seen) == 1
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("status,code", [(402, "quantum_access_required"), (429, "quantum_quota_exhausted"),
     (401, "quantum_unavailable"), (503, "quantum_provider_error"), (307, "quantum_provider_error")])
 def test_gateway_quantum_route_uses_own_key_and_never_retries(enabled, monkeypatch, status, code):

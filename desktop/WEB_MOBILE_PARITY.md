@@ -160,6 +160,43 @@ absence of a free alias in model discovery alone does not prove that a documente
 suffix is invalid. No paid retry or automatic model replacement is allowed.
 https://platform.experientiallabs.ai/docs/errors
 
+## Direct Z.ai Quantum migration (2026-10-27)
+
+The actual Experiential `:free` request was refused with 403 model_not_granted;
+this account's catalog offers DeepSeek free only with the paid Pro plan.
+The next explicit Quantum migration uses Z.ai Standard API, independently of
+Experiential. Configure both the account backend and browser gateway:
+
+```
+VELIA_QUANTUM_ENABLED=true
+VELIA_QUANTUM_PROVIDER=zai
+VELIA_QUANTUM_BASE_URL=https://api.z.ai/api/paas/v4
+VELIA_QUANTUM_MODEL=glm-4.7-flash
+VELIA_QUANTUM_API_KEY=<dedicated Z.ai Standard API key>
+```
+
+Only this published zero-priced model and exact endpoint are accepted for Z.ai.
+The key is supplied by the operator in Railway, never committed to source.
+No EXPLABS/Kimi credential fallback, Coding Plan endpoint, FlashX or paid GLM
+fallback is allowed. Built-in billed tools are rejected; only local function
+descriptions may be passed. Thinking is disabled to avoid hidden reasoning
+latency. Z.ai documents tool_choice=auto; the caller still requires and validates
+the function result, so a plain text planner response fails closed.
+
+Official API and current pricing:
+https://docs.z.ai/guides/overview/quick-start
+https://docs.z.ai/guides/overview/pricing
+https://docs.z.ai/api-reference/llm/chat-completion
+
+`python -m velia_quantum_provider` checks one synthetic function result and a
+completed stream against the service's actual key. For Z.ai it records the
+published-free pricing basis, not a fictitious metered dollar cost or an
+Experiential cap check. There is no documented model catalog check here; the
+gateway's live planning probe verifies real requests rather than key shape.
+After migration acceptance restore offline Quantum checks on recurring deploys.
+Account quota, rate limits, real multilingual quality and physical voice
+acceptance remain to be verified after the key is installed and deployment passes.
+
 ## Future self-hosting
 
 Official checkpoint: https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash
