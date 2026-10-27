@@ -39,8 +39,8 @@ def main():
         return check_configuration()
     voice = "--voice" in sys.argv
     config = configuration()
-    if (config is None or config.provider != "experiential"
-            or config.base_url != EXPERIENTIAL_URL or config.model not in EXPERIENTIAL_MODELS):
+    if (config is None or not (config.provider == "zai" or config.provider == "experiential"
+            and config.base_url == EXPERIENTIAL_URL and config.model in EXPERIENTIAL_MODELS)):
         print("VELIA_QUANTUM_LIVE_PROBE_FAILED quantum_unavailable", flush=True)
         return 1
     # This process-local bound never changes the running chat's output limit.

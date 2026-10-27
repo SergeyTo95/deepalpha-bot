@@ -26,6 +26,8 @@ EXPERIENTIAL_MODELS = {
     FREE_CORE_ROUTE: "DeepSeek V4.1 Flash через Experiential",
 }
 EXPERIENTIAL_URL = "https://api.experientiallabs.ai/v1"
+ZAI_URL = "https://api.z.ai/api/paas/v4"
+ZAI_FREE_MODEL = "glm-4.7-flash"
 KEY_INFO_URL = "https://api.experientiallabs.ai/api/v1/key"
 KEY_INFO_MAX_BYTES = 8192
 LOG = logging.getLogger(__name__)
@@ -118,6 +120,8 @@ class QuantumConfig:
 
     @property
     def source(self):
+        if self.provider == "zai":
+            return "GLM-4.7-Flash через Z.ai"
         return EXPERIENTIAL_MODELS.get(self.model, "Quantum через Experiential") if self.provider == "experiential" else "Собственная модель VELIA"
 
 
@@ -125,11 +129,11 @@ def configuration():
     if os.getenv("VELIA_QUANTUM_ENABLED", "").strip().lower() not in {"true", "1", "yes", "on"}:
         return None
     provider = os.getenv("VELIA_QUANTUM_PROVIDER", "experiential").strip().lower()
-    if provider not in {"experiential", "self_hosted"}:
+    if provider not in {"experiential", "zai", "self_hosted"}:
         return None
     external = provider == "experiential"
-    base = os.getenv("VELIA_QUANTUM_BASE_URL", EXPERIENTIAL_URL if external else "").strip().rstrip("/")
-    model = os.getenv("VELIA_QUANTUM_MODEL", FREE_MODEL if external else "").strip()
+    base = os.getenv("VELIA_QUANTUM_BASE_URL", ZAI_URL if provider == "zai" else EXPERIENTIAL_URL if external else "").strip().rstrip("/")
+    model = os.getenv("VELIA_QUANTUM_MODEL", ZAI_FREE_MODEL if provider == "zai" else FREE_MODEL if external else "").strip()
     key = os.getenv("VELIA_QUANTUM_API_KEY", "").strip()
     if external and not key:
         key = os.getenv("EXPLABS_API_KEY", "").strip()
@@ -138,7 +142,7 @@ def configuration():
         private = (url.hostname or "").endswith(".railway.internal") or url.hostname in {"localhost", "127.0.0.1", "::1"}
         valid = (url.scheme == "https" or url.scheme == "http" and private)
         valid = (valid and bool(url.hostname) and not url.username and not url.password
-            and not url.query and not url.fragment and url.path in {"", "/v1"}
+            and not url.query and not url.fragment and url.path in ({"/api/paas/v4"} if provider == "zai" else {"", "/v1"})
             and (url.port is None or 1 <= url.port <= 65535))
     except ValueError:
         return None
@@ -149,7 +153,9 @@ def configuration():
     # the presented key's hard $0 spending cap before any completion request.
     if external and (base != EXPERIENTIAL_URL or model not in EXPERIENTIAL_MODELS):
         return None
-    if not external and url.hostname == "api.experientiallabs.ai":
+    if provider == "zai" and (base != ZAI_URL or model != ZAI_FREE_MODEL or "${{" in key):
+        return None
+    if provider == "self_hosted" and url.hostname in {"api.experientiallabs.ai", "api.z.ai"}:
         return None
     return QuantumConfig(provider, base, model, key,
         bounded_int("VELIA_QUANTUM_MAX_OUTPUT_TOKENS", 8192, 256, 8192))
@@ -191,6 +197,9 @@ def require_zero_spend_key(raw):
 
 
 async def verify_zero_spend_async(client, config):
+    if config.provider == 'zai':
+        require_free_zai(config)
+        return
     if config.provider != 'experiential':
         return
     status = 0
@@ -216,6 +225,9 @@ async def verify_zero_spend_async(client, config):
 
 
 def verify_zero_spend(client, config):
+    if config.provider == 'zai':
+        require_free_zai(config)
+        return
     if config.provider != 'experiential':
         return
     status = 0
@@ -236,6 +248,16 @@ def verify_zero_spend(client, config):
         LOG.warning('VELIA_QUANTUM_FREE_GUARD ok=false status=%d', status)
         raise QuantumError('quantum_free_guard_required', 503) from None
     LOG.info('VELIA_QUANTUM_FREE_GUARD ok=true status=%d', status)
+
+
+def require_free_zai(config):
+    """Official zero-priced model only; never send Z.ai keys to an aggregator.
+
+    Z.ai does not expose Experiential's key-cap metadata. This guard pins the
+    published free model and endpoint, not an inferred credit balance.
+    """
+    if config.base_url != ZAI_URL or config.model != ZAI_FREE_MODEL:
+        raise QuantumError('quantum_free_guard_required', 503)
 
 
 def response_error(status, *, provider_code=None, quota_reason=None):
@@ -262,6 +284,18 @@ def payload(config, messages, *, stream=False, max_tokens=None, tools=None, tool
         result["reasoning_effort"] = "low"
         result["gateway"] = {"retry":{"max_attempts_per_route":1,"max_total_attempts":1},
             "routing":{"allow_fallbacks":False}}
+    if config.provider == "zai":
+        require_free_zai(config)
+        # Avoid hidden reasoning latency, including in the voice planner.
+        result["thinking"] = {"type": "disabled"}
+        if tools and any(t.get("type") != "function" for t in tools):
+            raise QuantumError("quantum_free_guard_required", 503)
+        # Z.ai documents only auto. The caller still strictly validates the
+        # required function result; a plain-text answer fails closed.
+        if tool_choice not in (None, "auto", "required"):
+            raise QuantumError("quantum_invalid_response")
+        if tool_choice == "required":
+            tool_choice = "auto"
     if tools:
         result["tools"] = tools
     if tool_choice is not None:
@@ -403,20 +437,25 @@ async def probe_free_core():
     """Two bounded synthetic calls using the exact service key; no fallback.
 
     Run explicitly for a model migration, not as a recurring availability gate.
-    Refuses any model other than the selected free core model and verifies the
-    key's hard $0 cap before each call. Records only safe structural evidence.
+    Pins Z.ai's published free model, or verifies Experiential's hard $0 key
+    cap before each call. Records only safe structural evidence. Z.ai usage
+    does not report a monetary cost, so never claim a metered zero for it.
     """
     from aiohttp import ClientSession, ClientTimeout, DummyCookieJar
     config = configuration()
-    if (config is None or config.provider != "experiential"
-            or config.model not in {FREE_CORE_MODEL, FREE_CORE_ROUTE} or config.base_url != EXPERIENTIAL_URL):
+    if (config is None or not (config.provider == "zai" or config.provider == "experiential"
+            and config.model in {FREE_CORE_MODEL, FREE_CORE_ROUTE} and config.base_url == EXPERIENTIAL_URL)):
         raise QuantumError("quantum_unavailable", 503)
     tool = {"type": "function", "function": {"name": "report_sum",
         "description": "Report the sum requested by the user.",
         "parameters": {"type": "object", "properties": {"sum": {"type": "integer"}},
             "required": ["sum"], "additionalProperties": False}}}
     report = {"model": config.model, "ok": False, "calls": 0,
-        "tool_call": False, "stream": False, "reported_cost_usd": 0}
+        "tool_call": False, "stream": False}
+    if config.provider == "experiential":
+        report["reported_cost_usd"] = 0
+    else:
+        report["pricing_basis"] = "zai_published_free_model"
     async with ClientSession(timeout=ClientTimeout(total=60, connect=5, sock_read=50),
             cookie_jar=DummyCookieJar(), trust_env=False) as client:
         for stream in (False, True):
@@ -454,17 +493,20 @@ async def probe_free_core():
                             continue
                         value = json.loads(data, parse_float=Decimal)
                         if isinstance(value, dict) and isinstance(value.get("usage"), dict):
-                            require_free_usage(value)
+                            if config.provider == "experiential":
+                                require_free_usage(value)
                             usage_frames.append(value)
-                    if not usage_frames:
+                    if config.provider == "experiential" and not usage_frames:
                         raise QuantumError("quantum_free_guard_required", 503)
                     report["stream"] = True
                 else:
                     value = json.loads(raw, parse_float=Decimal)
-                    require_free_usage(value)
+                    if config.provider == "experiential":
+                        require_free_usage(value)
                     choice = value["choices"][0]
                     calls = choice["message"]["tool_calls"]
-                    if choice.get("finish_reason") != "tool_calls" or len(calls) != 1:
+                    valid_finish = {"tool_calls", "stop"} if config.provider == "zai" else {"tool_calls"}
+                    if choice.get("finish_reason") not in valid_finish or len(calls) != 1:
                         raise QuantumError("quantum_invalid_response")
                     function = calls[0]["function"]
                     args = function["arguments"]

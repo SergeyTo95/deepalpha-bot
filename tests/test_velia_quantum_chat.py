@@ -79,6 +79,23 @@ def test_account_generation_free_route_preserves_user_text_and_streams(enabled, 
     assert kwargs['json']['gateway']['routing']['allow_fallbacks'] is False
 
 
+@pytest.mark.parametrize("voice", [False, True])
+def test_zai_account_chat_and_voice_use_dedicated_endpoint_without_aggregator(enabled, monkeypatch, voice):
+    monkeypatch.setenv("VELIA_QUANTUM_PROVIDER", "zai")
+    client = Client(Response())
+    monkeypatch.setattr(quantum.requests, "Session", lambda: client)
+    result = quantum.generate("こんにちは", voice_turn=voice)
+    assert result["ok"] and result["text"] == "Поняла" and result["fallback_used"] is False
+    assert client.guard_calls == [] and len(client.calls) == 1
+    url, request = client.calls[0]
+    assert url == "https://api.z.ai/api/paas/v4/chat/completions"
+    assert request["headers"]["Authorization"] == "Bearer quantum-test-secret"
+    assert request["json"]["model"] == "glm-4.7-flash"
+    assert request["json"]["thinking"] == {"type": "disabled"}
+    assert request["json"]["max_tokens"] == (1024 if voice else 8192)
+    assert "gateway" not in request["json"] and request["allow_redirects"] is False
+
+
 @pytest.mark.parametrize("response,code", [(Response(429), "quantum_quota_exhausted"),
     (Response(402), "quantum_access_required"), (Response(307), "quantum_provider_error"),
     (Response(401), "quantum_unavailable"), (requests.Timeout(), "quantum_timeout"),
