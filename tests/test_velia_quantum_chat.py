@@ -96,6 +96,56 @@ def test_zai_account_chat_and_voice_use_dedicated_endpoint_without_aggregator(en
     assert "gateway" not in request["json"] and request["allow_redirects"] is False
 
 
+def test_small_sse_delta_reaches_client_before_upstream_finishes(enabled, monkeypatch, caplog):
+    """Exercise a real unchunked HTTP stream, not a mocked chunk-size assertion."""
+    from concurrent.futures import ThreadPoolExecutor
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    first_delta, finish = threading.Event(), threading.Event()
+    parts = []
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            early = {"choices": [{"delta": {"content": "Поняла"}, "finish_reason": None}]}
+            self.wfile.write(("data: " + json.dumps(early) + "\n\n").encode())
+            self.wfile.flush()
+            finish.wait(5)
+            self.wfile.write(b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+            self.wfile.flush()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv("VELIA_QUANTUM_PROVIDER", "self_hosted")
+    monkeypatch.setenv("VELIA_QUANTUM_BASE_URL", f"http://127.0.0.1:{server.server_port}/v1")
+    monkeypatch.setenv("VELIA_QUANTUM_MODEL", "local-test")
+    caplog.set_level("INFO", logger="services.velia_quantum_service")
+    def delta(value):
+        parts.append(value)
+        first_delta.set()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            result = pool.submit(quantum.generate, "synthetic private prompt", on_delta=delta)
+            try:
+                assert first_delta.wait(2), "first SSE delta was buffered until generation finished"
+                assert parts == ["Поняла"] and not result.done()
+            finally:
+                finish.set()
+            assert result.result(timeout=3)["ok"]
+    finally:
+        finish.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+    timing = [r.message for r in caplog.records if "VELIA_QUANTUM_RESPONSE_TIMING" in r.message]
+    assert len(timing) == 1 and "outcome=complete" in timing[0] and "first_byte_ms=" in timing[0]
+    assert "synthetic private prompt" not in timing[0] and "quantum-test-secret" not in timing[0]
+
+
 @pytest.mark.parametrize("response,code", [(Response(429), "quantum_quota_exhausted"),
     (Response(402), "quantum_access_required"), (Response(307), "quantum_provider_error"),
     (Response(401), "quantum_unavailable"), (requests.Timeout(), "quantum_timeout"),

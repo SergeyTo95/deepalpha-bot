@@ -57,6 +57,9 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False):
         "request_id": request_id, "fallback_used": False, "estimated_cost_usd": 0.0}
     if config is None:
         return {**result, "reason": "quantum_unavailable"}
+    started = time.monotonic()
+    headers_at = first_byte_at = first_text_at = None
+    outcome = "quantum_provider_error"
     try:
         body = payload(config, [{"role": "system", "content": understanding_instruction(
             "You are Velia Quantum, a capable female AI assistant. Answer in the user's language. "
@@ -78,8 +81,10 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False):
             client.trust_env = False
             verify_zero_spend(client, config)
             with client.post(config.base_url + "/chat/completions", json=body,
-                    headers={"Authorization": "Bearer " + config.api_key},
+                    headers={"Authorization": "Bearer " + config.api_key,
+                        "Accept": "text/event-stream", "Accept-Encoding": "identity"},
                     timeout=(5, 60) if voice_turn else (10, 120), stream=True, allow_redirects=False) as response:
+                headers_at = time.monotonic()
                 if response.status_code != 200:
                     code, reason = _provider_error_details(response)
                     LOG.warning('VELIA_QUANTUM_HTTP_REJECTED phase=answer status=%d provider_code=%s quota_reason=%s',
@@ -87,12 +92,19 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False):
                     raise response_error(response.status_code, provider_code=code, quota_reason=reason)
                 if "text/event-stream" not in response.headers.get("Content-Type", ""):
                     raise QuantumError("quantum_invalid_response")
-                for chunk in response.iter_content(256):
+                # A fixed byte batch can hold a complete small SSE delta until
+                # more text arrives on non-chunked/proxied responses. Let the
+                # SSE decoder emit the first complete event immediately.
+                for chunk in response.iter_content(1):
+                    if chunk and first_byte_at is None:
+                        first_byte_at = time.monotonic()
                     if time.monotonic() > deadline:
                         raise QuantumError("quantum_timeout", 504)
                     for event in decoder.feed(chunk):
                         text = event["choices"][0]["delta"].get("content", "")
                         if text:
+                            if first_text_at is None:
+                                first_text_at = time.monotonic()
                             parts.append(text)
                             if on_delta:
                                 on_delta(text)
@@ -100,14 +112,23 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False):
         text = "".join(parts).strip()
         if not text or decoder.finish_reason != "stop":
             raise QuantumError("quantum_invalid_response")
+        outcome = "complete"
         return {**result, "ok": True, "text": text, "usage": decoder.usage,
             "finish_reason": decoder.finish_reason}
     except QuantumError as exc:
+        outcome = exc.code
         return {**result, "reason": exc.code}
     except requests.Timeout:
+        outcome = "quantum_timeout"
         return {**result, "reason": "quantum_timeout"}
     except (requests.RequestException, ValueError, OSError):
         return {**result, "reason": "quantum_provider_error"}
+    finally:
+        def elapsed(point):
+            return round((point - started) * 1000) if point is not None else -1
+        LOG.info("VELIA_QUANTUM_RESPONSE_TIMING provider=%s voice=%s headers_ms=%d first_byte_ms=%d first_text_ms=%d total_ms=%d outcome=%s",
+            config.provider, bool(voice_turn), elapsed(headers_at), elapsed(first_byte_at),
+            elapsed(first_text_at), elapsed(time.monotonic()), outcome)
 
 
 def dispatch_send(user_id, conversation_id, content, *, on_delta=None, on_reset=None, voice_turn=False, **kwargs):
