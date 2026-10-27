@@ -284,6 +284,18 @@ def test_quantum_envelope_compatibility_does_not_repair_queries_quotes_or_medica
     with pytest.raises(ValueError):planning_decision(result,'Расскажи про лес.')
 
 
+def test_zai_direct_with_filled_search_fields_remains_invalid():
+    """Do not deploy by erasing the malformed metadata observed in live acceptance."""
+    from desktop.quantum_intent import planning_decision
+    args = {"action": "direct", "quote": "", "candidate": "explanation",
+        "query": "difference between list and set", "task_query": "explain list and set",
+        "source_scope": "general", "context": []}
+    result = {"choices": [{"finish_reason": "tool_calls", "message": {"tool_calls": [
+        {"function": {"name": "understand_request", "arguments": args}}]}}]}
+    with pytest.raises(ValueError):
+        planning_decision(result, "Объясни разницу между списком и множеством.")
+
+
 def test_medical_planning_requires_exact_inflected_evidence_and_logs_only_structure():
     from desktop.quantum_intent import planning_decision
     from desktop.probe_quantum_independence import response_shape
