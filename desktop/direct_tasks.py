@@ -8,7 +8,22 @@ import re
 from desktop.spelling_hints import spelling_hints
 
 _GREETINGS = frozenset({'привет','здравствуйте','здравствуй','доброе утро','добрый день',
-    'добрый вечер','как дела','как настроение','hello','hi','good morning','how are you','merhaba','selam','nasılsın'})
+    'добрый вечер','ау','алло','как дела','как настроение','hello','hi','good morning','how are you','merhaba','selam','nasılsın'})
+_ASSISTANT_NAMES = frozenset({'велия', 'веля', 'виля', 'velia'})
+
+
+def _greeting(part):
+    if part in _GREETINGS:
+        return True
+    words = part.split()
+    if len(words) > 1:
+        if words[0] in _ASSISTANT_NAMES and " ".join(words[1:]) in _GREETINGS:
+            return True
+        if words[-1] in _ASSISTANT_NAMES and " ".join(words[:-1]) in _GREETINGS:
+            return True
+    return False
+
+
 _IDENTITY = frozenset({'кто ты','ты кто','как тебя зовут','что ты умеешь','что умеешь',
     'что ты можешь','кто ты и что ты умеешь','кто ты и что умеешь','ты тут','ты здесь','ты работаешь',
     'who are you','what can you do','who are you and what can you do',
@@ -28,7 +43,8 @@ def simple_direct_task(content):
         return None
     text = content.strip()
     clauses = [" ".join(part.split()) for part in re.split(r'[.!?…,\n]+', text.casefold()) if part.strip()]
-    if (clauses and all(part in _GREETINGS or part in _IDENTITY for part in clauses)
+    clauses = [part for part in clauses if part not in _ASSISTANT_NAMES]
+    if (clauses and all(_greeting(part) or part in _IDENTITY for part in clauses)
             or _ARITHMETIC.fullmatch(text)
             or len(text) <= 1000 and not _FACT_REQUEST.search(text)
                 and (_ANY_STORY.fullmatch(text) or _FICTION.match(text))):

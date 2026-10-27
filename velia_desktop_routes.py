@@ -359,7 +359,8 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                                        allow_redirects=False) as upstream:
                     if upstream.status != 200:
                         if quantum_config:
-                            failure = quantum.response_error(upstream.status)
+                            code, reason = await quantum.read_provider_error(upstream)
+                            failure = quantum.response_error(upstream.status, provider_code=code, quota_reason=reason)
                             return error(failure.code, failure.status)
                         return error("model_request_failed", 502)
                     if payload["stream"]:

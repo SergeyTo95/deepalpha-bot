@@ -87,7 +87,18 @@ def response_shape(result, question=''):
         return {'envelope':'invalid'}
 
 
-async def run(*, voice=False, access_only=False):
+async def run(*, voice=False, access_only=False, config_only=False):
+    if config_only:
+        if voice or access_only:
+            raise RuntimeError("incompatible_probe_modes")
+        if os.getenv("VELIA_QUANTUM_ENABLED", "").strip().lower() not in {"true", "1", "yes", "on"}:
+            print("VELIA_QUANTUM_CONFIG_DISABLED", flush=True)
+            return
+        config = configuration()
+        if config is None:
+            raise RuntimeError("quantum_invalid_configuration")
+        print("VELIA_QUANTUM_CONFIG_OK provider=" + config.provider, flush=True)
+        return
     def forbidden(*args, **kwargs):
         raise RuntimeError("quantum_touched_another_model")
     # Process-local changes cannot affect the following gateway process.
@@ -136,7 +147,7 @@ async def run(*, voice=False, access_only=False):
 
 if __name__ == "__main__":
     try:
-        asyncio.run(run(voice='--voice' in sys.argv,access_only='--access' in sys.argv))
+        asyncio.run(run(voice='--voice' in sys.argv,access_only='--access' in sys.argv,config_only='--config-only' in sys.argv))
     except Exception:
         print("VELIA_QUANTUM_INDEPENDENCE_FAILED", flush=True)
         raise SystemExit(1) from None

@@ -158,6 +158,7 @@ export function apiError(code) {
       quantum_unavailable: "Quantum сейчас недоступна. Выбери Flash или попробуй позже.",
       quantum_free_guard_required: "Бесплатный доступ Quantum сейчас не подтверждён. Попробуй позже.",
       quantum_access_required: "Quantum пока не активирована. Сейчас можно пользоваться Flash.",
+      quantum_spend_cap_reached: "Запрос Quantum заблокирован денежным лимитом ключа. Бесплатный доступ к модели сейчас не подтверждён.",
       quantum_quota_exhausted: "Бесплатная квота Quantum исчерпана. Можно выбрать Flash или попробовать позже.",
       quantum_busy: "Quantum сейчас занята. Попробуй чуть позже.",
       quantum_timeout: "Quantum не успела ответить. Попробуй ещё раз.",

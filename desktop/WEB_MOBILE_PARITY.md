@@ -88,3 +88,32 @@ Starting explicitly primes browser TTS in the button gesture; a sound-test butto
 The call now selects actual browser `SpeechSynthesisVoice.voiceURI` values scoped to its language and deduplicated by URI. The seven Android-style aliases were removed because multiple profiles could map to the same installed voice; pitch/rate variants do not establish different speakers. The UI explains when only one voice is exposed. Genuine speaker variety remains dependent on the device/browser inventory; no hosted multi-speaker engine was added.
 
 Voice-mode stream updates release completed phrases immediately, enqueue remaining phrases while speech is playing, flush the tail on final completion, and resume recognition only after final text and speech queue completion. Final canonical text does not replay already queued phrases. A canonical rewrite of spoken text stops the old queue and directs the user to the saved answer. Fenced code waits for completion before sanitization. Emoji, modifiers, joiners, keycaps and flags are removed from spoken text only. Full-app synthetic acceptance now asserts the first speech submission occurs while generation is still busy. This measures control-flow ordering, not real device latency or actual audible timbre.
+
+## Quantum voice transport and deployment isolation
+
+The browser gateway and account backend must both use the canonical
+`glm-5.3-uncensored` configuration. A successful account-backend deployment does
+not update the separate browser service. An older gateway that still pins the
+obsolete `:free` alias can reject a voice preparation request before the account
+backend receives it.
+
+For recurring gateway deployment use
+`python -m desktop.probe_quantum_independence --config-only` followed by the
+existing Browser Agent acceptance probe. Configuration-only checks make no
+provider/voice synthesis requests and do not claim live Quantum availability.
+Keep `--access` and `--voice` as explicit operator diagnostics; their failure
+remains a failure. Runtime inference still verifies the exact key's hard $0
+spending cap on each request and never falls back to a paid model or another
+model's credentials.
+
+Self-contained greetings with the assistant name (including the bounded ASR
+variants «Виля» and «Веля») skip redundant interpretation while preserving the
+original transcript and selected answering model. Factual, medical, current
+information and mixed requests retain the existing interpretation/retrieval
+path. Monetary key-cap errors have a separate public message and code; they are
+not represented as a consumed daily message allowance.
+
+Automated transport tests cover greeting transcripts, preservation of prior
+message content, and routing to the selected model. Physical microphone quality,
+live provider quota, TTS availability, and full browser history after a failed
+voice turn still require browser/device acceptance.

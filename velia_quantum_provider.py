@@ -26,7 +26,8 @@ ERRORS = frozenset({"quantum_unavailable", "quantum_quota_exhausted", "quantum_a
     "quantum_busy", "quantum_timeout", "quantum_provider_error",
     "quantum_invalid_response", "quantum_context_too_long",
     "quantum_attachments_unsupported", "quantum_daily_user_limit_exceeded",
-    "quantum_daily_global_limit_exceeded", "quantum_free_guard_required"})
+    "quantum_daily_global_limit_exceeded", "quantum_free_guard_required",
+    "quantum_spend_cap_reached"})
 PROVIDER_ERROR_CODES = frozenset({
     "invalid_key", "model_not_granted", "model_location_not_supported",
     "insufficient_quota", "rate_limit_exceeded", "free_limit_reached",
@@ -74,6 +75,21 @@ def provider_error_details(raw):
                 reason = prefix[1]
         return code, reason
     except (ValueError, TypeError, RecursionError, OverflowError):
+        return "unreadable_error", "none"
+
+
+async def read_provider_error(response):
+    """Bounded diagnostics shared by planning and direct Quantum transport."""
+    async def read():
+        raw = bytearray()
+        async for chunk in response.content.iter_chunked(2048):
+            raw.extend(chunk)
+            if len(raw) > 8192:
+                return "oversized_error", "none"
+        return provider_error_details(raw)
+    try:
+        return await asyncio.wait_for(read(), timeout=3)
+    except Exception:
         return "unreadable_error", "none"
 
 
@@ -215,10 +231,14 @@ def verify_zero_spend(client, config):
     LOG.info('VELIA_QUANTUM_FREE_GUARD ok=true status=%d', status)
 
 
-def response_error(status):
+def response_error(status, *, provider_code=None, quota_reason=None):
     if status == 402:
         return QuantumError("quantum_access_required", 503)
     if status == 429:
+        if provider_code == "insufficient_quota" and quota_reason == "key_daily_cap":
+            # A monetary cap can reject the very first request at $0. It does
+            # not prove that the user consumed a daily message allowance.
+            return QuantumError("quantum_spend_cap_reached", 503)
         return QuantumError("quantum_quota_exhausted", 429)
     if status in {401, 403}:
         return QuantumError("quantum_unavailable", 503)

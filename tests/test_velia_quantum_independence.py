@@ -85,7 +85,7 @@ def test_voice_and_files_follow_selected_model_without_decision_fallback(monkeyp
 
 
 @pytest.mark.parametrize("model", ["velia-flash", "velia-quantum"])
-@pytest.mark.parametrize("question", ["Как дела?", "Расскажи какую-нибудь интересную историю без разницы какую"])
+@pytest.mark.parametrize("question", ["Как дела?", "Расскажи какую-нибудь интересную историю без разницы какую", "Привет Виля", "Велия, привет", "ау"])
 def test_simple_voice_turn_uses_one_native_answer_without_planning_or_history_restore(monkeypatch, tmp_path, model, question):
     from desktop.web_search import WebSearch
     def forbidden(*args, **kwargs):
@@ -491,7 +491,7 @@ def test_access_diagnostic_never_sends_an_unresolved_railway_reference(monkeypat
     (401,'invalid_key','private provider body','quantum_unavailable','none'),
     (403,'model_not_granted','private provider body','quantum_unavailable','none'),
     (402,'card_required','private provider body','quantum_access_required','none'),
-    (429,'insufficient_quota','key_daily_cap: private provider body','quantum_quota_exhausted','key_daily_cap'),
+    (429,'insufficient_quota','key_daily_cap: private provider body','quantum_spend_cap_reached','key_daily_cap'),
     (429,'insufficient_quota','free_limit_reached: private provider body','quantum_quota_exhausted','free_limit_reached'),
 ])
 def test_planning_logs_exact_provider_rejection_without_secrets_or_a_retry(monkeypatch,caplog,status,code,message,public_code,reason):
@@ -520,3 +520,38 @@ def test_planning_logs_exact_provider_rejection_without_secrets_or_a_retry(monke
 async def _zero_spend_key_response(request):
     from aiohttp import web
     return web.json_response({'data':{'limit':0}})
+
+
+@pytest.mark.parametrize('enabled', [True, False])
+def test_gateway_startup_configuration_probe_never_calls_provider(monkeypatch, capsys, enabled):
+    from desktop import probe_quantum_independence as probe
+    def forbidden(*args, **kwargs):
+        pytest.fail('offline startup probe used a remote provider')
+    monkeypatch.setattr(probe, 'check_access', forbidden)
+    monkeypatch.setattr(probe.quantum_intent, 'understand_quantum', forbidden)
+    monkeypatch.setenv('VELIA_QUANTUM_ENABLED', 'true' if enabled else 'false')
+    monkeypatch.setenv('VELIA_QUANTUM_API_KEY', 'private-fixture-key')
+    monkeypatch.setenv('VELIA_QUANTUM_PROVIDER', 'experiential')
+    monkeypatch.setenv('VELIA_QUANTUM_BASE_URL', probe.EXPERIENTIAL_URL)
+    monkeypatch.setenv('VELIA_QUANTUM_MODEL', probe.FREE_MODEL)
+    asyncio.run(probe.run(config_only=True))
+    out = capsys.readouterr().out
+    assert ('CONFIG_OK' if enabled else 'CONFIG_DISABLED') in out
+    assert 'INDEPENDENCE_OK' not in out and 'private' not in out
+
+
+def test_gateway_startup_rejects_obsolete_free_alias_without_http(monkeypatch):
+    from desktop import probe_quantum_independence as probe
+    monkeypatch.setenv('VELIA_QUANTUM_ENABLED', 'true')
+    monkeypatch.setenv('VELIA_QUANTUM_API_KEY', 'fixture-key')
+    monkeypatch.setenv('VELIA_QUANTUM_PROVIDER', 'experiential')
+    monkeypatch.setenv('VELIA_QUANTUM_BASE_URL', probe.EXPERIENTIAL_URL)
+    monkeypatch.setenv('VELIA_QUANTUM_MODEL', probe.FREE_MODEL + ':free')
+    with pytest.raises(RuntimeError, match='quantum_invalid_configuration'):
+        asyncio.run(probe.run(config_only=True))
+
+
+@pytest.mark.parametrize('text', ['Привет, Велия, найди новости', 'Виля, какая погода сейчас?', 'Привет Виля как лечить астму?', 'ау, сколько стоит биткоин?'])
+def test_voice_greeting_optimization_never_skips_substantive_or_current_questions(text):
+    from desktop.direct_tasks import simple_direct_task
+    assert simple_direct_task(text) is None

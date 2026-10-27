@@ -8,20 +8,9 @@ from aiohttp import ClientError, ClientSession, ClientTimeout, DummyCookieJar
 from desktop.request_intent import INSTRUCTION, FULL_TOOL, parse_decision
 from services.velia_structured_output import strict_json_loads
 from velia_quantum_provider import (QuantumError, configuration, payload, response_error,
-    verify_zero_spend_async, provider_error_details)
+    verify_zero_spend_async, provider_error_details, read_provider_error)
 
 LOG = logging.getLogger(__name__)
-async def read_provider_error(response):
-    """Read only enough error data to identify a stable code and quota prefix."""
-    raw = bytearray()
-    try:
-        async for chunk in response.content.iter_chunked(2048):
-            raw.extend(chunk)
-            if len(raw) > 8192:
-                return "oversized_error", "none"
-        return provider_error_details(raw)
-    except (ClientError, TimeoutError, ValueError, TypeError, UnicodeDecodeError):
-        return "unreadable_error", "none"
 
 
 async def provider_error_code(response):
@@ -114,7 +103,7 @@ async def understand_quantum(messages):
                     code, reason = await read_provider_error(response)
                     LOG.warning("VELIA_QUANTUM_HTTP_REJECTED status=%d provider_code=%s quota_reason=%s",
                         response.status, code, reason)
-                    raise response_error(response.status)
+                    raise response_error(response.status, provider_code=code, quota_reason=reason)
                 if "application/json" not in response.headers.get("Content-Type", ""):
                     raise QuantumError("quantum_invalid_response")
                 raw = bytearray()
