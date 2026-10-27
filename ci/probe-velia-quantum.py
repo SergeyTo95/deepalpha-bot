@@ -10,7 +10,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services import velia_quantum_service as quantum
-from velia_quantum_provider import configuration, ERRORS, EXPERIENTIAL_URL, FREE_MODEL
+from velia_quantum_provider import configuration, ERRORS, EXPERIENTIAL_URL, FREE_MODEL, EXPERIENTIAL_MODELS
 
 
 def check_configuration():
@@ -40,7 +40,7 @@ def main():
     voice = "--voice" in sys.argv
     config = configuration()
     if (config is None or config.provider != "experiential"
-            or config.base_url != EXPERIENTIAL_URL or config.model != FREE_MODEL):
+            or config.base_url != EXPERIENTIAL_URL or config.model not in EXPERIENTIAL_MODELS):
         print("VELIA_QUANTUM_LIVE_PROBE_FAILED quantum_unavailable", flush=True)
         return 1
     # This process-local bound never changes the running chat's output limit.
@@ -63,7 +63,7 @@ def main():
             and result.get("model") == "velia-quantum"
             and result.get("estimated_cost_usd") == 0
             and result.get("fallback_used") is False):
-        print(("VELIA_QUANTUM_VOICE_PROBE_OK model=" if voice else "VELIA_QUANTUM_LIVE_PROBE_OK model=") + FREE_MODEL, flush=True)
+        print(("VELIA_QUANTUM_VOICE_PROBE_OK model=" if voice else "VELIA_QUANTUM_LIVE_PROBE_OK model=") + config.model, flush=True)
         return 0
     reason = result.get("reason")
     print("VELIA_QUANTUM_LIVE_PROBE_FAILED " + (
