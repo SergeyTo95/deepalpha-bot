@@ -61,6 +61,80 @@ def test_external_free_only_and_no_other_model_credentials(enabled, monkeypatch)
     assert quantum.configuration().api_key == "dedicated-key"
 
 
+def test_quantum_free_core_is_an_explicit_model_switch(enabled, monkeypatch):
+    monkeypatch.setenv("VELIA_QUANTUM_MODEL", quantum.FREE_CORE_MODEL)
+    config = quantum.configuration()
+    assert config.model == "deepseek-v4.1-flash"
+    assert config.source == "DeepSeek V4.1 через Experiential"
+    sent = quantum.payload(config, [{"role": "user", "content": "Merhaba"}])
+    assert sent["model"] == config.model
+    assert sent["reasoning_effort"] == "low"
+    assert sent["gateway"]["routing"]["allow_fallbacks"] is False
+    monkeypatch.setenv("VELIA_QUANTUM_MODEL", "another-paid-model")
+    assert quantum.configuration() is None
+
+
+@pytest.mark.parametrize("usage", [None, {}, {"cost": 0, "total_tokens": 10},
+    {"cost": 0, "is_byok": True, "total_tokens": 10},
+    {"cost": 0.001, "is_byok": False, "total_tokens": 10},
+    {"cost": False, "is_byok": False, "total_tokens": 10},
+    {"cost": "0", "is_byok": False, "total_tokens": 10},
+    {"cost": 0, "is_byok": False, "total_tokens": 0}])
+def test_free_acceptance_needs_explicit_zero_cost_and_real_metering(usage):
+    with pytest.raises(quantum.QuantumError):
+        quantum.require_free_usage({"usage": usage})
+
+
+@pytest.mark.parametrize("failure", [None, "paid", "quota", "bad_tool"])
+def test_free_migration_checks_exact_key_tools_and_stream_without_fallback(enabled, monkeypatch, capsys, failure):
+    import asyncio
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+    seen = []
+    async def run():
+        async def key(request):
+            assert request.headers["Authorization"] == "Bearer quantum-test-secret"
+            seen.append("guard")
+            return web.json_response({"data": {"limit": 0}})
+        async def completion(request):
+            body = await request.json()
+            assert request.headers["Authorization"] == "Bearer quantum-test-secret"
+            assert body["model"] == quantum.FREE_CORE_MODEL
+            assert body["gateway"]["routing"]["allow_fallbacks"] is False
+            assert body["gateway"]["retry"]["max_total_attempts"] == 1
+            seen.append("stream" if body["stream"] else "tool")
+            usage = {"cost": .001 if failure == "paid" else 0, "is_byok": False, "total_tokens": 20}
+            if failure == "quota":
+                return web.json_response({"error": {"code": "insufficient_quota", "message": "key_daily_cap: private account"}}, status=429)
+            if not body["stream"]:
+                return web.json_response({"usage": usage, "choices": [{"finish_reason": "tool_calls", "message": {"tool_calls": [{"function": {
+                    "name": "report_sum", "arguments": json.dumps({"sum": 99 if failure == "bad_tool" else 15})}}]}}]})
+            raw = "data: " + json.dumps({"choices": [{"delta": {"content": "Готова. Ready. Hazırım."}, "finish_reason": "stop"}]})
+            raw += "\n\ndata: " + json.dumps({"choices": [], "usage": usage}) + "\n\ndata: [DONE]\n\n"
+            return web.Response(text=raw, content_type="text/event-stream")
+        app = web.Application()
+        app.router.add_get("/api/v1/key", key)
+        app.router.add_post("/v1/chat/completions", completion)
+        async with TestServer(app) as server:
+            monkeypatch.setattr(quantum, "EXPERIENTIAL_URL", str(server.make_url("/v1")))
+            monkeypatch.setattr(quantum, "KEY_INFO_URL", str(server.make_url("/api/v1/key")))
+            monkeypatch.setenv("VELIA_QUANTUM_BASE_URL", quantum.EXPERIENTIAL_URL)
+            monkeypatch.setenv("VELIA_QUANTUM_MODEL", quantum.FREE_CORE_MODEL)
+            if failure:
+                with pytest.raises(quantum.QuantumError):
+                    await quantum.probe_free_core()
+            else:
+                await quantum.probe_free_core()
+    asyncio.run(run())
+    assert seen == (["guard", "tool"] if failure else ["guard", "tool", "guard", "stream"])
+    output = capsys.readouterr().out
+    assert "quantum-test-secret" not in output and "private account" not in output
+    if not failure:
+        report = json.loads(output.removeprefix("VELIA_QUANTUM_FREE_ACCEPTED "))
+        assert report["ok"] and report["tool_call"] and report["stream"]
+        assert report["reported_cost_usd"] == 0 and report["calls"] == 2
+
+
 @pytest.mark.parametrize("name,value", [
     ("VELIA_QUANTUM_ENABLED", "false"), ("VELIA_QUANTUM_PROVIDER", "unknown"),
     ("VELIA_QUANTUM_MODEL", "glm-5.3-uncensored:free"),

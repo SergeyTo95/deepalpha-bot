@@ -368,7 +368,8 @@ def test_access_diagnostic_is_one_read_and_exposes_only_allowlisted_codes(monkey
 
 
 @pytest.mark.parametrize('dedicated',[True,False])
-def test_access_diagnostic_authenticates_without_assuming_free_alias_is_listed(monkeypatch,capsys,dedicated):
+@pytest.mark.parametrize('selected',['glm-5.3-uncensored','deepseek-v4.1-flash'])
+def test_access_diagnostic_authenticates_without_assuming_free_alias_is_listed(monkeypatch,capsys,dedicated,selected):
     import json
     from types import SimpleNamespace
     from aiohttp import web
@@ -378,13 +379,13 @@ def test_access_diagnostic_authenticates_without_assuming_free_alias_is_listed(m
     async def run():
         async def models(request):
             seen.append(request.method)
-            return web.json_response({'data':[{'id':'glm-5.3-uncensored'},{'id':'private-owned-model'}]})
+            return web.json_response({'data':[{'id':selected},{'id':'private-owned-model'}]})
         app=web.Application();app.router.add_get('/v1/models',models);app.router.add_get('/api/v1/key',_zero_spend_key_response)
         monkeypatch.delenv('VELIA_QUANTUM_API_KEY',raising=False)
         monkeypatch.setenv('VELIA_QUANTUM_API_KEY' if dedicated else 'EXPLABS_API_KEY',key)
         async with TestServer(app) as server:
             base=str(server.make_url('/v1'));monkeypatch.setattr(probe,'EXPERIENTIAL_URL',base);monkeypatch.setattr('velia_quantum_provider.KEY_INFO_URL',str(server.make_url('/api/v1/key')))
-            await probe.check_access(SimpleNamespace(provider='experiential',base_url=base,model=probe.FREE_MODEL,api_key=key))
+            await probe.check_access(SimpleNamespace(provider='experiential',base_url=base,model=selected,api_key=key))
     asyncio.run(run())
     output=capsys.readouterr().out;record=json.loads(output.removeprefix('VELIA_QUANTUM_ACCESS '))
     assert seen==['GET'] and record['ok'] and record['status']==200
@@ -446,7 +447,7 @@ def test_access_catalog_budget_and_strict_json_remain_enforced(monkeypatch,capsy
     from desktop import probe_quantum_independence as probe
     key='xpl_'+'4'*40;seen=[]
     if case in {'exact_limit','oversized'}:
-        prefix=b'{"data":[],"description":"';suffix=b'"}'
+        prefix=b'{"data":[{"id":"glm-5.3-uncensored"}],"description":"';suffix=b'"}'
         size=1024*1024+(case=='oversized')
         raw=prefix+b'x'*(size-len(prefix)-len(suffix))+suffix
     else:

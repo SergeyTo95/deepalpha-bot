@@ -18,6 +18,11 @@ MODEL_ID = "velia-quantum"
 PROVIDER_ID = "velia-quantum"
 # Historical export name: the $0 key cap enforces free access, not a suffix.
 FREE_MODEL = "glm-5.3-uncensored"
+FREE_CORE_MODEL = "deepseek-v4.1-flash"
+EXPERIENTIAL_MODELS = {
+    FREE_MODEL: "GLM-5.3 через Experiential",
+    FREE_CORE_MODEL: "DeepSeek V4.1 через Experiential",
+}
 EXPERIENTIAL_URL = "https://api.experientiallabs.ai/v1"
 KEY_INFO_URL = "https://api.experientiallabs.ai/api/v1/key"
 KEY_INFO_MAX_BYTES = 8192
@@ -111,7 +116,7 @@ class QuantumConfig:
 
     @property
     def source(self):
-        return "GLM-5.3 через Experiential" if self.provider == "experiential" else "Собственная модель VELIA"
+        return EXPERIENTIAL_MODELS.get(self.model, "Quantum через Experiential") if self.provider == "experiential" else "Собственная модель VELIA"
 
 
 def configuration():
@@ -138,9 +143,9 @@ def configuration():
     if (not valid or not key or any(c in key for c in "\r\n")
             or not re.fullmatch(r"[A-Za-z0-9_./:+-]{1,200}", model)):
         return None
-    # Pin the documented canonical ID. Every Experiential transport must verify
+    # Only explicitly supported canonical IDs. Every transport must verify
     # the presented key's hard $0 spending cap before any completion request.
-    if external and (base != EXPERIENTIAL_URL or model != FREE_MODEL):
+    if external and (base != EXPERIENTIAL_URL or model not in EXPERIENTIAL_MODELS):
         return None
     if not external and url.hostname == "api.experientiallabs.ai":
         return None
@@ -377,3 +382,103 @@ async def read_result(source):
         return public_result(json.loads(body))
     except (ValueError, UnicodeDecodeError):
         raise QuantumError("quantum_invalid_response") from None
+
+
+def require_free_usage(value):
+    """Live acceptance needs explicit metered zero, never an omitted estimate."""
+    usage = value.get("usage") if isinstance(value, dict) else None
+    if not isinstance(usage, dict) or usage.get("is_byok") is not False:
+        raise QuantumError("quantum_free_guard_required", 503)
+    cost = usage.get("cost")
+    if isinstance(cost, bool) or not isinstance(cost, (int, float, Decimal)) or cost != 0:
+        raise QuantumError("quantum_free_guard_required", 503)
+    total = usage.get("total_tokens")
+    if type(total) is not int or total <= 0:
+        raise QuantumError("quantum_invalid_response")
+
+
+async def probe_free_core():
+    """Two bounded synthetic calls using the exact service key; no fallback.
+
+    Run explicitly for a model migration, not as a recurring availability gate.
+    Refuses any model other than the selected free core model and verifies the
+    key's hard $0 cap before each call. Records only safe structural evidence.
+    """
+    from aiohttp import ClientSession, ClientTimeout, DummyCookieJar
+    config = configuration()
+    if (config is None or config.provider != "experiential"
+            or config.model != FREE_CORE_MODEL or config.base_url != EXPERIENTIAL_URL):
+        raise QuantumError("quantum_unavailable", 503)
+    tool = {"type": "function", "function": {"name": "report_sum",
+        "description": "Report the sum requested by the user.",
+        "parameters": {"type": "object", "properties": {"sum": {"type": "integer"}},
+            "required": ["sum"], "additionalProperties": False}}}
+    report = {"model": config.model, "ok": False, "calls": 0,
+        "tool_call": False, "stream": False, "reported_cost_usd": 0}
+    async with ClientSession(timeout=ClientTimeout(total=60, connect=5, sock_read=50),
+            cookie_jar=DummyCookieJar(), trust_env=False) as client:
+        for stream in (False, True):
+            await verify_zero_spend_async(client, config)
+            messages = [{"role": "system", "content": "You are Velia, a female multilingual assistant."},
+                {"role": "user", "content": "Вызови report_sum для суммы 7 + 8." if not stream
+                    else "Ответь кратко на русском, English and Türkçe: ты готова помочь?"}]
+            body = payload(config, messages, stream=stream, max_tokens=1024,
+                tools=None if stream else [tool], tool_choice=None if stream else "required")
+            async with client.post(config.base_url + "/chat/completions", json=body,
+                    headers={"Authorization": "Bearer " + config.api_key}, allow_redirects=False) as response:
+                if response.status != 200:
+                    code, reason = await read_provider_error(response)
+                    print("VELIA_QUANTUM_FREE_PROBE_REJECTED " + json.dumps({
+                        "status": response.status, "provider_code": code, "quota_reason": reason}), flush=True)
+                    raise response_error(response.status, provider_code=code, quota_reason=reason)
+                raw = bytearray()
+                async for chunk in response.content.iter_chunked(8192):
+                    raw.extend(chunk)
+                    if len(raw) > 256 * 1024:
+                        raise QuantumError("quantum_invalid_response")
+                if stream:
+                    if "text/event-stream" not in response.headers.get("Content-Type", ""):
+                        raise QuantumError("quantum_invalid_response")
+                    decoder = StreamDecoder()
+                    events = decoder.feed(bytes(raw))
+                    decoder.finish()
+                    if decoder.finish_reason != "stop" or not any(
+                            e["choices"][0]["delta"].get("content", "").strip() for e in events):
+                        raise QuantumError("quantum_invalid_response")
+                    usage_frames = []
+                    for frame in re.split(br"\r?\n\r?\n", bytes(raw)):
+                        data = b"\n".join(line[5:].lstrip() for line in frame.splitlines() if line.startswith(b"data:"))
+                        if not data or data == b"[DONE]":
+                            continue
+                        value = json.loads(data, parse_float=Decimal)
+                        if isinstance(value, dict) and isinstance(value.get("usage"), dict):
+                            require_free_usage(value)
+                            usage_frames.append(value)
+                    if not usage_frames:
+                        raise QuantumError("quantum_free_guard_required", 503)
+                    report["stream"] = True
+                else:
+                    value = json.loads(raw, parse_float=Decimal)
+                    require_free_usage(value)
+                    choice = value["choices"][0]
+                    calls = choice["message"]["tool_calls"]
+                    if choice.get("finish_reason") != "tool_calls" or len(calls) != 1:
+                        raise QuantumError("quantum_invalid_response")
+                    function = calls[0]["function"]
+                    args = function["arguments"]
+                    args = json.loads(args) if isinstance(args, str) else args
+                    if function.get("name") != "report_sum" or args != {"sum": 15}:
+                        raise QuantumError("quantum_invalid_response")
+                    report["tool_call"] = True
+                report["calls"] += 1
+    report["ok"] = True
+    print("VELIA_QUANTUM_FREE_ACCEPTED " + json.dumps(report), flush=True)
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(probe_free_core())
+    except Exception as exc:
+        code = exc.code if isinstance(exc, QuantumError) else "quantum_invalid_response"
+        print("VELIA_QUANTUM_FREE_PROBE_FAILED " + code, flush=True)
+        raise SystemExit(1) from None

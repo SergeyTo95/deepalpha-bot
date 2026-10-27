@@ -91,8 +91,8 @@ Voice-mode stream updates release completed phrases immediately, enqueue remaini
 
 ## Quantum voice transport and deployment isolation
 
-The browser gateway and account backend must both use the canonical
-`glm-5.3-uncensored` configuration. A successful account-backend deployment does
+The browser gateway and account backend must both use the same explicitly
+selected canonical model configuration. A successful account-backend deployment does
 not update the separate browser service. An older gateway that still pins the
 obsolete `:free` alias can reject a voice preparation request before the account
 backend receives it.
@@ -117,3 +117,21 @@ Automated transport tests cover greeting transcripts, preservation of prior
 message content, and routing to the selected model. Physical microphone quality,
 live provider quota, TTS availability, and full browser history after a failed
 voice turn still require browser/device acceptance.
+
+## Explicit free-core Quantum migration
+
+Quantum can explicitly select `deepseek-v4.1-flash` using the same dedicated
+Experiential credentials. Both gateway preparation and account generation must
+use that model; there is no automatic model fallback. The canonical GLM model
+remains supported for compatibility but its public catalog currently lists paid
+rates, not a free allowance. The key's verified hard $0 cap remains mandatory
+on every call. Core Free pricing is account policy, not a claim that the public
+list price is zero; the published limits are shared across the organization.
+
+Run `python -m velia_quantum_provider` once as a migration acceptance gate in
+each service environment. It makes two synthetic requests under that service's
+key and checks a correct tool result, a non-empty completed text stream, actual
+usage tokens, explicit reported cost of zero, and no BYOK billing. Any missing
+evidence or provider refusal fails acceptance without raising the key cap.
+It does not establish physical microphone or TTS quality. After acceptance,
+return the recurring deploy command to its existing offline Quantum check.

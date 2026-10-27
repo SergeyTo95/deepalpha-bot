@@ -9,7 +9,7 @@ import time
 from aiohttp import ClientSession, ClientTimeout, DummyCookieJar
 from desktop import decision_router, request_intent, web_search, quantum_intent
 from services.velia_structured_output import strict_json_loads
-from velia_quantum_provider import EXPERIENTIAL_URL, FREE_MODEL, configuration, QuantumError, verify_zero_spend_async
+from velia_quantum_provider import EXPERIENTIAL_URL, FREE_MODEL, EXPERIENTIAL_MODELS, configuration, QuantumError, verify_zero_spend_async
 
 MODELS_MAX_BYTES = 1024 * 1024
 
@@ -17,7 +17,7 @@ MODELS_MAX_BYTES = 1024 * 1024
 async def check_access(config):
     """One authenticated read, no model generation, billing, or secret output."""
     if (config is None or config.provider != "experiential"
-            or config.base_url != EXPERIENTIAL_URL or config.model != FREE_MODEL):
+            or config.base_url != EXPERIENTIAL_URL or config.model not in EXPERIENTIAL_MODELS):
         print('VELIA_QUANTUM_ACCESS '+json.dumps({'ok':False,'status':0,'provider_code':'invalid_local_config'}),flush=True)
         raise RuntimeError('quantum_free_configuration_missing')
     source='VELIA_QUANTUM_API_KEY' if os.getenv('VELIA_QUANTUM_API_KEY','').strip() else 'EXPLABS_API_KEY'
@@ -54,8 +54,11 @@ async def check_access(config):
                     record['provider_code']='invalid_models_envelope'
                     raise RuntimeError('quantum_access_failed')
                 ids={row['id'] for row in body['data'] if isinstance(row,dict) and isinstance(row.get('id'),str)}
-                record.update(base_model_listed=FREE_MODEL in ids,
-                    free_alias_listed=FREE_MODEL+':free' in ids)
+                record.update(base_model_listed=config.model in ids,
+                    free_alias_listed=config.model+':free' in ids)
+                if not record['base_model_listed']:
+                    record['provider_code']='model_not_granted'
+                    raise RuntimeError('quantum_access_failed')
                 record['provider_code']='zero_spend_guard_required'
                 await verify_zero_spend_async(client,config)
                 record.update(ok=True,provider_code='none',zero_spend_key=True)
