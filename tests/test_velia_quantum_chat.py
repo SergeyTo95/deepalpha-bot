@@ -146,6 +146,59 @@ def test_small_sse_delta_reaches_client_before_upstream_finishes(enabled, monkey
     assert "synthetic private prompt" not in timing[0] and "quantum-test-secret" not in timing[0]
 
 
+def test_quantum_reuses_http_connection_without_cookies_or_cached_answers_and_rotates_key(enabled, monkeypatch):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    seen = []
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+        def log_message(self, *_args):
+            pass
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            prompt = body["messages"][-1]["content"]
+            seen.append((self.client_address[1], self.headers.get("Cookie"), self.headers["Authorization"], prompt))
+            result = wire(content=prompt)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(result)))
+            self.send_header("Set-Cookie", "provider_tracker=must-not-be-forwarded; Path=/")
+            self.end_headers()
+            self.wfile.write(result)
+            self.wfile.flush()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv("VELIA_QUANTUM_PROVIDER", "self_hosted")
+    monkeypatch.setenv("VELIA_QUANTUM_BASE_URL", f"http://127.0.0.1:{server.server_port}/v1")
+    monkeypatch.setenv("VELIA_QUANTUM_MODEL", "owned-test")
+    try:
+        for prompt in ("first isolated prompt", "second isolated prompt"):
+            answer = quantum.generate(prompt)
+            assert answer["ok"] and answer["text"] == prompt
+        assert len(seen) == 2 and seen[0][0] == seen[1][0]
+        assert all(row[1] is None for row in seen)
+        monkeypatch.setenv("VELIA_QUANTUM_API_KEY", "rotated-test-secret")
+        assert quantum.generate("third isolated prompt")["ok"]
+        assert len(seen) == 3 and seen[2][0] != seen[1][0]
+        assert seen[2][1] is None and seen[2][2] == "Bearer rotated-test-secret"
+    finally:
+        quantum._close_transport()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_reused_transport_rechecks_aggregator_zero_spend_cap_before_every_completion(enabled, monkeypatch):
+    client = Client(Response())
+    monkeypatch.setattr(quantum.requests, "Session", lambda: client)
+    assert quantum.generate("first synthetic turn")["ok"]
+    client.guard_response = Response(body=b'{"data":{"limit":1}}')
+    second = quantum.generate("second synthetic turn")
+    assert not second["ok"] and second["reason"] == "quantum_free_guard_required"
+    assert len(client.guard_calls) == 2 and len(client.calls) == 1
+
+
 @pytest.mark.parametrize("response,code", [(Response(429), "quantum_quota_exhausted"),
     (Response(402), "quantum_access_required"), (Response(307), "quantum_provider_error"),
     (Response(401), "quantum_unavailable"), (requests.Timeout(), "quantum_timeout"),

@@ -2,6 +2,10 @@
 import time
 import os
 import logging
+import hashlib
+import threading
+from contextlib import contextmanager
+from http.cookiejar import DefaultCookiePolicy
 import requests
 from velia_request_understanding import understanding_instruction
 from velia_quantum_provider import (MODEL_ID, PROVIDER_ID, QuantumError, StreamDecoder,
@@ -9,6 +13,50 @@ from velia_quantum_provider import (MODEL_ID, PROVIDER_ID, QuantumError, StreamD
     provider_error_details)
 
 LOG = logging.getLogger(__name__)
+_TRANSPORT = threading.local()
+
+
+class _NoProviderCookies(DefaultCookiePolicy):
+    def set_ok(self, *_args, **_kwargs):
+        return False
+
+
+def _close_transport():
+    client = getattr(_TRANSPORT, "client", None)
+    _TRANSPORT.client = None
+    _TRANSPORT.identity = None
+    close = getattr(client, "close", None)
+    if callable(close):
+        close()
+
+
+@contextmanager
+def _provider_client(config):
+    """Reuse TLS per worker/key; never share cookies or retry completions."""
+    factory = requests.Session
+    identity = (os.getpid(), factory, config.provider, config.base_url,
+        hashlib.sha256(config.api_key.encode()).digest())
+    if getattr(_TRANSPORT, "identity", None) != identity:
+        _close_transport()
+        client = factory()
+        client.trust_env = False
+        if hasattr(client, "cookies"):
+            client.cookies.clear()
+            client.cookies.set_policy(_NoProviderCookies())
+        if callable(getattr(client, "mount", None)):
+            adapter = requests.adapters.HTTPAdapter(pool_connections=1, pool_maxsize=1, max_retries=0)
+            client.mount("https://", adapter)
+            client.mount("http://", adapter)
+        _TRANSPORT.client, _TRANSPORT.identity = client, identity
+    try:
+        yield _TRANSPORT.client
+    except BaseException:
+        _close_transport()
+        raise
+    finally:
+        client = getattr(_TRANSPORT, "client", None)
+        if hasattr(client, "cookies"):
+            client.cookies.clear()
 
 
 def _provider_error_details(response):
@@ -77,8 +125,7 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False):
             {"role": "user", "content": prompt}], stream=True, max_tokens=1024 if voice_turn else None)
         decoder, parts = StreamDecoder(), []
         deadline = time.monotonic() + (75 if voice_turn else 300)
-        with requests.Session() as client:
-            client.trust_env = False
+        with _provider_client(config) as client:
             verify_zero_spend(client, config)
             with client.post(config.base_url + "/chat/completions", json=body,
                     headers={"Authorization": "Bearer " + config.api_key,
