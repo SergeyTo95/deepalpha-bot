@@ -296,6 +296,31 @@ def test_zai_direct_with_filled_search_fields_remains_invalid():
         planning_decision(result, "Объясни разницу между списком и множеством.")
 
 
+@pytest.mark.parametrize("task", ["", "explain difference between list and set"])
+def test_direct_plan_ignores_unused_task_label_without_changing_routing_or_user_evidence(task):
+    from desktop.quantum_intent import planning_decision
+    args = {"action": "direct", "quote": "", "candidate": "", "query": "",
+        "task_query": task, "source_scope": "general", "context": []}
+    result = {"choices": [{"finish_reason": "tool_calls", "message": {"tool_calls": [
+        {"function": {"name": "understand_request", "arguments": args}}]}}]}
+    assert planning_decision(result, "Объясни разницу между списком и множеством.") == {
+        "action": "direct", "query": "", "context": []}
+    for bad in [
+        {"query": "search despite direct"},
+        {"source_scope": "official_health"},
+        {"quote": "", "candidate": "invented correction"},
+        {"context": [{"quote": "invented condition", "kind": "condition", "status": "stated"}]},
+        {"task_query": ["not a string"]},
+        {"task_query": "x" * 201},
+    ]:
+        args.update(bad)
+        with pytest.raises((ValueError, TypeError)):
+            planning_decision(result, "Объясни разницу между списком и множеством.")
+        args.clear()
+        args.update({"action": "direct", "quote": "", "candidate": "", "query": "",
+            "task_query": task, "source_scope": "general", "context": []})
+
+
 def test_medical_planning_requires_exact_inflected_evidence_and_logs_only_structure():
     from desktop.quantum_intent import planning_decision
     from desktop.probe_quantum_independence import response_shape

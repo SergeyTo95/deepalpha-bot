@@ -106,6 +106,15 @@ def planning_decision(result, question):
         args["quote"] = ""
     if direct and args.get("query", "missing") is None:
         args["query"] = ""
+    if (args.get("action") == "direct" and args.get("query") == ""
+            and args.get("source_scope") == "general"
+            and isinstance(args.get("task_query"), str)
+            and len(args["task_query"]) <= 200):
+        # GLM may provide a task label even when it explicitly selects no
+        # search. This field is never consumed on a direct route. Discard it
+        # without changing action, query, corrections or evidence validation.
+        # A nonempty query or medical search scope still fails below.
+        args.pop("task_query")
     for field in ("source_scope", "task_query"):
         if direct and args.get(field, "missing") in {None, ""}:
             args.pop(field, None)
