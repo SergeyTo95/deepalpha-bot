@@ -61,11 +61,12 @@ def test_external_free_only_and_no_other_model_credentials(enabled, monkeypatch)
     assert quantum.configuration().api_key == "dedicated-key"
 
 
-def test_quantum_free_core_is_an_explicit_model_switch(enabled, monkeypatch):
-    monkeypatch.setenv("VELIA_QUANTUM_MODEL", quantum.FREE_CORE_MODEL)
+@pytest.mark.parametrize("model", [quantum.FREE_CORE_MODEL, quantum.FREE_CORE_ROUTE])
+def test_quantum_free_core_is_an_explicit_model_switch(enabled, monkeypatch, model):
+    monkeypatch.setenv("VELIA_QUANTUM_MODEL", model)
     config = quantum.configuration()
-    assert config.model == "deepseek-v4.1-flash"
-    assert config.source == "DeepSeek V4.1 через Experiential"
+    assert config.model == model
+    assert config.source == "DeepSeek V4.1 Flash через Experiential"
     sent = quantum.payload(config, [{"role": "user", "content": "Merhaba"}])
     assert sent["model"] == config.model
     assert sent["reasoning_effort"] == "low"
@@ -85,8 +86,9 @@ def test_free_acceptance_needs_explicit_zero_cost_and_real_metering(usage):
         quantum.require_free_usage({"usage": usage})
 
 
+@pytest.mark.parametrize("model", [quantum.FREE_CORE_MODEL, quantum.FREE_CORE_ROUTE])
 @pytest.mark.parametrize("failure", [None, "paid", "quota", "bad_tool"])
-def test_free_migration_checks_exact_key_tools_and_stream_without_fallback(enabled, monkeypatch, capsys, failure):
+def test_free_migration_checks_exact_key_tools_and_stream_without_fallback(enabled, monkeypatch, capsys, failure, model):
     import asyncio
     from aiohttp import web
     from aiohttp.test_utils import TestServer
@@ -99,7 +101,7 @@ def test_free_migration_checks_exact_key_tools_and_stream_without_fallback(enabl
         async def completion(request):
             body = await request.json()
             assert request.headers["Authorization"] == "Bearer quantum-test-secret"
-            assert body["model"] == quantum.FREE_CORE_MODEL
+            assert body["model"] == model
             assert body["gateway"]["routing"]["allow_fallbacks"] is False
             assert body["gateway"]["retry"]["max_total_attempts"] == 1
             seen.append("stream" if body["stream"] else "tool")
@@ -119,7 +121,7 @@ def test_free_migration_checks_exact_key_tools_and_stream_without_fallback(enabl
             monkeypatch.setattr(quantum, "EXPERIENTIAL_URL", str(server.make_url("/v1")))
             monkeypatch.setattr(quantum, "KEY_INFO_URL", str(server.make_url("/api/v1/key")))
             monkeypatch.setenv("VELIA_QUANTUM_BASE_URL", quantum.EXPERIENTIAL_URL)
-            monkeypatch.setenv("VELIA_QUANTUM_MODEL", quantum.FREE_CORE_MODEL)
+            monkeypatch.setenv("VELIA_QUANTUM_MODEL", model)
             if failure:
                 with pytest.raises(quantum.QuantumError):
                     await quantum.probe_free_core()

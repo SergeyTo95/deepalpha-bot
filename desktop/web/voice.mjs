@@ -3,8 +3,21 @@ const REMOTE_VOICES = new Set(['speechkit:jane','speechkit:omazh','speechkit:mar
  'edge:ru-RU-SvetlanaNeural','edge:en-US-EmmaMultilingualNeural','edge:en-US-AvaMultilingualNeural']);
 export const isRemoteVoice = uri => REMOTE_VOICES.has(uri);
 const LANGUAGES=[['ru-RU','Русский'],['en-US','English'],['tr-TR','Türkçe'],['de-DE','Deutsch'],['fr-FR','Français'],['es-ES','Español']];
+// ISO 639-1 language choices plus every locale advertised by the device/voices.
+// An entry is a selection, not a promise that the browser can recognize it.
+const LANGUAGE_CODES='aa ab ae af ak am an ar as av ay az ba be bg bh bi bm bn bo br bs ca ce ch co cr cs cu cv cy da de dv dz ee el en eo es et eu fa ff fi fj fo fr fy ga gd gl gn gu gv ha he hi ho hr ht hu hy hz ia id ie ig ii ik io is it iu ja jv ka kg ki kj kk kl km kn ko kr ks ku kv kw ky la lb lg li ln lo lt lu lv mg mh mi mk ml mn mr ms mt my na nb nd ne ng nl nn no nr nv ny oc oj om or os pa pi pl ps pt qu rm rn ro ru rw sa sc sd se sg si sk sl sm sn so sq sr ss st su sv sw ta te tg th ti tk tl tn to tr ts tt tw ty ug uk ur uz ve vi vo wa wo xh yi yo za zh zu'.split(' ');
+function canonicalLanguage(value) {
+ try {return Intl.getCanonicalLocales(String(value||'').trim().replace(/_/g,'-'))[0]||'';}catch{return '';}
+}
+export function conversationLanguages(current='',devices=[],voices=[]) {
+ const choices=new Map(LANGUAGES), names=typeof Intl.DisplayNames==='function'?new Intl.DisplayNames(['ru'],{type:'language'}):null;
+ for(const tag of [...LANGUAGE_CODES,...devices,current,...voices.flatMap(v=>[v.lang,...(v.languages||[])])]){
+  const id=canonicalLanguage(tag);if(id&&!choices.has(id))choices.set(id,names?.of(id)||id);
+ }
+ return [...choices].sort((a,b)=>a[1].localeCompare(b[1],'ru'));
+}
 export function recognitionLanguage(saved, page, device) {
-  const language=saved||page||device||'ru-RU';
+  const language=canonicalLanguage(saved)||canonicalLanguage(device)||canonicalLanguage(page)||'ru-RU';
   return LANGUAGES.find(([id])=>id.toLowerCase()===language.toLowerCase())?.[0]
     || LANGUAGES.find(([id])=>id.split('-')[0]===language.toLowerCase())?.[0] || language;
 }
@@ -78,11 +91,13 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'})
   const effectiveURI = () => voiceURI || choices()[0]?.voiceURI || '';
   const canSpeak = () => !!synth || isRemoteVoice(effectiveURI());
   function refreshVoices(){
+    const languages=conversationLanguages(language,navigator.languages||[navigator.language],[...remoteVoices,...(synth?.getVoices()||[])]);
+    for(const select of languageSelectors){if(!select.isConnected&&select.dataset.mounted){languageSelectors.delete(select);continue;}select.replaceChildren();for(const [id,name] of languages){const option=node('option',name+' · '+id);option.value=id;select.append(option);}select.value=language;select.dataset.mounted='true';}
     const list=choices();
     if(voiceURI&&!list.some(v=>v.voiceURI===voiceURI)&&(!isRemoteVoice(voiceURI)||catalogLoaded))voiceURI='';
     for(const select of voiceSelectors){if(!select.isConnected&&select.dataset.mounted){voiceSelectors.delete(select);continue;}select.replaceChildren();const def=node('option','Автоматически'+(list[0]?' — '+list[0].name:''));def.value='';select.append(def);for(const v of list){const o=node('option',v.name+' · '+(v.languages?'Мультиязычный':v.lang)+(isRemoteVoice(v.voiceURI)?' · Онлайн':'')+(v.gender==='female'?' · Женский':''));o.value=v.voiceURI;select.append(o);}select.value=voiceURI;select.dataset.mounted='true';}
     for(const b of speechTests) b.disabled=!canSpeak();
-    voiceHint.textContent=remoteVoices.length?'Онлайн-голоса дают одинаковый тембр на разных устройствах. Голос телефона обычно запускается быстрее.':list.length===1?'Для выбранного языка доступен один голос.':list.length===0?'Используется голос браузера по умолчанию.':'';
+    voiceHint.textContent=list.length===0?'Для этого языка браузер не сообщил подходящий голос. Распознавание и озвучка зависят от устройства.':remoteVoices.length?'Онлайн-голоса дают одинаковый тембр на разных устройствах. Голос телефона обычно запускается быстрее.':list.length===1?'Для выбранного языка доступен один голос.':'';
     voiceHint.hidden=!voiceHint.textContent;
   }
   async function loadCatalog(){if(catalogRequest)return catalogRequest;catalogRequest=(async()=>{try{const response=await fetch('/web-api/v1/voice/voices',{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(5000)});if(!response.ok)return;const data=await response.json();catalogLoaded=true;remoteVoices=Array.isArray(data.voices)?data.voices.filter(v=>isRemoteVoice(v.voiceURI)):[];refreshVoices();}catch{}finally{catalogRequest=null;}})();return catalogRequest;}
@@ -108,8 +123,7 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH'})
   function voiceControl(){const label=node('label','Голос Велии','voice-profile'), select=node('select');select.setAttribute('aria-label','Голос');voiceSelectors.add(select);select.onchange=()=>{const reopen=dialog.open;stop();voiceURI=select.value;save();refreshVoices();if(reopen)begin();};label.append(select);return label;}
   function languageControl(){
     const label=node('label','Язык разговора','voice-profile'),select=node('select');select.setAttribute('aria-label','Язык разговора');
-    for(const [id,name] of LANGUAGES){const option=node('option',name);option.value=id;select.append(option);}
-    if(!LANGUAGES.some(([id])=>id===language)){const option=node('option',language);option.value=language;select.append(option);}
+    for(const [id,name] of conversationLanguages(language,navigator.languages||[navigator.language],synth?.getVoices()||[])){const option=node('option',name+' · '+id);option.value=id;select.append(option);}
     select.value=language;languageSelectors.add(select);select.onchange=()=>{const reopen=dialog.open;stop();language=select.value;save();refreshVoices();for(const other of languageSelectors)other.value=language;if(reopen)begin();};label.append(select);return label;
   }
   dialog.append(close,title,modelLabel,orb,state,voiceControl(),languageControl(),resumeSpeech,reconnect,node('p','Ответы сохраняются в диалоге.','voice-hint'));

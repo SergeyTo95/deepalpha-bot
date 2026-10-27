@@ -19,9 +19,11 @@ PROVIDER_ID = "velia-quantum"
 # Historical export name: the $0 key cap enforces free access, not a suffix.
 FREE_MODEL = "glm-5.3-uncensored"
 FREE_CORE_MODEL = "deepseek-v4.1-flash"
+FREE_CORE_ROUTE = FREE_CORE_MODEL + ":free"
 EXPERIENTIAL_MODELS = {
     FREE_MODEL: "GLM-5.3 через Experiential",
-    FREE_CORE_MODEL: "DeepSeek V4.1 через Experiential",
+    FREE_CORE_MODEL: "DeepSeek V4.1 Flash через Experiential",
+    FREE_CORE_ROUTE: "DeepSeek V4.1 Flash через Experiential",
 }
 EXPERIENTIAL_URL = "https://api.experientiallabs.ai/v1"
 KEY_INFO_URL = "https://api.experientiallabs.ai/api/v1/key"
@@ -143,7 +145,7 @@ def configuration():
     if (not valid or not key or any(c in key for c in "\r\n")
             or not re.fullmatch(r"[A-Za-z0-9_./:+-]{1,200}", model)):
         return None
-    # Only explicitly supported canonical IDs. Every transport must verify
+    # Only supported IDs and the documented free-only alias. Every transport must verify
     # the presented key's hard $0 spending cap before any completion request.
     if external and (base != EXPERIENTIAL_URL or model not in EXPERIENTIAL_MODELS):
         return None
@@ -407,7 +409,7 @@ async def probe_free_core():
     from aiohttp import ClientSession, ClientTimeout, DummyCookieJar
     config = configuration()
     if (config is None or config.provider != "experiential"
-            or config.model != FREE_CORE_MODEL or config.base_url != EXPERIENTIAL_URL):
+            or config.model not in {FREE_CORE_MODEL, FREE_CORE_ROUTE} or config.base_url != EXPERIENTIAL_URL):
         raise QuantumError("quantum_unavailable", 503)
     tool = {"type": "function", "function": {"name": "report_sum",
         "description": "Report the sum requested by the user.",

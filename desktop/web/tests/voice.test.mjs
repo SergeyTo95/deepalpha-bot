@@ -1,11 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {speechChunks,availableVoices,voiceChoice,speechReady,isRemoteVoice,recognitionLanguage,isVoiceEndCommand} from '../voice.mjs';
-test('recognition follows the saved call language then the page rather than phone locale',()=>{
- assert.equal(recognitionLanguage('', 'ru', 'en-US'),'ru-RU');
+import {speechChunks,availableVoices,voiceChoice,speechReady,isRemoteVoice,recognitionLanguage,isVoiceEndCommand,conversationLanguages} from '../voice.mjs';
+test('recognition follows saved choice then device language independently of Russian UI',()=>{
+ assert.equal(recognitionLanguage('', 'ru', 'en-US'),'en-US');
  assert.equal(recognitionLanguage('tr-TR', 'ru', 'en-US'),'tr-TR');
  assert.equal(recognitionLanguage('', '', 'de-DE'),'de-DE');
  assert.equal(recognitionLanguage('', '', ''),'ru-RU');
+ assert.equal(recognitionLanguage('', 'ru', 'ja-JP'),'ja-JP');
+ assert.equal(recognitionLanguage('ar-EG', 'ru', 'ja-JP'),'ar-EG');
+ assert.equal(recognitionLanguage('not_a_locale!', 'ru', 'hi-IN'),'hi-IN');
+ assert.equal(recognitionLanguage('', 'ru', ''),'ru-RU');
+});
+test('language selection includes ISO languages and additional device or voice locales',()=>{
+ const choices=conversationLanguages('yue-Hant-HK',['uk-UA','ar-EG'],[{lang:'hi-IN'},{lang:'ja-JP',languages:['zh-CN','ko-KR']}]);
+ const ids=choices.map(([id])=>id);
+ assert.ok(ids.length>150);
+ for(const id of ['ar','he','hi','bn','ta','th','zh','ja','ko','sw','am','ka','uk','pt','id','yue-Hant-HK','uk-UA','ar-EG','hi-IN','ja-JP','zh-CN','ko-KR'])assert.ok(ids.includes(id),id);
+ assert.equal(new Set(ids).size,ids.length);
+ assert.ok(choices.every(([id,name])=>Intl.getCanonicalLocales(id)[0]===id&&name));
 });
 test('only an explicit whole utterance ends the call',()=>{
  for(const text of ['Велия, закончи разговор!','Заверши разговор, пожалуйста.','Пока!','Velia, end the call.','Görüşmeyi bitir.'])assert.equal(isVoiceEndCommand(text),true,text);

@@ -54,8 +54,9 @@ async def check_access(config):
                     record['provider_code']='invalid_models_envelope'
                     raise RuntimeError('quantum_access_failed')
                 ids={row['id'] for row in body['data'] if isinstance(row,dict) and isinstance(row.get('id'),str)}
-                record.update(base_model_listed=config.model in ids,
-                    free_alias_listed=config.model+':free' in ids)
+                canonical = config.model.removesuffix(':free')
+                record.update(base_model_listed=canonical in ids or config.model in ids,
+                    free_alias_listed=canonical+':free' in ids)
                 if not record['base_model_listed']:
                     record['provider_code']='model_not_granted'
                     raise RuntimeError('quantum_access_failed')

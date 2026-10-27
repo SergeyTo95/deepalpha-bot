@@ -135,3 +135,45 @@ usage tokens, explicit reported cost of zero, and no BYOK billing. Any missing
 evidence or provider refusal fails acceptance without raising the key cap.
 It does not establish physical microphone or TTS quality. After acceptance,
 return the recurring deploy command to its existing offline Quantum check.
+
+## Multilingual integration audit (2026-10-27)
+
+Text chat has no language allowlist. The system asks Quantum to answer in the
+user's language; Unicode text and history are forwarded without translating to
+Russian. Test prompts in three languages are samples, not a support boundary.
+This transport property does not establish semantic quality in every language.
+
+Voice selection now includes ISO 639-1 languages plus canonical BCP 47 locales
+reported by installed voices, navigator.languages, and the saved selection. The
+initial default follows the device before the Russian page language. This is
+approximately 190 language/region choices on the standard fixture, not a claim
+that the microphone recognizer or installed synthesizer supports all of them.
+The hosted voice inventory remains limited to its declared languages; other
+languages rely on the device. OCR readiness currently covers eng/rus/tur only.
+
+The first canonical DeepSeek migration was refused by the actual backend key
+with 429 insufficient_quota / key_daily_cap. Public free-tier advertising alone
+therefore did not establish free access for this account. The prepared route
+`deepseek-v4.1-flash:free` explicitly requests the provider's documented free-only
+lane. The hard $0 key check and zero-cost live acceptance stay mandatory; the
+absence of a free alias in model discovery alone does not prove that a documented
+suffix is invalid. No paid retry or automatic model replacement is allowed.
+https://platform.experientiallabs.ai/docs/errors
+
+## Future self-hosting
+
+Official checkpoint: https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash
+Inspected revision: 314113f8a7dadb388215396ba5fbee2c610a04d6.
+The 48 safetensors files total 510,296,708,312 bytes (approximately 510 GB).
+The model card applies the MIT license to code and weights; preserve its notices.
+Downloading is free of a model license fee, but storage and inference are not.
+The model is a very large MoE: active parameters per token are not its total
+storage or memory requirement. Official inference includes a TP8 reference.
+vLLM also documents host offload for the large Engram tables:
+https://docs.vllm.ai/en/latest/features/engram/
+
+The existing self_hosted configuration accepts an owned OpenAI-compatible
+endpoint, model ID, and dedicated token for both gateway and account backend.
+That permits moving Quantum to our hardware without changing the public mode
+name. It does not imply that today's provider alias identifies a byte-for-byte
+copy of a particular public checkpoint. No weights were downloaded in this audit.
