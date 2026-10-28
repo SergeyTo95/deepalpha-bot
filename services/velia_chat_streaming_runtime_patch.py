@@ -174,6 +174,7 @@ def run_streaming_send(
     attachment_ids: Any = None,
     chat_mode: str = "pro",
     voice_turn: bool = False,
+    web_search: Optional[bool] = None,
     on_delta: Callable[[str], None],
     on_reset: Callable[[], None],
 ) -> Dict[str, Any]:
@@ -191,6 +192,8 @@ def run_streaming_send(
         # field was supplied, while forwarding the exact list when it exists.
         if attachment_ids is not None:
             send_kwargs["attachment_ids"] = attachment_ids
+        if chat_mode == "quantum" and web_search is not None:
+            send_kwargs["web_search"] = bool(web_search)
         if chat_mode != "pro":
             from services.velia_flash_service import dispatch_send
             return dispatch_send(send_message, int(user_id), str(conversation_id),

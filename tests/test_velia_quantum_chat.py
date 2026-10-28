@@ -199,6 +199,105 @@ def test_reused_transport_rechecks_aggregator_zero_spend_cap_before_every_comple
     assert len(client.guard_calls) == 2 and len(client.calls) == 1
 
 
+def native_tool_wire(name="web_search", args=None):
+    args = args if args is not None else {"query":"latest stable Python version","scope":"general"}
+    value={"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function",
+        "function":{"name":name,"arguments":json.dumps(args)}}]},"finish_reason":"tool_calls"}]}
+    return ("data: "+json.dumps(value)+"\n\ndata: [DONE]\n\n").encode()
+
+
+@pytest.mark.parametrize("voice", [False,True])
+@pytest.mark.parametrize("search", [False,True])
+def test_quantum_native_turn_uses_one_model_call_or_one_search_and_continuation(enabled,monkeypatch,voice,search):
+    monkeypatch.setenv("VELIA_QUANTUM_PROVIDER","zai")
+    monkeypatch.setattr(quantum,"search_configuration",lambda:("tavily","dedicated-search-key"))
+    seen_search=[]
+    sources={"results":[{"title":"Python official","url":"https://www.python.org/downloads/","snippet":"Public release information."}],"retrieved_at":"2026-10-28T00:00:00Z"}
+    def run_search(query,*,scope):
+        seen_search.append((query,scope))
+        return sources
+    monkeypatch.setattr(quantum,"run_web_search",run_search)
+    replies=[Response(body=native_tool_wire()),Response(body=wire("Готова. [1]"))] if search else [Response(body=wire("Готова."))]
+    class NativeClient(Client):
+        def post(self,url,**kwargs):
+            self.calls.append((url,kwargs))
+            return replies.pop(0)
+    client=NativeClient(None)
+    monkeypatch.setattr(quantum.requests,"Session",lambda:client)
+    prompt="USER: My device is Linux.\n\nUSER: Найди текущую версию Python." if search else "USER: Explain a set in Python."
+    deltas=[]
+    result=quantum.generate(prompt,voice_turn=voice,web_search=True,on_delta=deltas.append)
+    assert result["ok"] and not result["fallback_used"] and result["text"]=="".join(deltas)
+    assert len(client.calls)==(2 if search else 1) and len(seen_search)==int(search)
+    first=client.calls[0][1]["json"]
+    assert first["messages"][-1]["content"]==prompt and first["tools"][0]["function"]["name"]=="web_search"
+    assert first["thinking"]=={"type":"disabled"} and first["tool_choice"]=="auto"
+    assert first["max_tokens"]==(1024 if voice else 8192)
+    if search:
+        second=client.calls[1][1]["json"]
+        assert "tools" not in second and second["messages"][-1]["role"]=="tool"
+        assert json.loads(second["messages"][-1]["content"])==sources
+        assert "https://www.python.org/downloads/" in result["text"]
+    assert "dedicated-search-key" not in result["text"] and "call_1" not in result["text"]
+
+
+@pytest.mark.parametrize("failure",["unknown_tool","bad_arguments","search_failed","second_tool","disabled_search"])
+def test_native_quantum_tool_validation_never_executes_arbitrary_or_repeated_tools(enabled,monkeypatch,failure):
+    monkeypatch.setenv("VELIA_QUANTUM_PROVIDER","zai")
+    monkeypatch.setattr(quantum,"search_configuration",lambda:("tavily","key"))
+    tool=native_tool_wire(name="run_shell" if failure=="unknown_tool" else "web_search",
+        args={"query":"current facts","scope":"evil"} if failure=="bad_arguments" else None)
+    replies=[Response(body=tool),Response(body=tool)]
+    class NativeClient(Client):
+        def post(self,url,**kwargs):
+            self.calls.append((url,kwargs))
+            return replies.pop(0)
+    seen=[]
+    def search(*args,**kwargs):
+        seen.append(True)
+        if failure=="search_failed":raise quantum.QuantumError("quantum_web_search_unavailable",503)
+        return {"results":[{"title":"Docs","url":"https://python.org/","snippet":"Untrusted source data."}]}
+    monkeypatch.setattr(quantum,"run_web_search",search)
+    client=NativeClient(None);monkeypatch.setattr(quantum.requests,"Session",lambda:client)
+    result=quantum.generate("synthetic turn",web_search=failure!="disabled_search")
+    assert not result["ok"] and result["text"]=="" and not result["fallback_used"]
+    assert len(seen)==int(failure in {"search_failed","second_tool"})
+    assert len(client.calls)==(2 if failure=="second_tool" else 1)
+
+
+@pytest.mark.parametrize("scope",["general","official_health"])
+def test_native_search_uses_fixed_endpoint_and_filters_untrusted_links(monkeypatch,scope):
+    import velia_quantum_search as search
+    monkeypatch.setenv("WEB_SEARCH_PROVIDER","tavily")
+    monkeypatch.setenv("WEB_SEARCH_API_KEY","search-fixture-secret")
+    seen=[]
+    body={"results":[
+        {"title":"Private","url":"http://127.0.0.1/secret","content":"Never return this"},
+        {"title":"Fake NHS","url":"https://nhs.uk.attacker.example/","content":"Not an official site"},
+        {"title":"<b>NHS</b>","url":"https://www.nhs.uk/live-well/","content":"<p>Public advice</p>"},
+    ]}
+    class SearchResponse(Response):
+        headers={"Content-Type":"application/json"}
+        def __init__(self):
+            super().__init__(body=json.dumps(body).encode())
+            self.headers={"Content-Type":"application/json"}
+    class SearchClient(Client):
+        def request(self,method,url,**kwargs):
+            seen.append((method,url,kwargs));return SearchResponse()
+    client=SearchClient(None)
+    monkeypatch.setattr(requests,"Session",lambda:client)
+    result=search.search("safe public information",scope=scope)
+    assert len(seen)==1 and seen[0][1]=="https://api.tavily.com/search"
+    assert seen[0][2]["allow_redirects"] is False and client.trust_env is False
+    args=seen[0][2]["json"]
+    assert args["search_depth"]=="basic" and args["auto_parameters"] is False
+    assert all("127.0.0.1" not in row["url"] for row in result["results"])
+    if scope=="official_health":
+        assert args["include_domains_mode"]=="restrict"
+        assert [row["title"] for row in result["results"]]==["NHS"]
+        assert result["results"][0]["snippet"]=="Public advice"
+
+
 @pytest.mark.parametrize("response,code", [(Response(429), "quantum_quota_exhausted"),
     (Response(402), "quantum_access_required"), (Response(307), "quantum_provider_error"),
     (Response(401), "quantum_unavailable"), (requests.Timeout(), "quantum_timeout"),

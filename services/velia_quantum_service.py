@@ -7,6 +7,8 @@ import threading
 from contextlib import contextmanager
 from http.cookiejar import DefaultCookiePolicy
 import requests
+from velia_quantum_turn import Turn, source_suffix
+from velia_quantum_search import configuration as search_configuration, search as run_web_search
 from velia_request_understanding import understanding_instruction
 from velia_quantum_provider import (MODEL_ID, PROVIDER_ID, QuantumError, StreamDecoder,
     available, bounded_int, configuration, payload, response_error, verify_zero_spend,
@@ -76,7 +78,8 @@ def _provider_error_details(response):
 
 def public_capability():
     config = configuration()
-    return {"chat_selected_model_inputs": True,
+    return {"chat_selected_model_inputs": True, "chat_quantum_native_tools": config is not None,
+        "chat_quantum_web_search": bool(config and search_configuration()),
         "chat_quantum": config is not None, "chat_quantum_attachments": bool(config and attachments_available()),
         "chat_quantum_source": config.source if config else None}
 
@@ -99,7 +102,7 @@ def budget_error(cursor, user_id):
     return None
 
 
-def generate(prompt, *, request_id="", on_delta=None, voice_turn=False):
+def generate(prompt, *, request_id="", on_delta=None, voice_turn=False, web_search=False):
     config = configuration()
     result = {"ok": False, "text": "", "provider": PROVIDER_ID, "model": MODEL_ID,
         "request_id": request_id, "fallback_used": False, "estimated_cost_usd": 0.0}
@@ -123,45 +126,58 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False):
                "и подтверждения пользователя. Если смысл понятен, отвечай сразу; при реальной "
                "неоднозначности задай один короткий вопрос, без списка уточнений. " if voice_turn else ""))},
             {"role": "user", "content": prompt}], stream=True, max_tokens=1024 if voice_turn else None)
-        decoder, parts = StreamDecoder(), []
+        turn = Turn(config, body["messages"], search_enabled=bool(web_search and search_configuration()),
+            max_tokens=1024 if voice_turn else None)
+        parts = []
         deadline = time.monotonic() + (75 if voice_turn else 300)
         with _provider_client(config) as client:
-            verify_zero_spend(client, config)
-            with client.post(config.base_url + "/chat/completions", json=body,
+            while True:
+                body = turn.body()
+                verify_zero_spend(client, config)
+                with client.post(config.base_url + "/chat/completions", json=body,
                     headers={"Authorization": "Bearer " + config.api_key,
                         "Accept": "text/event-stream", "Accept-Encoding": "identity"},
                     timeout=(5, 60) if voice_turn else (10, 120), stream=True, allow_redirects=False) as response:
-                headers_at = time.monotonic()
-                if response.status_code != 200:
-                    code, reason = _provider_error_details(response)
-                    LOG.warning('VELIA_QUANTUM_HTTP_REJECTED phase=answer status=%d provider_code=%s quota_reason=%s',
-                        response.status_code, code, reason)
-                    raise response_error(response.status_code, provider_code=code, quota_reason=reason)
-                if "text/event-stream" not in response.headers.get("Content-Type", ""):
-                    raise QuantumError("quantum_invalid_response")
-                # A fixed byte batch can hold a complete small SSE delta until
-                # more text arrives on non-chunked/proxied responses. Let the
-                # SSE decoder emit the first complete event immediately.
-                for chunk in response.iter_content(1):
-                    if chunk and first_byte_at is None:
-                        first_byte_at = time.monotonic()
-                    if time.monotonic() > deadline:
-                        raise QuantumError("quantum_timeout", 504)
-                    for event in decoder.feed(chunk):
-                        text = event["choices"][0]["delta"].get("content", "")
-                        if text:
+                    if headers_at is None:
+                        headers_at = time.monotonic()
+                    if response.status_code != 200:
+                        code, reason = _provider_error_details(response)
+                        LOG.warning('VELIA_QUANTUM_HTTP_REJECTED phase=answer status=%d provider_code=%s quota_reason=%s',
+                            response.status_code, code, reason)
+                        raise response_error(response.status_code, provider_code=code, quota_reason=reason)
+                    if "text/event-stream" not in response.headers.get("Content-Type", ""):
+                        raise QuantumError("quantum_invalid_response")
+                    for chunk in response.iter_content(1):
+                        if chunk and first_byte_at is None:
+                            first_byte_at = time.monotonic()
+                        if time.monotonic() > deadline:
+                            raise QuantumError("quantum_timeout", 504)
+                        for text in turn.feed(chunk):
                             if first_text_at is None:
                                 first_text_at = time.monotonic()
                             parts.append(text)
                             if on_delta:
                                 on_delta(text)
-                decoder.finish()
+                args = turn.finish()
+                if args is None:
+                    break
+                turn.supply(run_web_search(args["query"], scope=args["scope"]))
+                if turn.text:
+                    parts.append("\n\n")
+                    if on_delta:
+                        on_delta("\n\n")
+            suffix = source_suffix(turn.sources)
+            if suffix:
+                parts.append(suffix)
+                if on_delta:
+                    on_delta(suffix)
         text = "".join(parts).strip()
-        if not text or decoder.finish_reason != "stop":
+        if not text or turn.decoder.finish_reason != "stop":
             raise QuantumError("quantum_invalid_response")
         outcome = "complete"
-        return {**result, "ok": True, "text": text, "usage": decoder.usage,
-            "finish_reason": decoder.finish_reason}
+        LOG.info("VELIA_QUANTUM_TURN_COMPLETE model_calls=%d searched=%s", turn.calls, turn.searched)
+        return {**result, "ok": True, "text": text, "usage": turn.usage,
+            "finish_reason": turn.decoder.finish_reason}
     except QuantumError as exc:
         outcome = exc.code
         return {**result, "reason": exc.code}

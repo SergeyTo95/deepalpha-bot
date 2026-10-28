@@ -81,3 +81,11 @@ def test_stream_send_kwargs_forwards_voice_turn_only_when_explicit():
 
     assert "voice_turn" not in normal
     assert voice["voice_turn"] is True
+
+
+def test_native_search_mode_reaches_quantum_worker_only_when_explicit():
+    base=dict(user_id=7,conversation_id="conversation",content="original question",idempotency_key="request-native-1")
+    assert "web_search" not in service._stream_send_kwargs({"chat_mode":"quantum"},**base)
+    assert service._stream_send_kwargs({"chat_mode":"quantum","web_search":True},**base)["web_search"] is True
+    assert service._stream_send_kwargs({"chat_mode":"quantum","web_search":False},**base)["web_search"] is False
+    assert "web_search" not in service._stream_send_kwargs({"chat_mode":"flash","web_search":True},**base)

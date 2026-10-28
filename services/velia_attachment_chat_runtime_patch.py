@@ -149,6 +149,7 @@ def install(chat_module: Any) -> None:
         on_delta: Any = None,
         on_reset: Any = None,
         voice_turn: bool = False,
+        web_search: bool = False,
     ) -> Dict[str, Any]:
         if chat_mode not in {"pro", "flash", "quantum"}:
             return {"ok": False, "error": "invalid_chat_mode"}
@@ -373,7 +374,8 @@ def install(chat_module: Any) -> None:
                 )
             elif chat_mode == "quantum":
                 generation = quantum.generate(chat_module._build_prompt(user_id, conversation_id),
-                    request_id=request_id, on_delta=on_delta, **({"voice_turn": True} if voice_turn else {}))
+                    request_id=request_id, on_delta=on_delta, **({"voice_turn": True} if voice_turn else {}),
+                    **({"web_search": True} if web_search else {}))
             else:
                 prompt = chat_module._build_prompt(user_id, conversation_id)
                 generation = chat_module.generate_velia_chat_result(

@@ -1045,6 +1045,8 @@
   "velia_profile_routes.py",
   "velia_project_routes.py",
   "velia_quantum_provider.py",
+  "velia_quantum_search.py",
+  "velia_quantum_turn.py",
   "velia_repowise_service/__init__.py",
   "velia_repowise_service/app.py",
   "velia_repowise_service/config.py",

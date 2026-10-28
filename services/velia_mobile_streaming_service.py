@@ -100,6 +100,8 @@ def _stream_send_kwargs(
         kwargs["chat_mode"] = data["chat_mode"]
     if "voice_turn" in data:
         kwargs["voice_turn"] = bool(data.get("voice_turn"))
+    if data.get("chat_mode") == "quantum" and "web_search" in data:
+        kwargs["web_search"] = data["web_search"]
     # Field presence is meaningful for idempotency. An explicit null means
     # an explicit empty attachment set, while omission preserves legacy calls.
     if "attachment_ids" in data:
@@ -139,6 +141,8 @@ def setup_velia_mobile_streaming_route(
             )
 
         content = str(data.get("content") or "")
+        if "web_search" in data and type(data["web_search"]) is not bool:
+            return routes_module._json_response({"ok": False, "error": "invalid_request"}, status=400)
         idempotency_key = str(
             request.headers.get("Idempotency-Key")
             or data.get("idempotency_key")

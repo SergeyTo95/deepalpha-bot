@@ -37,6 +37,28 @@ def test_provider_diagnostic_rejects_malformed_or_oversized_bodies(raw, expected
 import velia_quantum_provider as quantum
 
 
+@pytest.mark.parametrize("code,reason,error", [
+    ("1302","request_rate_limit","quantum_rate_limited"),
+    ("1305","provider_overloaded","quantum_overloaded"),
+    ("1113","balance_or_package_required","quantum_access_required"),
+    ("1308","usage_limit","quantum_quota_exhausted"),
+    ("1310","weekly_or_monthly_limit","quantum_quota_exhausted"),
+])
+@pytest.mark.parametrize("numeric", [False,True])
+def test_zai_business_codes_distinguish_limits_without_logging_provider_prose(code,reason,error,numeric):
+    raw=json.dumps({"error":{"code":int(code) if numeric else code,"message":"private account details"}}).encode()
+    assert quantum.provider_error_details(raw)==(code,reason)
+    assert quantum.response_error(429,provider_code=code,quota_reason=reason).code==error
+
+
+@pytest.mark.parametrize("code,error",[("1302","quantum_rate_limited"),("1305","quantum_overloaded")])
+def test_zai_stream_error_keeps_safe_business_code(code,error,caplog):
+    raw=("data: "+json.dumps({"error":{"code":code,"message":"secret provider message"}})+"\n\n").encode()
+    with pytest.raises(quantum.QuantumError,match=error):
+        quantum.StreamDecoder().feed(raw)
+    assert code in caplog.text and "secret provider message" not in caplog.text
+
+
 def test_zai_uses_its_own_key_endpoint_and_free_model(enabled, monkeypatch):
     monkeypatch.setenv("VELIA_QUANTUM_PROVIDER", "zai")
     config = quantum.configuration()
