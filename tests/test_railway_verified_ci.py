@@ -81,3 +81,60 @@ def test_source_cannot_escape_checkout(checkout):
     (checkout / 'ci/railway-source-files.json').write_text(json.dumps(['../secret']))
     with pytest.raises(RuntimeError, match='escapes checkout'):
         ci.source_hash()
+
+
+def test_medical_loopback_health_ignores_outbound_proxy_and_waits_for_startup(monkeypatch):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from types import SimpleNamespace
+    import threading
+    requests = []
+    class Health(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+        def do_GET(self):
+            requests.append(self.headers.get('Authorization'))
+            if len(requests) == 1:
+                self.send_error(503)
+                return
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(b'{"ok":true,"provider":"radar"}')
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Health)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv('HTTP_PROXY', 'http://127.0.0.1:1')
+    monkeypatch.setenv('NO_PROXY', '')
+    try:
+        result = ci.wait_for_medical_health(SimpleNamespace(poll=lambda: None),
+            f'http://127.0.0.1:{server.server_port}/health', timeout=3)
+        assert result == {'ok':True,'provider':'radar'}
+        assert requests == ['Bearer ci-secret', 'Bearer ci-secret']
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(2)
+
+
+def test_medical_health_detects_worker_exit_and_enforces_deadline():
+    from types import SimpleNamespace
+    with pytest.raises(RuntimeError, match='exited'):
+        ci.wait_for_medical_health(SimpleNamespace(poll=lambda: 1), 'http://127.0.0.1:1/health')
+    with pytest.raises(RuntimeError, match='startup timed out'):
+        ci.wait_for_medical_health(SimpleNamespace(poll=lambda: None), 'http://127.0.0.1:1/health', timeout=0.03)
+
+
+@pytest.mark.parametrize('changed', [{'ok':False}, {'provider':'other'}, {'ready_for_inference':True},
+    {'commercial_use_allowed_by_public_weights':True}, {'raw_input_retained_after_job':True}])
+def test_medical_startup_resilience_never_weakens_fail_closed_contract(monkeypatch, changed):
+    from types import SimpleNamespace
+    stopped, receipts = [], []
+    process = SimpleNamespace(terminate=lambda: stopped.append(True), wait=lambda **_kwargs: 0)
+    monkeypatch.setattr(ci.subprocess, 'Popen', lambda *_a, **_k: process)
+    health = {'ok':True, 'provider':'radar', 'ready_for_inference':False,
+        'commercial_use_allowed_by_public_weights':False, 'raw_input_retained_after_job':False, **changed}
+    monkeypatch.setattr(ci, 'wait_for_medical_health', lambda *_a, **_k: health)
+    monkeypatch.setattr(ci, 'write_receipt', lambda *a: receipts.append(a))
+    with pytest.raises(RuntimeError, match='fail-closed'):
+        ci.medical_smoke('a'*40)
+    assert stopped == [True] and not receipts

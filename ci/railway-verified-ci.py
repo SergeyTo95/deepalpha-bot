@@ -135,32 +135,49 @@ def test_group(group, sha):
     write_receipt(group, sha, digest, results)
 
 
-def medical_smoke(sha):
+def wait_for_medical_health(proc, url, timeout=120):
     import time
     import urllib.error
     import urllib.request
+    # This is a loopback process check, never an outbound/proxied request.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    deadline = time.monotonic() + timeout
+    last_status = 0
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError('Medical worker exited before health check')
+        try:
+            request = urllib.request.Request(url, headers={'Authorization': 'Bearer ci-secret'})
+            with opener.open(request, timeout=min(2, max(0.01, deadline - time.monotonic()))) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as exc:
+            last_status = exc.code
+            if exc.code in (401, 403):
+                raise RuntimeError('Medical CI health authentication failed') from None
+        except urllib.error.URLError:
+            pass
+        time.sleep(min(1, max(0, deadline - time.monotonic())))
+    raise RuntimeError(f'Medical worker startup timed out; last_http_status={last_status}')
+
+
+def medical_smoke(sha):
+    import socket
     env = clean_environment()
     # Preserve only the fixed image paths, never deployment credentials.
+    with socket.socket() as reservation:
+        reservation.bind(('127.0.0.1', 0))
+        port = reservation.getsockname()[1]
+    work = tempfile.TemporaryDirectory(prefix='velia-medical-ci-')
     env.update(PATH='/opt/conda/bin:/usr/local/bin:/usr/bin:/bin',
                VELIA_MEDICAL_WORKER_AUTH_TOKEN='ci-secret',
                VELIA_MEDICAL_RADAR_NONCOMMERCIAL_ACK='false',
                RADAR_UPSTREAM_ROOT='/opt/damo-radar', RADAR_MODEL_ROOT='/models/radar',
-               VELIA_MEDICAL_WORK_DIR='/var/lib/velia-medical', PORT='8088')
+               VELIA_MEDICAL_WORK_DIR=work.name, PORT=str(port),
+               ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS='1', OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
     proc = subprocess.Popen([sys.executable, 'app.py'], cwd=ROOT / 'medical_worker', env=env)
     try:
-        data = None
-        for _ in range(30):
-            if proc.poll() is not None:
-                raise RuntimeError('Medical worker exited before health check')
-            try:
-                request = urllib.request.Request('http://127.0.0.1:8088/health',
-                                                  headers={'Authorization': 'Bearer ci-secret'})
-                with urllib.request.urlopen(request, timeout=2) as response:
-                    data = json.load(response)
-                break
-            except urllib.error.URLError:
-                time.sleep(1)
-        if not (data and data.get('ok') is True and data.get('provider') == 'radar'
+        data = wait_for_medical_health(proc, f'http://127.0.0.1:{port}/health')
+        if not (isinstance(data, dict) and data.get('ok') is True and data.get('provider') == 'radar'
                 and data.get('ready_for_inference') is False
                 and data.get('commercial_use_allowed_by_public_weights') is False
                 and data.get('raw_input_retained_after_job') is False):
@@ -172,6 +189,7 @@ def medical_smoke(sha):
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+        work.cleanup()
     write_receipt('medical-image', sha, source_hash(), [dict(health=data)])
 
 
