@@ -62,7 +62,7 @@ async def run_flash_probe():
         site = web.TCPSite(runner, "127.0.0.1", 0)
         await site.start()
         port = site._server.sockets[0].getsockname()[1]
-        runtime = os.getenv("VELIA_DESKTOP_QUALIFICATION_RUNTIME", "/opt/velia-qualification/harness")
+        runtime = os.getenv("VELIA_DESKTOP_QUALIFICATION_RUNTIME", "/opt/velia-qualification/harness/node_modules/@deepseek-ai/dsh")
         script = Path(__file__).parent / "scripts" / "probe-live-flash.mjs"
         child = await asyncio.create_subprocess_exec("node", str(script), f"http://127.0.0.1:{port}",
             fixture_token, runtime, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,

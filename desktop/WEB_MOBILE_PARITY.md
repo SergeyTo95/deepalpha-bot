@@ -303,3 +303,15 @@ function result. It does not execute real web search, log model output or keys,
 or claim production language quality or physical voice acceptance. A failed
 probe returns nonzero. Remove this live check from pre-deploy after acceptance;
 recurring checks remain configuration-only for Quantum.
+
+## Reproducible qualification runtime (2026-10-28)
+
+The gateway no longer downloads its CLI from a transient Windows-artifact
+service. The image installs the official published `@deepseek-ai/dsh`
+`0.2.1-alpha.1`, with the root tarball and all transitive artifacts pinned by
+`desktop/qualification-runtime/package-lock.json` integrity hashes. Install
+scripts are disabled. Both qualification and final image run the CLI version
+check; the explicit operator probe uses its new package path. This attests the
+published package and lock, not the old Windows archive or an inferred Git SHA.
+Node web tests, the Python gateway suite, Groq acceptance and the private remote
+Browser Agent live check remain required.
