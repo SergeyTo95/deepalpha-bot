@@ -7,6 +7,103 @@ from desktop.guest_store import GuestStore
 from test_velia_web_chat import fixture, login, headers
 
 
+@pytest.mark.parametrize("voice", [False, True])
+@pytest.mark.parametrize("search", [False, True])
+def test_native_saved_quantum_forwards_one_turn_without_any_gateway_planner(monkeypatch, tmp_path, voice, search):
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("native Quantum reached a legacy planner")
+    monkeypatch.setattr("desktop.web_search.WebSearch.account_question", forbidden)
+    monkeypatch.setattr("desktop.web_search.WebSearch.restore_messages", forbidden)
+    async def run():
+        async with fixture(monkeypatch,with_search=True,quantum_api=True,without_flash=True,
+                features={"chat_quantum":True,"chat_quantum_native_tools":True},
+                guest_store=GuestStore(sqlite_path=tmp_path/"native.db")) as (server,client,state):
+            cookie,_,_=await login(server,client)
+            async with client.post(server.make_url('/web-api/v1/conversations'),headers=headers(cookie),json={"title":"Native"}) as response:
+                cid=(await response.json())["conversation"]["id"]
+            prior=[{"role":"user","content":"I use Linux.","status":"completed"}]
+            state["conversations"][cid]["messages"]=list(prior)
+            question="Найди новую версию Python" if search else "Explain a Python set."
+            async with client.post(server.make_url(f'/web-api/v1/conversations/{cid}/messages/stream'),headers=headers(cookie),
+                    json={"content":question,"model":"velia-quantum","voice_turn":voice,"web_search":search,"idempotency_key":"native-test-01"}) as response:
+                wire=await response.text()
+                assert response.status==200 and "[DONE]" in wire
+            assert len(state["account_calls"])==1 and state["account_calls"][0]["content"]==question
+            assert state["account_calls"][0]["web_search"] is search
+            assert state["account_calls"][0].get("voice_turn",False) is voice
+            assert state["conversations"][cid]["messages"][:1]==prior
+            assert state["quantum_intent_payloads"]==state["intent_payloads"]==state["forbidden_model_calls"]==state["search_queries"]==[]
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("search", [False, True])
+def test_native_unsaved_quantum_answers_or_searches_without_routing_call(monkeypatch,tmp_path,search):
+    def forbidden(*_args,**_kwargs):
+        pytest.fail("native Quantum called a routing model")
+    monkeypatch.setattr("desktop.web_search.WebSearch._understand",forbidden)
+    async def run():
+        async with fixture(monkeypatch,with_search=True,quantum_api=True,without_flash=True,native_search=search,
+                features={"chat_quantum":True,"chat_quantum_native_tools":True},
+                guest_store=GuestStore(sqlite_path=tmp_path/"native-local.db")) as (server,client,state):
+            cookie,_,_=await login(server,client)
+            async with client.post(server.make_url('/web-api/v1/chat/completions'),headers=headers(cookie),
+                    json={"model":"velia-quantum","stream":True,"web_search":True,"messages":[{"role":"user","content":"Найди Python" if search else "Объясни множество"}]}) as response:
+                wire=await response.text()
+                assert response.status==200 and "[DONE]" in wire
+                assert ("https://www.python.org/downloads/" in wire) is search
+                assert "fixture-quantum-key" not in wire and "private-thought" not in wire and "call_search" not in wire
+            assert len(state["quantum_turn_payloads"])==1
+            assert len(state["payloads"])==1
+            assert len(state["search_queries"])==int(search)
+            assert state["quantum_intent_payloads"]==state["intent_payloads"]==state["forbidden_model_calls"]==[]
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("code,error",[("1302","quantum_rate_limited"),("1305","quantum_overloaded")])
+def test_native_web_quantum_reports_exact_limit_kind_without_retry_or_private_details(monkeypatch,tmp_path,code,error):
+    async def run():
+        async with fixture(monkeypatch,with_search=True,quantum_api=True,without_flash=True,native_status=429,native_code=code,
+                features={"chat_quantum":True,"chat_quantum_native_tools":True},
+                guest_store=GuestStore(sqlite_path=tmp_path/"native-limits.db")) as (server,client,state):
+            cookie,_,_=await login(server,client)
+            async with client.post(server.make_url('/web-api/v1/chat/completions'),headers=headers(cookie),
+                    json={"model":"velia-quantum","stream":True,"web_search":True,"messages":[{"role":"user","content":"Explain a set"}]}) as response:
+                wire=await response.text()
+                assert error in wire and "[DONE]" not in wire
+                assert "private fixture account" not in wire and "fixture-quantum-key" not in wire
+            assert len(state["quantum_turn_payloads"])==1 and state["payloads"]==state["search_queries"]==[]
+    asyncio.run(run())
+
+
+def test_native_web_search_failure_does_not_trigger_another_model_or_unverified_answer(monkeypatch,tmp_path):
+    async def run():
+        async with fixture(monkeypatch,with_search=True,quantum_api=True,without_flash=True,native_search=True,search_status=503,
+                features={"chat_quantum":True,"chat_quantum_native_tools":True},
+                guest_store=GuestStore(sqlite_path=tmp_path/"native-search-failure.db")) as (server,client,state):
+            cookie,_,_=await login(server,client)
+            async with client.post(server.make_url('/web-api/v1/chat/completions'),headers=headers(cookie),
+                    json={"model":"velia-quantum","stream":True,"web_search":True,"messages":[{"role":"user","content":"Find Python"}]}) as response:
+                wire=await response.text()
+                assert "quantum_web_search_unavailable" in wire and "[DONE]" not in wire
+            assert len(state["quantum_turn_payloads"])==1 and len(state["search_queries"])==1
+            assert state["payloads"]==state["forbidden_model_calls"]==[]
+    asyncio.run(run())
+
+
+def test_native_quantum_respects_disabled_internet(monkeypatch,tmp_path):
+    async def run():
+        async with fixture(monkeypatch,with_search=True,quantum_api=True,without_flash=True,native_search=True,
+                features={"chat_quantum":True,"chat_quantum_native_tools":True},
+                guest_store=GuestStore(sqlite_path=tmp_path/"native-off.db")) as (server,client,state):
+            cookie,_,_=await login(server,client)
+            async with client.post(server.make_url('/web-api/v1/chat/completions'),headers=headers(cookie),
+                    json={"model":"velia-quantum","stream":True,"web_search":False,"messages":[{"role":"user","content":"Explain a set"}]}) as response:
+                assert "[DONE]" in await response.text()
+            assert len(state["payloads"])==1 and "tools" not in state["payloads"][0]
+            assert state["search_queries"]==state["quantum_intent_payloads"]==[]
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("action", ["direct", "search"])
 @pytest.mark.parametrize("saved", [True, False])
 def test_quantum_owns_interpretation_and_search_with_flash_unavailable(monkeypatch, tmp_path, action, saved):

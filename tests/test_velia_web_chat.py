@@ -29,6 +29,7 @@ async def fixture(monkeypatch, **state):
     state["search_payloads"] = []
     state["intent_payloads"] = []
     state["quantum_intent_payloads"] = []
+    state["quantum_turn_payloads"] = []
     state["forbidden_model_calls"] = []
     state["review_payloads"] = []
     state["agent_calls"] = []
@@ -112,6 +113,15 @@ async def fixture(monkeypatch, **state):
         if state.get("without_flash") and not is_quantum:
             state["forbidden_model_calls"].append(data.get("model"))
             raise web.HTTPInternalServerError()
+        if is_quantum and data.get("tools", [{}])[0].get("function", {}).get("name") == "web_search":
+            state["quantum_turn_payloads"].append(data)
+            if state.get("native_status"):
+                return web.json_response({"error": {"code": state.get("native_code", "1302"), "message": "private fixture account"}}, status=state["native_status"])
+            if state.get("native_search"):
+                args = {"query": "latest stable Python version", "scope": state.get("native_scope", "general")}
+                event = {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_search", "type": "function",
+                    "function": {"name": "web_search", "arguments": json.dumps(args)}}]}, "finish_reason": "tool_calls"}]}
+                return web.Response(text="data: " + json.dumps(event) + "\n\ndata: [DONE]\n\n", content_type="text/event-stream")
         if data.get("tools", [{}])[0].get("function", {}).get("name") == "understand_request":
             plans = state["quantum_intent_payloads"] if is_quantum else state["intent_payloads"]
             plans.append(data)

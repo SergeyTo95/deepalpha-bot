@@ -14,7 +14,7 @@ test("Quantum history retains its mode and quota failures remain actionable", ()
   assert.equal(MODELS["velia-quantum"], "VELIA QUANTUM");
   assert.match(apiError("quantum_spend_cap_reached"), /денежным лимитом ключа/);
   assert.doesNotMatch(apiError("quantum_spend_cap_reached"), /Дневной лимит|попробуй позже/i);
-  assert.match(apiError("quantum_quota_exhausted"), /Бесплатная квота Quantum/);
+  assert.match(apiError("quantum_quota_exhausted"), /ограничила запросы/);
   assert.match(apiError("quantum_unavailable"), /Quantum/);
   assert.match(apiError("quantum_free_guard_required"), /Бесплатный доступ Quantum/);
 });

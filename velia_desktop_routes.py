@@ -11,7 +11,7 @@ import time
 from collections import deque
 from urllib.parse import urlsplit
 
-from aiohttp import ClientError, ClientSession, ClientTimeout, web
+from aiohttp import ClientError, ClientSession, ClientTimeout, DummyCookieJar, web
 from velia_request_understanding import understanding_messages
 import velia_quantum_provider as quantum
 
@@ -221,7 +221,7 @@ def validate_payload(data):
     return result
 
 
-def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filter_stream=None, authorize_model=None, enrich_payload=None):
+def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filter_stream=None, authorize_model=None, enrich_payload=None, quantum_browser=None, quantum_search=None):
     """Mount a disabled-by-default, bounded preview using mobile access tokens."""
     calls = {}
     active = set()
@@ -341,7 +341,7 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
         response = None
         try:
             timeout = ClientTimeout(total=360, sock_read=300) if is_flash or quantum_config else ClientTimeout(total=180, sock_read=90)
-            async with ClientSession(timeout=timeout) as client:
+            async with ClientSession(timeout=timeout, cookie_jar=DummyCookieJar(), trust_env=False) as client:
                 endpoint = flash_endpoint() if is_flash else os.getenv("KIMI_BASE_URL", "https://api.moonshot.ai/v1").rstrip("/")
                 if quantum_config:
                     endpoint = quantum_config.base_url
@@ -352,6 +352,22 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                         return payload
                 if is_flash:
                     await check_flash_context(client, endpoint, headers, payload)
+                if quantum_config and quantum_browser and quantum_browser(request):
+                    from velia_quantum_turn import stream_turn
+                    from desktop.web_search import SEARCH, source_event
+                    response = web.StreamResponse(headers={"Content-Type": "text/event-stream",
+                        "Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+                    await response.prepare(request)
+                    async for event in stream_turn(client, quantum_config, payload["messages"],
+                            search=quantum_search if request.get(SEARCH) else None, max_tokens=payload.get("max_tokens")):
+                        if "sources" in event:
+                            await response.write(source_event(event["sources"]))
+                        if "text" in event:
+                            wire = {"model": QUANTUM_ID, "choices": [{"delta": {"content": event["text"]}}]}
+                            await response.write(("data: " + json.dumps(wire, ensure_ascii=False) + "\n\n").encode())
+                    await response.write(b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+                    await response.write_eof()
+                    return response
                 if quantum_config:
                     await quantum.verify_zero_spend_async(client, quantum_config)
                 async with client.post(endpoint + ("/v1/chat/completions" if is_flash else "/chat/completions"), json=payload,

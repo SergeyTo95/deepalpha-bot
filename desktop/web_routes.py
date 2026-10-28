@@ -52,7 +52,8 @@ def prepare_web_payload(request, data, *, search_enabled=False):
         raise ValueError("invalid_messages")
     request[WEB_MODEL] = data["model"]
     voice_turn = bool(data.get("voice_turn"))
-    request[SEARCH] = search_enabled or bool(data.get("web_search"))
+    request[SEARCH] = (data.get("web_search", search_enabled) if data["model"] == QUANTUM_ID
+        else search_enabled or bool(data.get("web_search")))
     return {**{key: value for key, value in data.items() if key not in {"web_search", "voice_turn"}},
             "messages": [{"role": "system", "content": PERSONA + (" Это голосовой разговор. Ответь естественно, 1–2 законченными короткими фразами. Без Markdown. Используй свежие факты только при наличии переданных веб-источников." if voice_turn else "")}] + messages,
             "max_tokens": (1024 if data["model"] == QUANTUM_ID else 128) if voice_turn else 512 if data["model"] == FLASH_ID else 8192 if data["model"] == QUANTUM_ID else 4096}
@@ -126,6 +127,7 @@ class Session:
     quantum: bool = False
     quantum_source: str = ""
     quantum_attachments: bool = False
+    quantum_native_tools: bool = False
     selected_model_inputs: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -213,6 +215,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             session.quantum = identity.get("quantum") is True
             session.quantum_source = identity.get("quantum_source", "")
             session.quantum_attachments = identity.get("quantum_attachments") is True
+            session.quantum_native_tools = identity.get("quantum_native_tools") is True
             session.selected_model_inputs = identity.get("selected_model_inputs") is True
         request[WEB_SESSION] = session
         return session
@@ -284,6 +287,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             session.quantum = identity.get("quantum") is True
             session.quantum_source = identity.get("quantum_source", "")
             session.quantum_attachments = identity.get("quantum_attachments") is True
+            session.quantum_native_tools = identity.get("quantum_native_tools") is True
             session.selected_model_inputs = identity.get("selected_model_inputs") is True
             previous = decode(request)
             if previous:

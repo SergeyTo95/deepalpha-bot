@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, DummyCookieJar, TCPConnector, web
 from velia_desktop_routes import AuthenticationUnavailable, setup_velia_desktop_routes
-from desktop.web_routes import prepare_web_payload, public_web_stream, setup_web_routes
+from desktop.web_routes import prepare_web_payload, public_web_stream, setup_web_routes, WEB_CHAT, WEB_MODEL, WEB_SESSION
 from desktop.admin_proxy import setup_owner_admin_proxy
 from velia_quantum_provider import MODEL_ID as QUANTUM_ID
 
@@ -205,6 +205,7 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
         return {"user_id": user["id"], "name": str(user.get("first_name") or "Аккаунт VELIA")[:120],
             "selected_model_inputs": features.get("chat_selected_model_inputs") is True,
             "quantum": features.get("chat_quantum") is True,
+            "quantum_native_tools": features.get("chat_quantum_native_tools") is True,
             "quantum_attachments": features.get("chat_quantum_attachments") is True,
             "quantum_source": str(features.get("chat_quantum_source") or "")[:120]}
 
@@ -454,9 +455,13 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
     app.router.add_get("/mobile-connect", pairing_page)
     app.router.add_post("/mobile-api/v1/auth/exchange", relay_session)
     app.router.add_post("/mobile-api/v1/auth/refresh", relay_session)
+    def native_quantum_browser(request):
+        return bool(request.get(WEB_CHAT) and getattr(request.get(WEB_SESSION), "quantum_native_tools", False))
     async def enrich_web(request, payload):
         from desktop.web_search import SEARCH, PREPARED_REPLY, SearchUnavailable
         if request.get(SEARCH):
+            if request.get(WEB_MODEL) == QUANTUM_ID and native_quantum_browser(request):
+                return payload
             if web_search is None:
                 raise SearchUnavailable()
             payload = await web_search.enrich(request, payload)
@@ -468,7 +473,9 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
     def prepare_browser_payload(request, data):
         return prepare_web_payload(request, data, search_enabled=bool(web_search and web_search.available))
     handlers = setup_velia_desktop_routes(app, authenticate, prepare_payload=prepare_browser_payload,
-        filter_stream=public_web_stream, authorize_model=authorize_model, enrich_payload=enrich_web)
+        filter_stream=public_web_stream, authorize_model=authorize_model, enrich_payload=enrich_web,
+        quantum_browser=native_quantum_browser,
+        quantum_search=web_search.search if web_search and web_search.available else None)
     if os.getenv("VELIA_WEB_ENABLED", "").lower() in {"true", "1"}:
         origin = web_origin or https_origin(os.environ["VELIA_WEB_ORIGIN"])
         agent_available = (

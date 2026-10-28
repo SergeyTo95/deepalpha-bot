@@ -36,7 +36,18 @@ ERRORS = frozenset({"quantum_unavailable", "quantum_quota_exhausted", "quantum_a
     "quantum_invalid_response", "quantum_context_too_long",
     "quantum_attachments_unsupported", "quantum_daily_user_limit_exceeded",
     "quantum_daily_global_limit_exceeded", "quantum_free_guard_required",
-    "quantum_spend_cap_reached"})
+    "quantum_spend_cap_reached", "quantum_rate_limited", "quantum_overloaded", "quantum_web_search_unavailable"})
+ZAI_ERROR_REASONS = {
+    "1000": "authentication_failed", "1001": "authentication_missing", "1003": "authentication_expired",
+    "1005": "authentication_required", "1113": "balance_or_package_required",
+    "1210": "invalid_parameter", "1211": "unknown_model", "1214": "invalid_parameter",
+    "1220": "access_denied", "1261": "context_too_long", "1301": "content_rejected",
+    "1302": "request_rate_limit", "1305": "provider_overloaded", "1308": "usage_limit",
+    "1309": "package_expired", "1310": "weekly_or_monthly_limit", "1311": "model_not_in_plan",
+    "1313": "fair_usage_limit", "1314": "package_expired", "1315": "wrong_key_product",
+    "1316": "five_hour_limit", "1317": "weekly_limit", "1318": "five_hour_spend_limit",
+    "1319": "weekly_spend_limit", "1320": "five_hour_spend_limit", "1321": "weekly_spend_limit",
+}
 PROVIDER_ERROR_CODES = frozenset({
     "invalid_key", "model_not_granted", "model_location_not_supported",
     "insufficient_quota", "rate_limit_exceeded", "free_limit_reached",
@@ -74,6 +85,10 @@ def provider_error_details(raw):
         body = json.loads(raw.decode("utf-8"), object_pairs_hook=unique, parse_constant=finite)
         error = body.get("error") if isinstance(body, dict) else None
         code = error.get("code") if isinstance(error, dict) else None
+        if type(code) is int:
+            code = str(code)
+        if isinstance(code, str) and code in ZAI_ERROR_REASONS:
+            return code, ZAI_ERROR_REASONS[code]
         if not isinstance(code, str) or code not in PROVIDER_ERROR_CODES:
             return "unknown_error", "none"
         reason = "none"
@@ -261,6 +276,12 @@ def require_free_zai(config):
 
 
 def response_error(status, *, provider_code=None, quota_reason=None):
+    if provider_code in {"1302", "1313"}:
+        return QuantumError("quantum_rate_limited", 429)
+    if provider_code == "1305":
+        return QuantumError("quantum_overloaded", 503)
+    if provider_code in {"1113", "1309", "1311", "1314", "1315"}:
+        return QuantumError("quantum_access_required", 503)
     if status == 402:
         return QuantumError("quantum_access_required", 503)
     if status == 429:
@@ -358,7 +379,11 @@ class StreamDecoder:
                 value = json.loads(data)
             except (ValueError, UnicodeDecodeError):
                 raise QuantumError("quantum_invalid_response") from None
-            if not isinstance(value, dict) or value.get("error"):
+            if isinstance(value, dict) and value.get("error"):
+                code, reason = provider_error_details(data)
+                LOG.warning("VELIA_QUANTUM_STREAM_REJECTED provider_code=%s quota_reason=%s", code, reason)
+                raise response_error(502, provider_code=code, quota_reason=reason)
+            if not isinstance(value, dict):
                 raise QuantumError("quantum_provider_error")
             if isinstance(value.get("usage"), dict):
                 self.usage = {k: v for k, v in value["usage"].items()

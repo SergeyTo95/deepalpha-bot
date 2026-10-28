@@ -197,6 +197,44 @@ After migration acceptance restore offline Quantum checks on recurring deploys.
 Account quota, rate limits, real multilingual quality and physical voice
 acceptance remain to be verified after the key is installed and deployment passes.
 
+## Native Quantum tool turns (2026-10-28)
+
+An account backend advertising `chat_quantum_native_tools` owns the whole
+Quantum turn. The gateway forwards the original content, voice flag, attachment
+IDs and explicit web_search boolean; it does not retrieve preparation history,
+restore context metadata or call understand_request first. Existing backend
+history, attachment extraction, permissions, limits and persistence still apply.
+During a rolling release, older backends retain the qualified legacy route.
+Deploy the account backend before the gateway.
+
+`velia_quantum_turn.Turn` is shared by the native account generator and signed-in
+local browser chats. The first streaming completion may answer directly or
+call the local web_search function. Only a validated search call executes;
+query/scope are bounded, arbitrary functions and repeated tool loops fail closed.
+One search result permits exactly one model continuation with no further tools.
+The same selected Quantum model/key is used for both completions. No retries,
+paid model fallback or provider-built-in paid search is enabled.
+
+The account service uses its existing WEB_SEARCH_PROVIDER/WEB_SEARCH_API_KEY;
+local browser chats use the gateway's existing search service. Searches use
+fixed provider endpoints with redirects disabled, bounded responses, public
+source URLs, three snippets maximum and official domains for medical scope.
+Sources are appended as clickable links to the saved answer so they survive
+history reload, copying and export. Local browser turns also emit source cards.
+The voice reader keeps source captions and strips Markdown URLs.
+
+Z.ai business codes are logged as fixed codes and categories, never its message
+or account details. 1302 is a request rate limit, 1305 overload, 1113 a balance/
+package problem, and 1308/1310 usage limits. Unknown 429s are not labelled a
+confirmed daily/free quota exhaustion. Original failures without these codes
+cannot be retroactively classified. See https://docs.z.ai/api-reference/api-code .
+
+Automated tests exercise direct/voice/search turns, original-history preservation,
+one-versus-two completion counts, search failure, unsafe tool arguments, private
+URL filtering, medical domains, Internet disabled and safe 429 diagnostics.
+Physical microphone quality, actual model tool-choice quality and live API
+availability still require service/device acceptance after deployment.
+
 ## Future self-hosting
 
 Official checkpoint: https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash
