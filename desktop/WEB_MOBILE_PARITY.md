@@ -273,3 +273,33 @@ calls, minimal then native-tool payload, with no retries, actual searches, user
 history, model output or credentials in logs. It accepts only the pinned free
 Z.ai model and reports provider unavailability without treating it as a healthy
 model response. It is not part of recurring release readiness checks.
+
+## Independent Groq reserve (2026-10-28)
+
+Native account and signed-in browser Quantum support an explicit Groq backup:
+`VELIA_QUANTUM_GROQ_BACKUP_ENABLED=true` plus dedicated `GROQ_API_KEY`.
+Only `https://api.groq.com/openai/v1` and `openai/gpt-oss-120b` are allowed;
+provider/model endpoint overrides and another provider's credentials are not
+used. `max_completion_tokens` defaults to a maximum of 2048, reasoning effort
+is low, and `include_reasoning=false`. No provider-hosted tools are enabled.
+The existing custom search, safe tool limits, account budgets and history stay
+in effect. There is no language allowlist added by the Groq adapter.
+
+Only an explicit pre-response Z.ai 429/1302 or 429/1305, or its active overload
+cooldown, may enter this backup. One Z.ai overload retry is retained. Auth,
+balance, policy and quota errors, network errors, and every in-stream failure
+stop without switching. After a backup starts, its search continuation stays
+on Groq, with no replay of text or tools. The backend records fallback_used.
+
+Groq Free is an account tier, not a universally zero-priced model or an API
+key with an enforceable monetary cap. The operator must keep this account on
+Free to avoid usage charges; this integration never upgrades billing or buys
+credits, and cannot infer the account's billing plan from a successful model
+response. Existing project daily limits are not increased by this release.
+
+Explicit one-off acceptance: `python -m velia_quantum_groq_probe`. It verifies
+key/model visibility, then two bounded streaming completions with one synthetic
+function result. It does not execute real web search, log model output or keys,
+or claim production language quality or physical voice acceptance. A failed
+probe returns nonzero. Remove this live check from pre-deploy after acceptance;
+recurring checks remain configuration-only for Quantum.

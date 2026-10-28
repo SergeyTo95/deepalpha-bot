@@ -2,8 +2,8 @@
 
 Clients use velia-quantum / chat_mode=quantum. Only operator configuration knows
 the upstream model. Experiential requires a verified zero-spend key. Native chat
-may retry one explicit Z.ai overload before generation, without provider/model
-fallback or use of another model's credentials.
+may retry one explicit Z.ai overload before generation. An opt-in Groq reserve
+uses its own dedicated key and a pinned model only before generation starts.
 """
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -29,6 +29,8 @@ EXPERIENTIAL_MODELS = {
 EXPERIENTIAL_URL = "https://api.experientiallabs.ai/v1"
 ZAI_URL = "https://api.z.ai/api/paas/v4"
 ZAI_FREE_MODEL = "glm-4.7-flash"
+GROQ_URL = "https://api.groq.com/openai/v1"
+GROQ_MODEL = "openai/gpt-oss-120b"
 KEY_INFO_URL = "https://api.experientiallabs.ai/api/v1/key"
 KEY_INFO_MAX_BYTES = 8192
 LOG = logging.getLogger(__name__)
@@ -136,6 +138,8 @@ class QuantumConfig:
 
     @property
     def source(self):
+        if self.provider == "groq":
+            return "GPT-OSS 120B через Groq"
         if self.provider == "zai":
             return "GLM-4.7-Flash через Z.ai"
         return EXPERIENTIAL_MODELS.get(self.model, "Quantum через Experiential") if self.provider == "experiential" else "Собственная модель VELIA"
@@ -171,7 +175,7 @@ def configuration():
         return None
     if provider == "zai" and (base != ZAI_URL or model != ZAI_FREE_MODEL or "${{" in key):
         return None
-    if provider == "self_hosted" and url.hostname in {"api.experientiallabs.ai", "api.z.ai"}:
+    if provider == "self_hosted" and url.hostname in {"api.experientiallabs.ai", "api.z.ai", "api.groq.com"}:
         return None
     return QuantumConfig(provider, base, model, key,
         bounded_int("VELIA_QUANTUM_MAX_OUTPUT_TOKENS", 8192, 256, 8192))
@@ -179,6 +183,28 @@ def configuration():
 
 def available():
     return configuration() is not None
+
+
+def groq_backup_configuration(primary=None):
+    """Explicit opt-in for the operator's Groq Free account, not a $0 key cap.
+
+    Groq billing belongs to the account plan. This does not upgrade the plan,
+    purchase credits, or prove that an account has remained on Free.
+    """
+    if primary is not None and primary.provider != "zai":
+        return None
+    if os.getenv("VELIA_QUANTUM_GROQ_BACKUP_ENABLED", "").strip().lower() not in {"true", "1", "yes", "on"}:
+        return None
+    key = os.getenv("GROQ_API_KEY", "").strip()
+    if not key or any(c in key for c in "\r\n") or "${{" in key:
+        return None
+    return QuantumConfig("groq", GROQ_URL, GROQ_MODEL, key,
+        bounded_int("VELIA_QUANTUM_GROQ_MAX_OUTPUT_TOKENS", 2048, 512, 4096))
+
+
+def require_groq_route(config):
+    if config.base_url != GROQ_URL or config.model != GROQ_MODEL:
+        raise QuantumError("quantum_free_guard_required", 503)
 
 
 class QuantumError(Exception):
@@ -213,6 +239,9 @@ def require_zero_spend_key(raw):
 
 
 async def verify_zero_spend_async(client, config):
+    if config.provider == 'groq':
+        require_groq_route(config)
+        return
     if config.provider == 'zai':
         require_free_zai(config)
         return
@@ -241,6 +270,9 @@ async def verify_zero_spend_async(client, config):
 
 
 def verify_zero_spend(client, config):
+    if config.provider == 'groq':
+        require_groq_route(config)
+        return
     if config.provider == 'zai':
         require_free_zai(config)
         return
@@ -322,6 +354,13 @@ def payload(config, messages, *, stream=False, max_tokens=None, tools=None, tool
         result["tools"] = tools
     if tool_choice is not None:
         result["tool_choice"] = tool_choice
+    if config.provider == "groq":
+        require_groq_route(config)
+        if tools and any(t.get("type") != "function" for t in tools):
+            raise QuantumError("quantum_free_guard_required", 503)
+        result["max_completion_tokens"] = result.pop("max_tokens")
+        result["reasoning_effort"] = "low"
+        result["include_reasoning"] = False
     return result
 
 

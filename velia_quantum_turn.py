@@ -6,7 +6,7 @@ metadata stay server-side. A turn uses one completion, or two after one search.
 import json
 import logging
 import re
-from velia_quantum_provider import QuantumError, StreamDecoder, payload
+from velia_quantum_provider import QuantumError, StreamDecoder, payload, groq_backup_configuration
 from velia_quantum_transport import completion_async
 LOG = logging.getLogger(__name__)
 
@@ -157,7 +157,9 @@ async def stream_turn(client, config, messages, *, search=None, max_tokens=None)
     turn = Turn(config, messages, search_enabled=search is not None, max_tokens=max_tokens)
     while True:
         body = turn.body()
-        async with completion_async(client, config, body, retry_overload=turn.calls == 1) as response:
+        async with completion_async(client, turn.config, body, retry_overload=turn.calls == 1,
+                backup=groq_backup_configuration(turn.config) if turn.calls == 1 else None,
+                on_route=lambda selected: setattr(turn, "config", selected)) as response:
             if "text/event-stream" not in response.headers.get("Content-Type", ""):
                 raise QuantumError("quantum_invalid_response")
             async for chunk in response.content.iter_chunked(8192):

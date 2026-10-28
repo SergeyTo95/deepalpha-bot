@@ -3,9 +3,11 @@
 Only an explicit HTTP 429/1305 before the first completion starts is retried.
 No network, stream, quota or authentication failure is replayed. Cooldowns are
 process-local, scoped to endpoint/model/key, and never contain user messages.
+An explicitly configured Groq reserve can handle pre-response Z.ai capacity
+failures; no stream or tool continuation can trigger a provider switch.
 """
 import asyncio
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
 import hashlib
 import logging
 import os
@@ -14,7 +16,7 @@ import threading
 import time
 
 from velia_quantum_provider import (QuantumError, provider_error_details,
-    read_provider_error, response_error, verify_zero_spend, verify_zero_spend_async)
+    read_provider_error, response_error, verify_zero_spend, verify_zero_spend_async, payload)
 
 LOG = logging.getLogger(__name__)
 HEADERS = {"Accept": "text/event-stream", "Accept-Encoding": "identity",
@@ -36,7 +38,9 @@ def check_overload(config):
         state = _CIRCUITS.get(_identity(config))
         if state and state[1] > time.monotonic():
             LOG.info("VELIA_QUANTUM_OVERLOAD_COOLDOWN active=true")
-            raise QuantumError("quantum_overloaded", 503)
+            error = QuantumError("quantum_overloaded", 503)
+            error.before_response = True
+            raise error
 
 
 def _rejected(config, status, code):
@@ -92,7 +96,7 @@ def sync_error_details(response):
 
 
 @contextmanager
-def completion(client, config, body, *, timeout, retry_overload=False):
+def _completion(client, config, body, *, timeout, retry_overload=False):
     for attempt in range(2):
         check_overload(config)
         verify_zero_spend(client, config)
@@ -109,13 +113,15 @@ def completion(client, config, body, *, timeout, retry_overload=False):
             can_retry = _rejected(config, response.status_code, code)
             delay = _delay(response.headers) if retry_overload and attempt == 0 and can_retry else None
             if delay is None:
-                raise response_error(response.status_code, provider_code=code, quota_reason=reason)
+                error = response_error(response.status_code, provider_code=code, quota_reason=reason)
+                error.before_response = response.status_code == 429 and code in {"1302", "1305"}
+                raise error
         LOG.info("VELIA_QUANTUM_OVERLOAD_RETRY attempt=2")
         time.sleep(delay)  # Response closed before waiting; one retry maximum.
 
 
 @asynccontextmanager
-async def completion_async(client, config, body, *, retry_overload=False):
+async def _completion_async(client, config, body, *, retry_overload=False):
     for attempt in range(2):
         check_overload(config)
         await verify_zero_spend_async(client, config)
@@ -132,6 +138,48 @@ async def completion_async(client, config, body, *, retry_overload=False):
             can_retry = _rejected(config, response.status, code)
             delay = _delay(response.headers) if retry_overload and attempt == 0 and can_retry else None
             if delay is None:
-                raise response_error(response.status, provider_code=code, quota_reason=reason)
+                error = response_error(response.status, provider_code=code, quota_reason=reason)
+                error.before_response = response.status == 429 and code in {"1302", "1305"}
+                raise error
         LOG.info("VELIA_QUANTUM_OVERLOAD_RETRY attempt=2")
         await asyncio.sleep(delay)
+
+
+def _backup_body(config, backup, body, exc):
+    if (config.provider != "zai" or backup is None or backup.provider != "groq"
+            or not getattr(exc, "before_response", False)
+            or exc.code not in {"quantum_overloaded", "quantum_rate_limited"}):
+        raise exc
+    LOG.info("VELIA_QUANTUM_BACKUP from=zai to=groq reason=%s", exc.code)
+    return payload(backup, body["messages"], stream=True,
+        max_tokens=body.get("max_tokens"), tools=body.get("tools"), tool_choice=body.get("tool_choice"))
+
+
+@contextmanager
+def completion(client, config, body, *, timeout, retry_overload=False, backup=None, on_route=None):
+    # Catch only entry failures: exceptions while consuming a successful stream
+    # propagate to the caller and can never restart a turn on another provider.
+    with ExitStack() as stack:
+        try:
+            response = stack.enter_context(_completion(client, config, body,
+                timeout=timeout, retry_overload=retry_overload))
+        except QuantumError as exc:
+            converted = _backup_body(config, backup, body, exc)
+            if on_route:
+                on_route(backup)
+            response = stack.enter_context(_completion(client, backup, converted, timeout=timeout))
+        yield response
+
+
+@asynccontextmanager
+async def completion_async(client, config, body, *, retry_overload=False, backup=None, on_route=None):
+    async with AsyncExitStack() as stack:
+        try:
+            response = await stack.enter_async_context(_completion_async(client, config, body,
+                retry_overload=retry_overload))
+        except QuantumError as exc:
+            converted = _backup_body(config, backup, body, exc)
+            if on_route:
+                on_route(backup)
+            response = await stack.enter_async_context(_completion_async(client, backup, converted))
+        yield response
