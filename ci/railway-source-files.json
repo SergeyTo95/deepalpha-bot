@@ -1045,6 +1045,7 @@
   "velia_plugin_routes.py",
   "velia_profile_routes.py",
   "velia_project_routes.py",
+  "velia_quantum_groq_probe.py",
   "velia_quantum_provider.py",
   "velia_quantum_search.py",
   "velia_quantum_transport.py",

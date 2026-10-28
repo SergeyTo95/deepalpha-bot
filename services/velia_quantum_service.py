@@ -12,7 +12,7 @@ from velia_quantum_transport import completion
 from velia_quantum_search import configuration as search_configuration, search as run_web_search
 from velia_request_understanding import understanding_instruction
 from velia_quantum_provider import (MODEL_ID, PROVIDER_ID, QuantumError,
-    available, bounded_int, configuration, payload)
+    available, bounded_int, configuration, payload, groq_backup_configuration)
 
 LOG = logging.getLogger(__name__)
 _TRANSPORT = threading.local()
@@ -113,13 +113,19 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False, web_sear
             {"role": "user", "content": prompt}], stream=True, max_tokens=1024 if voice_turn else None)
         turn = Turn(config, body["messages"], search_enabled=bool(web_search and search_configuration()),
             max_tokens=1024 if voice_turn else None)
+        def select_route(selected):
+            nonlocal config
+            config = turn.config = selected
+            result["fallback_used"] = True
         parts = []
         deadline = time.monotonic() + (75 if voice_turn else 300)
         with _provider_client(config) as client:
             while True:
                 body = turn.body()
                 with completion(client, config, body, timeout=(5, 60) if voice_turn else (10, 120),
-                        retry_overload=turn.calls == 1) as response:
+                        retry_overload=turn.calls == 1,
+                        backup=groq_backup_configuration(config) if turn.calls == 1 else None,
+                        on_route=select_route) as response:
                     if headers_at is None:
                         headers_at = time.monotonic()
                     if "text/event-stream" not in response.headers.get("Content-Type", ""):

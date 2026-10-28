@@ -16,6 +16,12 @@ from velia_quantum_turn import Turn
 from velia_quantum_transport import HEADERS, sync_error_details
 
 
+def check_groq():
+    import asyncio
+    from velia_quantum_groq_probe import probe
+    return asyncio.run(probe())
+
+
 def compare_requests():
     """Two synthetic calls, no retries/tools executed, no secret/output logging.
 
@@ -85,6 +91,11 @@ def check_configuration():
 
 
 def main():
+    if "--groq" in sys.argv:
+        if any(mode in sys.argv for mode in ["--config-only", "--voice", "--compare-requests"]):
+            print("VELIA_QUANTUM_GROQ_PROBE_FAILED code=incompatible_probe_modes", flush=True)
+            return 1
+        return check_groq()
     if "--compare-requests" in sys.argv:
         if "--config-only" in sys.argv or "--voice" in sys.argv:
             print("VELIA_QUANTUM_COMPARE_SKIPPED reason=incompatible_probe_modes", flush=True)

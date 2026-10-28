@@ -480,3 +480,41 @@ def test_postgres_quantum_history_idempotency_quotas_and_owner(enabled, monkeypa
         cursor.execute("SELECT provider, model, estimated_cost_usd FROM velia_messages WHERE role='assistant'")
         provider, model, cost = cursor.fetchone()
         assert provider == model == "velia-quantum" and float(cost) == 0.0
+
+
+@pytest.mark.parametrize('search', [False, True])
+@pytest.mark.parametrize('voice', [False, True])
+def test_account_quantum_uses_groq_backup_for_original_turn_and_keeps_search_route(enabled, monkeypatch, search, voice):
+    import velia_quantum_transport as transport
+    transport._CIRCUITS.clear()
+    monkeypatch.setenv('VELIA_QUANTUM_PROVIDER', 'zai')
+    monkeypatch.setenv('VELIA_QUANTUM_GROQ_BACKUP_ENABLED', 'true')
+    monkeypatch.setenv('GROQ_API_KEY', 'groq-account-fixture-secret')
+    monkeypatch.setattr(quantum, 'search_configuration', lambda: ('tavily','search-fixture-secret'))
+    searches = []
+    def run_search(query, **kwargs):
+        searches.append(query)
+        return {'results':[{'title':'Docs','url':'https://python.org','snippet':'Public'}]}
+    monkeypatch.setattr(quantum, 'run_web_search', run_search)
+    replies = [Response(429, b'{"error":{"code":"1302"}}')]
+    replies += [Response(body=native_tool_wire()), Response(body=wire('Готова.'))] if search else [Response(body=wire('Готова.'))]
+    class BackupClient(Client):
+        def post(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return replies.pop(0)
+    client = BackupClient(None)
+    monkeypatch.setattr(quantum.requests, 'Session', lambda: client)
+    deltas = []
+    original = 'USER: history with 0,5 TON.\nUSER: 日本語 العربية Türkçe русский.'
+    result = quantum.generate(original, web_search=search, voice_turn=voice, on_delta=deltas.append)
+    assert result['ok'] and result['fallback_used'] is True and result['model'] == 'velia-quantum'
+    assert result['text'] == ''.join(deltas) and 'Готова.' in result['text']
+    assert len(client.calls) == (3 if search else 2) and len(searches) == int(search)
+    assert client.calls[1][1]['json']['messages'][-1]['content'] == original
+    assert client.calls[1][1]['json']['max_completion_tokens'] == (1024 if voice else 2048)
+    assert all(url.startswith('https://api.groq.com/openai/v1') for url, _ in client.calls[1:])
+    assert all(kwargs['headers']['Authorization'] == 'Bearer groq-account-fixture-secret' for _, kwargs in client.calls[1:])
+    if search:
+        assert client.calls[2][1]['json']['messages'][-1]['role'] == 'tool'
+        assert 'https://python.org' in result['text']
+    transport._CIRCUITS.clear()
