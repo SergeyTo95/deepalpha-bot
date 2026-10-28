@@ -252,3 +252,24 @@ endpoint, model ID, and dedicated token for both gateway and account backend.
 That permits moving Quantum to our hardware without changing the public mode
 name. It does not imply that today's provider alias identifies a byte-for-byte
 copy of a particular public checkpoint. No weights were downloaded in this audit.
+
+## Z.ai overload recovery (2026-10-28)
+
+Saved account chat and native browser Quantum share bounded overload handling:
+only an explicit HTTP 429 with business code 1305 before the first completion
+may be retried once after 1–2 seconds. Responses close before waiting. No retry
+is made for quota/authentication errors, network errors, in-stream failures or
+a completion after executing web search. The model, body and dedicated key do
+not change. Standard User-Agent/Accept headers are explicit.
+
+Two actual 1305 rejections open a 30-second process-local cooldown scoped to
+endpoint/model/key; other keys are unaffected. A subsequent successful HTTP
+response clears it. This is not a distributed capacity guarantee across workers
+or replicas. No independent backup provider is enabled by this release.
+
+The account backend includes the explicit operator diagnostic
+`python ci/probe-velia-quantum.py --compare-requests`: two bounded synthetic
+calls, minimal then native-tool payload, with no retries, actual searches, user
+history, model output or credentials in logs. It accepts only the pinned free
+Z.ai model and reports provider unavailability without treating it as a healthy
+model response. It is not part of recurring release readiness checks.

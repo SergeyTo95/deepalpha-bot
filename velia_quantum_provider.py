@@ -1,8 +1,9 @@
 """Quantum's provider boundary, shared by account chat and the desktop gateway.
 
 Clients use velia-quantum / chat_mode=quantum. Only operator configuration knows
-the upstream model. Experiential requires a verified zero-spend key; there is no retry,
-provider fallback, or use of another model's credentials.
+the upstream model. Experiential requires a verified zero-spend key. Native chat
+may retry one explicit Z.ai overload before generation, without provider/model
+fallback or use of another model's credentials.
 """
 from dataclasses import dataclass, field
 from decimal import Decimal
