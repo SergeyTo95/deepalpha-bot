@@ -8,11 +8,11 @@ from contextlib import contextmanager
 from http.cookiejar import DefaultCookiePolicy
 import requests
 from velia_quantum_turn import Turn, source_suffix
+from velia_quantum_transport import completion
 from velia_quantum_search import configuration as search_configuration, search as run_web_search
 from velia_request_understanding import understanding_instruction
-from velia_quantum_provider import (MODEL_ID, PROVIDER_ID, QuantumError, StreamDecoder,
-    available, bounded_int, configuration, payload, response_error, verify_zero_spend,
-    provider_error_details)
+from velia_quantum_provider import (MODEL_ID, PROVIDER_ID, QuantumError,
+    available, bounded_int, configuration, payload)
 
 LOG = logging.getLogger(__name__)
 _TRANSPORT = threading.local()
@@ -34,7 +34,7 @@ def _close_transport():
 
 @contextmanager
 def _provider_client(config):
-    """Reuse TLS per worker/key; never share cookies or retry completions."""
+    """Reuse TLS per worker/key without cookies or automatic adapter retries."""
     factory = requests.Session
     identity = (os.getpid(), factory, config.provider, config.base_url,
         hashlib.sha256(config.api_key.encode()).digest())
@@ -59,21 +59,6 @@ def _provider_client(config):
         client = getattr(_TRANSPORT, "client", None)
         if hasattr(client, "cookies"):
             client.cookies.clear()
-
-
-def _provider_error_details(response):
-    raw = bytearray()
-    deadline = time.monotonic() + 3
-    try:
-        for chunk in response.iter_content(1):
-            raw.extend(chunk)
-            if len(raw) > 8192:
-                return "oversized_error", "none"
-            if time.monotonic() >= deadline:
-                return "unreadable_error", "none"
-        return provider_error_details(raw)
-    except (requests.RequestException, OSError, ValueError, TypeError):
-        return "unreadable_error", "none"
 
 
 def public_capability():
@@ -133,18 +118,10 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False, web_sear
         with _provider_client(config) as client:
             while True:
                 body = turn.body()
-                verify_zero_spend(client, config)
-                with client.post(config.base_url + "/chat/completions", json=body,
-                    headers={"Authorization": "Bearer " + config.api_key,
-                        "Accept": "text/event-stream", "Accept-Encoding": "identity"},
-                    timeout=(5, 60) if voice_turn else (10, 120), stream=True, allow_redirects=False) as response:
+                with completion(client, config, body, timeout=(5, 60) if voice_turn else (10, 120),
+                        retry_overload=turn.calls == 1) as response:
                     if headers_at is None:
                         headers_at = time.monotonic()
-                    if response.status_code != 200:
-                        code, reason = _provider_error_details(response)
-                        LOG.warning('VELIA_QUANTUM_HTTP_REJECTED phase=answer status=%d provider_code=%s quota_reason=%s',
-                            response.status_code, code, reason)
-                        raise response_error(response.status_code, provider_code=code, quota_reason=reason)
                     if "text/event-stream" not in response.headers.get("Content-Type", ""):
                         raise QuantumError("quantum_invalid_response")
                     for chunk in response.iter_content(1):

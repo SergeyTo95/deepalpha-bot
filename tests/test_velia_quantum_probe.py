@@ -5,6 +5,37 @@ import pytest
 
 from test_velia_quantum_provider import enabled
 
+
+@pytest.mark.parametrize("statuses", [(200, 200), (429, 429), (200, 429)])
+def test_comparison_is_two_synthetic_calls_and_never_prints_keys_or_output(enabled, monkeypatch, capsys, statuses):
+    from contextlib import nullcontext
+    from test_velia_quantum_transport import Client, Response, wire
+    monkeypatch.setenv("VELIA_QUANTUM_PROVIDER", "zai")
+    client = Client(*(Response(s, body=wire("private model output") if s == 200 else None) for s in statuses))
+    monkeypatch.setattr(probe.quantum, "_provider_client", lambda _config: nullcontext(client))
+    monkeypatch.setattr(probe.sys, "argv", ["probe", "--compare-requests"])
+    assert probe.main() == 0
+    assert len(client.calls) == 2
+    assert "tools" not in client.calls[0][1]["json"]
+    assert client.calls[1][1]["json"]["tool_stream"] is True
+    assert all(call[1]["json"]["max_tokens"] == 256 for call in client.calls)
+    output = capsys.readouterr().out
+    assert "shape=minimal" in output and "shape=native_tools" in output and "calls=2" in output
+    assert "all_accepted=" + str(statuses == (200, 200)).lower() in output
+    assert "private" not in output and "secret" not in output
+
+
+@pytest.mark.parametrize("mode", ["--config-only", "--voice"])
+def test_comparison_rejects_ambiguous_modes_without_calling_provider(enabled, monkeypatch, mode):
+    monkeypatch.setattr(probe.sys, "argv", ["probe", "--compare-requests", mode])
+    monkeypatch.setattr(probe, "compare_requests", lambda: pytest.fail("ambiguous mode called API"))
+    assert probe.main() == 1
+
+
+def test_comparison_cannot_spend_experiential_credits(enabled, monkeypatch):
+    monkeypatch.setattr(probe.quantum, "_provider_client", lambda _: pytest.fail("wrong provider contacted"))
+    assert probe.compare_requests() == 1
+
 spec = importlib.util.spec_from_file_location("quantum_probe",
     Path(__file__).resolve().parents[1] / "ci/probe-velia-quantum.py")
 probe = importlib.util.module_from_spec(spec)

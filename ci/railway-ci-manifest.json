@@ -53,7 +53,7 @@
     "steps": [
       3
     ],
-    "sha256": "4548ea354acd75e2041baf637e7e264c7a4553c111b1ffbab784b3b46c663688"
+    "sha256": "ae861097d33c7722ec76e8d33e469563bd073911c016f3cb7af393929d15db72"
   },
   "velia-research-center-stage1.yml": {
     "group": "backend",

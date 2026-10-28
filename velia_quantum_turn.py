@@ -6,7 +6,8 @@ metadata stay server-side. A turn uses one completion, or two after one search.
 import json
 import logging
 import re
-from velia_quantum_provider import QuantumError, StreamDecoder, payload, read_provider_error, response_error, verify_zero_spend_async
+from velia_quantum_provider import QuantumError, StreamDecoder, payload
+from velia_quantum_transport import completion_async
 LOG = logging.getLogger(__name__)
 
 def strict_json_loads(value):
@@ -156,14 +157,7 @@ async def stream_turn(client, config, messages, *, search=None, max_tokens=None)
     turn = Turn(config, messages, search_enabled=search is not None, max_tokens=max_tokens)
     while True:
         body = turn.body()
-        await verify_zero_spend_async(client, config)
-        async with client.post(config.base_url + "/chat/completions", json=body,
-                headers={"Authorization": "Bearer " + config.api_key, "Accept": "text/event-stream"},
-                allow_redirects=False) as response:
-            if response.status != 200:
-                code, reason = await read_provider_error(response)
-                LOG.warning("VELIA_QUANTUM_HTTP_REJECTED phase=tool_turn status=%d provider_code=%s quota_reason=%s", response.status, code, reason)
-                raise response_error(response.status, provider_code=code, quota_reason=reason)
+        async with completion_async(client, config, body, retry_overload=turn.calls == 1) as response:
             if "text/event-stream" not in response.headers.get("Content-Type", ""):
                 raise QuantumError("quantum_invalid_response")
             async for chunk in response.content.iter_chunked(8192):

@@ -53,6 +53,26 @@ class Client:
         return self.guard_response
 
 
+def test_zai_account_retries_only_overload_before_streaming(enabled, monkeypatch):
+    import velia_quantum_transport as transport
+    transport._CIRCUITS.clear()
+    monkeypatch.setenv("VELIA_QUANTUM_PROVIDER", "zai")
+    replies = [Response(429, b'{"error":{"code":"1305"}}'), Response()]
+    class OverloadedClient(Client):
+        def post(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return replies.pop(0)
+    client = OverloadedClient(None)
+    waits, deltas = [], []
+    monkeypatch.setattr(transport.time, "sleep", waits.append)
+    monkeypatch.setattr(quantum.requests, "Session", lambda: client)
+    result = quantum.generate("synthetic greeting", on_delta=deltas.append)
+    assert result["ok"] and result["text"] == "".join(deltas) == "Поняла"
+    assert len(client.calls) == 2 and len(waits) == 1 and 1 <= waits[0] <= 2
+    assert client.calls[0] == client.calls[1] and not result["fallback_used"]
+    transport._CIRCUITS.clear()
+
+
 def test_account_generation_free_route_preserves_user_text_and_streams(enabled, monkeypatch):
     client = Client(Response())
     monkeypatch.setattr(quantum.requests, "Session", lambda: client)
