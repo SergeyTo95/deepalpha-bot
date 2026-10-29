@@ -57,9 +57,13 @@ def prepare_web_payload(request, data, *, search_enabled=False):
     request[WEB_VOICE] = voice_turn
     request[SEARCH] = (data.get("web_search", search_enabled) if data["model"] == QUANTUM_ID
         else search_enabled or bool(data.get("web_search")))
+    free_config = free_models.configuration(data["model"].removeprefix("velia-"), voice=voice_turn)
+    output_limit = (1024 if free_models.enabled() or data["model"] == QUANTUM_ID else 128) if voice_turn else 512 if data["model"] == FLASH_ID else 8192 if data["model"] == QUANTUM_ID else 4096
+    if free_config and data["model"] == MODEL_ID:
+        output_limit = free_config.max_tokens
     return {**{key: value for key, value in data.items() if key not in {"web_search", "voice_turn"}},
             "messages": [{"role": "system", "content": PERSONA + reply_language_instruction(getattr(request.get(WEB_SESSION), "language", "")) + (" Это голосовой разговор. Ответь естественно, 1–2 законченными короткими фразами. Без Markdown. Используй свежие факты только при наличии переданных веб-источников." if voice_turn else "")}] + messages,
-            "max_tokens": (1024 if free_models.enabled() or data["model"] == QUANTUM_ID else 128) if voice_turn else 512 if data["model"] == FLASH_ID else 8192 if data["model"] == QUANTUM_ID else 4096}
+            "max_tokens": output_limit}
 
 
 async def public_web_stream(request, source):

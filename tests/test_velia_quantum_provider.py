@@ -346,3 +346,44 @@ def test_spending_cap_classification_requires_exact_provider_rejection(status, c
     assert error.code == expected
     if expected == 'quantum_spend_cap_reached':
         assert error.status == 503
+
+
+@pytest.mark.parametrize("voice", [False, True])
+def test_free_pro_thinking_search_continuation_keeps_reasoning_private_and_turn_local(monkeypatch, voice):
+    import velia_free_models as free
+    from velia_quantum_turn import Turn
+    monkeypatch.setenv("VELIA_FREE_API_TIERS_ENABLED", "true")
+    monkeypatch.setenv("VELIA_ZAI_API_KEY", "fixture-zai")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    config = free.configuration("pro", voice=voice)
+    turn = Turn(config, [{"role":"user", "content":"Check Python"}], search_enabled=True)
+    body = turn.body()
+    assert body["model"] == "glm-4.7-flash" and body["thinking"] == {"type":"enabled"}
+    assert body["max_tokens"] == (4096 if voice else 8192)
+    tool = {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function",
+        "function":{"name":"web_search","arguments":json.dumps({"query":"Python version","scope":"general"})}}]},"finish_reason":"tool_calls"}]}
+    reasoning = {"choices":[{"delta":{"reasoning_content":"PRIVATE-THINKING"}}]}
+    stream = ("data: "+json.dumps(reasoning)+"\n\ndata: "+json.dumps(tool)+"\n\ndata: [DONE]\n\n").encode()
+    public = []
+    for byte in stream:
+        public.extend(turn.feed(bytes([byte])))
+    assert turn.finish() == {"query":"Python version","scope":"general"}
+    turn.supply({"results":[{"url":"https://python.org","title":"Python","snippet":"Evidence"}]})
+    continuation = turn.body()
+    assert continuation["messages"][-2]["reasoning_content"] == "PRIVATE-THINKING"
+    assert continuation["thinking"] == {"type":"enabled"} and "tools" not in continuation
+    public.extend(turn.feed(wire("Verified answer")))
+    assert turn.finish() is None and "".join(public) == "Verified answer"
+    other = Turn(config, [{"role":"user","content":"Independent turn"}])
+    assert "PRIVATE-THINKING" not in json.dumps(other.body())
+
+
+def test_private_reasoning_capture_is_bounded_and_never_public():
+    import velia_quantum_provider as quantum
+    decoder = quantum.StreamDecoder(capture_reasoning=True)
+    events = decoder.feed(wire())
+    decoder.finish()
+    assert decoder.reasoning_content == "PRIVATE" and "PRIVATE" not in json.dumps(events)
+    oversized = {"choices":[{"delta":{"reasoning_content":"x"*64001}}]}
+    with pytest.raises(quantum.QuantumError, match="quantum_invalid_response"):
+        quantum.StreamDecoder(capture_reasoning=True).feed(("data: "+json.dumps(oversized)+"\n\n").encode())

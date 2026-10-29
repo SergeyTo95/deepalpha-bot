@@ -168,7 +168,7 @@ def test_every_external_browser_path_checks_zero_spend_before_canonical_glm(enab
     assert 'private' not in caplog.text and 'quantum-test-secret' not in caplog.text
 
 
-@pytest.mark.parametrize("mode,model",[("flash","glm-4.5-flash"),("quantum","glm-4.7-flash"),("pro","openai/gpt-oss-120b")])
+@pytest.mark.parametrize("mode,model",[("flash","glm-4.5-flash"),("quantum","glm-4.7-flash"),("pro","glm-4.7-flash")])
 def test_free_browser_tiers_use_selected_native_model_without_planning(monkeypatch,mode,model):
     from test_velia_web_chat import fixture,headers,login
     import velia_free_models as free
@@ -177,7 +177,7 @@ def test_free_browser_tiers_use_selected_native_model_without_planning(monkeypat
         async with fixture(monkeypatch,features={"chat_quantum":True,"chat_quantum_native_tools":True}) as (server,client,state):
             monkeypatch.setenv("VELIA_FREE_API_TIERS_ENABLED","true")
             monkeypatch.setenv("VELIA_ZAI_API_KEY","fixture-zai")
-            monkeypatch.setenv("GROQ_API_KEY","fixture-groq")
+            monkeypatch.delenv("GROQ_API_KEY", raising=False)
             seen=[]
             async def stream(client,config,messages,**kwargs):
                 seen.append((config,messages,kwargs))
@@ -191,6 +191,10 @@ def test_free_browser_tiers_use_selected_native_model_without_planning(monkeypat
                 text=await response.text()
                 assert "Поняла" in text and "[DONE]" in text and model not in text
             assert len(seen)==1 and seen[0][0].model==model
+            config=seen[0][0]
+            assert config.provider=="zai" and config.thinking_enabled is (mode=="pro")
+            assert quantum.payload(config,seen[0][1],stream=True)["thinking"]=={"type":"enabled" if mode=="pro" else "disabled"}
+            assert seen[0][2]["max_tokens"]==(4096 if mode=="pro" else 1024)
             assert seen[0][1][-1]["content"]=="Привет"
             assert state["payloads"]==state["intent_payloads"]==state["review_payloads"]==state["search_queries"]==[]
     asyncio.run(run())
@@ -201,7 +205,8 @@ def test_free_pro_preserves_existing_account_token_access_rule(monkeypatch):
     async def run():
         async with fixture(monkeypatch,credits=0) as (server,client,state):
             monkeypatch.setenv("VELIA_FREE_API_TIERS_ENABLED","true")
-            monkeypatch.setenv("GROQ_API_KEY","fixture-groq")
+            monkeypatch.delenv("GROQ_API_KEY", raising=False)
+            monkeypatch.setenv("VELIA_ZAI_API_KEY","fixture-zai")
             cookie,_,_=await login(server,client)
             async with client.post(server.make_url("/web-api/v1/chat/completions"),headers=headers(cookie),
                     json={"model":"velia-pro","stream":True,"messages":[{"role":"user","content":"Hello"}]}) as response:
@@ -219,7 +224,7 @@ def test_free_saved_voice_turn_goes_directly_to_selected_account_model(monkeypat
         async with fixture(monkeypatch,features=features) as (server,client,state):
             monkeypatch.setenv("VELIA_FREE_API_TIERS_ENABLED","true")
             monkeypatch.setenv("VELIA_ZAI_API_KEY","fixture-zai")
-            monkeypatch.setenv("GROQ_API_KEY","fixture-groq")
+            monkeypatch.delenv("GROQ_API_KEY", raising=False)
             cookie,profile,_=await login(server,client)
             assert profile["free_api_tiers"] is True
             async with client.post(server.make_url("/web-api/v1/conversations"),headers=headers(cookie),json={"title":"Fixture"}) as response:
@@ -240,7 +245,8 @@ def test_free_saved_pro_cannot_reach_legacy_paid_backend_during_mixed_deployment
     async def run():
         async with fixture(monkeypatch) as (server,client,state):
             monkeypatch.setenv("VELIA_FREE_API_TIERS_ENABLED","true")
-            monkeypatch.setenv("GROQ_API_KEY","fixture-groq")
+            monkeypatch.delenv("GROQ_API_KEY", raising=False)
+            monkeypatch.setenv("VELIA_ZAI_API_KEY","fixture-zai")
             cookie,_,_=await login(server,client)
             async with client.post(server.make_url("/web-api/v1/conversations"),headers=headers(cookie),json={"title":"Fixture"}) as response:
                 cid=(await response.json())["conversation"]["id"]

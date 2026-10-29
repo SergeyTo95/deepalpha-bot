@@ -186,7 +186,7 @@ def validate_payload(data):
                 or not isinstance(tool.get("function"), dict)
                 or not isinstance(tool["function"].get("name"), str)):
             raise ValueError("invalid_tools")
-    output_limit = 8192 if data["model"] == QUANTUM_ID else 4096
+    output_limit = 8192 if data["model"] == QUANTUM_ID or free_models.enabled() and data["model"] == MODEL_ID else 4096
     limit = data.get("max_completion_tokens", data.get("max_tokens", output_limit))
     if type(limit) is not int or not 1 <= limit <= output_limit:
         raise ValueError("invalid_output_limit")

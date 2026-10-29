@@ -77,7 +77,7 @@ class Turn:
         self.calls += 1
         if self.calls > 2:
             raise QuantumError("quantum_invalid_response")
-        self.decoder = StreamDecoder()
+        self.decoder = StreamDecoder(capture_reasoning=self.config.provider == "zai" and self.config.thinking_enabled)
         self.tool = None
         self.text = ""
         body = payload(self.config, list(self.messages), stream=True, max_tokens=self.max_tokens,
@@ -149,6 +149,8 @@ class Turn:
         tool_id = self.tool["id"] or "velia_search_1"
         self.messages.append({"role": "assistant", "content": self.text or None, "tool_calls": [{
             "id": tool_id, "type": "function", "function": {"name": "web_search", "arguments": self.tool["arguments"]}}]})
+        if self.decoder.capture_reasoning:
+            self.messages[-1]["reasoning_content"] = self.decoder.reasoning_content
         self.messages.append({"role": "tool", "tool_call_id": tool_id,
             "content": json.dumps(result, ensure_ascii=False)})
         self.searched, self.sources = True, result

@@ -1,10 +1,10 @@
 """Opt-in, pinned free API tiers. No model supplied by a client is an upstream ID."""
 import os
-from velia_quantum_provider import QuantumConfig, ZAI_URL, GROQ_URL, GROQ_MODEL
+from velia_quantum_provider import QuantumConfig, ZAI_URL
 
 TIERS = {"flash": ("zai", "glm-4.5-flash", 2048),
          "quantum": ("zai", "glm-4.7-flash", 4096),
-         "pro": ("groq", GROQ_MODEL, 4096)}
+         "pro": ("zai", "glm-4.7-flash", 8192)}
 
 
 def enabled():
@@ -21,12 +21,11 @@ def configuration(mode, *, voice=False):
         if not key and os.getenv("VELIA_QUANTUM_PROVIDER", "").strip().lower() == "zai" and os.getenv("VELIA_QUANTUM_BASE_URL", ZAI_URL).rstrip("/") == ZAI_URL:
             key = os.getenv("VELIA_QUANTUM_API_KEY", "").strip()
         url = ZAI_URL
-    else:
-        key, url = os.getenv("GROQ_API_KEY", "").strip(), GROQ_URL
     if not key or "${{" in key or any(c in key for c in "\r\n"):
         return None
-    return QuantumConfig(provider, url, model, key, min(limit, 1024) if voice else limit,
-                         "low" if voice or mode != "pro" else "medium")
+    return QuantumConfig(provider, url, model, key,
+                         min(limit, 4096 if mode == "pro" else 1024) if voice else limit,
+                         thinking_enabled=mode == "pro")
 
 
 def public_capability():
