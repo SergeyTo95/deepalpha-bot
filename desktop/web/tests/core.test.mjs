@@ -56,6 +56,15 @@ function response(text, chunkSize = 1) {
     { headers: { "content-type": "text/event-stream" } },
   );
 }
+test("PRO overload remains actionable through its streamed error", async () => {
+  const frames = 'data: {"error":{"message":"pro_overloaded"}}\n\n';
+  await assert.rejects(readCompletion(response(frames), () => {}), /PRO.*перегружен.*30 секунд/);
+  assert.doesNotMatch(apiError("pro_overloaded"), /токены|баланс|Quantum|Flash/);
+  assert.match(apiError("pro_quota_exhausted"), /PRO.*ограничил запросы/);
+  assert.match(apiError("pro_tokens_required"), /токены/);
+  assert.match(apiError("flash_overloaded"), /Flash.*перегружен/);
+  assert.equal(apiError("private-upstream-text"), "Не удалось выполнить запрос. Попробуй ещё раз.");
+});
 test("preparation progress is separate from answer text and rejects unknown stages", async () => {
   const stages = [], visible = [];
   const frames = [
