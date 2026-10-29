@@ -5,6 +5,7 @@ import os
 import time
 import logging
 from collections import deque
+from contextlib import aclosing
 from aiohttp import ClientSession, ClientTimeout, ClientError, ClientConnectionError, ClientResponseError, web
 from velia_desktop_routes import AuthenticationUnavailable
 
@@ -42,37 +43,45 @@ def validate(data):
         return {"text": text, "edge_voice": voice.split(":", 1)[1], "edge_rate": f"{round((rate-1)*100):+d}%"}
     return {"text": text, "voice": voice.split(":", 1)[1], "speed": str(rate), "lang": "ru-RU", "format": "mp3"}
 
-async def synthesize_edge(fields):
+async def stream_edge(fields):
     # Fixed provider/allowlisted speakers; no client URL, credentials or SSML.
     import edge_tts
-    started, first, chunks, size = time.monotonic(), None, [], 0
+    started, first, size = time.monotonic(), None, 0
     attempts = 0
     try:
-        async with asyncio.timeout(20):
-            for attempt in range(2):
-                attempts += 1
-                try:
-                    source = edge_tts.Communicate(fields["text"], fields["edge_voice"],
-                        rate=fields["edge_rate"], connect_timeout=5, receive_timeout=10)
-                    async for part in source.stream():
-                        if part["type"] != "audio":
+        for attempt in range(2):
+            attempts += 1
+            try:
+                speaker = edge_tts.Communicate(fields["text"], fields["edge_voice"],
+                    rate=fields["edge_rate"], connect_timeout=5, receive_timeout=10)
+                async with aclosing(speaker.stream()) as source:
+                    while True:
+                        # End the timeout scope before yielding: HTTP streaming
+                        # can advance this generator from a different task.
+                        try:
+                            remaining = started + 20 - time.monotonic()
+                            if remaining <= 0:
+                                raise asyncio.TimeoutError()
+                            async with asyncio.timeout(remaining):
+                                part = await anext(source)
+                        except StopAsyncIteration:
+                            break
+                        if part["type"] != "audio" or not part.get("data"):
                             continue
                         first = first or time.monotonic()
                         size += len(part["data"])
                         if size > 2 * 1024 * 1024:
                             raise RuntimeError("tts_unavailable")
-                        chunks.append(part["data"])
-                    if not size:
-                        raise edge_tts.exceptions.NoAudioReceived("empty_audio")
-                    break
-                except (edge_tts.exceptions.NoAudioReceived, edge_tts.exceptions.WebSocketError,
-                        ClientConnectionError, ClientResponseError, asyncio.TimeoutError) as exc:
-                    # This adapter has no per-call billing. Retry an empty result
-                    # or transient connection failure once, with the same speaker,
-                    # only before receiving audio and within the shared deadline.
-                    if (attempt or size or isinstance(exc, ClientResponseError)
-                            and exc.status not in {408, 500, 502, 503, 504}):
-                        raise
+                        yield part["data"]
+                if not size:
+                    raise edge_tts.exceptions.NoAudioReceived("empty_audio")
+                break
+            except (edge_tts.exceptions.NoAudioReceived, edge_tts.exceptions.WebSocketError,
+                    ClientConnectionError, ClientResponseError, asyncio.TimeoutError) as exc:
+                # Retry only before any audio, with the same speaker/deadline.
+                if (attempt or size or isinstance(exc, ClientResponseError)
+                        and exc.status not in {408, 500, 502, 503, 504}):
+                    raise
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -81,7 +90,49 @@ async def synthesize_edge(fields):
         raise RuntimeError("tts_unavailable") from None
     LOG.info("VELIA_WEB_TTS_TIMING provider=edge voice=%s first_audio_ms=%d total_ms=%d attempts=%d",
         fields["edge_voice"], round((first-started)*1000), round((time.monotonic()-started)*1000), attempts)
-    return b"".join(chunks)
+
+async def synthesize_edge(fields):
+    return b"".join([chunk async for chunk in stream_edge(fields)])
+
+async def _next_audio(source, request):
+    task = asyncio.create_task(anext(source))
+    try:
+        while not task.done():
+            await asyncio.wait({task}, timeout=.25)
+            if request.transport is None or request.transport.is_closing():
+                raise ConnectionResetError()
+        return task.result()
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+async def stream_speech(request, fields):
+    response = None
+    try:
+        async with aclosing(stream_edge(fields)) as source:
+            # Validate the first provider bytes before committing HTTP 200.
+            first = await _next_audio(source, request)
+            response = web.StreamResponse(headers={"Content-Type": "audio/mpeg",
+                "Cache-Control": "no-store", "X-Accel-Buffering": "no", "X-Velia-Audio-Stream": "1"})
+            await response.prepare(request)
+            await response.write(first)
+            while True:
+                try:
+                    chunk = await _next_audio(source, request)
+                except StopAsyncIteration:
+                    break
+                await response.write(chunk)
+            await response.write_eof()
+            return response
+    except (ClientError, RuntimeError, OSError, asyncio.TimeoutError):
+        if response is None or not response.prepared:
+            raise
+        # A partial MP3 must not masquerade as a completed HTTP response.
+        response.force_close()
+        if request.transport:
+            request.transport.close()
+        return response
 
 async def synthesize(fields):
     if "edge_voice" in fields:
@@ -135,6 +186,8 @@ def setup_voice_routes(app, *, session_for, same_origin, json_response):
                 return json_response({"error": "tts_rate_limit"}, 429)
             history.append(now)
             async with slots:
+                if request.query.get("stream") == "1" and "edge_voice" in fields:
+                    return await stream_speech(request, fields)
                 audio = await synthesize(fields)
             return web.Response(body=audio, content_type="audio/mpeg", headers={"Cache-Control": "no-store"})
         except AuthenticationUnavailable:

@@ -65,6 +65,30 @@ Verification: 36 focused server tests, 13 Node tests and synthetic Chromium chec
 
 ## Browser voice conversation
 
+### Progressive audio and playback status (2026-10-29)
+
+Online playback shows “Готовлю голос…” while waiting for synthesis or browser
+buffering. “Велия говорит…” starts only on the audio `playing` event, or the
+device utterance `start` event. Waiting and stale events cannot leave the call
+claiming speech after it has stopped.
+
+The existing authenticated POST speech endpoint accepts `?stream=1` for the
+configured Edge speakers. It forwards the first audio bytes without retaining
+the entire phrase, then streams bounded MP3 chunks. Authentication, same-origin
+checks, voice allowlists, per-user limits, four synthesis slots, the 2 MiB audio
+bound and the 20-second provider deadline still apply. A disconnect cancels the
+upstream generator; an error after the first audio byte closes the incomplete
+HTTP stream, without retrying or switching speakers. The first provider audio
+must arrive before HTTP 200 is committed. There are no new providers or keys.
+
+Browsers supporting MediaSource `audio/mpeg` decode chunks progressively; others
+retain Blob playback. The selected voice and one-phrase prefetch are preserved.
+Tests cover early delivery, serial appends, cancellation, partial errors, auth,
+slot release and serving the new web module. The real Chromium smoke uses a
+synthetic MP3 tone and proves playback before provider EOF, status ordering,
+microphone restart and Blob compatibility. It does not measure physical-device
+speech or eliminate an upstream service's delay before its first audio bytes.
+
 ### Recognition turn completion (2026-10-29)
 
 Recognition now allows a one-second pause before requesting stop and cancels

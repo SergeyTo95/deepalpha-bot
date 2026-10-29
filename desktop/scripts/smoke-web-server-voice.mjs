@@ -8,11 +8,11 @@ Object.defineProperty(globalThis,'navigator',{value:window.navigator,configurabl
 window.HTMLDialogElement.prototype.showModal=function(){this.open=true;};
 window.HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new window.Event('close'));};
 const recognizers=[],audios=[],requests=[],spoken=[],released=[];
-let delayed=false,resolveAudio;
+let delayed=false,resolveAudio,holdPlaying=false;
 window.SpeechRecognition=class{constructor(){recognizers.push(this);}start(){}stop(){this.onend?.();}abort(){this.onend?.();}};
 globalThis.SpeechSynthesisUtterance=class{constructor(text){this.text=text;}};
 window.speechSynthesis={getVoices:()=>[{name:'Device',voiceURI:'device',lang:'ru-RU',localService:true}],addEventListener(){},speak:u=>spoken.push(u),cancel(){},resume(){}};
-globalThis.Audio=class{constructor(url){this.url=url;audios.push(this);}async play(){this.played=true;}pause(){this.paused=true;}};
+globalThis.Audio=class{constructor(url){this.url=url;audios.push(this);}async play(){this.played=true;if(!holdPlaying)this.onplaying?.();}pause(){this.paused=true;}};
 URL.createObjectURL=()=>`blob:${audios.length}`;URL.revokeObjectURL=url=>released.push(url);
 const voices=['jane','omazh','marina'].map(id=>({voiceURI:'speechkit:'+id,name:id,lang:'ru-RU',localService:false}));
 globalThis.fetch=async(url,options)=>{if(url.endsWith('/voices'))return {ok:true,json:async()=>({voices})};requests.push({data:JSON.parse(options.body),options});if(delayed)return new Promise(resolve=>{resolveAudio=()=>resolve({ok:true,blob:async()=>new Blob(['fixture'])});});return {ok:true,blob:async()=>new Blob(['fixture'])};};
@@ -20,7 +20,7 @@ localStorage.setItem('velia-voice-language','ru-RU');localStorage.setItem('velia
 const {setupVoice}=await import('../web/voice.mjs');
 let voice=setupVoice({send:async()=>{voice.update('Привет! 😊 ');voice.complete('Привет! 😊 Рада тебя слышать.');},busy:()=>false,toast:()=>{}});
 voice.settings(document.querySelector('#settings'));voice.open();
-const tick=()=>new Promise(resolve=>setTimeout(resolve,10)),settled=()=>new Promise(resolve=>setTimeout(resolve,480));await tick();
+const tick=()=>new Promise(resolve=>setTimeout(resolve,10)),settled=()=>new Promise(resolve=>setTimeout(resolve,1100));await tick();
 assert.equal(document.querySelector('.voice-dialog select').value,'speechkit:omazh');
 assert.equal(document.querySelector('.voice-dialog select').options.length,5);
 assert.equal(recognizers.length,1);assert.equal(document.querySelector('.voice-controls'),null);assert.equal(document.querySelector('.voice-transcript'),null);
@@ -52,7 +52,7 @@ const femaleSelect=document.querySelector('#settings select');
 for(const v of neural){femaleSelect.value=v.voiceURI;femaleSelect.dispatchEvent(new window.Event('change'));women.speak('Другой женский голос.');await tick();assert.equal(requests.at(-1).data.voice,v.voiceURI);women.stop();}
 // Accumulate final segments and never submit while the next fragment is interim.
 window.speechSynthesis={getVoices:()=>[],addEventListener(){},speak(){},cancel(){}};
-const delayedRecognition=[];window.SpeechRecognition=class{constructor(){delayedRecognition.push(this);}start(){}stop(){}abort(){}};
+const delayedRecognition=[];window.SpeechRecognition=class{constructor(){delayedRecognition.push(this);}start(){}stop(){this.onend?.();}abort(){}};
 let submissions=0,submitted='';const immediate=setupVoice({send:text=>{submissions++;submitted=text;return new Promise(()=>{});},busy:()=>false,toast:()=>{}});immediate.open();
 const recognizer=delayedRecognition.at(-1),segment=(text,final=true)=>Object.assign([{transcript:text}],{isFinal:final});
 assert.equal(recognizer.continuous,true);assert.equal(recognizer.lang,'ru-RU');
@@ -110,4 +110,18 @@ hidden=false;document.dispatchEvent(new window.Event('visibilitychange'));assert
 goodbye.stop();hidden=true;document.dispatchEvent(new window.Event('visibilitychange'));hidden=false;document.dispatchEvent(new window.Event('visibilitychange'));assert.equal(delayedRecognition.length,beforeHide+1);
 goodbye.open();const incomplete=delayedRecognition.at(-1);incomplete.onresult({results:[segment('Расскажи'),segment('про',false)]});incomplete.onend();await settled();assert.equal(unexpected,0);endDialog.querySelector('.voice-close').click();
 console.log(JSON.stringify({ok:true,synthetic:true,checks:['foreground resumes an open call','explicit stop prevents foreground restart','unconfirmed trailing words cannot become a partial question']}));
+// Preparing audio, browser playback startup and rebuffering are not speaking.
+hidden=false;holdPlaying=true;localStorage.setItem('velia-voice-uri',neural[2].voiceURI);
+globalThis.fetch=async(url,options)=>url.endsWith('/voices')?{ok:true,json:async()=>({voices:neural})}:new Promise(resolve=>{resolveAudio=()=>resolve({ok:true,blob:async()=>new Blob(['fixture'])});});
+let timed;timed=setupVoice({send:async()=>timed.complete('Проверка голоса.'),busy:()=>false,toast:()=>{}});timed.open();
+const timedDialog=[...document.querySelectorAll('.voice-dialog')].at(-1);
+delayedRecognition.at(-1).onresult({results:[segment('Привет')]});delayedRecognition.at(-1).onend();await tick();
+assert.equal(timedDialog.dataset.phase,'thinking');assert.equal(timedDialog.querySelector('.voice-status').textContent,'Готовлю голос…');
+resolveAudio();await tick();assert.equal(timedDialog.dataset.phase,'thinking');
+const playingAudio=audios.at(-1),latePlaying=playingAudio.onplaying;
+playingAudio.onplaying();assert.equal(timedDialog.dataset.phase,'speaking');
+playingAudio.onwaiting();assert.equal(timedDialog.dataset.phase,'thinking');
+playingAudio.onplaying();assert.equal(timedDialog.dataset.phase,'speaking');
+timed.stop();latePlaying();assert.equal(timedDialog.dataset.phase,'idle');
+console.log(JSON.stringify({ok:true,synthetic:true,checks:['audio download is preparing','play call alone is not speaking','playing event starts speaking','buffering clears speaking','stale playing event after stop is ignored']}));
 dom.window.close();

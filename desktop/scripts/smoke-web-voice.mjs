@@ -4,7 +4,7 @@ import {createServer} from 'node:http';
 import fs from 'node:fs/promises';
 const {chromium}=await import(process.env.VELIA_PLAYWRIGHT_MODULE||'playwright');
 const output=process.argv[2]||'/tmp/velia-voice-qa';await fs.mkdir(output,{recursive:true});
-const server=createServer(async(req,res)=>{if(req.url==='/voice.mjs'||req.url==='/style.css'){res.setHeader('Content-Type',req.url.endsWith('mjs')?'text/javascript':'text/css');res.end(await fs.readFile('desktop/web'+req.url));}else res.end('<html lang="ru"><head><link rel="stylesheet" href="/style.css"></head><body><section id="settings"></section></body></html>');});
+const server=createServer(async(req,res)=>{if(['/voice.mjs','/speech-audio.mjs','/style.css'].includes(req.url)){res.setHeader('Content-Type',req.url.endsWith('mjs')?'text/javascript':'text/css');res.end(await fs.readFile('desktop/web'+req.url));}else res.end('<html lang="ru"><head><link rel="stylesheet" href="/style.css"></head><body><section id="settings"></section></body></html>');});
 await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
 try{
  browser=await chromium.launch({executablePath:process.env.VELIA_CHROMIUM_EXECUTABLE,args:['--no-sandbox','--disable-dev-shm-usage'],headless:true});
@@ -14,7 +14,7 @@ try{
   localStorage.setItem('velia-voice-language','ru-RU');window.recognizers=[];window.spoken=[];window.sends=[];
   window.SpeechRecognition=class {constructor(){window.recognizers.push(this);}start(){}abort(){this.onend?.();}stop(){setTimeout(()=>{if(window.finalOnStop){this.onresult?.({results:window.finalOnStop});window.finalOnStop=null;}this.onend?.();},25);}};
   window.SpeechSynthesisUtterance=class {constructor(text){this.text=text;}};
-  Object.defineProperty(window,'speechSynthesis',{value:{cancel(){},getVoices(){return [{name:'Тестовый голос',voiceURI:'test',lang:'ru-RU',localService:true}];},addEventListener(){},resume(){},speak(u){if(u.volume===0){window.unlocks=(window.unlocks||0)+1;return;}window.spoken.push(u);}}});
+  Object.defineProperty(window,'speechSynthesis',{value:{cancel(){},getVoices(){return [{name:'Тестовый голос',voiceURI:'test',lang:'ru-RU',localService:true}];},addEventListener(){},resume(){},speak(u){if(u.volume===0){window.unlocks=(window.unlocks||0)+1;return;}window.spoken.push(u);u.onstart?.();}}});
   const {setupVoice}=await import('/voice.mjs');window.voice=setupVoice({busy:()=>false,toast:()=>{},send:async text=>{window.sends.push(text);window.voice.complete('Это ответ. '.repeat(80));}});window.voice.settings(document.querySelector('#settings'));window.voice.open();
  });
  assert.equal(await page.locator('.voice-transcript').count(),0);

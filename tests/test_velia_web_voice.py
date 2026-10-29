@@ -4,6 +4,7 @@ import pytest
 import edge_tts
 from aiohttp import web, ClientSession, ClientConnectionError, ClientResponseError
 from aiohttp.test_utils import TestServer
+from aiohttp import ClientPayloadError
 from desktop import voice_routes as routes
 
 @pytest.mark.parametrize('data', [None, {}, {'text':'','voice':'speechkit:jane','rate':1},
@@ -162,3 +163,89 @@ def test_permanent_or_throttled_edge_errors_do_not_retry(monkeypatch,status):
     fields=routes.validate({'text':'Привет','voice':routes.EDGE_VOICES[2]['voiceURI'],'rate':1})
     with pytest.raises(RuntimeError,match='^tts_unavailable$'):asyncio.run(routes.synthesize(fields))
     assert calls==[1]
+
+
+def streaming_app():
+    async def session_for(request):
+        return SimpleNamespace(user_id=7) if request.headers.get('X-Test-Session') else None
+    app=web.Application()
+    routes.setup_voice_routes(app,session_for=session_for,
+        same_origin=lambda r:r.headers.get('Origin')=='https://velia.example' and r.headers.get('X-Velia-Request')=='1',
+        json_response=lambda data,status=200:web.json_response(data,status=status))
+    return app
+
+STREAM_HEADERS={'Origin':'https://velia.example','X-Velia-Request':'1','X-Test-Session':'yes'}
+STREAM_DATA={'text':'Привет!','voice':'edge:en-US-AvaMultilingualNeural','rate':1}
+
+def test_mp3_first_chunk_reaches_browser_before_provider_finishes(monkeypatch):
+    monkeypatch.setenv('VELIA_WEB_TTS_PROVIDER','edge')
+    async def run():
+        release,finished=asyncio.Event(),asyncio.Event()
+        class Speaker:
+            def __init__(self,*a,**k):pass
+            async def stream(self):
+                yield {'type':'audio','data':b'first-mp3'}
+                await release.wait()
+                yield {'type':'audio','data':b'last-mp3'}
+                finished.set()
+        monkeypatch.setattr(edge_tts,'Communicate',Speaker)
+        async with TestServer(streaming_app()) as server, ClientSession() as client:
+            response=await client.post(server.make_url('/web-api/v1/voice/speech?stream=1'),headers=STREAM_HEADERS,json=STREAM_DATA)
+            assert response.status==200 and response.headers['X-Velia-Audio-Stream']=='1'
+            assert response.headers['Cache-Control']=='no-store' and response.headers['X-Accel-Buffering']=='no'
+            assert await asyncio.wait_for(response.content.readexactly(9),1)==b'first-mp3'
+            assert not finished.is_set()
+            release.set();assert await response.read()==b'last-mp3';assert finished.is_set()
+    asyncio.run(run())
+
+def test_stream_auth_and_validation_reject_before_any_provider_call(monkeypatch):
+    monkeypatch.setenv('VELIA_WEB_TTS_PROVIDER','edge')
+    monkeypatch.setattr(edge_tts,'Communicate',lambda *a,**k:pytest.fail('rejected request called provider'))
+    async def run():
+        async with TestServer(streaming_app()) as server,ClientSession() as client:
+            url=server.make_url('/web-api/v1/voice/speech?stream=1')
+            assert (await client.post(url,json=STREAM_DATA)).status==403
+            assert (await client.post(url,json=STREAM_DATA,headers={**STREAM_HEADERS,'X-Test-Session':''})).status==401
+            assert (await client.post(url,json={**STREAM_DATA,'voice':'edge:other'},headers=STREAM_HEADERS)).status==400
+    asyncio.run(run())
+
+def test_disconnect_cancels_provider_and_releases_stream_slots(monkeypatch):
+    monkeypatch.setenv('VELIA_WEB_TTS_PROVIDER','edge')
+    async def run():
+        closed=[]
+        class Speaker:
+            def __init__(self,*a,**k):self.closed=asyncio.Event();closed.append(self.closed)
+            async def stream(self):
+                try:
+                    yield {'type':'audio','data':b'mp3'}
+                    await asyncio.Event().wait()
+                finally:self.closed.set()
+        monkeypatch.setattr(edge_tts,'Communicate',Speaker)
+        async with TestServer(streaming_app()) as server,ClientSession() as client:
+            # More requests than the four available slots must still succeed.
+            for _ in range(5):
+                response=await client.post(server.make_url('/web-api/v1/voice/speech?stream=1'),headers=STREAM_HEADERS,json=STREAM_DATA)
+                assert response.status==200
+                assert await response.content.readexactly(3)==b'mp3'
+                response.close()
+                await asyncio.wait_for(closed[-1].wait(),1)
+    asyncio.run(run())
+
+def test_partial_audio_failure_is_not_retried_or_reported_as_complete(monkeypatch):
+    monkeypatch.setenv('VELIA_WEB_TTS_PROVIDER','edge')
+    async def run():
+        release=asyncio.Event();calls=[]
+        class Speaker:
+            def __init__(self,*a,**k):calls.append(1)
+            async def stream(self):
+                yield {'type':'audio','data':b'mp3'}
+                await release.wait()
+                raise ClientConnectionError('private provider details')
+        monkeypatch.setattr(edge_tts,'Communicate',Speaker)
+        async with TestServer(streaming_app()) as server,ClientSession() as client:
+            response=await client.post(server.make_url('/web-api/v1/voice/speech?stream=1'),headers=STREAM_HEADERS,json=STREAM_DATA)
+            assert await response.content.readexactly(3)==b'mp3'
+            release.set()
+            with pytest.raises(ClientPayloadError):await response.read()
+            assert calls==[1]
+    asyncio.run(run())
