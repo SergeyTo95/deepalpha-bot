@@ -65,6 +65,30 @@ Verification: 36 focused server tests, 13 Node tests and synthetic Chromium chec
 
 ## Browser voice conversation
 
+### Single-utterance recognition and optional local speech (2026-10-29)
+
+Conversation capture now uses `continuous=false`: one recognition session is
+one spoken turn, with automatic restart after the answer. In this mode a new
+transcript snapshot replaces the previous snapshot; stale or cumulative result
+slots are not concatenated. Actual repetitions inside the final transcript,
+negation, amounts and all Unicode text are preserved. Continuous-mode adapters
+still retain their segment assembly in the shared lifecycle helper. Natural
+browser `end` submits immediately, without adding the one-second fallback stop
+timer. The final-result and interrupted-tail checks remain in place.
+
+The voice dialog offers “Быстрый голос телефона” only if the device advertises
+a `localService=true` voice for the selected language. The button shows its real
+name and explicitly selects and saves that voice; no speaker is silently changed.
+Local playback uses the existing device engine and makes no remote speech POST.
+The online voices remain selectable, and no synthetic speaker aliases are added.
+This bypasses the observed online TTS wait, but does not establish an end-to-end
+twofold speedup on a physical device. Tests cover cumulative snapshots from the
+reported phrases, intended repetitions, language/voice matching and zero remote
+TTS requests after the one-click local selection. Real speech accuracy and
+time to first audible speech require a phone check after reload.
+
+Single-turn API contract: https://webaudio.github.io/web-speech-api/#dom-speechrecognition-continuous
+
 ### Progressive audio and playback status (2026-10-29)
 
 Follow-up: remote speech status now requires at least 40 ms of media-clock

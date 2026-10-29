@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {speechChunks,availableVoices,voiceChoice,speechReady,isRemoteVoice,recognitionLanguage,isVoiceEndCommand,conversationLanguages} from '../voice.mjs';
+import {speechChunks,availableVoices,voiceChoice,speechReady,isRemoteVoice,recognitionLanguage,isVoiceEndCommand,conversationLanguages,fastDeviceVoice} from '../voice.mjs';
+
+test('fast voice uses only an actually reported local voice in the selected language',()=>{
+ const voices=[{name:'Ава',voiceURI:'edge:en-US-AvaMultilingualNeural',lang:'ru-RU',localService:false},
+  {name:'Cloud',voiceURI:'cloud',lang:'ru-RU',localService:false},
+  {name:'English local',voiceURI:'en-local',lang:'en-US',localService:true},
+  {name:'Russian local',voiceURI:'ru-local',lang:'ru-RU',localService:true}];
+ assert.equal(fastDeviceVoice(voices,'ru-RU').voiceURI,'ru-local');
+ assert.equal(fastDeviceVoice(voices,'tr-TR'),null);assert.equal(fastDeviceVoice([],'ru-RU'),null);
+});
 test('recognition follows saved choice then device language independently of Russian UI',()=>{
  assert.equal(recognitionLanguage('', 'ru', 'en-US'),'en-US');
  assert.equal(recognitionLanguage('tr-TR', 'ru', 'en-US'),'tr-TR');

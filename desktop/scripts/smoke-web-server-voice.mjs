@@ -34,6 +34,16 @@ delayed=false;const select=document.querySelector('.voice-dialog select');select
 voice.stop();assert.ok(audios.at(-1).paused);
 // A local voice still uses the device engine.
 select.value='device';select.dispatchEvent(new window.Event('change'));voice.speak('Локальный голос.');assert.equal(spoken.at(-1).voice.voiceURI,'device');voice.stop();
+// One click uses the actual local engine and avoids all remote speech POSTs.
+localStorage.setItem('velia-voice-uri','speechkit:omazh');let fastSubmitted='';
+let speedy;speedy=setupVoice({send:async text=>{fastSubmitted=text;speedy.complete('Связь проверена.');},busy:()=>false,toast:()=>{}});speedy.open();await tick();
+const fastDialog=[...document.querySelectorAll('.voice-dialog')].at(-1),fastButton=fastDialog.querySelector('.voice-fast');
+assert.equal(fastButton.hidden,false);const beforeFast=requests.length;fastButton.click();
+assert.equal(fastDialog.querySelector('[aria-label="Голос"]').value,'device');
+assert.equal(localStorage.getItem('velia-voice-uri'),'device');assert.equal(recognizers.at(-1).continuous,false);
+recognizers.at(-1).onresult({results:['снова','снова','снова тест-система'].map(transcript=>Object.assign([{transcript}],{isFinal:true}))});recognizers.at(-1).onend();await tick();
+assert.equal(fastSubmitted,'снова тест-система');assert.equal(requests.length,beforeFast);assert.equal(spoken.at(-1).voice.voiceURI,'device');speedy.stop();
+console.log(JSON.stringify({ok:true,synthetic:true,checks:['one-click local voice preserves actual speaker ID','no remote TTS requests in fast mode','cumulative ASR snapshots are not concatenated','one-shot recognition after changing voice']}));
 // Online speech remains usable on browsers without a device TTS engine.
 window.speechSynthesis=null;localStorage.setItem('velia-voice-uri','speechkit:jane');
 document.querySelector('#settings').replaceChildren();
@@ -55,12 +65,12 @@ window.speechSynthesis={getVoices:()=>[],addEventListener(){},speak(){},cancel()
 const delayedRecognition=[];window.SpeechRecognition=class{constructor(){delayedRecognition.push(this);}start(){}stop(){this.onend?.();}abort(){}};
 let submissions=0,submitted='';const immediate=setupVoice({send:text=>{submissions++;submitted=text;return new Promise(()=>{});},busy:()=>false,toast:()=>{}});immediate.open();
 const recognizer=delayedRecognition.at(-1),segment=(text,final=true)=>Object.assign([{transcript:text}],{isFinal:final});
-assert.equal(recognizer.continuous,true);assert.equal(recognizer.lang,'ru-RU');
+assert.equal(recognizer.continuous,false);assert.equal(recognizer.lang,'ru-RU');
 recognizer.onresult({results:[segment('Расскажи')]});assert.equal(submissions,0);
-recognizer.onresult({results:[segment('Расскажи'),segment('историю про',false)]});await settled();assert.equal(submissions,0);
-recognizer.onresult({results:[segment('Расскажи'),segment('историю про дружбу')]});await settled();
+recognizer.onresult({results:[segment('Расскажи'),segment('Расскажи историю про',false)]});await settled();assert.equal(submissions,0);
+recognizer.onresult({results:[segment('Расскажи'),segment('Расскажи историю про дружбу')]});await settled();
 assert.equal(submissions,1);assert.equal(submitted,'Расскажи историю про дружбу');recognizer.onend();assert.equal(submissions,1);immediate.stop();women.stop();
-console.log(JSON.stringify({ok:true,synthetic:true,checks:['three distinct female provider IDs','remote selection without device TTS','automatic microphone start','continuous recognition with explicit call language','whole final utterance retained','interim tail delays submission','settled final submits before delayed onend','late onend cannot duplicate request']}));
+console.log(JSON.stringify({ok:true,synthetic:true,checks:['three distinct female provider IDs','remote selection without device TTS','automatic microphone start','single-utterance recognition with explicit call language','cumulative revisions replace earlier text','interim tail delays submission','settled final submits before delayed onend','late onend cannot duplicate request']}));
 // At most one next phrase downloads while the current one downloads/plays.
 const downloads=[];globalThis.fetch=async(url,options)=>{if(url.endsWith('/voices'))return {ok:true,json:async()=>({voices:neural})};return new Promise(resolve=>downloads.push({data:JSON.parse(options.body),signal:options.signal,resolve:()=>resolve({ok:true,blob:async()=>new Blob(['fixture'])})}));};
 const audioStart=audios.length;let prefetched;

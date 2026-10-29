@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {bindRecognitionTurn} from '../voice.mjs';
 
-function session() {
+function session(continuous=true) {
  let now=0,next=0,live=true,stops=0,aborts=0,misses=0;
  const timers=new Map(),finished=[];
- const r={stop(){stops++;},abort(){aborts++;r.onend?.();}};
+ const r={continuous,stop(){stops++;},abort(){aborts++;r.onend?.();}};
  const cancel=bindRecognitionTurn(r,{valid:()=>live,finish:text=>finished.push(text),incomplete:()=>{misses++;},
   setTimer:(fn,ms)=>{const id=++next;timers.set(id,{fn,at:now+ms});return id;},clearTimer:id=>timers.delete(id)});
  function tick(ms){const end=now+ms;while(true){const job=[...timers].filter(([,v])=>v.at<=end).sort((a,b)=>a[1].at-b[1].at)[0];if(!job)break;now=job[1].at;timers.delete(job[0]);job[1].fn();}now=end;}
@@ -51,4 +51,26 @@ test('updated interim hypotheses are replaced by the final multilingual result',
 test('a browser that cannot stop enters recovery without submitting the partial turn',()=>{
  const s=session();s.r.stop=()=>{throw Error('engine stopped');};s.result(['Недописанная фраза']);s.tick(5000);
  assert.deepEqual(s.finished,[]);assert.equal(s.counts().misses,1);assert.equal(s.counts().aborts,1);
+});
+
+test('mobile one-shot cumulative revisions replace older snapshots instead of duplicating words',()=>{
+ const s=session(false);
+ s.result(['проверяем']);s.result(['проверяем'],['проверяем']);
+ s.result(['проверяем'],['проверяем'],['проверяем снова']);
+ s.result(['проверяем'],['проверяем'],['проверяем снова'],['проверяем снова система']);
+ s.r.onend();assert.deepEqual(s.finished,['проверяем снова система']);
+});
+test('repeated result events and slot changes cannot append the same phrase twice',()=>{
+ const s=session(false);
+ for(let i=0;i<5;i++)s.result(['снова'],['снова'],['снова тест-система']);
+ s.r.onend();s.r.onend();assert.deepEqual(s.finished,['снова тест-система']);
+});
+test('intentional repetitions, negation, numbers and multilingual text within the utterance remain exact',()=>{
+ for(const phrase of ['да да, не надо','очень очень важно: 0,5 TON','hayır hayır, 125 lira','no no, do not send 8080','لا لا، لا ترسل','はい はい、続けて']){
+  const s=session(false);s.result([phrase,false]);s.result([phrase]);s.r.onend();assert.deepEqual(s.finished,[phrase]);
+ }
+});
+test('single utterance is sent on browser end without adding the one-second settle wait',()=>{
+ const s=session(false);s.result(['Связь проверена']);s.r.onend();
+ assert.deepEqual(s.finished,['Связь проверена']);assert.equal(s.counts().stops,0);
 });
