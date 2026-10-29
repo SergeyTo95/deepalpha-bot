@@ -19,7 +19,7 @@ globalThis.fetch=async(url,options)=>{if(url.endsWith('/voices'))return {ok:true
 localStorage.setItem('velia-voice-language','ru-RU');localStorage.setItem('velia-voice-mode','manual');localStorage.setItem('velia-voice-uri','speechkit:omazh');
 const {setupVoice}=await import('../web/voice.mjs');
 // Account locale wins over a legacy saved language; automatic TTS needs no click.
-localStorage.removeItem('velia-voice-mode');localStorage.setItem('velia-voice-language','en-US');
+localStorage.removeItem('velia-voice-mode');localStorage.setItem('velia-voice-language','en-US');localStorage.setItem('velia-voice-language-mode','manual');
 let accountLocale='ru';const auto=setupVoice({accountLanguage:()=>accountLocale,send:async()=>{},busy:()=>false,toast:()=>{}});
 auto.open();await new Promise(resolve=>setTimeout(resolve,10));
 const autoDialog=[...document.querySelectorAll('.voice-dialog')].at(-1);
@@ -28,11 +28,16 @@ assert.equal(autoDialog.querySelector('.voice-fast').hidden,true);
 const requestsBeforeAuto=requests.length;auto.speak('Автоматический голос.');
 assert.equal(spoken.at(-1).voice.voiceURI,'device');assert.equal(requests.length,requestsBeforeAuto);auto.stop();
 accountLocale='tr';auto.syncLanguage();auto.open();assert.equal(recognizers.at(-1).lang,'tr-TR');auto.stop();
-const autoLanguage=autoDialog.querySelector('[aria-label="Язык разговора"]');
-autoLanguage.value='ja';autoLanguage.dispatchEvent(new window.Event('change'));auto.open();assert.equal(recognizers.at(-1).lang,'ja');auto.stop();
-accountLocale='de';auto.syncLanguage();auto.open();assert.equal(recognizers.at(-1).lang,'ja');auto.stop();
-autoLanguage.value='';autoLanguage.dispatchEvent(new window.Event('change'));auto.open();assert.equal(recognizers.at(-1).lang,'de-DE');auto.stop();
-console.log(JSON.stringify({ok:true,synthetic:true,checks:['account locale overrides legacy language','automatic local TTS without network or click','account locale change applies','manual recognition override and automatic restore']}));
+assert.equal(autoDialog.querySelector('[aria-label="Язык разговора"]'),null);
+auto.settings(document.querySelector('#settings'));
+assert.equal(document.querySelector('#settings [aria-label="Язык разговора"]'),null);
+accountLocale='ja-JP';auto.syncLanguage();auto.open();assert.equal(recognizers.at(-1).lang,'ja-JP');auto.stop();
+accountLocale='de';auto.syncLanguage();auto.open();assert.equal(recognizers.at(-1).lang,'de-DE');auto.stop();
+// A guest uses the browser locale, never a removed manual language setting.
+accountLocale='';auto.syncLanguage();auto.open();assert.equal(recognizers.at(-1).lang,'en-US');auto.stop();
+document.querySelector('#settings').replaceChildren();
+Object.defineProperty(window.navigator,'language',{value:'ru-RU',configurable:true});
+console.log(JSON.stringify({ok:true,synthetic:true,checks:['account locale overrides legacy language','automatic local TTS without network or click','account locale change applies','language selector absent from dialog and settings','legacy manual language ignored','guest follows browser locale']}));
 localStorage.setItem('velia-voice-language','ru-RU');localStorage.setItem('velia-voice-language-mode','auto');localStorage.setItem('velia-voice-mode','manual');localStorage.setItem('velia-voice-uri','speechkit:omazh');
 autoDialog.remove();recognizers.length=0;spoken.length=0;
 let voice=setupVoice({send:async()=>{voice.update('Привет! 😊 ');voice.complete('Привет! 😊 Рада тебя слышать.');},busy:()=>false,toast:()=>{}});

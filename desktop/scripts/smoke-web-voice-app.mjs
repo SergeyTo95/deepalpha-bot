@@ -10,7 +10,7 @@ await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error
 let browser;
 try{
  browser=await chromium.launch({executablePath:process.env.VELIA_CHROMIUM_EXECUTABLE,args:['--no-sandbox','--disable-dev-shm-usage'],headless:true});
- const context=await browser.newContext({viewport:{width:1440,height:960}}),page=await context.newPage(),calls=[],uploads=[],errors=[];
+ const context=await browser.newContext({viewport:{width:1440,height:960},locale:'ru-RU'}),page=await context.newPage(),calls=[],uploads=[],errors=[];
  page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.method()==='POST'&&r.url().includes('/web-api/')){if(r.headers()['content-type']?.includes('multipart/form-data'))uploads.push({path:new URL(r.url()).pathname,mode:r.headers()['x-velia-chat-mode']});else calls.push({path:new URL(r.url()).pathname,data:r.postDataJSON()});}});
  await context.addInitScript(()=>{
   localStorage.setItem('velia-voice-language','ru-RU');window.recognizers=[];window.spoken=[];window.unlocks=0;
@@ -30,7 +30,8 @@ try{
  assert.equal(await page.getByRole('button',{name:'Начать',exact:true}).count(),0);
  assert.equal(await page.getByRole('button',{name:'Завершить',exact:true}).count(),0);
  assert.equal(await page.getByText('Субтитры',{exact:true}).count(),0);
- assert.equal(await page.locator('.voice-dialog').getByLabel('Язык разговора',{exact:true}).inputValue(),'ru-RU');
+ assert.equal(await page.locator('.voice-dialog').getByLabel('Язык разговора',{exact:true}).count(),0);
+ assert.equal(await page.evaluate(()=>recognizers.at(-1).lang),'ru-RU');
  await page.evaluate(()=>{window.startedRecognizers=recognizers.length;});
  await page.evaluate(()=>recognizers.at(-1).onresult({results:[Object.assign([{transcript:'Велия, привет'}],{isFinal:true})]}));
  await page.waitForFunction(()=>spoken.length>0);

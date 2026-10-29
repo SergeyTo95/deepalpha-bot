@@ -8,7 +8,7 @@ const server=createServer(async(req,res)=>{if(['/voice.mjs','/speech-audio.mjs',
 await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
 try{
  browser=await chromium.launch({executablePath:process.env.VELIA_CHROMIUM_EXECUTABLE,args:['--no-sandbox','--disable-dev-shm-usage'],headless:true});
- const page=await browser.newPage({viewport:{width:393,height:710}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ const page=await browser.newPage({viewport:{width:393,height:710},locale:'ru-RU'});const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto('http://127.0.0.1:'+server.address().port);
  await page.evaluate(async()=>{
   localStorage.setItem('velia-voice-language','ru-RU');window.recognizers=[];window.spoken=[];window.sends=[];
