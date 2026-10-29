@@ -135,6 +135,15 @@ export function apiError(code) {
   return (
     {
       unauthorized: "Войди в VELIA, чтобы продолжить.",
+      background_tasks_unavailable: "Фоновые задачи сейчас недоступны. Отправь обычное сообщение.",
+      background_task_not_found: "Задача не найдена в этом аккаунте.",
+      background_task_active: "Одна задача уже выполняется. Дождись результата или отмени её. С Flash можно продолжить разговор.",
+      background_task_finished: "Задача уже завершена. Можно обсудить результат или создать новую.",
+      background_revision_limit: "Для одной задачи доступны три уточнения. Создай новую задачу с полным условием.",
+      background_queue_full: "Очередь фоновых задач заполнена. Попробуй позже.",
+      background_task_interrupted: "Выполнение задачи прервалось. Можно отправить её заново.",
+      background_task_failed: "Не удалось выполнить задачу. Можно отправить её заново.",
+      background_task_cancelled: "Задача отменена.",
       guest_limit_reached: "30 гостевых сообщений использованы. Войди в VELIA, чтобы продолжить.",
       guest_session_required: "Обнови страницу, чтобы начать гостевой разговор.",
       guest_flash_only: "Без регистрации доступен только Flash. Для PRO войди в аккаунт с токенами.",

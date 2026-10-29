@@ -248,6 +248,11 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH', 
     if(!speechChunks(text).length){if(!String(text||'').trim())failure(true);else {streamDone=true;pending=false;pumpStream();}return;}
     update(text,true);pending=false;
   }
+  function backgroundAccepted(text=''){
+    modelLabel.textContent=modelName();
+    if(text){complete(text);return;}
+    clearTimeout(waitingTimer);pending=false;streamDone=true;if(active)pumpStream();
+  }
   function failure(force=false,detail=''){clearTimeout(waitingTimer);if(pending||force){pending=false;deferredAnswer=null;speechPaused=false;resumeSpeech.hidden=true;active=false;speechEpoch++;cancelAudio();clearTimeout(speechTimer);currentUtterance=null;synth?.cancel();status(typeof detail==='string'&&detail.trim()?detail.slice(0,500):'Ответ не получен. Проверь диалог и повтори подключение.','error');}}
   function settings(parent){
     syncLanguage();loadCatalog();
@@ -265,5 +270,5 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH', 
     if(document.hidden){if(pending){synth?.pause?.();remoteAudio?.pause();return;}stop();resumeWhenVisible=dialog.open;status('Разговор приостановлен: страница была свёрнута.');}
     else {synth?.resume?.();remoteAudio?.play().catch(()=>failure(true));if(deferredAnswer!==null){const answer=deferredAnswer;deferredAnswer=null;complete(answer);}else if(pending)update(streamText);pumpStream();}
   });
-  return {settings,update,complete,failure,speak,open:show,stop,syncLanguage};
+  return {settings,update,complete,failure,speak,open:show,stop,syncLanguage,backgroundAccepted};
 }

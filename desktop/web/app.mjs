@@ -11,6 +11,7 @@ import {
 import {setupFeatures, featureRequest} from "./features.mjs";
 import {prepareFile, fileSize, setupFileTools} from "./files.mjs";
 import {setupVoice} from "./voice.mjs";
+import {setupBackgroundTasks, taskAcknowledgement} from "./background-tasks.mjs";
 const $ = (id) => document.getElementById(id);
 const icons = {
   attachment: "M21 11l-8 8a6 6 0 0 1-8-8l9-9a4 4 0 0 1 6 6l-9 9a2 2 0 0 1-3-3l8-8",
@@ -100,10 +101,14 @@ function addFiles(files) {
 const current = () => chats.find((c) => c.id === currentId);
 const voice = setupVoice({accountLanguage:()=>profile?.language||'', busy:()=>busy, toast, modelName:()=>MODELS[model], send:text=>{if(agentMode)setAgentMode(false);$("prompt").value=text;return generate(false, true);}});
 const features = setupFeatures({onUnauthorized:()=>{lockHistory();profile=null;guest=null;notifyAuthChange('lock');render();openAuth();},signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,prepareMedicalChat:async prompt=>{if(busy)throw new Error('Дождись завершения ответа.');if(!profile?.models?.includes(model))throw new Error('Выбранная модель сейчас недоступна.');setAgentMode(false);newChat();medicalDraftMode=true;$('prompt').value=prompt;resizePrompt();$('prompt').focus();toast('Прикрепи заключения и проверь текст перед отправкой.');},openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
+const background = setupBackgroundTasks({request:jsonRequest,profile:()=>profile,busy:()=>busy,currentId:()=>currentId,toast,speak:text=>voice.speak(text),
+  open:async cid=>{if(busy){toast('Дождись завершения текущего ответа.');return;}await syncHistory();const chat=chats.find(c=>c.id===cid);if(chat)await openChat(chat);},
+  refresh:async cid=>{const chat=chats.find(c=>c.id===cid);if(chat&&currentId===cid&&!busy)await openChat(chat,true);}});
 const browserStorage = { getItem: (key) => localStorage.getItem(key) };
 const localHistory = new LocalHistory(browserHistoryStore());
 const authChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('velia-auth-v1') : null;
 function lockHistory() {
+  background.reset();
   abort?.abort(); clearTimeout(saveTimer); saveTimer = null;
   localHistory.lock(); storageKey = null; chats = []; currentId = null;
   features.close(); features.clearMedicalData(); voice.stop(); clearFiles(); fileTools.clear();
@@ -163,6 +168,7 @@ function setModel(value) {
   if (busy || !MODELS[value] || (!profile && value !== "velia-flash")) return;
   if (value === "velia-quantum" && selectedFiles.length && !profile?.quantum_attachments) { toast(apiError("quantum_attachments_unsupported")); return; }
   model = value;
+  background.modelChanged(value);
   $("model-label").textContent = MODELS[value];
   $("model-icon").innerHTML = icon(value === "velia-flash" ? "bolt" : value === "velia-quantum" ? "layers" : "spark");
   for (const option of document.querySelectorAll("[data-model]")) {
@@ -372,6 +378,7 @@ function render() {
   if (chat)
     chat.messages.forEach((m, i) => $("messages").append(messageNode(m, i)));
   renderHistory();
+  background.render();
 }
 function scrollDown(force = false) {
   const el = $("conversation-scroll");
@@ -524,13 +531,11 @@ async function continueAfterTakeover() {
 }
 
 async function openChat(chat, background = false) {
-  if (!background) voice.stop();
-  features.close();
-  clearFiles();
+  if (!background) { voice.stop(); features.close(); clearFiles(); }
   if (busy || (!profile && !guest)) return;
   const account = profile?.account;
   currentId = chat.id;
-  sidebar(false);
+  if (!background) sidebar(false);
   if (chat.remote) {
     $("generation-status").textContent = "Загружаю диалог…";
     try {
@@ -543,7 +548,7 @@ async function openChat(chat, background = false) {
         requestId: previous[i]?.role === m.role && previous[i]?.content === m.content ? previous[i]?.requestId : undefined,
         model: m.chat_mode === "quantum" ? "velia-quantum" : m.chat_mode === "flash" ? "velia-flash" : "velia-pro",
         pending: m.status === "pending",
-        failed: m.status === "error" ? "Не удалось получить ответ. Можно повторить запрос." : undefined,
+        failed: m.status === "error" ? (m.error_code ? apiError(m.error_code) : "Не удалось получить ответ. Можно повторить запрос.") : undefined,
         internet: m.web_search === true,
         search: m.role === "assistant" && m.web_search ? safeSearch(m.web_search) : undefined,
       }));
@@ -589,6 +594,7 @@ async function applyProfile(value) {
   const changed = profile?.account !== value.account;
   if(changed){lockHistory(); guest = null;}
   profile = value;
+  background.poll();
   voice.syncLanguage();
   internetAvailable = !!value.web_search;
   $("guest-notice").hidden = true;
@@ -738,6 +744,19 @@ async function generate(retry = false, voiceTurn = false) {
   if(chat.medicalNoSearch && !agentMode){payload.medical_no_search=true;payload.web_search=false;}
   if (voiceTurn) payload.voice_turn=true;
   if (!agentMode && internetAvailable && !chat.medicalNoSearch) payload.web_search = true;
+  if(!agentMode&&chat.remote&&profile?.background_tasks&&background.wants(selected)){
+    const owner=profile.account;setBusy(true);render();save();
+    try{
+      const taskPayload={...payload};delete taskPayload.medical_no_search;
+      const job=await background.submit(chat.id,taskPayload);
+      if(profile?.account!==owner)return;
+      setBusy(false);setModel('velia-flash');
+      if(voiceTurn)voice.backgroundAccepted(taskAcknowledgement(profile.language));
+      toast(`${job.model==='pro'?'PRO':'Quantum'} работает в фоне. Разговор продолжит Flash.`);
+    }catch(error){toast(error.message);if(voiceTurn)voice.failure(false,error.message);}
+    finally{setBusy(false);render();save();}
+    return;
+  }
   chat.messages.push(answer);
   chat.updated = Date.now();
   abort = new AbortController();

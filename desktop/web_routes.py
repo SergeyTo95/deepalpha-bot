@@ -133,6 +133,7 @@ class Session:
     name: str = "Аккаунт VELIA"
     language: str = ""
     free_api: bool = False
+    background_tasks: bool = False
     quantum: bool = False
     quantum_source: str = ""
     quantum_attachments: bool = False
@@ -224,6 +225,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             session.language = normalize_reply_language(identity.get("language"))
             session.quantum = identity.get("quantum") is True
             session.free_api = identity.get("free_api") is True
+            session.background_tasks = identity.get("background_tasks") is True
             session.quantum_source = identity.get("quantum_source", "")
             session.quantum_attachments = identity.get("quantum_attachments") is True
             session.quantum_native_tools = identity.get("quantum_native_tools") is True
@@ -243,6 +245,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             "web_search": bool(web_search and web_search.available),
             "selected_model_inputs": session.selected_model_inputs,
             **({"free_api_tiers": True} if session.free_api else {}),
+            **({"background_tasks": True} if session.background_tasks and session.free_api else {}),
             "browser_agent": browser_agent_run is not None,
             **({"quantum_source": session.quantum_source, "quantum_attachments": session.quantum_attachments} if session.quantum else {}),
             "pro_locked_reason": None if credits and credits > 0 else
@@ -299,6 +302,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             session.language = normalize_reply_language(identity.get("language"))
             session.quantum = identity.get("quantum") is True
             session.free_api = identity.get("free_api") is True
+            session.background_tasks = identity.get("background_tasks") is True
             session.quantum_source = identity.get("quantum_source", "")
             session.quantum_attachments = identity.get("quantum_attachments") is True
             session.quantum_native_tools = identity.get("quantum_native_tools") is True
@@ -451,7 +455,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
 
     async def asset(request):
         name = request.match_info.get("name", "index.html")
-        if name not in {"index.html", "app.mjs", "core.mjs", "local-history.mjs", "features.mjs", "work.mjs", "voice.mjs", "speech-audio.mjs", "files.mjs", "style.css", "favicon.svg"}:
+        if name not in {"index.html", "app.mjs", "core.mjs", "local-history.mjs", "features.mjs", "work.mjs", "voice.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
             raise web.HTTPNotFound()
         response = web.FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
         response.headers.update({"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",

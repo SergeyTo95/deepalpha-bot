@@ -255,3 +255,44 @@ def test_free_saved_pro_cannot_reach_legacy_paid_backend_during_mixed_deployment
                 assert response.status==503
             assert state["account_calls"]==state["payloads"]==[]
     asyncio.run(run())
+
+
+
+def test_durable_task_gateway_keeps_flash_available_and_enforces_csrf_and_pro_access(monkeypatch):
+    from test_velia_web_chat import fixture,headers,login
+    async def run():
+        features={"chat_quantum":True,"chat_free_api_tiers":True,"chat_background_tasks":True}
+        async with fixture(monkeypatch,features=features) as (server,client,state):
+            monkeypatch.setenv("VELIA_FREE_API_TIERS_ENABLED","true")
+            monkeypatch.setenv("VELIA_ZAI_API_KEY","fixture-zai")
+            cookie,profile,_=await login(server,client)
+            assert profile["background_tasks"] is True
+            async with client.get(server.make_url("/web/background-tasks.mjs")) as asset:
+                assert asset.status==200 and "setupBackgroundTasks" in await asset.text()
+            async with client.post(server.make_url("/web-api/v1/conversations"),headers=headers(cookie),json={"title":"Task"}) as response:
+                cid=(await response.json())["conversation"]["id"]
+            data={"model":"velia-pro","content":"Prepare a comparison","idempotency_key":"background-test-1","voice_turn":True,"web_search":True}
+            async with client.post(server.make_url(f"/web-api/v1/conversations/{cid}/tasks"),headers=headers(cookie),json=data) as response:
+                assert response.status==202;job=(await response.json())["job"]
+                assert "private" not in job and job["model"]=="pro"
+            assert state["background_calls"][0]["data"]=={**data,"model":"pro","conversation_id":cid}
+            assert state["background_calls"][0]["cookie"] is None
+            # No foreground reservation is held by the background task.
+            async with client.post(server.make_url(f"/web-api/v1/conversations/{cid}/messages/stream"),headers=headers(cookie),
+                    json={"model":"velia-flash","content":"Meanwhile, explain a term","idempotency_key":"foreground-test-1"}) as response:
+                assert response.status==200 and "[DONE]" in await response.text()
+            assert state["account_calls"][-1]["chat_mode"]=="flash"
+            async with client.post(server.make_url(f"/web-api/v1/background-tasks/{job['id']}/revise"),headers=headers(cookie),json={"note":"Add one constraint","idempotency_key":"revision-test-1"}) as response:
+                assert response.status==200 and (await response.json())["job"]["notes"]==["Add one constraint"]
+            async with client.post(server.make_url(f"/web-api/v1/background-tasks/{job['id']}/cancel"),headers={"Cookie":cookie},json={}) as response:
+                assert response.status==403
+            async with client.post(server.make_url(f"/web-api/v1/background-tasks/{job['id']}/cancel"),headers=headers(cookie),json={}) as response:
+                assert response.status==200 and (await response.json())["job"]["status"]=="cancelled"
+            async with client.get(server.make_url('/web-api/v1/background-tasks')) as response:
+                assert response.status==401
+        async with fixture(monkeypatch,features=features,credits=0) as (server,client,state):
+            cookie,_,_=await login(server,client)
+            async with client.post(server.make_url('/web-api/v1/conversations/00000000-0000-4000-8000-000000000001/tasks'),headers=headers(cookie),json=data) as response:
+                assert response.status==402
+            assert state.get('background_calls',[])==[]
+    asyncio.run(run())

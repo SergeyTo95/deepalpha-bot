@@ -158,4 +158,18 @@ playingAudio.onplaying();assert.equal(timedDialog.dataset.phase,'thinking');
 playingAudio.currentTime=.2;playingAudio.ontimeupdate();assert.equal(timedDialog.dataset.phase,'speaking');
 timed.stop();latePlaying();assert.equal(timedDialog.dataset.phase,'idle');
 console.log(JSON.stringify({ok:true,synthetic:true,checks:['audio download is preparing','play call alone is not speaking','playing event starts speaking','buffering clears speaking','stale playing event after stop is ignored']}));
+// A background acceptance is a short acknowledgement, not the final job answer.
+localStorage.removeItem('velia-voice-mode');localStorage.removeItem('velia-voice-uri');
+window.speechSynthesis.getVoices=()=>[{name:'Device RU',voiceURI:'device-ru',lang:'ru-RU',localService:true}];
+window.speechSynthesis.speak=u=>spoken.push(u);
+let selectedTaskModel='VELIA PRO',taskSubmissions=0;let handoff;
+handoff=setupVoice({modelName:()=>selectedTaskModel,accountLanguage:()=> 'ru',busy:()=>false,toast:()=>{},send:async()=>{taskSubmissions++;selectedTaskModel='VELIA FLASH';handoff.backgroundAccepted('Поняла, готовлю результат.');}});
+handoff.open();const handoffDialog=[...document.querySelectorAll('.voice-dialog')].at(-1);
+const handoffRecognition=delayedRecognition.at(-1);handoffRecognition.onresult({results:[segment('Подготовь сравнение')]});handoffRecognition.onend();await tick();
+assert.equal(taskSubmissions,1);assert.equal(handoffDialog.querySelector('.voice-model').textContent,'VELIA FLASH');
+assert.equal(spoken.at(-1).text,'Поняла, готовлю результат.');
+const beforeAcknowledgementEnd=delayedRecognition.length;spoken.at(-1).onstart?.();spoken.at(-1).onend?.();
+await new Promise(resolve=>setTimeout(resolve,450));
+assert.equal(delayedRecognition.length,beforeAcknowledgementEnd+1);assert.equal(taskSubmissions,1);handoff.stop();
+console.log(JSON.stringify({ok:true,synthetic:true,checks:['one background submission','short acknowledgement in existing voice pipeline','voice model label switches to Flash','microphone resumes while task continues']}));
 dom.window.close();

@@ -144,6 +144,7 @@
           ></section>
         </div>
         <div class="composer-area">
+          <section id="background-tasks" aria-label="Фоновые задачи" hidden></section>
           <div
             class="generation-status"
             id="generation-status"
@@ -159,6 +160,7 @@
               maxlength="32000"
             ></textarea>
             <div id="attachment-preview" class="attachment-preview"></div>
+              <label id="background-option" title="Quantum или PRO выполнит задачу на сервере; разговор можно продолжить с Flash" hidden><input id="background-enabled" type="checkbox" /> В фоне</label>
             <div class="composer-toolbar">
               <button type="button" id="attach" class="icon-button" aria-label="Прикрепить файл"><span data-icon="attachment"></span></button>
               <input type="file" id="attachment-input" multiple hidden accept="image/jpeg,image/png,image/webp,.pdf,.txt,.md,.csv,.json,.docx" />

@@ -225,6 +225,31 @@ async def fixture(monkeypatch, **state):
     authority.router.add_post("/v1/run", browser_agent)
     authority.router.add_get("/v1/takeover/state", browser_takeover_state)
     authority.router.add_post("/v1/takeover/action", browser_takeover_action)
+    async def background_tasks(request):
+        import uuid
+        state.setdefault("background_calls",[]).append({"path":request.path,"method":request.method,
+            "cookie":request.headers.get("Cookie"),"data":await request.json() if request.method=="POST" else None})
+        jobs=state.setdefault("background_jobs",[])
+        job_id=request.match_info.get("job_id")
+        action=request.match_info.get("action")
+        if job_id:
+            job=next((j for j in jobs if j["id"]==job_id),None)
+            if job is None:return web.json_response({"ok":False,"error":"background_task_not_found"},status=404)
+            if action=="cancel":job["status"]="cancelled"
+            if action=="revise":job["notes"].append(state["background_calls"][-1]["data"]["note"])
+            return web.json_response({"ok":True,"job":job})
+        if request.method=="POST":
+            data=state["background_calls"][-1]["data"]
+            job={"id":str(uuid.uuid4()),"conversation_id":data["conversation_id"],"model":data["model"],"status":"running",
+                "revision":1,"created_at":0,"updated_at":0,"title":data["content"],"result":"","error":"", "notes":[],
+                "assistant_message_id":str(uuid.uuid4()),"private":"never forward this"}
+            jobs.append(job)
+            return web.json_response({"ok":True,"job":job},status=202)
+        return web.json_response({"ok":True,"jobs":jobs})
+    authority.router.add_get("/mobile-api/v1/background-tasks",background_tasks)
+    authority.router.add_post("/mobile-api/v1/background-tasks",background_tasks)
+    authority.router.add_get("/mobile-api/v1/background-tasks/{job_id}",background_tasks)
+    authority.router.add_post("/mobile-api/v1/background-tasks/{job_id}/{action}",background_tasks)
     async with TestServer(authority) as source:
         for key, value in {"VELIA_WEB_ENABLED": "true", "VELIA_WEB_ORIGIN": ORIGIN,
             "VELIA_WEB_SESSION_KEY": base64.urlsafe_b64encode(b"t" * 32).decode(),

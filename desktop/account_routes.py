@@ -37,6 +37,8 @@ def message(value):
     if not isinstance(value, dict) or value.get("role") not in {"user", "assistant"}:
         raise ValueError("invalid_account_response")
     result = {key: value.get(key) for key in ("id", "role", "content", "status", "chat_mode", "created_at")}
+    if value.get("error_code") in ERRORS | {"background_task_cancelled","background_task_failed","background_task_interrupted"}:
+        result["error_code"] = value["error_code"]
     if isinstance(value.get("attachments"), list):
         result["attachments"] = []
         for item in value["attachments"][:4]:
@@ -111,7 +113,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
 
     @web.middleware
     async def boundary(request, handler):
-        if not request.path.startswith("/web-api/v1/conversations"):
+        if not request.path.startswith(("/web-api/v1/conversations", "/web-api/v1/background-tasks")):
             return await handler(request)
         if request.method != "GET" and not same_origin(request):
             return error("invalid_origin", 403)
@@ -307,6 +309,54 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
                 finally:
                     handlers["release"](session.user_id)
 
+    async def background(request):
+        session = request[ACCOUNT_SESSION]
+        if not session.free_api or not session.background_tasks:
+            return error("background_tasks_unavailable", 503)
+        job_id = request.match_info.get("job_id")
+        if job_id and not ID.fullmatch(job_id):
+            return error("background_task_not_found", 404)
+        action = request.match_info.get("action")
+        path = "/mobile-api/v1/background-tasks" + ("/"+job_id if job_id else "") + ("/"+action if action else "")
+        data = None
+        if request.method == "POST":
+            data = await read_body(request)
+            if job_id:
+                if action == "cancel" and data or action == "revise" and (set(data)!={"note","idempotency_key"} or not isinstance(data.get("note"),str) or not 1<=len(data["note"].strip())<=2000 or not REQUEST_ID.fullmatch(str(data.get("idempotency_key","")))) or action not in {"cancel","revise"}:
+                    return error("invalid_request",400)
+            else:
+                if (set(data)-{"web_search","voice_turn","attachment_ids"}!={"content","model","idempotency_key"}
+                        or data.get("model") not in {MODEL_ID,QUANTUM_ID}
+                        or not isinstance(data.get("content"),str) or not 1<=len(data["content"].strip())<=12000
+                        or not REQUEST_ID.fullmatch(str(data.get("idempotency_key","")))
+                        or any(k in data and type(data[k]) is not bool for k in ("web_search","voice_turn"))):
+                    return error("invalid_request",400)
+                permission = await authorize_model(session.access,data["model"],files=bool(data.get("attachment_ids")))
+                if permission:
+                    return error(*permission)
+                attachments = data.get("attachment_ids",[])
+                if not isinstance(attachments,list) or len(attachments)>4 or any(not isinstance(x,str) or not ID.fullmatch(x) for x in attachments):
+                    return error("invalid_attachment_ids",400)
+                data = {**data,"conversation_id":request.match_info["conversation_id"],"model":data["model"].removeprefix("velia-")}
+        status,result = await upstream(request.method,path,token=session.access,data=data)
+        if not result.get("ok"):
+            code = result.get("error")
+            safe = {"background_tasks_unavailable","background_task_not_found","background_task_active","background_task_finished","background_revision_limit","background_queue_full","invalid_request","invalid_attachment_ids","attachment_not_found","attachment_not_ready","attachment_already_linked"} | ERRORS
+            return error(code if code in safe else "account_service_unavailable",status)
+        def public(value):
+            if (not isinstance(value,dict) or not ID.fullmatch(str(value.get("id",""))) or not ID.fullmatch(str(value.get("conversation_id","")))
+                    or value.get("model") not in {"quantum","pro"} or value.get("status") not in {"queued","running","completed","error","cancelled"}):
+                raise ValueError("invalid_background_response")
+            return {k:value.get(k) for k in ("id","conversation_id","model","status","revision","created_at","updated_at","assistant_message_id")} | {
+                "title":str(value.get("title", ""))[:160],"result":str(value.get("result", ""))[:64000],
+                "error":value.get("error") if value.get("error") in ERRORS | {"background_task_failed","background_task_cancelled","background_task_interrupted"} else None,
+                "notes":[str(n)[:2000] for n in value.get("notes",[])[:3]]}
+        return json_response({"ok":True,**({"job":public(result["job"])} if "job" in result else {"jobs":[public(j) for j in result.get("jobs",[])[:30]]})},status)
+
+    app.router.add_get("/web-api/v1/background-tasks",background)
+    app.router.add_get("/web-api/v1/background-tasks/{job_id}",background)
+    app.router.add_post("/web-api/v1/background-tasks/{job_id}/{action}",background)
+    app.router.add_post("/web-api/v1/conversations/{conversation_id}/tasks",background)
     app.router.add_get("/web-api/v1/conversations", listing)
     app.router.add_post("/web-api/v1/conversations", create)
     app.router.add_get("/web-api/v1/conversations/{conversation_id}/messages", messages)
