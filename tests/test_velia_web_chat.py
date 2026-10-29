@@ -297,7 +297,12 @@ def test_quantum_account_routing_history_and_capability_revocation(monkeypatch):
                 "chat_quantum_source": "GLM-5.3 через Experiential"}) as (server, client, state):
             cookie, profile, _ = await login(server, client)
             assert "velia-quantum" in profile["models"] and "velia-pro" not in profile["models"]
-            assert profile["quantum_source"] == "GLM-5.3 через Experiential"
+            assert "quantum_source" not in profile
+            assert "GLM" not in json.dumps(profile) and "Experiential" not in json.dumps(profile)
+            async with client.get(server.make_url("/web-api/v1/session"), headers=headers(cookie)) as response:
+                refreshed = await response.json()
+                assert response.status == 200 and "quantum_source" not in refreshed
+                assert "GLM" not in json.dumps(refreshed) and "Experiential" not in json.dumps(refreshed)
             async with client.post(server.make_url("/web-api/v1/conversations"), headers=headers(cookie),
                     json={"title": "Quantum test"}) as response:
                 cid = (await response.json())["conversation"]["id"]

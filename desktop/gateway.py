@@ -209,8 +209,7 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
             "free_api": features.get("chat_free_api_tiers") is True,
             "background_tasks": features.get("chat_background_tasks") is True,
             "quantum_native_tools": features.get("chat_quantum_native_tools") is True,
-            "quantum_attachments": features.get("chat_quantum_attachments") is True,
-            "quantum_source": str(features.get("chat_quantum_source") or "")[:120]}
+            "quantum_attachments": features.get("chat_quantum_attachments") is True}
 
     async def account_balance(token):
         status, result = await upstream("GET", "/mobile-api/v1/economy/me", token=token)
