@@ -1098,6 +1098,12 @@ def test_background_agent_manual_handoff_and_cancel_do_not_report_verified_succe
     monkeypatch.setattr(agent,'execute_remote',lambda *a:{'text':'Please sign in','tool_count':1,'user_action_required':'credentials'})
     text=agent.execute(job,jobs,plan,lambda _:None);assert text=='Please sign in' and len(calls)==1
     jobs.finish(job,text);assert public_job(jobs.get(77,first['id']))['user_action_required']=='credentials'
+    from services import velia_background_chat_service as service
+    monkeypatch.setattr(service,'enabled',lambda:True);monkeypatch.setattr(service,'store',lambda:jobs)
+    context=service.background_context(77,'conv')
+    assert '"status": "waiting_user"' in context and '"requires_user_action": "credentials"' in context
+    assert '"reviewed": false' in context
+    assert service.background_context(78,'conv')==''
     second=jobs.create(77,'conv','pro','agent-task-4',data);job=jobs.claim()
     def cancel(*args):jobs.change(77,job['id']);return {'text':'Late result','tool_count':1,'user_action_required':None}
     monkeypatch.setattr(agent,'execute_remote',cancel)
