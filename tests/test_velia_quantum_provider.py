@@ -387,3 +387,40 @@ def test_private_reasoning_capture_is_bounded_and_never_public():
     oversized = {"choices":[{"delta":{"reasoning_content":"x"*64001}}]}
     with pytest.raises(quantum.QuantumError, match="quantum_invalid_response"):
         quantum.StreamDecoder(capture_reasoning=True).feed(("data: "+json.dumps(oversized)+"\n\n").encode())
+
+
+@pytest.mark.parametrize("greeting", ["Привет", "Привет!", "Привет, как дела?", "Hello!", "How are you?", "Merhaba", "你好", "مرحبا"])
+def test_pro_social_greeting_skips_thinking_without_changing_model_history_or_reply_language(monkeypatch, greeting):
+    import velia_free_models as free
+    from velia_quantum_turn import Turn
+    monkeypatch.setenv("VELIA_FREE_API_TIERS_ENABLED", "true")
+    monkeypatch.setenv("VELIA_ZAI_API_KEY", "fixture-zai")
+    config = free.configuration("pro")
+    messages = [{"role":"system", "content":"Account reply language: ru"},
+        {"role":"assistant", "content":"An earlier answer"}, {"role":"user", "content":greeting}]
+    turn = Turn(config, messages)
+    body = turn.body()
+    assert body["model"] == "glm-4.7-flash" and body["thinking"] == {"type":"disabled"}
+    assert body["max_tokens"] == 1024 and body["messages"][1:] == messages[1:]
+    assert "Account reply language: ru" in body["messages"][0]["content"]
+    assert config.thinking_enabled is True and messages[0]["content"] == "Account reply language: ru"
+
+
+@pytest.mark.parametrize("content", ["Да", "Продолжи", "Спасибо", "Привет, реши задачу", "Hello, analyze this code", 'Переведи «привет»', '"привет"', "Не привет", "Привет"*100])
+def test_pro_continuations_and_tasks_keep_reasoning(monkeypatch, content):
+    import velia_free_models as free
+    from velia_quantum_turn import Turn
+    monkeypatch.setenv("VELIA_FREE_API_TIERS_ENABLED", "true")
+    monkeypatch.setenv("VELIA_ZAI_API_KEY", "fixture-zai")
+    turn = Turn(free.configuration("pro"), [{"role":"user", "content":content}])
+    assert turn.body()["thinking"] == {"type":"enabled"}
+
+
+def test_social_fast_path_does_not_skip_attachment_analysis(monkeypatch):
+    import velia_free_models as free
+    from velia_quantum_turn import Turn
+    monkeypatch.setenv("VELIA_FREE_API_TIERS_ENABLED", "true")
+    monkeypatch.setenv("VELIA_ZAI_API_KEY", "fixture-zai")
+    messages = [{"role":"user","content":"ATTACHMENT_DATA_UNTRUSTED: [BEGIN_ATTACHMENT]Evidence"},
+        {"role":"user","content":"Привет"}]
+    assert Turn(free.configuration("pro"), messages).body()["thinking"] == {"type":"enabled"}

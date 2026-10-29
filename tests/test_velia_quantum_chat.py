@@ -756,7 +756,7 @@ def test_free_tiers_pin_same_model_for_text_and_voice_without_worker_or_paid_cal
     monkeypatch.setattr(quantum.requests, "Session", lambda:client)
     monkeypatch.setattr(quantum, "groq_backup_configuration", lambda *a:pytest.fail("tier switched models"))
     parts=[]
-    result=quantum.generate("unused",messages=[{"role":"user","content":"Привет"}],chat_mode=mode,
+    result=quantum.generate("unused",messages=[{"role":"user","content":"Объясни решение сложной задачи"}],chat_mode=mode,
         voice_turn=voice,account_language="ru",on_delta=parts.append)
     assert result["ok"] and result["model"]==result["provider"]=="velia-"+mode
     assert result["estimated_cost_usd"]==0 and result["fallback_used"] is False

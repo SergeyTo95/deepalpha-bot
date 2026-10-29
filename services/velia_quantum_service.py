@@ -252,7 +252,7 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False, web_sear
         outcome = "complete"
         LOG.info("VELIA_QUANTUM_TURN_COMPLETE model_calls=%d searched=%s", turn.calls, turn.searched)
         if free_tier:
-            LOG.info("VELIA_FREE_API_TURN mode=%s upstream=%s voice=%s model_calls=%d", chat_mode, config.model, bool(voice_turn), turn.calls)
+            LOG.info("VELIA_FREE_API_TURN mode=%s upstream=%s voice=%s thinking=%s model_calls=%d", chat_mode, config.model, bool(voice_turn), turn.config.thinking_enabled, turn.calls)
         return {**result, "ok": True, "text": text, "usage": turn.usage,
             "finish_reason": turn.decoder.finish_reason}
     except QuantumError as exc:
