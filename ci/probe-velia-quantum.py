@@ -86,6 +86,11 @@ def check_configuration():
     if config is None:
         print("VELIA_QUANTUM_CONFIG_FAILED quantum_unavailable", flush=True)
         return 1
+    if config.provider == "zai" and quantum.voice_route_enabled():
+        if quantum.groq_backup_configuration(config) is None:
+            print("VELIA_QUANTUM_CONFIG_FAILED groq_voice_unavailable", flush=True)
+            return 1
+        print("VELIA_QUANTUM_VOICE_CONFIG_OK provider=groq", flush=True)
     print("VELIA_QUANTUM_CONFIG_OK provider=" + config.provider, flush=True)
     return 0
 
@@ -126,13 +131,15 @@ def main():
             os.environ.pop("VELIA_QUANTUM_MAX_OUTPUT_TOKENS", None)
         else:
             os.environ["VELIA_QUANTUM_MAX_OUTPUT_TOKENS"] = previous_limit
+    selected_voice = quantum.groq_backup_configuration(config) if voice and quantum.voice_route_enabled() else None
     if (result.get("ok") is True and result.get("finish_reason") == "stop"
             and str(result.get("text") or "").strip()
             and result.get("provider") == "velia-quantum"
             and result.get("model") == "velia-quantum"
             and result.get("estimated_cost_usd") == 0
-            and result.get("fallback_used") is False):
-        print(("VELIA_QUANTUM_VOICE_PROBE_OK model=" if voice else "VELIA_QUANTUM_LIVE_PROBE_OK model=") + config.model, flush=True)
+            and result.get("fallback_used") is bool(selected_voice)):
+        print(("VELIA_QUANTUM_VOICE_PROBE_OK model=" if voice else "VELIA_QUANTUM_LIVE_PROBE_OK model=")
+            + (selected_voice or config).model, flush=True)
         return 0
     reason = result.get("reason")
     print("VELIA_QUANTUM_LIVE_PROBE_FAILED " + (

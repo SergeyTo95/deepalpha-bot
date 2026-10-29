@@ -115,6 +115,32 @@ def test_offline_deploy_accepts_disabled_optional_quantum(monkeypatch, capsys):
     assert "CONFIG_DISABLED" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize('key', ['', 'groq-voice-fixture'])
+def test_offline_voice_route_requires_existing_backup_credentials_without_api_calls(enabled, monkeypatch, capsys, key):
+    monkeypatch.setenv('VELIA_QUANTUM_PROVIDER', 'zai')
+    monkeypatch.setenv('VELIA_QUANTUM_GROQ_VOICE_ENABLED', 'true')
+    monkeypatch.setenv('VELIA_QUANTUM_GROQ_BACKUP_ENABLED', 'true')
+    monkeypatch.setenv('GROQ_API_KEY', key)
+    monkeypatch.setattr(probe.quantum, '_provider_client', lambda *_: pytest.fail('offline probe called inference'))
+    assert probe.check_configuration() == (0 if key else 1)
+    output = capsys.readouterr().out
+    assert ('VOICE_CONFIG_OK provider=groq' if key else 'CONFIG_FAILED groq_voice_unavailable') in output
+    assert 'fixture' not in output
+
+
+def test_explicit_voice_probe_reports_opted_in_groq_model(enabled, monkeypatch, capsys):
+    monkeypatch.setenv('VELIA_QUANTUM_PROVIDER', 'zai')
+    monkeypatch.setenv('VELIA_QUANTUM_GROQ_BACKUP_ENABLED', 'true')
+    monkeypatch.setenv('VELIA_QUANTUM_GROQ_VOICE_ENABLED', 'true')
+    monkeypatch.setenv('GROQ_API_KEY', 'groq-voice-fixture')
+    monkeypatch.setattr(probe.sys, 'argv', ['probe', '--voice'])
+    monkeypatch.setattr(probe.quantum, 'generate', lambda *a, **k: {
+        'ok':True,'finish_reason':'stop','text':'private','provider':'velia-quantum',
+        'model':'velia-quantum','estimated_cost_usd':0,'fallback_used':True})
+    assert probe.main() == 0
+    assert capsys.readouterr().out.strip() == 'VELIA_QUANTUM_VOICE_PROBE_OK model=openai/gpt-oss-120b'
+
+
 def test_offline_deploy_still_rejects_invalid_enabled_configuration(enabled, monkeypatch, capsys):
     monkeypatch.setattr(probe.sys, "argv", ["probe-velia-quantum.py", "--config-only"])
     monkeypatch.setenv("VELIA_QUANTUM_BASE_URL", "https://evil.example/v1")

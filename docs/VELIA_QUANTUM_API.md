@@ -9,7 +9,41 @@ response decoding and public errors. `services/velia_quantum_service.py` connect
 that contract to existing account history, streaming and PostgreSQL locks.
 The original Qwen research/build branch and worker are not modified.
 
-## Initial external route
+## Account conversation and voice update (2026-10-29)
+
+The current production primary is the pinned Z.ai Standard `glm-4.7-flash`
+route, with the explicitly enabled, pinned Groq `openai/gpt-oss-120b` reserve.
+The initial Experiential setup below is historical, not the active route.
+
+Account turns now read actual database `user` and `assistant` roles, scoped to
+the same user and conversation. The current committed request must be the last
+user message. A confirmation such as “давай” follows the prior assistant offer
+as a distinct message. Profile, memory, project and attachment extensions remain
+untrusted background data; only an exact server-built transcript is removed
+from that snapshot to avoid submitting history twice. User-written role labels
+are never parsed into model roles. Existing locks, history bounds, quotas,
+attachments and idempotency still apply. No template greeting replaces a model
+response. System instructions explicitly require continuing the latest turn.
+
+Opt in on the account backend with `VELIA_QUANTUM_GROQ_VOICE_ENABLED=true`.
+It requires the existing `VELIA_QUANTUM_GROQ_BACKUP_ENABLED=true` and dedicated
+`GROQ_API_KEY`. Voice turns then go directly to the same pinned Groq model,
+without waiting for a slow Z.ai response first. Text chat retains its primary
+route and capacity fallback. Voice search continuation stays on Groq, and a
+Groq error never replays a turn on Z.ai, Flash or another model. Disable the
+voice flag to restore the previous routing. Offline pre-deploy checks validate
+the selected voice configuration without inference; an explicit `--voice`
+probe reports the actual selected model. The Groq Free account tier and its
+quotas still govern access; no billing upgrade or quota increase is performed.
+
+This change follows a production voice turn that waited about 21.8 seconds
+before Z.ai returned headers; another completed in under one second. It does
+not establish a fixed user-visible latency, physical ASR accuracy or TTS speed.
+Unit tests cover role boundaries, quoted labels, untrusted extensions, current
+request checks, direct voice routing, failure isolation and search continuation.
+A PostgreSQL regression covers three stored voice turns and idempotent replay.
+
+## Initial external route (historical)
 
 Configure the account backend that serves the browser's identity authority:
 
