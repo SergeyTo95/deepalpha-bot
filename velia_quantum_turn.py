@@ -8,6 +8,7 @@ from dataclasses import replace
 import velia_free_models as free_models
 import logging
 import re
+from velia_code_quality import guidance as engineering_guidance
 from velia_quantum_provider import QuantumError, StreamDecoder, payload, groq_backup_configuration
 from velia_quantum_transport import completion_async
 LOG = logging.getLogger(__name__)
@@ -68,7 +69,7 @@ class Turn:
             config = replace(config, thinking_enabled=False, max_tokens=min(config.max_tokens, 1024))
         self.config = config
         self.messages = [dict(m) for m in messages]
-        instruction = INSTRUCTION + (
+        instruction = INSTRUCTION + '\n' + engineering_guidance(compact=True) + (
             "\nWeb search is disabled for this turn. Do not claim current facts are verified." if not search_enabled else "")
         if self.messages and self.messages[0].get("role") == "system":
             self.messages[0]["content"] += "\n" + instruction

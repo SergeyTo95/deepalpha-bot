@@ -3,6 +3,7 @@ import json
 import pytest
 
 from services import velia_developer_coding_service as coding
+from velia_code_quality import inspect_changes, QualityError
 
 
 PROJECT = {
@@ -87,6 +88,70 @@ def test_apply_patch_rejects_paths_outside_plan():
             states={"services/example.py": "x = 0\n"},
         )
     assert exc.value.code == "developer_coding_path_outside_plan"
+
+
+@pytest.mark.parametrize('path,source', [('app.py','def broken(:\n'),('config.json','{"x":1,"x":2}'),('config.json','{"x":NaN}')])
+def test_quality_gate_rejects_invalid_new_source_without_echoing_source(path,source):
+    with pytest.raises(QualityError) as exc:
+        inspect_changes({path:None},{path:source})
+    assert exc.value.code=='developer_coding_syntax_invalid' and source not in exc.value.detail
+
+
+def test_quality_checks_do_not_execute_source_or_claim_project_tests_passed():
+    report=inspect_changes({'app.py':None,'ui.ts':None},
+        {'app.py':'raise RuntimeError("source must not execute")\n','ui.ts':'export const x: number = 1;\n'})
+    assert report['checks']==[{'path':'app.py','check':'syntax','status':'passed'},
+        {'path':'ui.ts','check':'syntax','status':'not_run','reason':'parser_unavailable'}]
+    assert report['tests']=='not_run' and report['crap']==report['mutation']==report['coverage']=='not_measured'
+
+
+def test_legacy_syntax_is_not_misrepresented_as_a_pass_and_resource_limits_are_bounded(monkeypatch):
+    import velia_code_quality as quality
+    report=inspect_changes({'old.py':'print "old syntax"\n'},{'old.py':'print "updated legacy syntax"\n'})
+    assert report['checks'][0]['status']=='not_run'
+    monkeypatch.setattr(quality,'MAX_FILE_BYTES',8)
+    with pytest.raises(QualityError,match='developer_coding_quality_limit'):
+        inspect_changes({'app.py':None},{'app.py':'number = 123456789\n'})
+
+
+def test_new_duplicate_bodies_are_advisory_and_unchanged_legacy_duplicates_are_not_reflagged():
+    body='    total = value + 1\n    if total > 2:\n        total += value\n    return total * 2\n'
+    before='def first(value):\n'+body
+    after=before+'\ndef second(value):\n'+body
+    report=inspect_changes({'app.py':before},{'app.py':after})
+    assert any(w['kind']=='exact_body_duplication' for w in report['warnings'])
+    preserved=inspect_changes({'app.py':after},{'app.py':after+'\n# documentation\n'})
+    assert not preserved['warnings']
+
+
+def test_execute_step_repairs_invalid_syntax_before_a_single_commit(monkeypatch):
+    monkeypatch.setattr(coding,'_step_context',lambda *a:('New file',{'app.py':None}))
+    monkeypatch.setattr(coding.fast_path,'_estimate_cost',lambda *a:0.001)
+    responses=[{'operations':[{'op':'create','path':'app.py','content':'def broken(:\n'}]},
+        {'operations':[{'op':'create','path':'app.py','content':'def answer():\n    return 42\n'}]}]
+    calls=[];commits=[]
+    def model(**kwargs):calls.append(kwargs);return {'text':json.dumps(responses.pop(0)),'estimated_cost_usd':0.001,'usage':{}}
+    def commit(*args,**kwargs):commits.append(kwargs);return {'files':['app.py'],'commit_sha':'fixture-sha'}
+    monkeypatch.setattr(coding,'_model_call',model);monkeypatch.setattr(coding.write_service,'commit_operations',commit)
+    job={'job_id':'fixture','goal':'Implement answer','base_branch':'main','work_branch':'velia/test','total_steps':1,'plan':{}}
+    step={'index':1,'title':'Answer','objective':'Return 42','files':['app.py'],'checks':['pytest']}
+    result=coding._execute_step(user_id=1,project=PROJECT,job=job,step=step,step_number=1)
+    assert len(commits)==1 and len(calls)==2
+    assert 'developer_coding_syntax_invalid' in calls[1]['prompt']
+    assert commits[0]['operations'][0]['content']=='def answer():\n    return 42\n'
+    assert result['quality']['tests']=='not_run' and result['quality']['checks'][0]['status']=='passed'
+    assert result['estimated_cost_usd']==0.002
+
+
+def test_exhausted_syntax_repair_never_commits_invalid_code(monkeypatch):
+    monkeypatch.setattr(coding,'_step_context',lambda *a:('New file',{'app.py':None}))
+    monkeypatch.setattr(coding.fast_path,'_estimate_cost',lambda *a:0.001)
+    monkeypatch.setattr(coding,'_model_call',lambda **kw:{'text':json.dumps({'operations':[{'op':'create','path':'app.py','content':'return 42\n'}]}),'usage':{}})
+    monkeypatch.setattr(coding.write_service,'commit_operations',lambda *a,**kw:pytest.fail('Invalid code reached GitHub'))
+    job={'job_id':'fixture','goal':'Implement answer','base_branch':'main','work_branch':'velia/test','total_steps':1,'plan':{}}
+    step={'index':1,'title':'Answer','objective':'Return 42','files':['app.py'],'checks':[]}
+    with pytest.raises(coding.DeveloperCodingError,match='developer_coding_syntax_invalid'):
+        coding._execute_step(user_id=1,project=PROJECT,job=job,step=step,step_number=1)
 
 
 def test_plan_job_uses_one_low_cost_model_call(monkeypatch):

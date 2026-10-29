@@ -5,6 +5,7 @@ import os
 import re
 from typing import Any, Callable, Dict, List, Mapping, Optional
 from urllib.parse import quote
+from velia_code_quality import guidance as engineering_guidance
 
 from services import velia_agent_coding_autopilot_policy_service as policy_service
 from services import velia_developer_github_service as github_service
@@ -404,6 +405,8 @@ def _review_prompt(
         "security, acceptance intent, API/contracts, tests, and scope. "
         "Do not claim CI passed when checks are pending or absent. A pending "
         "check alone does not make a draft PR invalid.\n\n"
+        + engineering_guidance('review') + '\n\n'
+        +
         "JSON schema:\n"
         '{"status":"passed|failed|blocked","summary":"...",'
         '"findings":[{"severity":"low|medium|high|critical","code":"...",'

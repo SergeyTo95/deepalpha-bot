@@ -380,6 +380,8 @@ def _coding_language_text(message: str, code: str) -> str:
         "github_pull_requests_write_permission_required": "Для создания draft PR GitHub App нужен доступ Pull requests: Read and write.",
         "developer_coding_plan_missing": "В этом чате нет активного плана. Сначала опиши изменение, которое нужно реализовать.",
         "developer_coding_job_running": "План уже выполняется — отменить его во время записи нельзя.",
+        "developer_coding_syntax_invalid": "Проверка нашла синтаксическую ошибку в изменениях. Этот шаг не записан в GitHub.",
+        "developer_coding_quality_limit": "Шаг слишком большой для локальной проверки. Раздели изменение на меньшие части.",
     }
     mapping_en = {
         "developer_coding_disabled": "VELIA Coding Agent is currently disabled on the server.",
@@ -388,6 +390,8 @@ def _coding_language_text(message: str, code: str) -> str:
         "github_pull_requests_write_permission_required": "The GitHub App needs Pull requests: Read and write to create a draft PR.",
         "developer_coding_plan_missing": "There is no active plan in this chat. Describe the change first.",
         "developer_coding_job_running": "The plan is already running and cannot be cancelled during a write.",
+        "developer_coding_syntax_invalid": "Syntax validation found an error. This step was not written to GitHub.",
+        "developer_coding_quality_limit": "The change exceeds the local validation budget. Split it into smaller steps.",
     }
     fallback = (
         f"Не удалось выполнить Coding Agent ({code}). Изменения не были смержены или задеплоены."

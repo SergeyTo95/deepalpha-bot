@@ -21,6 +21,7 @@ from services import velia_developer_github_write_service as write_service
 from services import velia_developer_taste_skill_service as taste_skill
 
 from services.velia_repository_context_security import redact_source, sensitive_context_path
+from velia_code_quality import guidance as engineering_guidance, inspect_changes, QualityError
 
 
 class DeveloperCodingError(RuntimeError):
@@ -473,7 +474,7 @@ def _plan_prompt(
     branch = str(project.get("selected_branch") or "")
     profile = taste_profile if isinstance(taste_profile, dict) else {}
     taste_guidance = taste_skill.planning_guidance(profile)
-    guidance_block = f"\n\n{taste_guidance}" if taste_guidance else ""
+    guidance_block = '\n\n'+engineering_guidance('planning')+(f"\n\n{taste_guidance}" if taste_guidance else "")
     design_schema = ""
     design_rule = ""
     if profile.get("active"):
@@ -795,7 +796,7 @@ def _step_prompt(
             required_checks.append(item)
     required_checks = required_checks[:12]
     taste_guidance = taste_skill.execution_guidance(design, step)
-    guidance_block = f"\n\n{taste_guidance}" if taste_guidance else ""
+    guidance_block = '\n\n'+engineering_guidance('implementation')+(f"\n\n{taste_guidance}" if taste_guidance else "")
     return f"""You are the execution stage of VELIA Coding Agent.
 Repository: {project.get('repository_full_name')}
 Base branch: {job.get('base_branch')}
@@ -889,6 +890,15 @@ def _apply_patch_payload(
     return operations, next_states
 
 
+def _checked_patch_payload(payload, *, allowed_files, states):
+    operations, next_states = _apply_patch_payload(payload, allowed_files=allowed_files, states=states)
+    try:
+        quality = inspect_changes(states, next_states)
+    except QualityError as exc:
+        raise DeveloperCodingError(exc.code, status=422, detail=exc.detail) from None
+    return operations, next_states, quality
+
+
 def _repair_prompt(original_prompt: str, response: str, error: DeveloperCodingError) -> str:
     return f"""Repair the JSON patch below.
 The original coding instruction was:
@@ -931,6 +941,7 @@ def _execute_step(
     payload: Dict[str, Any] = {}
     operations: List[Dict[str, Any]] = []
     next_states: Dict[str, Optional[str]] = {}
+    quality: Dict[str, Any] = {}
     attempts = _env_int("VELIA_DEVELOPER_CODING_PATCH_ATTEMPTS", 2, 1, 2)
     current_prompt = prompt
     for attempt in range(attempts):
@@ -953,7 +964,7 @@ def _execute_step(
         raw_response = str(result.get("text") or "")
         try:
             payload = _extract_json(raw_response)
-            operations, next_states = _apply_patch_payload(
+            operations, next_states, quality = _checked_patch_payload(
                 payload,
                 allowed_files=step.get("files") or [],
                 states=states,
@@ -979,6 +990,7 @@ def _execute_step(
         "suggestions": [str(item)[:400] for item in (payload.get("suggestions") or [])][:6],
         "estimated_cost_usd": total_cost,
         "usage": total_usage,
+        "quality": quality,
     }
 
 
@@ -1012,6 +1024,13 @@ def _pr_body(job: Dict[str, Any], results: List[Dict[str, Any]]) -> str:
                 f"  - Summary: {item.get('summary')}",
             ]
         )
+        quality = item.get('quality') or {}
+        if quality:
+            passed = sum(c.get('status')=='passed' for c in quality.get('checks',[]))
+            pending = sum(c.get('status')=='not_run' for c in quality.get('checks',[]))
+            lines.append(f"  - Observed local syntax checks: {passed} passed; {pending} not run. Project tests, coverage and mutation testing were not run by the patch writer.")
+            if quality.get('warnings'):
+                lines.append(f"  - Maintainability findings for review: {len(quality['warnings'])} (advisory).")
     lines.extend(
         [
             "",

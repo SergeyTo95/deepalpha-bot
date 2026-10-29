@@ -18,6 +18,7 @@ from services import velia_software_factory_autonomy_service as autonomy
 from services import velia_software_factory_rollout_service as rollout
 from services import velia_software_factory_workspace_service as workspace_service
 from services.velia_software_factory_core_service import SoftwareFactoryError
+from velia_code_quality import guidance as engineering_guidance
 
 logger = logging.getLogger(__name__)
 _SCHEMA_READY = False
@@ -590,6 +591,8 @@ def _instruction(execution: Mapping[str, Any], task: Mapping[str, Any], dependen
     acceptance = (execution.get("plan") or {}).get("acceptance_criteria") or []
     return (
         "VELIA multi-repo workspace task. Work ONLY in this task's repository and approved write scope.\n"
+        + engineering_guidance(compact=True)+'\n'
+        +
         f"Workspace objective: {str((execution.get('plan') or {}).get('objective') or '')[:4000]}\n"
         f"Task: {str(payload.get('title') or task.get('workspace_task_id') or '')[:500]}\n"
         f"Goal: {str(payload.get('goal') or '')[:6000]}\n"
