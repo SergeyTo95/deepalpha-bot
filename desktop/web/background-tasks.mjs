@@ -1,6 +1,6 @@
 import {apiError} from "./core.mjs";
 // Server owns execution. This module only submits, polls and renders task state.
-export function setupBackgroundTasks({request, profile, busy, currentId, open, refresh, speak, toast}) {
+export function setupBackgroundTasks({request, profile, busy, currentId, open, refresh, speak, toast, chatWithFlash}) {
   const panel=document.getElementById('background-tasks'), option=document.getElementById('background-option'), toggle=document.getElementById('background-enabled');
   let jobs=[], owner=null, timer=null, loading=false, generation=0;
   const notified=new Set(), restored=new Set(), preferences=new Map();
@@ -27,6 +27,11 @@ export function setupBackgroundTasks({request, profile, busy, currentId, open, r
       const button=(text,fn)=>{const b=document.createElement('button');b.type='button';b.textContent=text;b.onclick=fn;actions.append(b);return b;};
       button(job.status==='completed'?'Открыть результат':'Открыть диалог',()=>open(job.conversation_id));
       if(active(job)){
+        const hint=document.createElement('p');hint.className='background-hint';
+        hint.textContent=`Пока ждёшь результат ${job.model==='pro'?'PRO':'Quantum'}, можно пообщаться с Flash. Задача продолжится в фоне, а ответ появится в исходном диалоге.`;
+        card.append(hint);
+        const chat=button('Поговорить с Flash',()=>{if(!busy())chatWithFlash();});
+        chat.disabled=busy();
         button('Отменить',async()=>{try{await request(`background-tasks/${job.id}/cancel`,{});await poll();}catch(e){toast(e.message);}});
         button('Дополнить',()=>{
           if(card.querySelector('textarea'))return;
@@ -82,5 +87,5 @@ export function setupBackgroundTasks({request, profile, busy, currentId, open, r
 
 export function taskAcknowledgement(locale){
   const language=String(locale||'').toLowerCase().split(/[-_]/)[0];
-  return ({ru:'Поняла, готовлю результат. Пока можем продолжить разговор.',en:'I’m preparing the result. We can keep talking in the meantime.',tr:'Sonucu hazırlıyorum. Bu sırada konuşmaya devam edebiliriz.',es:'Estoy preparando el resultado. Mientras tanto, podemos seguir hablando.',fr:'Je prépare le résultat. Nous pouvons continuer à discuter.',de:'Ich bereite das Ergebnis vor. Wir können inzwischen weiterreden.',pt:'Estou preparando o resultado. Podemos continuar conversando.',it:'Sto preparando il risultato. Intanto possiamo continuare a parlare.',zh:'我正在准备结果。我们可以继续聊天。',ja:'結果を準備しています。その間も会話を続けられます。',ko:'결과를 준비하고 있어요. 그동안 대화를 계속할 수 있어요.',ar:'أجهز النتيجة. يمكننا مواصلة الحديث في هذه الأثناء.',uk:'Готую результат. Тим часом можемо продовжити розмову.'})[language]||'';
+  return ({ru:'Поняла, готовлю результат. Пока можем пообщаться в режиме Flash.',en:'I’m preparing the result. We can keep talking in Flash mode.',tr:'Sonucu hazırlıyorum. Bu sırada Flash modunda konuşabiliriz.',es:'Estoy preparando el resultado. Mientras tanto, podemos hablar en modo Flash.',fr:'Je prépare le résultat. Nous pouvons discuter en mode Flash.',de:'Ich bereite das Ergebnis vor. Wir können inzwischen im Flash-Modus weiterreden.',pt:'Estou preparando o resultado. Podemos conversar no modo Flash.',it:'Sto preparando il risultato. Intanto possiamo parlare in modalità Flash.',zh:'我正在准备结果。我们可以在 Flash 模式下继续聊天。',ja:'結果を準備しています。その間は Flash モードで会話を続けられます。',ko:'결과를 준비하고 있어요. 그동안 Flash 모드로 대화할 수 있어요.',ar:'أجهز النتيجة. يمكننا مواصلة الحديث في وضع Flash.',uk:'Готую результат. Тим часом можемо поспілкуватися в режимі Flash.'})[language]||'';
 }

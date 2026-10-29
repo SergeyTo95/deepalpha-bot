@@ -49,7 +49,7 @@ try {
   await page.screenshot({path: output + '/quantum-desktop.png'});
   await page.setViewportSize({width: 390, height: 844});
   await page.locator('#model-button').click();
-  assert.match(await page.locator('#quantum-description').innerText(), /GLM-5.3 через Experiential/);
+  assert.match(await page.locator('#quantum-description').innerText(), /Анализ, тексты и рабочие задачи/);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
   await page.screenshot({path: output + '/quantum-mobile.png'});
   assert.deepEqual(errors, []);

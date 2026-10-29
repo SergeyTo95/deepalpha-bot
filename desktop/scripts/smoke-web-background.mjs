@@ -31,6 +31,10 @@ globalThis.fetch=async(url,options={})=>{
 };
 try{
  await import('../web/app.mjs');await new Promise(r=>setTimeout(r,30));
+ assert.match(document.querySelector('#flash-description').textContent,/Быстрые ответы/);
+ assert.match(document.querySelector('#quantum-description').textContent,/Анализ, тексты/);
+ assert.match(document.querySelector('#pro-description').textContent,/Обдумывание сложных задач/);
+ assert.match(document.querySelector('#pro-availability').textContent,/токенами/);
  document.querySelector('[data-model="velia-pro"]').click();
  assert.equal(document.querySelector('#background-option').hidden,false);
  assert.equal(document.querySelector('#background-enabled').checked,true);
@@ -40,6 +44,15 @@ try{
  assert.equal(jobs.length,1);assert.equal(document.querySelector('#prompt').disabled,false);
  assert.match(document.querySelector('#model-label').textContent,/FLASH/);
  assert.match(document.querySelector('#background-tasks').textContent,/PRO.*Готовлю результат/);
+ assert.match(document.querySelector('.background-hint').textContent,/пообщаться с Flash.*в исходном диалоге/);
+ // The invitation switches the real composer without resubmitting or losing a draft.
+ document.querySelector('[data-model="velia-quantum"]').click();
+ document.querySelector('#prompt').value='Meanwhile, explain a term';
+ [...document.querySelectorAll('.background-actions button')].find(b=>b.textContent==='Поговорить с Flash').click();
+ assert.match(document.querySelector('#model-label').textContent,/FLASH/);
+ assert.equal(document.querySelector('#prompt').value,'Meanwhile, explain a term');
+ assert.equal(document.activeElement,document.querySelector('#prompt'));
+ assert.equal(jobs[0].status,'running');
  document.querySelector('#prompt').value='Meanwhile, explain a term';
  document.querySelector('#composer').dispatchEvent(new window.Event('submit',{cancelable:true}));
  await new Promise(r=>setTimeout(r,80));
@@ -52,6 +65,8 @@ try{
  document.dispatchEvent(new window.Event('visibilitychange'));
  await new Promise(r=>setTimeout(r,80));
  assert.match(document.querySelector('#messages').textContent,/The finished PRO comparison/);
+ assert.equal(document.querySelector('.background-hint'),null);
+ assert.ok(!document.querySelector('#background-tasks').textContent.includes('Поговорить с Flash'));
  assert.equal(document.querySelector('#prompt').value,'An unsent draft must stay here');
- console.log(JSON.stringify({ok:true,synthetic:true,checks:['explicit background task accepted','composer stays available','conversation switches to Flash','Flash answers while PRO runs','result restored in original chat','unsent draft preserved']}));
+ console.log(JSON.stringify({ok:true,synthetic:true,checks:['model benefits and access terms visible','background task accepted','composer stays available','Flash invitation preserves draft and task','Flash answers while PRO runs','result restored in original chat','invitation removed on completion','unsent draft preserved']}));
 }catch(error){console.error(error);process.exitCode=1;}finally{dom.window.close();setTimeout(()=>process.exit(process.exitCode||0),10);}

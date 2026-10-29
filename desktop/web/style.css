@@ -630,6 +630,7 @@ span[data-icon] {
   font-size: 10px;
   color: var(--muted);
   margin-top: 6px;
+  line-height: 1.45;
 }
 .model-check {
   margin-left: auto;
@@ -1493,6 +1494,7 @@ dialog::backdrop {
 #background-tasks { max-height: 220px; overflow: auto; margin-bottom: 8px; }
 .background-task { border: 1px solid var(--border, #444); border-radius: 14px; padding: 12px; margin: 6px 0; font-size: 13px; }
 .background-task p { margin: 6px 0; overflow-wrap: anywhere; }
+.background-task .background-hint { color: var(--muted); line-height: 1.5; }
 .background-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .background-task button { background: transparent; color: inherit; border: 1px solid #555; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
 .background-task textarea { width: 100%; margin: 8px 0; box-sizing: border-box; }

@@ -102,6 +102,7 @@ const current = () => chats.find((c) => c.id === currentId);
 const voice = setupVoice({accountLanguage:()=>profile?.language||'', busy:()=>busy, toast, modelName:()=>MODELS[model], send:text=>{if(agentMode)setAgentMode(false);$("prompt").value=text;return generate(false, true);}});
 const features = setupFeatures({onUnauthorized:()=>{lockHistory();profile=null;guest=null;notifyAuthChange('lock');render();openAuth();},signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,prepareMedicalChat:async prompt=>{if(busy)throw new Error('Дождись завершения ответа.');if(!profile?.models?.includes(model))throw new Error('Выбранная модель сейчас недоступна.');setAgentMode(false);newChat();medicalDraftMode=true;$('prompt').value=prompt;resizePrompt();$('prompt').focus();toast('Прикрепи заключения и проверь текст перед отправкой.');},openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
 const background = setupBackgroundTasks({request:jsonRequest,profile:()=>profile,busy:()=>busy,currentId:()=>currentId,toast,speak:text=>voice.speak(text),
+  chatWithFlash:()=>{if(busy)return;setModel('velia-flash');$('prompt').focus();},
   open:async cid=>{if(busy){toast('Дождись завершения текущего ответа.');return;}await syncHistory();const chat=chats.find(c=>c.id===cid);if(chat)await openChat(chat);},
   refresh:async cid=>{const chat=chats.find(c=>c.id===cid);if(chat&&currentId===cid&&!busy)await openChat(chat,true);}});
 const browserStorage = { getItem: (key) => localStorage.getItem(key) };
@@ -202,7 +203,7 @@ function setAgentMode(value) {
     : "VELIA Agent Core · браузерные действия через Flash";
   button.querySelector("span:last-child").textContent = enabled ? "AGENT ON" : "AGENT";
   $("model-button").disabled = busy;
-  $("flash-description").textContent = enabled ? "Активна для VELIA Agent Core" : "Для повседневных вопросов";
+  $("flash-description").textContent = enabled ? "Быстрые ответы и действия на сайтах через VELIA Agent Core" : "Быстрые ответы, повседневные вопросы и живой разговор";
   setModel(model);
   try { localStorage.setItem("velia-web-agent", enabled ? "1" : "0"); } catch {}
 }
@@ -639,10 +640,11 @@ async function applyProfile(value) {
   small.textContent = (Number.isInteger(value.credits) ? value.credits + " токенов · " : "") + "Выйти из аккаунта";
   $("account-label").append(small);
   if (!value.models.includes(model)) toast("Выбранная модель сейчас недоступна. Выбери другую модель.");
-  $("pro-description").textContent = value.pro_locked_reason ?
+  $("pro-availability").textContent = value.pro_locked_reason ?
     apiError(value.pro_locked_reason) : "Доступен с токенами на балансе";
-  $("quantum-description").textContent = value.models.includes("velia-quantum") ?
-    "Сложные вопросы · " + (value.quantum_source || "Экспериментальная модель") : "Скоро · в разработке";
+  $("quantum-availability").textContent = value.models.includes("velia-quantum") ?
+    (value.background_tasks ? "Задачи в фоне · можно продолжать разговор с Flash" : "Доступен в твоём аккаунте") : "Сейчас недоступен";
+  if(value.background_tasks&&!value.pro_locked_reason)$("pro-availability").textContent += " · задачи в фоне";
   setModel(model);
   render();
   syncHistory();
@@ -667,8 +669,8 @@ function applyGuest(value) {
   setModel(model);
   $("history-state").textContent = "Гостевая история только до закрытия вкладки";
   $("account-label").innerHTML = "Войти в VELIA<small>Синхронизация истории и доступ к PRO</small>";
-  $("pro-description").textContent = "Войди в аккаунт с токенами для PRO";
-  $("quantum-description").textContent = "Скоро · в разработке";
+  $("pro-availability").textContent = "Войди в аккаунт с токенами для PRO";
+  $("quantum-availability").textContent = "Войди в аккаунт для доступа";
   $("guest-notice").hidden = false;
   $("guest-counter").textContent = value.remaining > 0 ? "Без регистрации · осталось " + value.remaining + " из 30 сообщений" : "30 гостевых сообщений использованы. Войди, чтобы продолжить.";
   save(); render();
@@ -1073,7 +1075,7 @@ $('logout-confirm').onclick = async () => {
     resizePrompt();
     $("account-label").innerHTML =
       "Войти в VELIA<small>Твоё личное пространство</small>";
-    $("pro-description").textContent = "Доступен с токенами на балансе";
+    $("pro-availability").textContent = "Доступен с токенами на балансе";
     $("history-state").textContent = "История в твоём аккаунте";
     render();
     toast("Ты вышел из аккаунта.");
