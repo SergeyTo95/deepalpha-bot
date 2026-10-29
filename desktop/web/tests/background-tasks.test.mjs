@@ -58,3 +58,26 @@ test('task submission uses one request and retains its idempotency key',async()=
     assert.equal(taskAcknowledgement('unknown-locale'),'');
   }finally{controller.reset();}
 });
+
+test('closing a finished card survives polling and reload without hiding another account or cancelling a task',async()=>{
+  const previousStorage=globalThis.localStorage,stored=new Map(),calls=[];
+  globalThis.localStorage={getItem:key=>stored.get(key)||null,setItem:(key,value)=>stored.set(key,value)};
+  let account='owner',status='completed',controller,nodes;
+  const mount=()=>{
+    nodes=surface();
+    controller=setupBackgroundTasks({request:async(path,data)=>{calls.push({path,data});return {jobs:[{...job,status}]};},
+      profile:()=>({account,background_tasks:true}),busy:()=>false,currentId:()=>job.conversation_id,
+      open(){},refresh(){},speak(){},toast(){}});
+  };
+  try{
+    mount();await controller.poll();
+    nodes['background-tasks'].children[0].children[0].querySelector('button').onclick();
+    assert.equal(nodes['background-tasks'].hidden,true);
+    await controller.poll();assert.equal(nodes['background-tasks'].hidden,true);
+    controller.reset();mount();await controller.poll();assert.equal(nodes['background-tasks'].hidden,true);
+    account='other-owner';await controller.poll();assert.equal(nodes['background-tasks'].hidden,false);
+    account='owner';status='running';await controller.poll();assert.equal(nodes['background-tasks'].hidden,false);
+    assert.ok(calls.every(call=>call.path==='background-tasks'&&call.data===undefined));
+    assert.ok([...stored.values()].every(value=>!value.includes(job.title)&&!value.includes(job.result)));
+  }finally{controller?.reset();globalThis.localStorage=previousStorage;}
+});

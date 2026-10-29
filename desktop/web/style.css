@@ -1497,6 +1497,9 @@ dialog::backdrop {
 .background-task .background-hint { color: var(--muted); line-height: 1.5; }
 .background-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .background-task button { background: transparent; color: inherit; border: 1px solid #555; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+.background-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.background-task .background-close { flex-shrink: 0; width: 40px; min-height: 40px; margin: -6px -6px -6px 0; padding: 0; border: 0; font-size: 24px; color: var(--muted); }
+.background-task .background-close:hover { color: var(--text); background: var(--hover); }
 .background-task textarea { width: 100%; margin: 8px 0; box-sizing: border-box; }
 #background-option { display: flex; align-items: center; gap: 6px; min-height: 32px; margin-bottom: 6px; font-size: 12px; white-space: nowrap; }
 #background-option[hidden] { display: none; }

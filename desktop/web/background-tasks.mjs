@@ -3,12 +3,26 @@ import {apiError} from "./core.mjs";
 export function setupBackgroundTasks({request, profile, busy, currentId, open, refresh, speak, toast, chatWithFlash}) {
   const panel=document.getElementById('background-tasks'), option=document.getElementById('background-option'), toggle=document.getElementById('background-enabled');
   let jobs=[], owner=null, timer=null, loading=false, generation=0;
-  const notified=new Set(), restored=new Set(), preferences=new Map();
+  const notified=new Set(), restored=new Set(), dismissed=new Set(), preferences=new Map();
   let selectedModel=null;
   toggle.onchange=()=>{if(selectedModel)preferences.set(selectedModel,toggle.checked);};
   const active=j=>['queued','running'].includes(j.status);
   const labels={queued:'В очереди',running:'Готовлю результат',completed:'Готово',error:'Задача не выполнена',cancelled:'Отменена'};
-  function reset(){generation++;owner=null;jobs=[];notified.clear();restored.clear();preferences.clear();selectedModel=null;clearTimeout(timer);timer=null;loading=false;panel.replaceChildren();panel.hidden=true;option.hidden=true;toggle.checked=false;}
+  function reset(){generation++;owner=null;jobs=[];notified.clear();restored.clear();dismissed.clear();preferences.clear();selectedModel=null;clearTimeout(timer);timer=null;loading=false;panel.replaceChildren();panel.hidden=true;option.hidden=true;toggle.checked=false;}
+  const dismissalKey=account=>'velia-background-dismissed-v1:'+account;
+  function setOwner(account){
+    if(owner===account)return;
+    reset();owner=account;
+    try{
+      const ids=JSON.parse(localStorage.getItem(dismissalKey(account))||'[]');
+      if(Array.isArray(ids))for(const id of ids.slice(-100))if(typeof id==='string'&&/^[0-9a-f-]{36}$/i.test(id))dismissed.add(id);
+    }catch{/* Closing still works for this session if browser storage is unavailable. */}
+  }
+  function dismiss(id){
+    dismissed.add(id);while(dismissed.size>100)dismissed.delete(dismissed.values().next().value);
+    try{localStorage.setItem(dismissalKey(owner),JSON.stringify([...dismissed]));}catch{}
+    render();
+  }
   function modelChanged(model){
     selectedModel=model;option.hidden=!profile()?.background_tasks||!['velia-quantum','velia-pro'].includes(model);
     if(!option.hidden)toggle.checked=preferences.get(model)??true;
@@ -17,11 +31,18 @@ export function setupBackgroundTasks({request, profile, busy, currentId, open, r
   function render(){
     if(panel.contains(document.activeElement)&&document.activeElement.tagName==='TEXTAREA')return;
     panel.replaceChildren();panel.hidden=!jobs.length;
-    for(const job of jobs.filter(j=>active(j)||j.conversation_id===currentId()||Date.now()/1000-Number(j.updated_at||j.created_at||0)<86400).slice(0,4)){
+    for(const job of jobs.filter(j=>(active(j)||!dismissed.has(j.id))&&(active(j)||j.conversation_id===currentId()||Date.now()/1000-Number(j.updated_at||j.created_at||0)<86400)).slice(0,4)){
       const card=document.createElement('article');card.className='background-task';
+      const header=document.createElement('div');header.className='background-heading';
       const heading=document.createElement('strong');heading.textContent=`${job.model==='pro'?'PRO':'Quantum'} · ${labels[job.status]||'Проверяю состояние'}`;
+      header.append(heading);
+      if(!active(job)){
+        const close=document.createElement('button');close.type='button';close.className='background-close';close.textContent='×';
+        close.title='Закрыть карточку';close.setAttribute('aria-label','Закрыть карточку');close.onclick=()=>dismiss(job.id);
+        header.append(close);
+      }
       const title=document.createElement('p');title.textContent=job.title;
-      card.append(heading,title);
+      card.append(header,title);
       if(job.notes?.length){const note=document.createElement('small');note.textContent='Уточнение: '+job.notes.at(-1);card.append(note);}
       const actions=document.createElement('div');actions.className='background-actions';
       const button=(text,fn)=>{const b=document.createElement('button');b.type='button';b.textContent=text;b.onclick=fn;actions.append(b);return b;};
@@ -51,7 +72,7 @@ export function setupBackgroundTasks({request, profile, busy, currentId, open, r
     const account=profile()?.account;
     if(!account||!profile()?.background_tasks){reset();return;}
     if(loading)return;
-    if(owner!==account){reset();owner=account;}
+    setOwner(account);
     const token=generation;loading=true;
     try{
       const data=await request('background-tasks');
@@ -77,7 +98,7 @@ export function setupBackgroundTasks({request, profile, busy, currentId, open, r
     const account=profile()?.account;
     const data=await request(`conversations/${cid}/tasks`,payload);
     if(!account||profile()?.account!==account)throw Error('Сессия изменилась.');
-    owner=account;jobs=[data.job,...jobs.filter(j=>j.id!==data.job.id)];render();
+    setOwner(account);jobs=[data.job,...jobs.filter(j=>j.id!==data.job.id)];render();
     clearTimeout(timer);timer=setTimeout(poll,1000);
     return data.job;
   }

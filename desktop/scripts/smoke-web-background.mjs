@@ -68,5 +68,13 @@ try{
  assert.equal(document.querySelector('.background-hint'),null);
  assert.ok(!document.querySelector('#background-tasks').textContent.includes('Поговорить с Flash'));
  assert.equal(document.querySelector('#prompt').value,'An unsent draft must stay here');
- console.log(JSON.stringify({ok:true,synthetic:true,checks:['model benefits and access terms visible','background task accepted','composer stays available','Flash invitation preserves draft and task','Flash answers while PRO runs','result restored in original chat','invitation removed on completion','unsent draft preserved']}));
+ document.querySelector('.background-close').click();
+ assert.equal(document.querySelector('#background-tasks').hidden,true);
+ document.dispatchEvent(new window.Event('visibilitychange'));
+ await new Promise(r=>setTimeout(r,80));
+ assert.equal(document.querySelector('#background-tasks').hidden,true);
+ assert.match(document.querySelector('#messages').textContent,/The finished PRO comparison/);
+ assert.equal(document.querySelector('#prompt').value,'An unsent draft must stay here');
+ assert.ok(!requests.some(r=>r.path.endsWith('/cancel')));
+ console.log(JSON.stringify({ok:true,synthetic:true,checks:['model benefits and access terms visible','background task accepted','composer stays available','Flash invitation preserves draft and task','Flash answers while PRO runs','result restored in original chat','invitation removed on completion','unsent draft preserved','closed card stays hidden after polling','closing preserves answer without cancellation']}));
 }catch(error){console.error(error);process.exitCode=1;}finally{dom.window.close();setTimeout(()=>process.exit(process.exitCode||0),10);}
