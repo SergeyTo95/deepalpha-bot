@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, Optional
 from aiohttp import web
 from services.velia_flash_service import public_capability, dispatch_send
 from services.velia_quantum_service import public_capability as quantum_capability
+from services.velia_background_chat_service import enabled as background_enabled
 
 from velia_request_understanding import normalize_reply_language
 from db.database import get_user, get_subscription_until, is_subscribed
@@ -239,6 +240,7 @@ def setup_velia_mobile_routes(
                     **public_capability(),
                     **quantum_capability(),
                     **(free_models.public_capability() if free_models.enabled() else {}),
+                    **({'chat_background_tasks': True} if background_enabled() else {}),
                     "debug_usage": is_debug_usage_enabled_for_user(user_id),
                 },
             }
@@ -420,3 +422,6 @@ def setup_velia_mobile_routes(
     app.router.add_get("/mobile-api/v1/usage", handle_usage)
     from velia_project_routes import setup_velia_project_routes
     setup_velia_project_routes(app)
+    from services.velia_background_chat_service import setup_routes
+    import sys
+    setup_routes(app, sys.modules[__name__])

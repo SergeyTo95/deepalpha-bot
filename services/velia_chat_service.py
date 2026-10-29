@@ -420,7 +420,7 @@ def list_messages(
                    cached_input_tokens, reasoning_tokens, estimated_cost_usd,
                    latency_ms, error_code, created_at, updated_at
             FROM velia_messages
-            WHERE conversation_id=%s AND user_id=%s AND deleted_at IS NULL
+            WHERE conversation_id=%s AND user_id=%s AND deleted_at IS NULL AND finish_reason IS DISTINCT FROM 'background_pending'
             ORDER BY created_at ASC,
                      CASE WHEN role='user' THEN 0 ELSE 1 END ASC, message_id ASC
             LIMIT %s

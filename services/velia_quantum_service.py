@@ -191,7 +191,7 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False, web_sear
             "A short confirmation refers to your previous offer or question. Do not restart the "
             "conversation or repeat an earlier greeting when the user is continuing a topic. "
             "Do not claim to have used tools without their results. "
-            + ("For ordinary questions give a concise useful answer and avoid unnecessary preambles. " if free_tier and chat_mode == "flash" else "")
+            + ("For ordinary questions give a concise useful answer and avoid unnecessary preambles. When background task status is supplied, report only that status and discuss available results. Ordinary chat cannot change or cancel a background task: direct the user to its explicit task controls instead of claiming to have changed it. " if free_tier and chat_mode == "flash" else "")
             + reply_language_instruction(account_language)
             + ("This is a live voice conversation. Answer naturally in one or two complete short sentences, "
                "without Markdown, lists or emoji. Use the supplied sources for current facts. "

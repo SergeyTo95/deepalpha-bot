@@ -853,3 +853,189 @@ def test_free_tier_search_stays_on_selected_model_and_never_uses_provider_builti
     assert all(request["json"]["model"]==free_tiers.TIERS[mode][1] for _,request in client.calls)
     assert client.calls[0][1]["json"]["tools"][0]["type"]=="function"
     assert "tools" not in client.calls[1][1]["json"] and client.calls[1][1]["json"]["messages"][-1]["role"]=="tool"
+
+
+@pytest.fixture
+def background_store(tmp_path):
+    import sqlite3
+    from velia_background_jobs import JobStore
+    path=tmp_path/'background.sqlite'
+    return_store=JobStore(lambda:sqlite3.connect(path,timeout=10),sqlite=True)
+    return_store.initialize()
+    return return_store
+
+
+def test_background_jobs_are_durable_owner_scoped_idempotent_and_single_active(background_store):
+    from velia_background_jobs import JobStore,JobError,public_job
+    store=background_store
+    data={'content':'Compare two options','messages':[{'role':'user','content':'Original immutable request'}],'notes':[]}
+    first=store.create(77,'conversation','pro','request-0001',data)
+    restored=JobStore(store.connect,sqlite=True)
+    assert restored.get(77,first['id'])['payload']['messages']==data['messages']
+    assert restored.create(77,'conversation','pro','request-0001',data)['id']==first['id']
+    with pytest.raises(JobError,match='idempotency_mode_mismatch'):
+        restored.create(77,'conversation','quantum','request-0001',data)
+    with pytest.raises(JobError,match='background_task_active'):
+        restored.create(77,'other-conversation','quantum','request-0002',data)
+    with pytest.raises(JobError,match='background_task_not_found'):
+        restored.get(78,first['id'])
+    assert restored.listing(78)==[]
+    assert not {'payload','user_id','lease','request_key','messages'} & public_job(first).keys()
+    running=restored.claim()
+    assert running['payload']['messages']==data['messages']
+    assert restored.finish(running,'Complete answer') is True
+    assert restored.finish(running,'Duplicate answer') is False
+    final=store.get(77,first['id'])
+    assert final['status']=='completed' and final['result']=='Complete answer' and 'messages' not in final['payload']
+
+
+def test_background_cancellation_and_revision_fence_stale_results(background_store):
+    from velia_background_jobs import JobError
+    store=background_store
+    first=store.create(77,'conversation','pro','request-0001',{'content':'Task','messages':[{'role':'user','content':'Original'}]})
+    running=store.claim()
+    changed=store.change(77,first['id'],note='Use the revised constraints',key='revision-0001')
+    assert changed['revision']==2 and not store.alive(running)
+    assert store.finish(running,'STALE answer') is False
+    assert store.get(77,first['id'])['status']=='queued'
+    assert store.change(77,first['id'],note='Use the revised constraints',key='revision-0001')['revision']==2
+    with pytest.raises(JobError,match='idempotency_mode_mismatch'):
+        store.change(77,first['id'],note='different',key='revision-0001')
+    running2=store.claim()
+    assert running2['payload']['messages'][-1]['content']=='Original'
+    assert running2['payload']['notes'][-1]['text']=='Use the revised constraints'
+    cancelled=store.change(77,first['id'])
+    assert cancelled['status']=='cancelled' and store.finish(running2,'Must never publish') is False
+    assert store.get(77,first['id'])['result']==''
+    assert store.change(77,first['id'])['status']=='cancelled'
+    assert store.create(77,'conversation','quantum','request-0002',{'content':'New task'})['status']=='queued'
+
+
+def test_background_expired_lease_recovers_with_bounded_attempts_and_no_duplicate_publication(background_store):
+    store=background_store
+    first=store.create(77,'conversation','quantum','request-0001',{'content':'Task'})
+    original=store.claim()
+    for attempt in range(2,5):
+        with store.transaction() as cur:
+            cur.execute('UPDATE velia_background_chat SET lease_until=0 WHERE id=?',(first['id'],))
+        recovered=store.claim()
+        assert recovered['attempts']==attempt and recovered['lease']!=original['lease']
+        assert store.finish(original,'Outdated worker') is False
+    with store.transaction() as cur:
+        cur.execute('UPDATE velia_background_chat SET lease_until=0 WHERE id=?',(first['id'],))
+    assert store.claim() is None
+    assert store.get(77,first['id'])['status']=='error'
+
+
+def test_background_admission_is_atomic_under_concurrent_submissions(background_store):
+    from concurrent.futures import ThreadPoolExecutor
+    from velia_background_jobs import JobError
+    def submit(index):
+        try:return background_store.create(77,'conv','pro','request-000'+str(index),{'content':'Task'})['id']
+        except JobError as exc:return exc.code
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        answers=list(pool.map(submit,range(4)))
+    assert answers.count('background_task_active')==3 and len(background_store.listing(77))==1
+
+
+def test_background_routes_survive_client_disconnect_and_keep_other_owners_out(background_store,monkeypatch):
+    import asyncio,threading
+    from aiohttp import web,ClientSession
+    from aiohttp.test_utils import TestServer
+    from services import velia_background_chat_service as service
+    monkeypatch.setenv('VELIA_FREE_API_TIERS_ENABLED','true')
+    monkeypatch.setenv('VELIA_BACKGROUND_CHAT_ENABLED','true')
+    monkeypatch.setattr(service,'store',lambda:background_store)
+    monkeypatch.setattr(service,'allowed',lambda *a:None)
+    monkeypatch.setattr(service.chat,'get_conversation',lambda user,cid:{'id':cid})
+    release=threading.Event();started=threading.Event()
+    def run(jobs,shutdown):
+        job=jobs.claim()
+        if job:
+            started.set();release.wait(5)
+            jobs.finish(job,'Durable result after the browser left')
+    monkeypatch.setattr(service,'run_one',run)
+    routes=SimpleNamespace(_mobile_api_available=lambda:True,_require_mobile_auth=lambda req:{'user_id':int(req.headers['X-Test-Owner'])} if req.headers.get('X-Test-Owner') else None,
+        _read_json=lambda req:req.json(),_json_response=lambda data,status=200:web.json_response(data,status=status))
+    async def scenario():
+        app=web.Application();service.setup_routes(app,routes)
+        async with TestServer(app) as server:
+            async with ClientSession() as client:
+                payload={'conversation_id':'00000000-0000-4000-8000-000000000001','content':'Task','model':'pro','idempotency_key':'request-0001'}
+                async with client.post(server.make_url('/mobile-api/v1/background-tasks'),headers={'X-Test-Owner':'77'},json=payload) as response:
+                    assert response.status==202;job=(await response.json())['job']
+            # The submitting HTTP client is closed. The backend owns the task.
+            assert await asyncio.to_thread(started.wait,3)
+            release.set()
+            async with ClientSession() as other:
+                for _ in range(30):
+                    async with other.get(server.make_url('/mobile-api/v1/background-tasks/'+job['id']),headers={'X-Test-Owner':'77'}) as response:
+                        result=(await response.json())['job']
+                    if result['status']=='completed':break
+                    await asyncio.sleep(.02)
+                assert result['result']=='Durable result after the browser left'
+                async with other.get(server.make_url('/mobile-api/v1/background-tasks/'+job['id']),headers={'X-Test-Owner':'78'}) as response:
+                    assert response.status==404
+                async with other.get(server.make_url('/mobile-api/v1/background-tasks')) as response:
+                    assert response.status==401
+    asyncio.run(scenario())
+
+
+def test_postgres_background_publication_keeps_flash_unblocked_and_context_owned(free_tiers,monkeypatch,postgres_chat):
+    import threading
+    from services import velia_background_chat_service as service,velia_attachment_service as files
+    proxy,connect=postgres_chat
+    monkeypatch.setattr(proxy,'_build_prompt',lambda *a:'Fixture account background')
+    monkeypatch.setenv('VELIA_BACKGROUND_CHAT_ENABLED','true')
+    monkeypatch.setenv('VELIA_CHAT_ENABLED','true')
+    monkeypatch.setattr(files,'get_connection',connect)
+    files.ensure_velia_attachment_tables()
+    monkeypatch.setattr(service.quantum,'account_language',lambda *a:'ru')
+    cid=chat.create_conversation(77)['id']
+    jobs=service.store();jobs.initialize()
+    data={'content':'Prepare an explanation','web_search':False,'voice_turn':False,'attachment_ids':[]}
+    queued=jobs.create(77,cid,'pro','background-0001',data)
+    assert chat.list_messages(77,cid)[-1]['role']=='user'
+    running=jobs.claim()
+    assert running['payload']['messages'][-1]=={'role':'user','content':'Prepare an explanation'}
+    calls=[]
+    def generated(prompt,**kwargs):
+        calls.append(kwargs)
+        return {'ok':True,'text':'A separate Flash answer','provider':'velia-flash','model':'velia-flash','usage':{}}
+    monkeypatch.setattr(service.quantum,'generate',generated)
+    result=flash.dispatch_send(lambda *a,**k:pytest.fail('legacy paid path'),77,cid,'Let us discuss another topic',chat_mode='flash',idempotency_key='foreground-0001')
+    assert result['ok'] and calls[0]['chat_mode']=='flash'
+    assert 'BACKGROUND_TASK_STATE_UNTRUSTED' in json.dumps(calls[0]['messages'])
+    assert jobs.finish(running,'The finished PRO result') is True
+    assert chat.list_messages(77,cid)[-1]['content']=='The finished PRO result'
+    assert 'The finished PRO result' in service.background_context(77,cid)
+    assert service.background_context(78,cid)==''
+    assert jobs.finish(running,'Duplicate') is False
+    with connect() as conn,conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM velia_messages WHERE role='assistant' AND provider='velia-pro'")
+        assert cur.fetchone()[0]==1
+
+
+def test_background_worker_keeps_full_written_answer_and_does_not_reserve_foreground_lane(background_store,monkeypatch):
+    import threading
+    from services import velia_background_chat_service as service
+    class LockCursor:
+        def execute(self,sql):assert 'velia:background:inference' in sql
+        def fetchone(self):return (True,)
+        def close(self):pass
+    class LockConnection:
+        def cursor(self):return LockCursor()
+        def close(self):pass
+    monkeypatch.setattr(service.chat,'get_connection',lambda:LockConnection())
+    monkeypatch.setattr(service.chat,'get_conversation',lambda *a:{'id':'conv'})
+    monkeypatch.setattr(service,'allowed',lambda *a:None)
+    calls=[]
+    def generated(prompt,**kwargs):
+        calls.append(kwargs)
+        return {'ok':True,'text':'A complete written result'}
+    monkeypatch.setattr(service.quantum,'generate',generated)
+    job=background_store.create(77,'conv','pro','background-voice-1',{'content':'Task spoken aloud','messages':[{'role':'user','content':'Full task'}],'voice_turn':True,'web_search':False,'language':'ru'})
+    assert service.run_one(background_store,threading.Event()) is True
+    assert calls[0]['voice_turn'] is False and calls[0]['chat_mode']=='pro'
+    assert calls[0]['messages']==[{'role':'user','content':'Full task'}]
+    assert background_store.get(77,job['id'])['result']=='A complete written result'

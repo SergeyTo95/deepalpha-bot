@@ -376,6 +376,10 @@ def install(chat_module: Any) -> None:
             if free_models.enabled():
                 prompt = chat_module._build_prompt(user_id, conversation_id)
                 messages = quantum.conversation_messages(chat_module, user_id, conversation_id, prompt=prompt, request_id=request_id)
+                from services.velia_background_chat_service import background_context
+                task_context = background_context(user_id, str(conversation_id))
+                if task_context:
+                    messages.insert(0, {'role':'user','content':task_context})
                 generation = quantum.generate(prompt, messages=messages, chat_mode=chat_mode,
                     account_language=quantum.account_language(chat_module, user_id), request_id=request_id,
                     on_delta=on_delta, voice_turn=voice_turn, web_search=web_search)
