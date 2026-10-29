@@ -16,8 +16,25 @@ globalThis.Audio=class{constructor(url){this.url=url;this.currentTime=0;audios.p
 URL.createObjectURL=()=>`blob:${audios.length}`;URL.revokeObjectURL=url=>released.push(url);
 const voices=['jane','omazh','marina'].map(id=>({voiceURI:'speechkit:'+id,name:id,lang:'ru-RU',localService:false}));
 globalThis.fetch=async(url,options)=>{if(url.endsWith('/voices'))return {ok:true,json:async()=>({voices})};requests.push({data:JSON.parse(options.body),options});if(delayed)return new Promise(resolve=>{resolveAudio=()=>resolve({ok:true,blob:async()=>new Blob(['fixture'])});});return {ok:true,blob:async()=>new Blob(['fixture'])};};
-localStorage.setItem('velia-voice-language','ru-RU');localStorage.setItem('velia-voice-uri','speechkit:omazh');
+localStorage.setItem('velia-voice-language','ru-RU');localStorage.setItem('velia-voice-mode','manual');localStorage.setItem('velia-voice-uri','speechkit:omazh');
 const {setupVoice}=await import('../web/voice.mjs');
+// Account locale wins over a legacy saved language; automatic TTS needs no click.
+localStorage.removeItem('velia-voice-mode');localStorage.setItem('velia-voice-language','en-US');
+let accountLocale='ru';const auto=setupVoice({accountLanguage:()=>accountLocale,send:async()=>{},busy:()=>false,toast:()=>{}});
+auto.open();await new Promise(resolve=>setTimeout(resolve,10));
+const autoDialog=[...document.querySelectorAll('.voice-dialog')].at(-1);
+assert.equal(recognizers.at(-1).lang,'ru-RU');assert.equal(autoDialog.querySelector('[aria-label="Голос"]').value,'');
+assert.equal(autoDialog.querySelector('.voice-fast').hidden,true);
+const requestsBeforeAuto=requests.length;auto.speak('Автоматический голос.');
+assert.equal(spoken.at(-1).voice.voiceURI,'device');assert.equal(requests.length,requestsBeforeAuto);auto.stop();
+accountLocale='tr';auto.syncLanguage();auto.open();assert.equal(recognizers.at(-1).lang,'tr-TR');auto.stop();
+const autoLanguage=autoDialog.querySelector('[aria-label="Язык разговора"]');
+autoLanguage.value='ja';autoLanguage.dispatchEvent(new window.Event('change'));auto.open();assert.equal(recognizers.at(-1).lang,'ja');auto.stop();
+accountLocale='de';auto.syncLanguage();auto.open();assert.equal(recognizers.at(-1).lang,'ja');auto.stop();
+autoLanguage.value='';autoLanguage.dispatchEvent(new window.Event('change'));auto.open();assert.equal(recognizers.at(-1).lang,'de-DE');auto.stop();
+console.log(JSON.stringify({ok:true,synthetic:true,checks:['account locale overrides legacy language','automatic local TTS without network or click','account locale change applies','manual recognition override and automatic restore']}));
+localStorage.setItem('velia-voice-language','ru-RU');localStorage.setItem('velia-voice-language-mode','auto');localStorage.setItem('velia-voice-mode','manual');localStorage.setItem('velia-voice-uri','speechkit:omazh');
+autoDialog.remove();recognizers.length=0;spoken.length=0;
 let voice=setupVoice({send:async()=>{voice.update('Привет! 😊 ');voice.complete('Привет! 😊 Рада тебя слышать.');},busy:()=>false,toast:()=>{}});
 voice.settings(document.querySelector('#settings'));voice.open();
 const tick=()=>new Promise(resolve=>setTimeout(resolve,10)),settled=()=>new Promise(resolve=>setTimeout(resolve,1100));await tick();
@@ -35,17 +52,17 @@ voice.stop();assert.ok(audios.at(-1).paused);
 // A local voice still uses the device engine.
 select.value='device';select.dispatchEvent(new window.Event('change'));voice.speak('Локальный голос.');assert.equal(spoken.at(-1).voice.voiceURI,'device');voice.stop();
 // One click uses the actual local engine and avoids all remote speech POSTs.
-localStorage.setItem('velia-voice-uri','speechkit:omazh');let fastSubmitted='';
+localStorage.setItem('velia-voice-mode','manual');localStorage.setItem('velia-voice-uri','speechkit:omazh');let fastSubmitted='';
 let speedy;speedy=setupVoice({send:async text=>{fastSubmitted=text;speedy.complete('Связь проверена.');},busy:()=>false,toast:()=>{}});speedy.open();await tick();
 const fastDialog=[...document.querySelectorAll('.voice-dialog')].at(-1),fastButton=fastDialog.querySelector('.voice-fast');
 assert.equal(fastButton.hidden,false);const beforeFast=requests.length;fastButton.click();
-assert.equal(fastDialog.querySelector('[aria-label="Голос"]').value,'device');
-assert.equal(localStorage.getItem('velia-voice-uri'),'device');assert.equal(recognizers.at(-1).continuous,false);
+assert.equal(fastDialog.querySelector('[aria-label="Голос"]').value,'');
+assert.equal(localStorage.getItem('velia-voice-mode'),'auto');assert.equal(recognizers.at(-1).continuous,false);
 recognizers.at(-1).onresult({results:['снова','снова','снова тест-система'].map(transcript=>Object.assign([{transcript}],{isFinal:true}))});recognizers.at(-1).onend();await tick();
 assert.equal(fastSubmitted,'снова тест-система');assert.equal(requests.length,beforeFast);assert.equal(spoken.at(-1).voice.voiceURI,'device');speedy.stop();
 console.log(JSON.stringify({ok:true,synthetic:true,checks:['one-click local voice preserves actual speaker ID','no remote TTS requests in fast mode','cumulative ASR snapshots are not concatenated','one-shot recognition after changing voice']}));
 // Online speech remains usable on browsers without a device TTS engine.
-window.speechSynthesis=null;localStorage.setItem('velia-voice-uri','speechkit:jane');
+window.speechSynthesis=null;localStorage.setItem('velia-voice-mode','manual');localStorage.setItem('velia-voice-uri','speechkit:jane');
 document.querySelector('#settings').replaceChildren();
 const onlineOnly=setupVoice({send:async()=>{},busy:()=>false,toast:()=>{}});
 onlineOnly.settings(document.querySelector('#settings'));await tick();

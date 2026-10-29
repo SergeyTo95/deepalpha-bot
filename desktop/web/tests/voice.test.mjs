@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {speechChunks,availableVoices,voiceChoice,speechReady,isRemoteVoice,recognitionLanguage,isVoiceEndCommand,conversationLanguages,fastDeviceVoice} from '../voice.mjs';
+import {speechChunks,availableVoices,voiceChoice,speechReady,isRemoteVoice,recognitionLanguage,isVoiceEndCommand,conversationLanguages,fastDeviceVoice,automaticVoice} from '../voice.mjs';
 
 test('fast voice uses only an actually reported local voice in the selected language',()=>{
  const voices=[{name:'Ава',voiceURI:'edge:en-US-AvaMultilingualNeural',lang:'ru-RU',localService:false},
@@ -89,4 +89,20 @@ test('real female neural speakers are distinct and multilingual without replacin
  assert.equal(availableVoices(voices,'tr-TR').length,2);
  assert.equal(voiceChoice(voices,'ru-RU',voices[2].voiceURI).name,'Эмма');
  assert.ok(isRemoteVoice(voices[1].voiceURI));assert.equal(isRemoteVoice('edge:ru-RU-DmitryNeural'),false);
+});
+
+test('account language overrides legacy browser choice across locales',()=>{
+ assert.equal(recognitionLanguage('en-US','ru','de-DE','ru'),'ru-RU');
+ assert.equal(recognitionLanguage('ru-RU','ru','en-US','tr'),'tr-TR');
+ assert.equal(recognitionLanguage('ru-RU','ru','en-US','ja-JP'),'ja-JP');
+ assert.equal(recognitionLanguage('ru-RU','ru','en-US','zh-Hant-TW'),'zh-Hant-TW');
+ assert.equal(recognitionLanguage('ar-EG','ru','en-US','bad!'),'ar-EG');
+});
+test('automatic voice prefers a local language match then a real available voice',()=>{
+ const voices=[{voiceURI:'cloud',name:'Cloud',lang:'ja-JP',recommended:true,localService:false},
+  {voiceURI:'local',name:'Local',lang:'ja-JP',localService:true},
+  {voiceURI:'english-local',name:'English local',lang:'en-US',localService:true}];
+ assert.equal(automaticVoice(voices,'ja-JP').voiceURI,'local');
+ assert.equal(automaticVoice(voices.filter(v=>v.voiceURI!=='local'),'ja-JP').voiceURI,'cloud');
+ assert.equal(automaticVoice(voices,'ar-EG'),null);
 });

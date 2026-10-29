@@ -202,7 +202,7 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
                 or type(user.get("id")) is not int or user["id"] <= 0):
             raise AuthenticationUnavailable()
         features = result.get("features") if isinstance(result.get("features"), dict) else {}
-        return {"user_id": user["id"], "name": str(user.get("first_name") or "Аккаунт VELIA")[:120],
+        return {"user_id": user["id"], "language": user.get("language", ""), "name": str(user.get("first_name") or "Аккаунт VELIA")[:120],
             "selected_model_inputs": features.get("chat_selected_model_inputs") is True,
             "quantum": features.get("chat_quantum") is True,
             "quantum_native_tools": features.get("chat_quantum_native_tools") is True,

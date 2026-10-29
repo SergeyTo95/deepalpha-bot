@@ -50,7 +50,7 @@ async def fixture(monkeypatch, **state):
         state["seen"].append({"path": request.path, "cookie": request.headers.get("Cookie")})
         if not state["validity"] or request.headers.get("Authorization") not in {"Bearer " + TOKEN, "Bearer " + ROTATED}:
             return web.json_response({"ok": False}, status=401)
-        return web.json_response({"ok": True, "user": {"id": state["user_id"]},
+        return web.json_response({"ok": True, "user": {"id": state["user_id"], "language": state.get("language", "")},
             "features": state.get("features", {})})
     async def auth(request):
         data = await request.json()
@@ -301,7 +301,7 @@ def test_opaque_secure_cookie_and_no_authority_secrets(monkeypatch):
             cookie, result, wire = await login(server, client)
             assert all(value not in json.dumps(result) + wire for value in (TOKEN, REFRESH, "never-return-this", "authority_cookie"))
             assert all(flag in wire for flag in ("HttpOnly", "Secure", "SameSite=Lax", "Path=/"))
-            assert set(result) == {"ok", "account", "name", "models", "credits", "pro_locked_reason", "web_search", "browser_agent", "history_cache_key", "selected_model_inputs"}
+            assert set(result) == {"ok", "account", "name", "models", "credits", "pro_locked_reason", "web_search", "browser_agent", "history_cache_key", "selected_model_inputs", "language"}
             assert result["browser_agent"] is True
             assert result["models"] == ["velia-pro", "velia-flash"]
             async with client.get(server.make_url("/web-api/v1/session"), headers=headers(cookie)) as response:
@@ -739,4 +739,25 @@ def test_local_history_key_requires_auth_and_is_account_scoped(monkeypatch):
             async with client.get(server.make_url("/web-api/v1/session"), headers=headers(cookie)) as response:
                 assert response.status == 401
                 assert "history_cache_key" not in await response.text()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("language", ["ru", "tr-TR", "ja-JP", "ar-EG", "zh-Hant-TW"])
+def test_account_language_reaches_profile_and_model_without_changing_user_text(monkeypatch, language):
+    async def run():
+        async with fixture(monkeypatch, language=language) as (server, client, state):
+            cookie, profile, _ = await login(server, client)
+            assert profile["language"] == language
+            original = "Please answer this one in English: explain the test."
+            async with client.post(server.make_url("/web-api/v1/chat/completions"), headers=headers(cookie),
+                    json={"model":"velia-pro", "stream":True, "messages":[{"role":"user","content":original}]}) as response:
+                assert response.status == 200
+                await response.read()
+            sent = state["payloads"][0]["messages"]
+            assert sent[-1] == {"role":"user","content":original}
+            assert "account settings: " + language in sent[0]["content"]
+            assert "explicit user request" in sent[0]["content"]
+            state["language"] = "de-DE"
+            async with client.get(server.make_url("/web-api/v1/session"), headers=headers(cookie)) as response:
+                assert (await response.json())["language"] == "de-DE"
     asyncio.run(run())

@@ -14,7 +14,7 @@ from aiohttp import web
 from cryptography.fernet import Fernet, InvalidToken
 from velia_desktop_routes import AuthenticationUnavailable, FLASH_ID, MODEL_ID, flash_enabled
 from velia_quantum_provider import MODEL_ID as QUANTUM_ID
-from velia_request_understanding import understanding_instruction
+from velia_request_understanding import understanding_instruction, normalize_reply_language, reply_language_instruction
 from desktop.web_search import SEARCH, SOURCES, source_event
 
 WEB_CHAT = web.RequestKey("velia_browser_chat", bool)
@@ -24,7 +24,7 @@ COOKIE = "__Host-velia-web"
 LIFETIME = 7 * 24 * 3600
 STATIC = Path(__file__).parent / "web"
 PERSONA = understanding_instruction("Ты Велия (VELIA), персональная ИИ-помощница на Velyon Core. "
-    "Говори о себе в женском роде, по умолчанию отвечай по-русски. "
+    "Говори о себе в женском роде. Отвечай на языке пользователя, если настройки аккаунта или его явная просьба не задают другой язык. "
     "Пиши кратко, ясно и по существу, используй Markdown при необходимости. "
     "По умолчанию достаточно 3–5 коротких предложений; дай законченный ответ. "
     "Не обещай абсолютную безопасность или невозможность доступа к данным. "
@@ -55,7 +55,7 @@ def prepare_web_payload(request, data, *, search_enabled=False):
     request[SEARCH] = (data.get("web_search", search_enabled) if data["model"] == QUANTUM_ID
         else search_enabled or bool(data.get("web_search")))
     return {**{key: value for key, value in data.items() if key not in {"web_search", "voice_turn"}},
-            "messages": [{"role": "system", "content": PERSONA + (" Это голосовой разговор. Ответь естественно, 1–2 законченными короткими фразами. Без Markdown. Используй свежие факты только при наличии переданных веб-источников." if voice_turn else "")}] + messages,
+            "messages": [{"role": "system", "content": PERSONA + reply_language_instruction(getattr(request.get(WEB_SESSION), "language", "")) + (" Это голосовой разговор. Ответь естественно, 1–2 законченными короткими фразами. Без Markdown. Используй свежие факты только при наличии переданных веб-источников." if voice_turn else "")}] + messages,
             "max_tokens": (1024 if data["model"] == QUANTUM_ID else 128) if voice_turn else 512 if data["model"] == FLASH_ID else 8192 if data["model"] == QUANTUM_ID else 4096}
 
 
@@ -124,6 +124,7 @@ class Session:
     access_until: float
     expires: float
     name: str = "Аккаунт VELIA"
+    language: str = ""
     quantum: bool = False
     quantum_source: str = ""
     quantum_attachments: bool = False
@@ -212,6 +213,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
                 sessions.pop(key, None)
                 return None
             session.name = identity.get("name", "Аккаунт VELIA")
+            session.language = normalize_reply_language(identity.get("language"))
             session.quantum = identity.get("quantum") is True
             session.quantum_source = identity.get("quantum_source", "")
             session.quantum_attachments = identity.get("quantum_attachments") is True
@@ -228,7 +230,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
         return {"ok": True, "account": account, "history_cache_key": hmac.new(
                 os.environ["VELIA_WEB_SESSION_KEY"].encode(),
                 ("velia-local-history-v1:" + origin + ":" + str(session.user_id)).encode(),
-                hashlib.sha256).hexdigest(), "name": session.name, "credits": credits,
+                hashlib.sha256).hexdigest(), "name": session.name, "language": session.language, "credits": credits,
             "web_search": bool(web_search and web_search.available),
             "selected_model_inputs": session.selected_model_inputs,
             "browser_agent": browser_agent_run is not None,
@@ -284,6 +286,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             session = Session(secrets.token_urlsafe(32), result["access_token"], result["refresh_token"], device,
                 identity["user_id"], time.time() + result["access_expires_in"], time.time() + LIFETIME)
             session.name = identity.get("name", "Аккаунт VELIA")
+            session.language = normalize_reply_language(identity.get("language"))
             session.quantum = identity.get("quantum") is True
             session.quantum_source = identity.get("quantum_source", "")
             session.quantum_attachments = identity.get("quantum_attachments") is True
@@ -326,6 +329,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             headers["Authorization"] = "Bearer " + session.access
             forwarded = request.clone(headers=headers)
             forwarded[WEB_CHAT] = True
+            forwarded[WEB_SESSION] = session
             return await handlers["complete"](forwarded)
         except AuthenticationUnavailable:
             return error("authentication_unavailable", 503)

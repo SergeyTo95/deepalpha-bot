@@ -1,3 +1,9 @@
+## Account language and automatic voice
+
+Authenticated identity now carries the stored account locale to the browser profile and Quantum's system instruction. The account default applies to text and voice replies even when the input language differs; an explicit user request to translate, answer or continue in another language takes priority for its stated scope. Locale values are bounded tags, never arbitrary profile instructions. Missing/invalid account locales retain the prior language fallback.
+
+Voice recognition defaults to the account locale, with an explicit recognition-language override and an Automatic option to restore the account default. Automatic TTS chooses an actually advertised local voice for that language first, then an available matching voice. Old voice selections migrate to Automatic; a new manual voice selection is persisted and respected. Device voice availability, pronunciation, and timbre depend on the device; multilingual response quality and physical audible latency require phone validation. This adds no model calls or paid fallback.
+
 # Browser/mobile feature audit — 2026-10-07
 
 Compared the Android `develop` API and screens with the deployed gateway branch

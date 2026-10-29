@@ -98,7 +98,7 @@ function addFiles(files) {
 }
 
 const current = () => chats.find((c) => c.id === currentId);
-const voice = setupVoice({busy:()=>busy, toast, modelName:()=>MODELS[model], send:text=>{if(agentMode)setAgentMode(false);$("prompt").value=text;return generate(false, true);}});
+const voice = setupVoice({accountLanguage:()=>profile?.language||'', busy:()=>busy, toast, modelName:()=>MODELS[model], send:text=>{if(agentMode)setAgentMode(false);$("prompt").value=text;return generate(false, true);}});
 const features = setupFeatures({onUnauthorized:()=>{lockHistory();profile=null;guest=null;notifyAuthChange('lock');render();openAuth();},signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,prepareMedicalChat:async prompt=>{if(busy)throw new Error('Дождись завершения ответа.');if(!profile?.models?.includes(model))throw new Error('Выбранная модель сейчас недоступна.');setAgentMode(false);newChat();medicalDraftMode=true;$('prompt').value=prompt;resizePrompt();$('prompt').focus();toast('Прикрепи заключения и проверь текст перед отправкой.');},openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
 const browserStorage = { getItem: (key) => localStorage.getItem(key) };
 const localHistory = new LocalHistory(browserHistoryStore());
@@ -589,6 +589,7 @@ async function applyProfile(value) {
   const changed = profile?.account !== value.account;
   if(changed){lockHistory(); guest = null;}
   profile = value;
+  voice.syncLanguage();
   internetAvailable = !!value.web_search;
   $("guest-notice").hidden = true;
   let restoreAgent = false;
