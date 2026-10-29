@@ -166,3 +166,86 @@ def test_every_external_browser_path_checks_zero_spend_before_canonical_glm(enab
             assert payloads[0]['gateway']=={'retry':{'max_attempts_per_route':1,'max_total_attempts':1},'routing':{'allow_fallbacks':False}}
     asyncio.run(run())
     assert 'private' not in caplog.text and 'quantum-test-secret' not in caplog.text
+
+
+@pytest.mark.parametrize("mode,model",[("flash","glm-4.5-flash"),("quantum","glm-4.7-flash"),("pro","openai/gpt-oss-120b")])
+def test_free_browser_tiers_use_selected_native_model_without_planning(monkeypatch,mode,model):
+    from test_velia_web_chat import fixture,headers,login
+    import velia_free_models as free
+    import velia_quantum_turn as native
+    async def run():
+        async with fixture(monkeypatch,features={"chat_quantum":True,"chat_quantum_native_tools":True}) as (server,client,state):
+            monkeypatch.setenv("VELIA_FREE_API_TIERS_ENABLED","true")
+            monkeypatch.setenv("VELIA_ZAI_API_KEY","fixture-zai")
+            monkeypatch.setenv("GROQ_API_KEY","fixture-groq")
+            seen=[]
+            async def stream(client,config,messages,**kwargs):
+                seen.append((config,messages,kwargs))
+                yield {"text":"Поняла. 日本語 العربية"}
+            monkeypatch.setattr(native,"stream_turn",stream)
+            cookie,_,_=await login(server,client)
+            async with client.post(server.make_url("/web-api/v1/chat/completions"),headers=headers(cookie),
+                    json={"model":"velia-"+mode,"stream":True,"voice_turn":True,"web_search":True,
+                          "messages":[{"role":"user","content":"Привет"}]}) as response:
+                assert response.status==200
+                text=await response.text()
+                assert "Поняла" in text and "[DONE]" in text and model not in text
+            assert len(seen)==1 and seen[0][0].model==model
+            assert seen[0][1][-1]["content"]=="Привет"
+            assert state["payloads"]==state["intent_payloads"]==state["review_payloads"]==state["search_queries"]==[]
+    asyncio.run(run())
+
+
+def test_free_pro_preserves_existing_account_token_access_rule(monkeypatch):
+    from test_velia_web_chat import fixture,headers,login
+    async def run():
+        async with fixture(monkeypatch,credits=0) as (server,client,state):
+            monkeypatch.setenv("VELIA_FREE_API_TIERS_ENABLED","true")
+            monkeypatch.setenv("GROQ_API_KEY","fixture-groq")
+            cookie,_,_=await login(server,client)
+            async with client.post(server.make_url("/web-api/v1/chat/completions"),headers=headers(cookie),
+                    json={"model":"velia-pro","stream":True,"messages":[{"role":"user","content":"Hello"}]}) as response:
+                assert response.status==402 and (await response.json())["error"]["message"]=="pro_tokens_required"
+            assert state["payloads"]==[]
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("mode",["flash","quantum","pro"])
+def test_free_saved_voice_turn_goes_directly_to_selected_account_model(monkeypatch,mode):
+    import uuid
+    from test_velia_web_chat import fixture,headers,login
+    async def run():
+        features={"chat_quantum":True,"chat_quantum_native_tools":True,"chat_free_api_tiers":True}
+        async with fixture(monkeypatch,features=features) as (server,client,state):
+            monkeypatch.setenv("VELIA_FREE_API_TIERS_ENABLED","true")
+            monkeypatch.setenv("VELIA_ZAI_API_KEY","fixture-zai")
+            monkeypatch.setenv("GROQ_API_KEY","fixture-groq")
+            cookie,profile,_=await login(server,client)
+            assert profile["free_api_tiers"] is True
+            async with client.post(server.make_url("/web-api/v1/conversations"),headers=headers(cookie),json={"title":"Fixture"}) as response:
+                cid=(await response.json())["conversation"]["id"]
+            async with client.post(server.make_url("/web-api/v1/conversations/"+cid+"/messages/stream"),headers=headers(cookie),
+                    json={"model":"velia-"+mode,"content":"Сохрани буквально эту фразу", "idempotency_key":"free-account-voice", "voice_turn":True, "web_search":True}) as response:
+                assert response.status==200
+                assert "[DONE]" in await response.text()
+            call=state["account_calls"][0]
+            assert call["content"]=="Сохрани буквально эту фразу" and call["chat_mode"]==mode
+            assert call["voice_turn"] is True and call["web_search"] is True
+            assert state["intent_payloads"]==state["review_payloads"]==state["payloads"]==[]
+    asyncio.run(run())
+
+
+def test_free_saved_pro_cannot_reach_legacy_paid_backend_during_mixed_deployment(monkeypatch):
+    from test_velia_web_chat import fixture,headers,login
+    async def run():
+        async with fixture(monkeypatch) as (server,client,state):
+            monkeypatch.setenv("VELIA_FREE_API_TIERS_ENABLED","true")
+            monkeypatch.setenv("GROQ_API_KEY","fixture-groq")
+            cookie,_,_=await login(server,client)
+            async with client.post(server.make_url("/web-api/v1/conversations"),headers=headers(cookie),json={"title":"Fixture"}) as response:
+                cid=(await response.json())["conversation"]["id"]
+            async with client.post(server.make_url("/web-api/v1/conversations/"+cid+"/messages/stream"),headers=headers(cookie),
+                    json={"model":"velia-pro","content":"Fixture", "idempotency_key":"free-account-pro"}) as response:
+                assert response.status==503
+            assert state["account_calls"]==state["payloads"]==[]
+    asyncio.run(run())

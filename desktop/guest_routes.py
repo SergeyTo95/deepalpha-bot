@@ -1,4 +1,5 @@
 """Guest Flash only, signed HttpOnly identity and durable server-side trial limit."""
+import velia_free_models as free_models
 import asyncio
 from datetime import datetime, timezone
 import hashlib
@@ -13,6 +14,7 @@ from aiohttp import ClientError, ClientSession, ClientTimeout, web
 from cryptography.fernet import Fernet, InvalidToken
 from desktop.guest_store import GuestLimitReached, GuestStore, LIMIT
 from desktop.web_routes import WEB_CHAT, prepare_web_payload, public_web_stream, prepared_web_response
+from velia_quantum_provider import QuantumError
 from velia_desktop_routes import FlashContextTooLong, check_flash_context, flash_enabled, flash_endpoint, validate_payload, FLASH_ID
 
 COOKIE = "__Host-velia-guest"
@@ -112,9 +114,10 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_
                 "elapsed_ms": round((time.monotonic() - started) * 1000)}), flush=True)
         try:
             async with ClientSession(timeout=ClientTimeout(total=600, sock_read=300)) as client:
-                headers = {"Authorization": "Bearer " + os.environ["VELIA_DESKTOP_FLASH_API_KEY"]}
+                headers = {"Authorization": "Bearer " + os.getenv("VELIA_DESKTOP_FLASH_API_KEY", "")}
                 endpoint = flash_endpoint()
-                await check_flash_context(client, endpoint, headers, payload)
+                if not free_models.enabled():
+                    await check_flash_context(client, endpoint, headers, payload)
                 timing("context_checked")
                 try:
                     remaining = await asyncio.to_thread(store.reserve, quota_keys)
@@ -122,6 +125,26 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_
                     return error("guest_limit_reached", 429)
                 except Exception:
                     return error("guest_service_unavailable", 503)
+                if free_models.enabled():
+                    from velia_quantum_turn import stream_turn
+                    from desktop.web_search import SEARCH, source_event
+                    config = free_models.configuration("flash")
+                    if config is None:
+                        return error("flash_unavailable", 503)
+                    response = web.StreamResponse(headers={"Content-Type":"text/event-stream", "Cache-Control":"no-store",
+                        "X-Accel-Buffering":"no", "X-Velia-Guest-Remaining":str(remaining)})
+                    await response.prepare(request)
+                    async for event in stream_turn(client, config, payload["messages"],
+                            search=web_search.search if request.get(SEARCH) and web_search and web_search.available else None,
+                            max_tokens=payload.get("max_tokens")):
+                        if "sources" in event:
+                            await response.write(source_event(event["sources"]))
+                        if "text" in event:
+                            wire = {"model":FLASH_ID, "choices":[{"delta":{"content":event["text"]}}]}
+                            await response.write(("data: "+json.dumps(wire,ensure_ascii=False)+"\n\n").encode())
+                    await response.write(b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+                    await response.write_eof()
+                    return response
                 from desktop.web_search import SEARCH, PREPARED_REPLY, SearchUnavailable
                 if request.get(SEARCH):
                     if web_search is None:
@@ -151,6 +174,13 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_
                     await response.write_eof()
                     timing("complete")
                     return response
+        except QuantumError as exc:
+            code = free_models.error_code(exc.code, "flash")
+            if response is not None and response.prepared:
+                await response.write(("data: "+json.dumps({"error":{"message":code}})+"\n\n").encode())
+                await response.write_eof()
+                return response
+            return error(code, exc.status)
         except FlashContextTooLong:
             return error("flash_context_too_long", 400)
         except (ClientError, TimeoutError, OSError, ValueError):

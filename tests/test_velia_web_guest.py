@@ -173,3 +173,26 @@ def test_railway_guest_network_guard_ignores_forwarded_for(monkeypatch, tmp_path
                 assert response.status == 503
             assert len(state["payloads"]) == 1
     asyncio.run(run())
+
+
+
+def test_free_api_guest_preserves_trial_quota_without_bonsai_or_planner(monkeypatch,tmp_path):
+    import velia_quantum_turn as native
+    async def run():
+        monkeypatch.setenv("VELIA_WEB_GUEST_ENABLED","true")
+        async with fixture(monkeypatch,guest_store=GuestStore(sqlite_path=tmp_path/"free-guest.db")) as (server,client,state):
+            monkeypatch.setenv("VELIA_FREE_API_TIERS_ENABLED","true")
+            monkeypatch.setenv("VELIA_ZAI_API_KEY","fixture-zai")
+            monkeypatch.delenv("VELIA_DESKTOP_FLASH_API_KEY",raising=False)
+            calls=[]
+            async def stream(client,config,messages,**kwargs):
+                calls.append(config.model)
+                yield {"text":"Поняла"}
+            monkeypatch.setattr(native,"stream_turn",stream)
+            cookie,profile,_=await guest(server,client)
+            assert profile["remaining"]==30
+            async with client.post(server.make_url("/web-api/v1/guest/chat/completions"),headers=guest_headers(cookie),json={**BODY,"voice_turn":True}) as response:
+                assert response.status==200 and response.headers["X-Velia-Guest-Remaining"]=="29"
+                assert "Поняла" in await response.text()
+            assert calls==["glm-4.5-flash"] and state["payloads"]==state["intent_payloads"]==[]
+    asyncio.run(run())

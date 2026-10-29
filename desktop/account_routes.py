@@ -1,5 +1,6 @@
 """Bounded, same-origin access to the signed-in account's existing chat store."""
 import asyncio
+import velia_free_models as free_models
 from contextlib import suppress
 import json
 import logging
@@ -17,6 +18,7 @@ ERRORS = {"conversation_not_found", "generation_in_progress", "flash_busy", "fla
     "velia_chat_disabled", "pro_tokens_required", "token_balance_unavailable",
     "idempotency_mode_mismatch", "user_daily_limit_exceeded", "global_daily_limit_exceeded"}
 ERRORS |= QUANTUM_ERRORS
+ERRORS |= {free_models.error_code(code, mode) for code in QUANTUM_ERRORS for mode in ("flash", "pro")}
 LOG = logging.getLogger(__name__)
 _PREPARATION_HEARTBEAT_SECONDS = 8.0
 
@@ -192,6 +194,8 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
         if data["model"] == QUANTUM_ID and attachments and not request[ACCOUNT_SESSION].quantum_attachments:
             return error("quantum_attachments_unsupported", 400)
         session = request[ACCOUNT_SESSION]
+        if free_models.enabled() and not session.free_api:
+            return error(data["model"].removeprefix("velia-") + "_unavailable", 503)
         # session_for just revalidated this account and refreshed capabilities.
         # The native generator independently enforces availability and quotas.
         permission = ((None if session.quantum else ("quantum_unavailable", 503))
@@ -218,7 +222,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
             content, result = data["content"], None
             from desktop.direct_tasks import simple_direct_task
             direct_turn = (data.get("voice_turn") or data["model"] == QUANTUM_ID) and not attachments and simple_direct_task(content) is not None
-            native_quantum = data["model"] == QUANTUM_ID and session.quantum_native_tools
+            native_quantum = (data["model"] == QUANTUM_ID and session.quantum_native_tools) or (free_models.enabled() and session.free_api)
             if not native_quantum and not direct_turn and not data.get("medical_no_search") and ((web_search and web_search.available) or data.get("web_search")):
                 if web_search is None:
                     raise SearchUnavailable()

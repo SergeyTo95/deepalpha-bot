@@ -135,6 +135,7 @@ class QuantumConfig:
     model: str
     api_key: str = field(repr=False)
     max_tokens: int = 8192
+    reasoning_effort: str = "low"
 
     @property
     def source(self):
@@ -304,7 +305,7 @@ def require_free_zai(config):
     Z.ai does not expose Experiential's key-cap metadata. This guard pins the
     published free model and endpoint, not an inferred credit balance.
     """
-    if config.base_url != ZAI_URL or config.model != ZAI_FREE_MODEL:
+    if config.base_url != ZAI_URL or config.model not in {ZAI_FREE_MODEL, "glm-4.5-flash"}:
         raise QuantumError('quantum_free_guard_required', 503)
 
 
@@ -359,7 +360,7 @@ def payload(config, messages, *, stream=False, max_tokens=None, tools=None, tool
         if tools and any(t.get("type") != "function" for t in tools):
             raise QuantumError("quantum_free_guard_required", 503)
         result["max_completion_tokens"] = result.pop("max_tokens")
-        result["reasoning_effort"] = "low"
+        result["reasoning_effort"] = config.reasoning_effort if config.reasoning_effort in {"low", "medium", "high"} else "low"
         result["include_reasoning"] = False
     return result
 

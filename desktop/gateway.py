@@ -5,6 +5,7 @@ uses the existing preview database only for persistent quota counters. The Web
 adapter uses encrypted, HttpOnly cookies; authority cookies are ignored.
 Only a fixed identity authority receives account tokens; model keys stay here.
 """
+import velia_free_models as free_models
 from collections import deque
 import asyncio
 from dataclasses import dataclass
@@ -205,6 +206,7 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
         return {"user_id": user["id"], "language": user.get("language", ""), "name": str(user.get("first_name") or "Аккаунт VELIA")[:120],
             "selected_model_inputs": features.get("chat_selected_model_inputs") is True,
             "quantum": features.get("chat_quantum") is True,
+            "free_api": features.get("chat_free_api_tiers") is True,
             "quantum_native_tools": features.get("chat_quantum_native_tools") is True,
             "quantum_attachments": features.get("chat_quantum_attachments") is True,
             "quantum_source": str(features.get("chat_quantum_source") or "")[:120]}
@@ -456,11 +458,11 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
     app.router.add_post("/mobile-api/v1/auth/exchange", relay_session)
     app.router.add_post("/mobile-api/v1/auth/refresh", relay_session)
     def native_quantum_browser(request):
-        return bool(request.get(WEB_CHAT) and getattr(request.get(WEB_SESSION), "quantum_native_tools", False))
+        return bool(request.get(WEB_CHAT) and (free_models.enabled() or getattr(request.get(WEB_SESSION), "quantum_native_tools", False)))
     async def enrich_web(request, payload):
         from desktop.web_search import SEARCH, PREPARED_REPLY, SearchUnavailable
         if request.get(SEARCH):
-            if request.get(WEB_MODEL) == QUANTUM_ID and native_quantum_browser(request):
+            if (free_models.enabled() or request.get(WEB_MODEL) == QUANTUM_ID) and native_quantum_browser(request):
                 return payload
             if web_search is None:
                 raise SearchUnavailable()

@@ -1,5 +1,6 @@
 """Same-origin browser chat; opaque cookies, server-only device credentials."""
 import asyncio
+import velia_free_models as free_models
 from collections import deque
 from dataclasses import dataclass, field
 import hashlib
@@ -18,6 +19,7 @@ from velia_request_understanding import understanding_instruction, normalize_rep
 from desktop.web_search import SEARCH, SOURCES, source_event
 
 WEB_CHAT = web.RequestKey("velia_browser_chat", bool)
+WEB_VOICE = web.RequestKey("velia_browser_voice", bool)
 WEB_MODEL = web.RequestKey("velia_browser_model", str)
 WEB_SESSION = web.RequestKey("velia_browser_session", object)
 COOKIE = "__Host-velia-web"
@@ -52,11 +54,12 @@ def prepare_web_payload(request, data, *, search_enabled=False):
         raise ValueError("invalid_messages")
     request[WEB_MODEL] = data["model"]
     voice_turn = bool(data.get("voice_turn"))
+    request[WEB_VOICE] = voice_turn
     request[SEARCH] = (data.get("web_search", search_enabled) if data["model"] == QUANTUM_ID
         else search_enabled or bool(data.get("web_search")))
     return {**{key: value for key, value in data.items() if key not in {"web_search", "voice_turn"}},
             "messages": [{"role": "system", "content": PERSONA + reply_language_instruction(getattr(request.get(WEB_SESSION), "language", "")) + (" Это голосовой разговор. Ответь естественно, 1–2 законченными короткими фразами. Без Markdown. Используй свежие факты только при наличии переданных веб-источников." if voice_turn else "")}] + messages,
-            "max_tokens": (1024 if data["model"] == QUANTUM_ID else 128) if voice_turn else 512 if data["model"] == FLASH_ID else 8192 if data["model"] == QUANTUM_ID else 4096}
+            "max_tokens": (1024 if free_models.enabled() or data["model"] == QUANTUM_ID else 128) if voice_turn else 512 if data["model"] == FLASH_ID else 8192 if data["model"] == QUANTUM_ID else 4096}
 
 
 async def public_web_stream(request, source):
@@ -125,6 +128,7 @@ class Session:
     expires: float
     name: str = "Аккаунт VELIA"
     language: str = ""
+    free_api: bool = False
     quantum: bool = False
     quantum_source: str = ""
     quantum_attachments: bool = False
@@ -215,6 +219,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             session.name = identity.get("name", "Аккаунт VELIA")
             session.language = normalize_reply_language(identity.get("language"))
             session.quantum = identity.get("quantum") is True
+            session.free_api = identity.get("free_api") is True
             session.quantum_source = identity.get("quantum_source", "")
             session.quantum_attachments = identity.get("quantum_attachments") is True
             session.quantum_native_tools = identity.get("quantum_native_tools") is True
@@ -233,6 +238,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
                 hashlib.sha256).hexdigest(), "name": session.name, "language": session.language, "credits": credits,
             "web_search": bool(web_search and web_search.available),
             "selected_model_inputs": session.selected_model_inputs,
+            **({"free_api_tiers": True} if session.free_api else {}),
             "browser_agent": browser_agent_run is not None,
             **({"quantum_source": session.quantum_source, "quantum_attachments": session.quantum_attachments} if session.quantum else {}),
             "pro_locked_reason": None if credits and credits > 0 else
@@ -288,6 +294,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             session.name = identity.get("name", "Аккаунт VELIA")
             session.language = normalize_reply_language(identity.get("language"))
             session.quantum = identity.get("quantum") is True
+            session.free_api = identity.get("free_api") is True
             session.quantum_source = identity.get("quantum_source", "")
             session.quantum_attachments = identity.get("quantum_attachments") is True
             session.quantum_native_tools = identity.get("quantum_native_tools") is True

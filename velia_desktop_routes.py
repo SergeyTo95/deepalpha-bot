@@ -3,6 +3,7 @@
 Preview access is restricted to explicitly configured user ids. This route does
 not execute tools: Harness executes them on the user's computer.
 """
+import velia_free_models as free_models
 import asyncio
 import inspect
 import json
@@ -34,6 +35,8 @@ def flash_endpoint():
 
 
 def flash_enabled():
+    if free_models.enabled():
+        return free_models.configuration("flash") is not None
     return (os.getenv("VELIA_DESKTOP_FLASH_ENABLED", "").lower() in {"true", "1"}
             and bool(flash_endpoint()) and bool(os.getenv("VELIA_DESKTOP_FLASH_API_KEY", "").strip()))
 
@@ -189,6 +192,12 @@ def validate_payload(data):
         raise ValueError("invalid_output_limit")
     if type(data.get("stream", False)) is not bool:
         raise ValueError("invalid_stream")
+    if free_models.enabled():
+        config = free_models.configuration(data["model"].removeprefix("velia-"))
+        if config is None:
+            raise quantum.QuantumError("quantum_unavailable", 503)
+        return quantum.payload(config, understanding_messages(normalized_messages), stream=data.get("stream", False),
+            max_tokens=limit, tools=tools or None, tool_choice=data.get("tool_choice"))
     is_flash = data["model"] == FLASH_ID
     result = {"model": os.getenv("VELIA_DESKTOP_PRO_MODEL", "kimi-k3") if not is_flash else FLASH_ID,
               "messages": understanding_messages(normalized_messages), "max_completion_tokens": limit,
@@ -314,14 +323,17 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                 return error("flash_unavailable", 503)
             payload = validate_payload(data)
         except quantum.QuantumError as exc:
-            return error(exc.code, exc.status)
+            code = free_models.error_code(exc.code, data["model"].removeprefix("velia-")) if free_models.enabled() and isinstance(data, dict) else exc.code
+            return error(code, exc.status)
         except (ValueError, TypeError, UnicodeDecodeError) as exc:
             return error(str(exc) if str(exc) in {"unsupported_model", "invalid_messages", "text_only_preview",
                          "invalid_tools", "invalid_output_limit", "invalid_stream", "invalid_tool_choice",
                          "invalid_tool_calls", "invalid_tool_arguments"}
                          else "invalid_json", 400)
         is_flash = data["model"] == FLASH_ID
-        quantum_config = quantum.configuration() if data["model"] == QUANTUM_ID else None
+        from desktop.web_routes import WEB_VOICE
+        quantum_config = (free_models.configuration(data["model"].removeprefix("velia-"), voice=bool(request.get(WEB_VOICE))) if free_models.enabled()
+            else quantum.configuration() if data["model"] == QUANTUM_ID else None)
         if data["model"] == QUANTUM_ID and quantum_config is None:
             return error("quantum_unavailable", 503)
         failure = await model_permission(request, data["model"])
@@ -350,7 +362,7 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                     payload = await enrich_payload(request, payload)
                     if isinstance(payload, web.StreamResponse):
                         return payload
-                if is_flash:
+                if is_flash and not free_models.enabled():
                     await check_flash_context(client, endpoint, headers, payload)
                 if quantum_config and quantum_browser and quantum_browser(request):
                     from velia_quantum_turn import stream_turn
@@ -363,14 +375,14 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                         if "sources" in event:
                             await response.write(source_event(event["sources"]))
                         if "text" in event:
-                            wire = {"model": QUANTUM_ID, "choices": [{"delta": {"content": event["text"]}}]}
+                            wire = {"model": data["model"], "choices": [{"delta": {"content": event["text"]}}]}
                             await response.write(("data: " + json.dumps(wire, ensure_ascii=False) + "\n\n").encode())
                     await response.write(b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
                     await response.write_eof()
                     return response
                 if quantum_config:
                     await quantum.verify_zero_spend_async(client, quantum_config)
-                async with client.post(endpoint + ("/v1/chat/completions" if is_flash else "/chat/completions"), json=payload,
+                async with client.post(endpoint + ("/v1/chat/completions" if is_flash and not free_models.enabled() else "/chat/completions"), json=payload,
                                        headers=headers,
                                        allow_redirects=False) as upstream:
                     if upstream.status != 200:
@@ -399,11 +411,12 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
         except FlashContextTooLong:
             return error("flash_context_too_long", 400)
         except quantum.QuantumError as exc:
+            code = free_models.error_code(exc.code, data["model"].removeprefix("velia-")) if free_models.enabled() else exc.code
             if response is not None and response.prepared:
-                await response.write(("data: " + json.dumps({"error": {"message": exc.code}}) + "\n\n").encode())
+                await response.write(("data: " + json.dumps({"error": {"message": code}}) + "\n\n").encode())
                 await response.write_eof()
                 return response
-            return error(exc.code, exc.status)
+            return error(code, exc.status)
         except (TimeoutError, OSError, ClientError, ValueError):
             if response is not None and response.prepared:
                 response.force_close()
