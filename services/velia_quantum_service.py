@@ -202,9 +202,9 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False, web_sear
                "и подтверждения пользователя. Если смысл понятен, отвечай сразу; при реальной "
                "неоднозначности задай один короткий вопрос, без списка уточнений. " if voice_turn else ""))},
             *([{"role": "user", "content": prompt}] if messages is None else messages)],
-            stream=True, max_tokens=1024 if voice_turn else config.max_tokens)
+            stream=True, max_tokens=1024 if voice_turn and not free_tier else config.max_tokens)
         turn = Turn(config, body["messages"], search_enabled=bool(web_search and search_configuration()),
-            max_tokens=1024 if voice_turn else config.max_tokens)
+            max_tokens=1024 if voice_turn and not free_tier else config.max_tokens)
         def select_route(selected):
             nonlocal config
             config = turn.config = selected

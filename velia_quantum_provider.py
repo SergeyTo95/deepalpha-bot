@@ -136,13 +136,14 @@ class QuantumConfig:
     api_key: str = field(repr=False)
     max_tokens: int = 8192
     reasoning_effort: str = "low"
+    thinking_enabled: bool = False
 
     @property
     def source(self):
         if self.provider == "groq":
             return "GPT-OSS 120B через Groq"
         if self.provider == "zai":
-            return "GLM-4.7-Flash через Z.ai"
+            return ("GLM-4.5-Flash" if self.model == "glm-4.5-flash" else "GLM-4.7-Flash") + " через Z.ai"
         return EXPERIENTIAL_MODELS.get(self.model, "Quantum через Experiential") if self.provider == "experiential" else "Собственная модель VELIA"
 
 
@@ -341,8 +342,8 @@ def payload(config, messages, *, stream=False, max_tokens=None, tools=None, tool
             "routing":{"allow_fallbacks":False}}
     if config.provider == "zai":
         require_free_zai(config)
-        # Avoid hidden reasoning latency, including in the voice planner.
-        result["thinking"] = {"type": "disabled"}
+        # Server-selected PRO enables thinking; other routes keep fast replies.
+        result["thinking"] = {"type": "enabled" if config.thinking_enabled else "disabled"}
         if tools and any(t.get("type") != "function" for t in tools):
             raise QuantumError("quantum_free_guard_required", 503)
         # Z.ai documents only auto. The caller still strictly validates the
@@ -387,13 +388,16 @@ def public_result(value):
 
 class StreamDecoder:
     """Bounded SSE decoder; accepts split UTF-8/CRLF and requires completion."""
-    def __init__(self):
+    def __init__(self, *, capture_reasoning=False):
         self.pending = b""
         self.total = 0
         self.done = False
         self.answer = False
         self.finish_reason = None
         self.usage = {}
+        # Private, bounded, turn-local tool continuation state. Never in events.
+        self.capture_reasoning = capture_reasoning
+        self.reasoning_content = ""
 
     def feed(self, chunk):
         self.total += len(chunk)
@@ -438,6 +442,12 @@ class StreamDecoder:
             if not isinstance(choice, dict) or not isinstance(choice.get("delta", {}), dict):
                 raise QuantumError("quantum_invalid_response")
             delta = choice.get("delta", {})
+            if self.capture_reasoning:
+                reasoning = delta.get("reasoning_content")
+                if reasoning is not None:
+                    if not isinstance(reasoning, str) or len(self.reasoning_content) + len(reasoning) > 64000:
+                        raise QuantumError("quantum_invalid_response")
+                    self.reasoning_content += reasoning
             safe = {k: v for k, v in delta.items()
                 if k == "content" and isinstance(v, str) or k == "tool_calls" and isinstance(v, list)}
             if safe.get("content", "").strip() or safe.get("tool_calls"):

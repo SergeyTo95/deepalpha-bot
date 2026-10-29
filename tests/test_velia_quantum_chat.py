@@ -749,7 +749,7 @@ def free_tiers(monkeypatch):
     return free
 
 
-@pytest.mark.parametrize("mode,model", [("flash","glm-4.5-flash"),("quantum","glm-4.7-flash"),("pro","openai/gpt-oss-120b")])
+@pytest.mark.parametrize("mode,model", [("flash","glm-4.5-flash"),("quantum","glm-4.7-flash"),("pro","glm-4.7-flash")])
 @pytest.mark.parametrize("voice", [False,True])
 def test_free_tiers_pin_same_model_for_text_and_voice_without_worker_or_paid_calls(free_tiers, monkeypatch, mode, model, voice):
     client = Client(Response(body=wire("Поняла. 日本語 العربية Türkçe")))
@@ -765,13 +765,11 @@ def test_free_tiers_pin_same_model_for_text_and_voice_without_worker_or_paid_cal
     assert body["model"]==model and "account settings: ru" in body["messages"][0]["content"]
     assert "apply-template" not in url and "tokenize" not in url
     assert "tools" not in body
-    if mode=="pro":
-        assert url=="https://api.groq.com/openai/v1/chat/completions"
-        assert body["reasoning_effort"]==("low" if voice else "medium")
-        assert body["include_reasoning"] is False
-    else:
-        assert url=="https://api.z.ai/api/paas/v4/chat/completions"
-        assert body["thinking"]=={"type":"disabled"}
+    assert url=="https://api.z.ai/api/paas/v4/chat/completions"
+    assert body["thinking"]=={"type":"enabled" if mode=="pro" else "disabled"}
+    assert "reasoning_effort" not in body and "include_reasoning" not in body
+    assert body["max_tokens"] == ((4096 if voice else 8192) if mode=="pro" else (1024 if voice else free_tiers.TIERS[mode][2]))
+    assert "PRIVATE" not in json.dumps(result) and "PRIVATE" not in "".join(parts)
 
 
 @pytest.mark.parametrize("mode", ["flash","quantum","pro"])
@@ -790,14 +788,14 @@ def test_free_tier_configuration_ignores_paid_model_and_url_overrides(free_tiers
     monkeypatch.setenv("KIMI_MODEL","paid-model")
     monkeypatch.setenv("VELIA_FLASH_BASE_URL","https://paid.invalid")
     monkeypatch.setenv("VELIA_ZAI_MODEL","paid-model")
-    assert [free_tiers.configuration(mode).model for mode in free_tiers.TIERS]==["glm-4.5-flash","glm-4.7-flash","openai/gpt-oss-120b"]
+    assert [free_tiers.configuration(mode).model for mode in free_tiers.TIERS]==["glm-4.5-flash","glm-4.7-flash","glm-4.7-flash"]
     assert free_tiers.configuration("invented") is None
     monkeypatch.delenv("GROQ_API_KEY")
-    assert free_tiers.configuration("pro") is None
+    assert free_tiers.configuration("pro").thinking_enabled is True
     monkeypatch.delenv("VELIA_ZAI_API_KEY")
     monkeypatch.setenv("VELIA_QUANTUM_PROVIDER","experiential")
     monkeypatch.setenv("VELIA_QUANTUM_API_KEY","wrong-service-secret")
-    assert free_tiers.configuration("flash") is None
+    assert all(free_tiers.configuration(mode) is None for mode in free_tiers.TIERS)
 
 
 @pytest.mark.parametrize("mode",["flash","quantum","pro"])

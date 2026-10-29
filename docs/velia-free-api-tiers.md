@@ -1,14 +1,14 @@
 # Free API tiers — prepared rollout
 
-Set `VELIA_FREE_API_TIERS_ENABLED=true` only with the existing Z.ai Standard API key and the existing Groq **Free** account key present. The flag is opt-in; disabled keeps the previous deployment behavior. Enable it on the account backend first and on the gateway after the backend is healthy.
+Set `VELIA_FREE_API_TIERS_ENABLED=true` only with the existing Z.ai Standard API key present. The flag is opt-in; disabled keeps the previous deployment behavior. Enable it on the account backend first and on the gateway after the backend is healthy.
 
 | Public mode | Pinned upstream | Text | Voice |
 | --- | --- | --- | --- |
 | VELIA Flash | Z.ai `glm-4.5-flash` | Thinking disabled | Same model, short spoken answer |
 | VELIA Quantum | Z.ai `glm-4.7-flash` | Thinking disabled | Same model, short spoken answer |
-| VELIA PRO | Groq `openai/gpt-oss-120b` | Medium reasoning | Same model, low reasoning |
+| VELIA PRO | Z.ai `glm-4.7-flash` | Thinking enabled, 8192-token budget | Same model, thinking enabled, 4096-token budget |
 
-Z.ai lists both Flash models at zero token price. Groq is free within the account's Free plan limits; the model has paid pricing on Developer accounts, so no paid-plan upgrade is part of this rollout. This is not a promise of unlimited quota or zero hosting cost. No paid model ID, provider built-in search, Coding Plan endpoint, or automatic cross-model fallback is selected. Errors stop the selected route.
+Z.ai lists both selected GLM models at zero token price. Quantum and PRO share GLM-4.7-Flash; PRO enables thinking for text and voice, which may help complex tasks but increases latency and does not guarantee better answers. PRO uses a larger bounded completion budget because thinking consumes tokens; spoken answers remain short. No Groq key is required for these tiers. This is not a promise of unlimited quota or zero hosting cost. No paid model ID, provider built-in search, Coding Plan endpoint, or automatic cross-model fallback is selected. Errors stop the selected route.
 
 Normal chat uses one streaming completion, or two when the selected model calls one bounded local web-search function. Existing search keys/quotas remain; no new paid search integration is enabled. No separate Flash planner, Decision call, Bonsai prompt render/tokenize request, or answer-review model call precedes normal free-tier chat. Desktop function tools still use validated tool messages on the pinned selected model. No new Railway service or project is needed.
 
