@@ -12,7 +12,7 @@ try{
  await page.goto('http://127.0.0.1:'+server.address().port);
  await page.evaluate(async()=>{
   localStorage.setItem('velia-voice-language','ru-RU');window.recognizers=[];window.spoken=[];window.sends=[];
-  window.SpeechRecognition=class {constructor(){window.recognizers.push(this);}start(){}abort(){this.onend?.();}};
+  window.SpeechRecognition=class {constructor(){window.recognizers.push(this);}start(){}abort(){this.onend?.();}stop(){setTimeout(()=>{if(window.finalOnStop){this.onresult?.({results:window.finalOnStop});window.finalOnStop=null;}this.onend?.();},25);}};
   window.SpeechSynthesisUtterance=class {constructor(text){this.text=text;}};
   Object.defineProperty(window,'speechSynthesis',{value:{cancel(){},getVoices(){return [{name:'Тестовый голос',voiceURI:'test',lang:'ru-RU',localService:true}];},addEventListener(){},resume(){},speak(u){if(u.volume===0){window.unlocks=(window.unlocks||0)+1;return;}window.spoken.push(u);}}});
   const {setupVoice}=await import('/voice.mjs');window.voice=setupVoice({busy:()=>false,toast:()=>{},send:async text=>{window.sends.push(text);window.voice.complete('Это ответ. '.repeat(80));}});window.voice.settings(document.querySelector('#settings'));window.voice.open();
@@ -21,7 +21,9 @@ try{
  assert.equal(await page.getByRole('button',{name:'Начать',exact:true}).count(),0);
  await page.evaluate(()=>{const r=recognizers.at(-1);r.onresult({results:[Object.assign([{transcript:'Промежуточная речь'}],{isFinal:false})]});});
  assert.equal(await page.evaluate(()=>sends.length),0);
- await page.evaluate(()=>{const r=recognizers.at(-1);r.onresult({results:[Object.assign([{transcript:'Привет Велия'}],{isFinal:true})]});r.onend();});
+ // Browser finalizes the last captured word asynchronously after stop().
+ await page.evaluate(()=>{window.finalOnStop=[Object.assign([{transcript:'Привет Велия'}],{isFinal:true})];recognizers.at(-1).onresult({results:[Object.assign([{transcript:'Привет'}],{isFinal:true})]});});
+ await page.waitForTimeout(600);assert.equal(await page.evaluate(()=>sends.length),0);
  await page.waitForFunction(()=>spoken.length===1);assert.deepEqual(await page.evaluate(()=>sends),['Привет Велия']);
  await page.screenshot({path:output+'/voice-mobile-speaking.png'});
  await page.evaluate(()=>{for(let i=0;i<100;i++){const u=spoken.at(-1);if(u===window.last)break;window.last=u;u.onend();}});
@@ -74,5 +76,5 @@ try{
  assert.equal(await page.evaluate(()=>spoken.at(-1).voice.voiceURI),'test');
  assert.equal(await page.evaluate(()=>localStorage.getItem('velia-voice-uri')),'test');
  assert.ok(await page.evaluate(()=>unlocks>=1));
- assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,synthetic:true,checks:['automatic start without obsolete controls','multi-chunk reply','silence retry','stale callback safety','permission error','voice/rate','mobile layout','hidden pending answer survives','stop clears stale progress','first phrase before final reply','emoji removed','stream final does not repeat']}));
+ assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,synthetic:true,checks:['automatic start without obsolete controls','pause does not submit early','final captured words after stop survive','multi-chunk reply','silence retry','stale callback safety','permission error','voice/rate','mobile layout','hidden pending answer survives','stop clears stale progress','first phrase before final reply','emoji removed','stream final does not repeat']}));
 }finally{await browser?.close();server.close();}

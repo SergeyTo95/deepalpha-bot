@@ -65,6 +65,23 @@ Verification: 36 focused server tests, 13 Node tests and synthetic Chromium chec
 
 ## Browser voice conversation
 
+### Recognition turn completion (2026-10-29)
+
+Recognition now allows a one-second pause before requesting stop and cancels
+that timer while speech resumes or an interim hypothesis remains. It keeps the
+recognizer attached until `end`, including final words delivered asynchronously
+after `stop()`. A two-second missing-end watchdog aborts and asks for a repeat;
+it never silently submits a potentially truncated prefix. Closing the call,
+changing language and permission failures invalidate pending callbacks. The
+recognizer remains the browser's Web Speech engine; these changes do not add
+an audio-upload provider or guarantee recognition accuracy. The selected call
+language still overrides the device locale and remains available for all
+existing language choices. Eight deterministic lifecycle tests cover the pause
+and late-final regressions. All 63 web tests and 22 voice-route Python tests
+passed locally. The mobile synthetic smoke was updated for late final words,
+but could not run in this environment: Chromium was absent and its download
+returned an invalid archive. Physical microphone accuracy requires a device check.
+
 Rebuilt the native Web Speech conversation loop with interim captions, distinct listening/thinking/speaking states, pause/resume, retry after silence, explicit permission/network/microphone errors and stale-callback guards. Pausing, closing, hiding the page or changing conversations stops microphone and speech. Rejected/no-op chat submissions return an actionable state instead of waiting forever; browser Agent replies now use the same voice completion hook.
 
 Speech output splits long answers into bounded chunks and removes spoken code/URLs/Markdown while preserving the original chat reply. A speech watchdog stops a stalled engine. Settings expose conversation language, available device voices, rate and a sample; voices loaded asynchronously refresh the selector. Responses remain in normal conversation history. Recognition listens between spoken answers, so automatic barge-in/echo cancellation and real-time model audio are not claimed. TTS begins after the full model reply arrives.
