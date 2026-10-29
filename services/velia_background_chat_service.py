@@ -13,6 +13,7 @@ from velia_background_jobs import JobStore, JobError, public_job
 from services import velia_chat_service as chat, velia_quantum_service as quantum
 from services.velia_attachment_service import AttachmentError, attachment_context_sql, normalize_attachment_ids, validate_and_link_attachments
 import velia_free_models as free
+from services import velia_background_agent_service as agent
 
 LOG = logging.getLogger(__name__)
 ID = re.compile(r'[0-9a-fA-F-]{36}\Z')
@@ -52,6 +53,17 @@ def prepare(cur, job):
     error = quantum.free_budget_error(cur, user, job['model'])
     if error:
         raise JobError(error, 429)
+    if data.get('resume_from'):
+        cur.execute('SELECT payload FROM velia_background_chat WHERE id=%s AND user_id=%s AND conversation_id=%s AND model=%s',
+            (data['resume_from'],user,cid,job['model']))
+        parent=cur.fetchone()
+        if not parent:raise JobError('background_task_not_found',404)
+        parent=json.loads(parent[0])
+        if parent.get('user_action_required') not in agent.HANDOFFS or parent.get('resumed_by'):
+            raise JobError('background_task_finished',409)
+        parent.update(resumed_by=job['id'],user_action_required=None)
+        cur.execute('UPDATE velia_background_chat SET payload=%s,updated_at=%s WHERE id=%s AND user_id=%s',
+            (json.dumps(parent,ensure_ascii=False),time.time(),data['resume_from'],user))
     user_id, assistant_id = str(uuid.uuid4()), str(uuid.uuid4())
     cur.execute("""INSERT INTO velia_messages(message_id,conversation_id,user_id,role,content,status,idempotency_key,request_id)
         VALUES (%s,%s,%s,'user',%s,'completed',%s,%s)""", (user_id,cid,user,data['content'],job['request_key'],job['id']))
@@ -141,14 +153,17 @@ def run_one(jobs, shutdown):
                 checked=time.monotonic()
                 if not jobs.alive(job):
                     raise JobError('background_task_cancelled',409)
-        result=quantum.generate('',messages=messages,chat_mode=job['model'],voice_turn=False,
-            web_search=job['payload']['web_search'],account_language=job['payload']['language'],on_delta=delta,request_id=job['id'])
+        if job['payload'].get('agent'):
+            result={'ok':True,'text':agent.execute(job,jobs,quantum.generate,delta)}
+        else:
+            result=quantum.generate('',messages=messages,chat_mode=job['model'],voice_turn=False,
+                web_search=job['payload']['web_search'],account_language=job['payload']['language'],on_delta=delta,request_id=job['id'])
         jobs.finish(job,result.get('text','') if result.get('ok') else '', '' if result.get('ok') else result.get('reason','background_task_failed'))
         LOG.info('VELIA_BACKGROUND_COMPLETE mode=%s ok=%s',job['model'],result.get('ok') is True)
         return True
     except Exception as exc:
         if job and not shutdown.is_set():
-            code=exc.code if isinstance(exc,JobError) else 'background_task_failed'
+            code=exc.code if isinstance(exc,JobError) else ('background_agent_interrupted' if job['payload'].get('agent_state') in {'browser','checking'} else 'background_task_failed')
             jobs.finish(job,error=code)
         LOG.warning('VELIA_BACKGROUND_FAILED type=%s',type(exc).__name__)
         return False
@@ -215,16 +230,34 @@ def setup_routes(app, routes):
                 elif action=='revise':
                     if set(data)!={'note','idempotency_key'} or not isinstance(data['note'],str) or not 1<=len(data['note'].strip())<=2000 or not KEY.fullmatch(str(data['idempotency_key'])):raise JobError('invalid_request')
                     await asyncio.to_thread(allowed,user,job['model'])
+                    if job['payload'].get('agent'):
+                        agent.validate_task(job['payload']['content'],[n['text'] for n in job['payload'].get('notes',[])]+[data['note'].strip()])
                     value=await asyncio.to_thread(jobs.change,user,job_id,note=data['note'].strip(),key=data['idempotency_key'])
                 else:raise JobError('invalid_request')
             else:
-                if set(data)-{'web_search','voice_turn','attachment_ids'}!={'conversation_id','model','content','idempotency_key'}:raise JobError('invalid_request')
+                if set(data)-{'web_search','voice_turn','attachment_ids','agent','resume_job_id'}!={'conversation_id','model','content','idempotency_key'}:raise JobError('invalid_request')
                 cid,mode,content=data['conversation_id'],data['model'],data['content']
                 if mode not in {'quantum','pro'} or not isinstance(cid,str) or not ID.fullmatch(cid) or not isinstance(content,str) or not 1<=len(content.strip())<=12000 or not KEY.fullmatch(str(data['idempotency_key'])):raise JobError('invalid_request')
-                if any(k in data and type(data[k]) is not bool for k in ('web_search','voice_turn')):raise JobError('invalid_request')
+                if any(k in data and type(data[k]) is not bool for k in ('web_search','voice_turn','agent')):raise JobError('invalid_request')
+                resume_from=data.get('resume_job_id')
+                if resume_from is not None:
+                    if not data.get('agent') or not isinstance(resume_from,str) or not ID.fullmatch(resume_from):raise JobError('invalid_request')
+                    parent=await asyncio.to_thread(jobs.get,user,resume_from)
+                    if parent['conversation_id']!=cid or parent['model']!=mode or parent['status']!='completed':raise JobError('background_task_not_found',404)
+                    if parent['payload'].get('resumed_by'):
+                        value=await asyncio.to_thread(jobs.get,user,parent['payload']['resumed_by'])
+                        return routes._json_response({'ok':True,'job':public_job(value)},status=202)
+                    if parent['payload'].get('user_action_required') not in agent.HANDOFFS:raise JobError('background_task_finished',409)
+                    content='\n'.join([parent['payload']['content'],*[n['text'] for n in parent['payload'].get('notes',[])]])
+                if data.get('agent'):
+                    if not agent.configuration():raise JobError('background_agent_unavailable',503)
+                    if data.get('attachment_ids'):raise JobError('invalid_attachment_ids')
+                    agent.validate_task(content)
                 await asyncio.to_thread(allowed,user,mode)
                 values={'content':content.strip(),'web_search':data.get('web_search',False),'voice_turn':data.get('voice_turn',False), 'attachment_ids':normalize_attachment_ids(data.get('attachment_ids',[]))}
-                value=await asyncio.to_thread(jobs.create,user,cid,mode,data['idempotency_key'],values)
+                if data.get('agent'):values.update(agent=True,agent_state='planning')
+                if resume_from:values['resume_from']=resume_from
+                value=await asyncio.to_thread(jobs.create,user,cid,mode,'resume:'+resume_from if resume_from else data['idempotency_key'],values)
             wake.set()
             return routes._json_response({'ok':True,'job':public_job(value)},status=202)
         except (JobError,AttachmentError) as exc:

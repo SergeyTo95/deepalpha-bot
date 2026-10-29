@@ -1039,3 +1039,119 @@ def test_background_worker_keeps_full_written_answer_and_does_not_reserve_foregr
     assert calls[0]['voice_turn'] is False and calls[0]['chat_mode']=='pro'
     assert calls[0]['messages']==[{'role':'user','content':'Full task'}]
     assert background_store.get(77,job['id'])['result']=='A complete written result'
+
+
+@pytest.mark.parametrize('mode',['pro','quantum'])
+def test_background_agent_selected_model_plans_and_checks_one_browser_execution(background_store,monkeypatch,mode):
+    from services import velia_background_agent_service as agent
+    from velia_background_jobs import public_job
+    jobs=background_store;calls=[];remote=[]
+    queued=jobs.create(77,'conv',mode,'agent-task-1',{'agent':True,'content':'Read the public price page',
+        'messages':[{'role':'user','content':'Read the public price page'}],'notes':[],'language':'tr'})
+    job=jobs.claim()
+    def generate(_prompt,**kwargs):
+        calls.append(kwargs)
+        return {'ok':True,'text':json.dumps({'instruction':'Inspect the requested price page without submitting forms'}) if len(calls)==1 else 'Verified result'}
+    def execute(current,prompt):
+        remote.append((current['user_id'],current['conversation_id'],prompt))
+        assert jobs.get(77,job['id'])['payload']['agent_state']=='browser'
+        return {'text':'Observed public price: 10','tool_count':2,'user_action_required':None}
+    monkeypatch.setattr(agent,'execute_remote',execute)
+    result=agent.execute(job,jobs,generate,lambda _:None)
+    assert result=='Verified result' and len(remote)==1 and len(calls)==2
+    assert remote[0][:2]==(77,'conv') and 'Read the public price page' in remote[0][2]
+    assert all(c['chat_mode']==mode and c['web_search'] is False and c['account_language']=='tr' for c in calls)
+    assert 'Observed public price: 10' in calls[-1]['messages'][0]['content']
+    assert jobs.finish(job,result)
+    done=jobs.get(77,queued['id']);assert 'agent_result' not in done['payload']
+    assert public_job(done)['agent'] is True and 'Observed public price' not in str(public_job(done))
+
+
+def test_background_agent_never_replays_uncertain_actions_and_reuses_a_saved_receipt(background_store,monkeypatch):
+    from services import velia_background_agent_service as agent
+    from velia_background_jobs import JobError
+    jobs=background_store
+    queued=jobs.create(77,'conv','pro','agent-task-2',{'agent':True,'content':'Read a page',
+        'messages':[{'role':'user','content':'Read a page'}],'notes':[],'language':'ru'})
+    job=jobs.claim();jobs.checkpoint(job,{'agent_state':'browser'})
+    monkeypatch.setattr(agent,'execute_remote',lambda *a:pytest.fail('Remote action was replayed'))
+    with pytest.raises(JobError,match='background_agent_interrupted'):
+        agent.execute(job,jobs,lambda *a,**kw:pytest.fail('Unexpected replan'),lambda _:None)
+    jobs.checkpoint(job,{'agent_result':{'text':'Already observed','tool_count':1,'user_action_required':None},'agent_state':'checking'})
+    jobs.change(77,job['id'],note='Report only the confirmed result',key='clarify-0001')
+    assert jobs.finish(job,'stale') is False
+    recovered=jobs.claim();calls=[]
+    def verify(_prompt,**kwargs):calls.append(kwargs);return {'ok':True,'text':'Confirmed'}
+    assert agent.execute(recovered,jobs,verify,lambda _:None)=='Confirmed'
+    assert len(calls)==1 and 'Report only the confirmed result' in str(calls)
+    jobs.change(77,job['id'])
+    assert jobs.checkpoint(recovered,{'agent_state':'browser'}) is False
+
+
+def test_background_agent_manual_handoff_and_cancel_do_not_report_verified_success(background_store,monkeypatch):
+    from services import velia_background_agent_service as agent
+    from velia_background_jobs import public_job,JobError
+    jobs=background_store
+    data={'agent':True,'content':'Open my account','messages':[{'role':'user','content':'Open my account'}],'language':'ru'}
+    first=jobs.create(77,'conv','quantum','agent-task-3',data);job=jobs.claim();calls=[]
+    def plan(*args,**kwargs):calls.append(kwargs);return {'ok':True,'text':'{"instruction":"Open the account page and stop for login"}'}
+    monkeypatch.setattr(agent,'execute_remote',lambda *a:{'text':'Please sign in','tool_count':1,'user_action_required':'credentials'})
+    text=agent.execute(job,jobs,plan,lambda _:None);assert text=='Please sign in' and len(calls)==1
+    jobs.finish(job,text);assert public_job(jobs.get(77,first['id']))['user_action_required']=='credentials'
+    second=jobs.create(77,'conv','pro','agent-task-4',data);job=jobs.claim()
+    def cancel(*args):jobs.change(77,job['id']);return {'text':'Late result','tool_count':1,'user_action_required':None}
+    monkeypatch.setattr(agent,'execute_remote',cancel)
+    with pytest.raises(JobError,match='background_task_cancelled'):agent.execute(job,jobs,plan,lambda _:None)
+    assert jobs.get(77,second['id'])['status']=='cancelled'
+
+
+def test_background_agent_configuration_and_context_are_bounded(monkeypatch):
+    from services import velia_background_agent_service as agent
+    from velia_background_jobs import JobError
+    monkeypatch.setenv('VELIA_BACKGROUND_AGENT_KEY','x'*48)
+    for origin in ('http://example.com','https://a:b@example.com','https://example.com/path','https://example.com?x=1'):
+        monkeypatch.setenv('VELIA_BACKGROUND_AGENT_ORIGIN',origin);assert agent.configuration() is None
+    monkeypatch.setenv('VELIA_BACKGROUND_AGENT_ORIGIN','https://gateway.example')
+    assert agent.configuration()[0]=='https://gateway.example'
+    with pytest.raises(JobError,match='background_agent_context_too_long'):agent.validate_task('界'*2100)
+
+
+def test_postgres_background_agent_resume_links_once_to_owned_original_task(free_tiers,monkeypatch,postgres_chat):
+    from services import velia_background_chat_service as service,velia_attachment_service as files
+    from velia_background_jobs import JobError
+    _,connect=postgres_chat
+    monkeypatch.setenv('VELIA_BACKGROUND_CHAT_ENABLED','true');monkeypatch.setenv('VELIA_CHAT_ENABLED','true')
+    monkeypatch.setattr(files,'get_connection',connect);files.ensure_velia_attachment_tables()
+    monkeypatch.setattr(service.quantum,'account_language',lambda *a:'ru')
+    cid=chat.create_conversation(77)['id'];jobs=service.store();jobs.initialize()
+    data={'agent':True,'content':'Open the account page','web_search':False,'voice_turn':False,'attachment_ids':[]}
+    parent=jobs.create(77,cid,'pro','parent-agent-001',data);running=jobs.claim()
+    jobs.checkpoint(running,{'user_action_required':'otp','agent_state':'waiting_user'})
+    jobs.finish(running,'Please enter the code in the browser')
+    resumed={**data,'content':'Continue the original task','resume_from':parent['id']}
+    with pytest.raises(JobError,match='background_task_not_found'):
+        jobs.create(77,cid,'quantum','wrong-model-001',resumed)
+    child=jobs.create(77,cid,'pro','resume:'+parent['id'],resumed)
+    assert jobs.create(77,cid,'pro','resume:'+parent['id'],resumed)['id']==child['id']
+    stored=jobs.get(77,parent['id'])['payload']
+    assert stored['resumed_by']==child['id'] and stored['user_action_required'] is None
+    assert child['payload']['messages'][-1]['content']=='Continue the original task'
+    with connect() as conn,conn.cursor() as cur:
+        cur.execute('SELECT COUNT(*) FROM velia_background_chat WHERE user_id=77');assert cur.fetchone()[0]==2
+
+
+def test_background_agent_review_failure_keeps_unverified_evidence_without_repeating_actions(background_store,monkeypatch):
+    from services import velia_background_agent_service as agent
+    from velia_background_jobs import JobError
+    jobs=background_store
+    jobs.create(77,'conv','pro','review-error-1',{'agent':True,'content':'Read a public page',
+        'messages':[{'role':'user','content':'Read a public page'}],'notes':[],'language':'ru'})
+    job=jobs.claim()
+    jobs.checkpoint(job,{'agent_state':'checking','agent_result':{'text':'Observed result','tool_count':1,'user_action_required':None}})
+    monkeypatch.setattr(agent,'execute_remote',lambda *a:pytest.fail('Do not repeat actions during verification'))
+    with pytest.raises(JobError,match='background_agent_review_failed'):
+        agent.execute(job,jobs,lambda *a,**kw:{'ok':False,'reason':'pro_overloaded'},lambda _:None)
+    jobs.finish(job,error='background_agent_review_failed')
+    stored=jobs.get(77,job['id'])
+    assert stored['status']=='error' and 'Observed result' in stored['result'] and 'не проверен' in stored['result']
+    assert 'agent_result' not in stored['payload']

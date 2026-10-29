@@ -509,6 +509,7 @@
   "services/velia_attachment_service.py",
   "services/velia_attachment_text_service.py",
   "services/velia_attachment_upload_service.py",
+  "services/velia_background_agent_service.py",
   "services/velia_background_chat_service.py",
   "services/velia_chat_latency_runtime_patch.py",
   "services/velia_chat_service.py",

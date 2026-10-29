@@ -135,6 +135,19 @@ class JobStore:
         current = self.get(job['user_id'], job['id'])
         return (current['status'] == 'running' and current['lease'] == job['lease'] and current['revision'] == job['revision'])
 
+    def checkpoint(self, job, fields, *, strict_revision=True):
+        with self.transaction() as cur:
+            self.execute(cur, 'SELECT * FROM velia_background_chat WHERE id=? AND user_id=?', (job['id'], job['user_id']))
+            current = self.row(cur, cur.fetchone())
+            if (not current or current['status'] != 'running' or current['lease'] != job['lease']
+                    or strict_revision and current['revision'] != job['revision']):
+                return False
+            current['payload'].update(fields)
+            self.execute(cur, 'UPDATE velia_background_chat SET payload=?,lease_until=?,updated_at=? WHERE id=? AND user_id=?',
+                (json.dumps(current['payload'], ensure_ascii=False), time.time()+600, time.time(), job['id'], job['user_id']))
+            job['payload'].update(fields)
+            return True
+
     def finish(self, job, text='', error=''):
         with self.transaction() as cur:
             self.execute(cur, 'SELECT * FROM velia_background_chat WHERE id=? AND user_id=?', (job['id'], job['user_id']))
@@ -145,9 +158,12 @@ class JobStore:
                 self.execute(cur, "UPDATE velia_background_chat SET status='queued',lease=NULL,updated_at=? WHERE id=?", (time.time(), job['id']))
                 return False
             current.update(status='completed' if text and not error else 'error', result=text if not error else '', error=error)
+            if error == 'background_agent_review_failed' and current['payload'].get('agent_result'):
+                current['result'] = '[Agent — результат ещё не проверен выбранной моделью]\n\n'+current['payload']['agent_result']['text']
             if self.publish:
                 self.publish(cur, current)
             current['payload'].pop('messages',None)
+            current['payload'].pop('agent_result',None)
             self.execute(cur, 'UPDATE velia_background_chat SET status=?,result=?,error=?,payload=?,lease=NULL,updated_at=? WHERE id=?',
                 (current['status'], current['result'], current['error'], json.dumps(current['payload'],ensure_ascii=False), time.time(), job['id']))
             return True
@@ -172,6 +188,7 @@ class JobStore:
             if note is None:
                 job.update(status='cancelled', error='background_task_cancelled')
                 job['payload'].pop('messages',None)
+                job['payload'].pop('agent_result',None)
                 if self.publish:
                     self.publish(cur, job)
             else:
@@ -189,4 +206,8 @@ def public_job(job):
     return {k:job[k] for k in ('id','conversation_id','model','status','revision','created_at','updated_at','error')} | {
         'title':job['payload']['content'][:160], 'result':job['result'],
         'assistant_message_id':job['payload'].get('assistant_message_id'),
+        'agent':job['payload'].get('agent') is True,
+        'resumed':bool(job['payload'].get('resumed_by')),
+        'agent_state':job['payload'].get('agent_state'),
+        'user_action_required':job['payload'].get('user_action_required'),
         'notes':[n['text'] for n in job['payload'].get('notes', [])]}
