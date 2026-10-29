@@ -50,6 +50,7 @@ try{
   assert.equal(await page.locator('.voice-dialog').getAttribute('data-phase'),'thinking');
   job.first.resolve();
   await page.waitForFunction(()=>document.querySelector('.voice-dialog').dataset.phase==='speaking');
+  assert.ok(await page.evaluate(()=>audios.at(-1).currentTime>=.04));
   await page.waitForFunction(()=>audios.at(-1).currentTime>0);
   if(streaming)assert.equal(job.ended,false,'playback waited for the entire provider response');
   job.tail.resolve();await page.waitForFunction(()=>recognizers.length===2);

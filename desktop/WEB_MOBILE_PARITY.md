@@ -67,6 +67,16 @@ Verification: 36 focused server tests, 13 Node tests and synthetic Chromium chec
 
 ### Progressive audio and playback status (2026-10-29)
 
+Follow-up: remote speech status now requires at least 40 ms of media-clock
+progress after `playing`, and again after buffering or pause. It is tied to the
+current audio element; callbacks from an earlier phrase cannot change the
+current status. This adds no wait to playback itself. It confirms media-clock
+progress, not physical speaker output or speech amplitude. Reload the browser
+document after deploying to replace an already-imported voice module. Requests
+send the fixed `playback-clock-v1` client marker; server logs distinguish that
+marker from legacy clients and progressive from buffered delivery, with no
+speech text or arbitrary client header data in logs.
+
 Online playback shows “Готовлю голос…” while waiting for synthesis or browser
 buffering. “Велия говорит…” starts only on the audio `playing` event, or the
 device utterance `start` event. Waiting and stale events cannot leave the call

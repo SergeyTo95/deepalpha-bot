@@ -186,6 +186,9 @@ def setup_voice_routes(app, *, session_for, same_origin, json_response):
                 return json_response({"error": "tts_rate_limit"}, 429)
             history.append(now)
             async with slots:
+                LOG.info("VELIA_WEB_TTS_DELIVERY mode=%s client=%s",
+                    "progressive" if request.query.get("stream") == "1" and "edge_voice" in fields else "buffered",
+                    "playback-clock-v1" if request.headers.get("X-Velia-Voice-Client") == "playback-clock-v1" else "legacy")
                 if request.query.get("stream") == "1" and "edge_voice" in fields:
                     return await stream_speech(request, fields)
                 audio = await synthesize(fields)

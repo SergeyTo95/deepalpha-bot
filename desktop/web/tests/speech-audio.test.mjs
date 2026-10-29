@@ -1,6 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {canStreamAudio,attachAudioStream} from '../speech-audio.mjs';
+import {canStreamAudio,attachAudioStream,trackPlaybackStatus} from '../speech-audio.mjs';
+
+test('playing without media-clock progress stays in preparation, even after repeated events',()=>{
+ const audio={currentTime:0,paused:false},states=[];
+ trackPlaybackStatus(audio,{valid:()=>true,speaking:()=>states.push('speaking'),buffering:()=>states.push('preparing')});
+ audio.onplaying();for(let i=0;i<30;i++)audio.ontimeupdate();assert.deepEqual(states,[]);
+ audio.currentTime=.02;audio.ontimeupdate();assert.deepEqual(states,[]);
+ audio.currentTime=.1;audio.ontimeupdate();assert.deepEqual(states,['speaking']);
+});
+test('after buffering or pause, a player must advance again before showing speaking',()=>{
+ const audio={currentTime:1,paused:false},states=[];
+ const dispose=trackPlaybackStatus(audio,{valid:()=>true,speaking:()=>states.push('speaking'),buffering:()=>states.push('preparing')});
+ audio.onplaying();assert.deepEqual(states,[]);audio.currentTime=1.1;audio.ontimeupdate();
+ audio.onwaiting();audio.onplaying();assert.deepEqual(states,['speaking','preparing']);
+ audio.currentTime=1.2;audio.ontimeupdate();assert.equal(states.at(-1),'speaking');
+ audio.paused=true;audio.onpause();audio.currentTime=1.3;audio.ontimeupdate();assert.equal(states.at(-1),'preparing');dispose();
+});
+test('callbacks from a previous player or a stopped call cannot change the status',()=>{
+ const audio={currentTime:0,paused:false},states=[];let live=true;
+ const dispose=trackPlaybackStatus(audio,{valid:()=>live,speaking:()=>states.push('speaking'),buffering:()=>states.push('preparing')});
+ const playing=audio.onplaying,progress=audio.ontimeupdate,waiting=audio.onwaiting;
+ live=false;audio.currentTime=1;playing();progress();waiting();assert.deepEqual(states,[]);
+ live=true;dispose();playing();progress();waiting();assert.deepEqual(states,[]);
+ assert.equal(audio.onplaying,null);assert.equal(audio.ontimeupdate,null);
+});
 
 function setup(signal) {
  const sources=[],errors=[];

@@ -3,6 +3,19 @@ export function canStreamAudio(Source=globalThis.window?.MediaSource) {
   try{return !!Source?.isTypeSupported('audio/mpeg');}catch{return false;}
 }
 
+// Some players signal `playing` before their media clock starts advancing.
+// Gate the status on progress from this player, including after rebuffering.
+export function trackPlaybackStatus(audio,{valid,speaking,buffering}) {
+  let disposed=false,running=false,baseline=Number(audio.currentTime)||0;
+  const progress=()=>{
+    if(!disposed&&valid()&&running&&!audio.paused&&Number(audio.currentTime)-baseline>=.04)speaking();
+  };
+  const playing=()=>{if(disposed)return;running=true;progress();};
+  const waiting=()=>{if(disposed)return;running=false;baseline=Number(audio.currentTime)||0;if(valid())buffering();};
+  audio.onplaying=playing;audio.ontimeupdate=progress;audio.onwaiting=waiting;audio.onpause=waiting;
+  return ()=>{disposed=true;for(const [name,handler] of [['onplaying',playing],['ontimeupdate',progress],['onwaiting',waiting],['onpause',waiting]])if(audio[name]===handler)audio[name]=null;};
+}
+
 export function attachAudioStream(response,{signal,onFailure,Source=window.MediaSource}) {
   const source=new Source(),reader=response.body.getReader(),url=URL.createObjectURL(source);
   let cancelled=false,buffer=null,interrupt=null;
