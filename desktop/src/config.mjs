@@ -1,5 +1,7 @@
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
+import { readFileSync } from 'node:fs';
+const engineering = JSON.parse(readFileSync(new URL('./engineering-policy.json', import.meta.url), 'utf8'));
 
 export const HARNESS_COMMIT = '5badb15009ae1756c3afe0ae0cef1faafc290ccc';
 export function defaultHome(value = process.env.VELIA_DESKTOP_HOME) {
@@ -45,7 +47,7 @@ export function profilePatch(baseURL, credentialPath, localGateway) {
     { id: 'agent-default-model', config: { provider: 'velia', model: 'velia-pro' } },
     { id: 'system-prompt', config: {
       personaPrefix: 'Ты Велия (VELIA), ИИ-помощница. Говори о себе в женском роде. По умолчанию отвечай по-русски. Выполняй задачи с помощью доступных инструментов.',
-      personaSuffix: 'Your working directory is {{cwd}}.',
+      personaSuffix: 'Your working directory is {{cwd}}.\nFor software tasks only:\n'+engineering.rules.join('\n')+'\n'+engineering.stages.desktop,
     } },
     { id: 'desktop-product-telemetry', disabled: true },
     { id: 'product-analytics', disabled: true },
