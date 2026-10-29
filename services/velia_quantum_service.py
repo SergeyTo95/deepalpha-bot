@@ -71,7 +71,7 @@ def public_capability():
     return {"chat_selected_model_inputs": True, "chat_quantum_native_tools": config is not None,
         "chat_quantum_web_search": bool(config and search_configuration()),
         "chat_quantum": config is not None, "chat_quantum_attachments": bool(config and attachments_available()),
-        "chat_quantum_source": config.source if config else None}
+        "chat_quantum_source": "VELIA QUANTUM" if config else None}
 
 
 def attachments_available():

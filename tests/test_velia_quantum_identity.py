@@ -40,5 +40,5 @@ def test_identity_capability_tracks_quantum_configuration(enabled, monkeypatch, 
                 assert result["features"]["chat_quantum"] is available
                 assert result["features"]["chat_quantum_attachments"] is False
                 assert result["features"]["chat_quantum_source"] == (
-                    "GLM-5.3 через Experiential" if available else None)
+                    "VELIA QUANTUM" if available else None)
     asyncio.run(run())
