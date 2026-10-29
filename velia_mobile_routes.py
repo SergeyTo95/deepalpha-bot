@@ -1,4 +1,5 @@
 import html
+import velia_free_models as free_models
 import json
 import os
 from typing import Any, Callable, Dict, Optional
@@ -237,6 +238,7 @@ def setup_velia_mobile_routes(
                     "chat": is_velia_chat_enabled_for_user(user_id),
                     **public_capability(),
                     **quantum_capability(),
+                    **(free_models.public_capability() if free_models.enabled() else {}),
                     "debug_usage": is_debug_usage_enabled_for_user(user_id),
                 },
             }

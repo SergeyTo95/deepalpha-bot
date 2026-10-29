@@ -10,6 +10,7 @@ import threading
 from urllib.parse import urlsplit
 
 import requests
+import velia_free_models as free_models
 
 MODEL = "velia-flash"
 PROVIDER = "bonsai"
@@ -95,6 +96,8 @@ def endpoint():
 
 
 def available():
+    if free_models.enabled():
+        return free_models.configuration("flash") is not None
     return (os.getenv("VELIA_FLASH_ENABLED", "false").lower() in {"true", "1", "yes"}
             and bool(endpoint()) and bool(os.getenv("VELIA_FLASH_API_KEY", "").strip()))
 
@@ -477,6 +480,10 @@ _RETRIABLE_STREAM_ERRORS = {
 
 def generate(messages, *, request_id="", on_delta=None, on_reset=None):
     """Generate once, with one same-provider recovery after a broken mobile stream."""
+    if free_models.enabled():
+        from services.velia_quantum_service import generate as native_generate
+        return native_generate("", messages=messages, chat_mode="flash", voice_turn=_voice_fast_enabled(),
+            request_id=request_id, on_delta=on_delta)
     result = _generate_once(messages, request_id=request_id, on_delta=on_delta)
     if result.get("ok") or not (callable(on_delta) and callable(on_reset)):
         return result
@@ -509,6 +516,10 @@ def generate(messages, *, request_id="", on_delta=None, on_reset=None):
 
 def dispatch_send(sender, user_id, conversation_id, content, *, chat_mode="pro",
                   voice_turn=False, on_delta=None, on_reset=None, **kwargs):
+    if free_models.enabled():
+        from services.velia_quantum_service import dispatch_free
+        return dispatch_free(user_id, conversation_id, content, chat_mode=chat_mode, voice_turn=voice_turn,
+            on_delta=on_delta, on_reset=on_reset, **kwargs)
     if chat_mode == "pro":
         return sender(user_id, conversation_id, content, **kwargs)
     if chat_mode == "quantum":

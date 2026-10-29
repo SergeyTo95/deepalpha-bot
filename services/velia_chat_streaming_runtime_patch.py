@@ -1,3 +1,4 @@
+import velia_free_models as free_models
 import logging
 import threading
 import time
@@ -192,9 +193,9 @@ def run_streaming_send(
         # field was supplied, while forwarding the exact list when it exists.
         if attachment_ids is not None:
             send_kwargs["attachment_ids"] = attachment_ids
-        if chat_mode == "quantum" and web_search is not None:
+        if (chat_mode == "quantum" or free_models.enabled()) and web_search is not None:
             send_kwargs["web_search"] = bool(web_search)
-        if chat_mode != "pro":
+        if chat_mode != "pro" or free_models.enabled():
             from services.velia_flash_service import dispatch_send
             return dispatch_send(send_message, int(user_id), str(conversation_id),
                                  str(content), chat_mode=chat_mode, voice_turn=bool(voice_turn),

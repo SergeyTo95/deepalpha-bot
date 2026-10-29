@@ -207,7 +207,7 @@ def _serialize_conversation(row: Any) -> Dict[str, Any]:
 
 def _message_chat_mode(row: Any) -> str:
     provider = _row_value(row, "provider", 9)
-    return "quantum" if provider == "velia-quantum" else "flash" if provider == "bonsai" else "pro"
+    return "quantum" if provider == "velia-quantum" else "flash" if provider in {"bonsai", "velia-flash"} else "pro"
 
 
 def _serialize_message(row: Any, *, debug_usage: bool = False) -> Dict[str, Any]:

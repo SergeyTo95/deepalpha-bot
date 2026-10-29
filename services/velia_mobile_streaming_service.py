@@ -1,4 +1,5 @@
 import asyncio
+import velia_free_models as free_models
 import json
 import logging
 import os
@@ -100,7 +101,7 @@ def _stream_send_kwargs(
         kwargs["chat_mode"] = data["chat_mode"]
     if "voice_turn" in data:
         kwargs["voice_turn"] = bool(data.get("voice_turn"))
-    if data.get("chat_mode") == "quantum" and "web_search" in data:
+    if (data.get("chat_mode") == "quantum" or free_models.enabled()) and "web_search" in data:
         kwargs["web_search"] = data["web_search"]
     # Field presence is meaningful for idempotency. An explicit null means
     # an explicit empty attachment set, while omission preserves legacy calls.

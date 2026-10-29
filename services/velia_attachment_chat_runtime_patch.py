@@ -1,5 +1,6 @@
 import time
 import uuid
+import velia_free_models as free_models
 from typing import Any, Dict, List, Optional
 
 from db.database import get_connection
@@ -153,6 +154,8 @@ def install(chat_module: Any) -> None:
     ) -> Dict[str, Any]:
         if chat_mode not in {"pro", "flash", "quantum"}:
             return {"ok": False, "error": "invalid_chat_mode"}
+        if free_models.enabled() and free_models.configuration(chat_mode, voice=voice_turn) is None:
+            return {"ok":False, "error":chat_mode + "_unavailable"}
         if chat_mode == "flash" and not flash.available():
             return {"ok": False, "error": "flash_unavailable"}
         if chat_mode == "quantum" and not quantum.available():
@@ -232,7 +235,7 @@ def install(chat_module: Any) -> None:
                 conn.rollback()
                 return existing
 
-            budget_error = (flash.budget_error(cursor, user_id) if chat_mode == "flash"
+            budget_error = (quantum.free_budget_error(cursor, user_id, chat_mode) if free_models.enabled() else flash.budget_error(cursor, user_id) if chat_mode == "flash"
                             else quantum.budget_error(cursor, user_id) if chat_mode == "quantum"
                             else chat_module._budget_error(user_id))
             if budget_error:
@@ -300,7 +303,10 @@ def install(chat_module: Any) -> None:
                 ),
             )
 
-            if chat_mode == "flash":
+            if free_models.enabled():
+                cursor.execute("UPDATE velia_messages SET provider=%s, model=%s, estimated_cost_usd=0 WHERE message_id=%s AND user_id=%s",
+                    ("velia-"+chat_mode, "velia-"+chat_mode, assistant_message_id, int(user_id)))
+            elif chat_mode == "flash":
                 cursor.execute(
                     "UPDATE velia_messages SET provider='bonsai', model='velia-flash', "
                     "estimated_cost_usd=0 WHERE message_id=%s AND user_id=%s",
@@ -367,7 +373,13 @@ def install(chat_module: Any) -> None:
 
         started = time.monotonic()
         try:
-            if chat_mode == "flash":
+            if free_models.enabled():
+                prompt = chat_module._build_prompt(user_id, conversation_id)
+                messages = quantum.conversation_messages(chat_module, user_id, conversation_id, prompt=prompt, request_id=request_id)
+                generation = quantum.generate(prompt, messages=messages, chat_mode=chat_mode,
+                    account_language=quantum.account_language(chat_module, user_id), request_id=request_id,
+                    on_delta=on_delta, voice_turn=voice_turn, web_search=web_search)
+            elif chat_mode == "flash":
                 generation = flash.generate(
                     flash.build_prompt(chat_module, user_id, conversation_id),
                     request_id=request_id, on_delta=on_delta, on_reset=on_reset,

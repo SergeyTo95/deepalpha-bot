@@ -2,6 +2,7 @@
 import json
 import re
 import time
+import velia_free_models as free_models
 
 from services import velia_flash_service as flash
 
@@ -26,7 +27,7 @@ def run_case(label, prompt, check):
         result.get("ok")
         and check(text)
         and "<think>" not in text
-        and result.get("provider") == "bonsai"
+        and result.get("provider") == ("velia-flash" if free_models.enabled() else "bonsai")
         and result.get("estimated_cost_usd") == 0
         and not result.get("fallback_used")
         and bool(pieces)
@@ -46,6 +47,9 @@ def run_case(label, prompt, check):
     print("VELIA_FLASH_ADAPTER_PROBE " + json.dumps(payload, ensure_ascii=False), flush=True)
     return bool(passed)
 
+
+if free_models.enabled() and any(free_models.configuration(mode) is None for mode in free_models.TIERS):
+    raise SystemExit("VELIA_FREE_API_CONFIG_INVALID")
 
 cases = [
     run_case(

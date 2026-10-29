@@ -1,3 +1,4 @@
+import velia_free_models as free_models
 import hashlib
 import logging
 import re
@@ -528,7 +529,7 @@ def create_attachment_idempotently(
         return existing
 
     try:
-        if chat_mode in {"flash", "quantum"}:
+        if chat_mode in {"flash", "quantum"} or free_models.enabled():
             from services.velia_attachment_text_service import inspect_text_attachment
             inspected = inspect_text_attachment(raw, str(preflight["mime_type"]))
         else:

@@ -738,3 +738,120 @@ def test_saved_quantum_reads_account_language_instead_of_another_users_setting(e
     cid = chat.create_conversation(77)["id"]
     result = flash.dispatch_send(lambda *a,**k:pytest.fail("other model"),77,cid,"Hello",chat_mode="quantum",idempotency_key="language-owner-1")
     assert result["ok"] and seen == ["ja-JP"]
+
+
+@pytest.fixture
+def free_tiers(monkeypatch):
+    import velia_free_models as free
+    monkeypatch.setenv("VELIA_FREE_API_TIERS_ENABLED", "true")
+    monkeypatch.setenv("VELIA_ZAI_API_KEY", "fixture-zai-key")
+    monkeypatch.setenv("GROQ_API_KEY", "fixture-groq-key")
+    return free
+
+
+@pytest.mark.parametrize("mode,model", [("flash","glm-4.5-flash"),("quantum","glm-4.7-flash"),("pro","openai/gpt-oss-120b")])
+@pytest.mark.parametrize("voice", [False,True])
+def test_free_tiers_pin_same_model_for_text_and_voice_without_worker_or_paid_calls(free_tiers, monkeypatch, mode, model, voice):
+    client = Client(Response(body=wire("Поняла. 日本語 العربية Türkçe")))
+    monkeypatch.setattr(quantum.requests, "Session", lambda:client)
+    monkeypatch.setattr(quantum, "groq_backup_configuration", lambda *a:pytest.fail("tier switched models"))
+    parts=[]
+    result=quantum.generate("unused",messages=[{"role":"user","content":"Привет"}],chat_mode=mode,
+        voice_turn=voice,account_language="ru",on_delta=parts.append)
+    assert result["ok"] and result["model"]==result["provider"]=="velia-"+mode
+    assert result["estimated_cost_usd"]==0 and result["fallback_used"] is False
+    assert result["text"]=="".join(parts) and len(client.calls)==1 and client.guard_calls==[]
+    url, call=client.calls[0]; body=call["json"]
+    assert body["model"]==model and "account settings: ru" in body["messages"][0]["content"]
+    assert "apply-template" not in url and "tokenize" not in url
+    assert "tools" not in body
+    if mode=="pro":
+        assert url=="https://api.groq.com/openai/v1/chat/completions"
+        assert body["reasoning_effort"]==("low" if voice else "medium")
+        assert body["include_reasoning"] is False
+    else:
+        assert url=="https://api.z.ai/api/paas/v4/chat/completions"
+        assert body["thinking"]=={"type":"disabled"}
+
+
+@pytest.mark.parametrize("mode", ["flash","quantum","pro"])
+@pytest.mark.parametrize("status", [401,402,429,500])
+def test_free_tier_errors_never_call_another_provider_or_legacy_sender(free_tiers,monkeypatch,mode,status):
+    client=Client(Response(status=status,body=b'{"error":{"code":"1302"}}'))
+    monkeypatch.setattr(quantum.requests,"Session",lambda:client)
+    monkeypatch.setattr(quantum,"groq_backup_configuration",lambda *a:pytest.fail("fallback"))
+    result=quantum.generate("fixture",chat_mode=mode)
+    assert not result["ok"] and result["reason"].startswith(mode+"_")
+    assert len(client.calls)==1 and result["fallback_used"] is False
+
+
+def test_free_tier_configuration_ignores_paid_model_and_url_overrides(free_tiers,monkeypatch):
+    monkeypatch.setenv("VELIA_QUANTUM_MODEL","glm-5.3")
+    monkeypatch.setenv("KIMI_MODEL","paid-model")
+    monkeypatch.setenv("VELIA_FLASH_BASE_URL","https://paid.invalid")
+    monkeypatch.setenv("VELIA_ZAI_MODEL","paid-model")
+    assert [free_tiers.configuration(mode).model for mode in free_tiers.TIERS]==["glm-4.5-flash","glm-4.7-flash","openai/gpt-oss-120b"]
+    assert free_tiers.configuration("invented") is None
+    monkeypatch.delenv("GROQ_API_KEY")
+    assert free_tiers.configuration("pro") is None
+    monkeypatch.delenv("VELIA_ZAI_API_KEY")
+    monkeypatch.setenv("VELIA_QUANTUM_PROVIDER","experiential")
+    monkeypatch.setenv("VELIA_QUANTUM_API_KEY","wrong-service-secret")
+    assert free_tiers.configuration("flash") is None
+
+
+@pytest.mark.parametrize("mode",["flash","quantum","pro"])
+def test_free_saved_voice_turn_keeps_owner_mode_idempotency_and_never_uses_paid(free_tiers,monkeypatch,postgres_chat,mode):
+    proxy, connect=postgres_chat
+    monkeypatch.setenv("VELIA_CHAT_ENABLED","true")
+    monkeypatch.setattr(proxy,"_build_prompt",lambda *a:"Fixture context")
+    def forbidden(*a,**k):pytest.fail("paid or worker path")
+    monkeypatch.setattr(flash,"_generate_once",forbidden)
+    proxy.generate_velia_chat_result=forbidden
+    calls=[]
+    def generated(prompt,**kwargs):
+        calls.append(kwargs)
+        return {"ok":True,"text":"Fixture reply","provider":"velia-"+kwargs["chat_mode"],"model":"velia-"+kwargs["chat_mode"],"usage":{},"estimated_cost_usd":0.0}
+    monkeypatch.setattr(quantum,"generate",generated)
+    cid=chat.create_conversation(77)["id"]
+    result=flash.dispatch_send(forbidden,77,cid,"Привет",chat_mode=mode,voice_turn=True,idempotency_key="free-voice-turn-1")
+    assert result["ok"] and result["assistant_message"]["chat_mode"]==mode
+    assert calls[0]["chat_mode"]==mode and calls[0]["voice_turn"] is True
+    replay=flash.dispatch_send(forbidden,77,cid,"Привет",chat_mode=mode,voice_turn=True,idempotency_key="free-voice-turn-1")
+    assert replay["duplicate"] and len(calls)==1
+    denied=flash.dispatch_send(forbidden,78,cid,"Привет",chat_mode=mode,idempotency_key="free-voice-turn-2")
+    assert denied["error"]=="conversation_not_found" and len(calls)==1
+    other="pro" if mode!="pro" else "quantum"
+    mismatch=flash.dispatch_send(forbidden,77,cid,"Привет",chat_mode=other,idempotency_key="free-voice-turn-1")
+    assert mismatch["error"]=="idempotency_mode_mismatch" and len(calls)==1
+
+
+
+def test_free_pro_attachments_use_local_extraction_and_never_paid_vision(free_tiers,monkeypatch):
+    from services import velia_attachment_idempotency_service as uploads
+    from services import velia_attachment_text_service as extraction
+    calls=[]
+    monkeypatch.setattr(uploads.upload_service,"_preflight_attachment",lambda *a:{"mime_type":"text/plain"})
+    monkeypatch.setattr(uploads,"_existing_or_reserve",lambda **k:None)
+    monkeypatch.setattr(extraction,"inspect_text_attachment",lambda raw,mime:calls.append((raw,mime)) or {"extracted_text":"Invoice 42"})
+    monkeypatch.setattr(uploads.attachment_service,"inspect_attachment",lambda *a,**k:pytest.fail("paid vision invoked"))
+    monkeypatch.setattr(uploads.upload_service,"_complete_attachment",lambda **k:k["inspected"])
+    result=uploads.create_attachment_idempotently(77,"00000000-0000-4000-8000-000000000001",idempotency_key="free-pro-image-1",filename="invoice.txt",mime_type="text/plain",content=b"Invoice 42",chat_mode="pro")
+    assert result["extracted_text"]=="Invoice 42" and calls==[(b"Invoice 42","text/plain")]
+
+
+@pytest.mark.parametrize("mode",["flash","quantum","pro"])
+def test_free_tier_search_stays_on_selected_model_and_never_uses_provider_builtins(free_tiers,monkeypatch,mode):
+    monkeypatch.setattr(quantum,"search_configuration",lambda:("tavily","fixture"))
+    monkeypatch.setattr(quantum,"run_web_search",lambda *a,**k:{"results":[{"title":"Docs","url":"https://python.org","snippet":"Evidence"}]})
+    replies=[Response(body=native_tool_wire()),Response(body=wire("Нашла сведения."))]
+    class SearchClient(Client):
+        def post(self,url,**kwargs):
+            self.calls.append((url,kwargs));return replies.pop(0)
+    client=SearchClient(None)
+    monkeypatch.setattr(quantum.requests,"Session",lambda:client)
+    result=quantum.generate("Проверь Python",chat_mode=mode,web_search=True)
+    assert result["ok"] and result["fallback_used"] is False and len(client.calls)==2
+    assert all(request["json"]["model"]==free_tiers.TIERS[mode][1] for _,request in client.calls)
+    assert client.calls[0][1]["json"]["tools"][0]["type"]=="function"
+    assert "tools" not in client.calls[1][1]["json"] and client.calls[1][1]["json"]["messages"][-1]["role"]=="tool"
