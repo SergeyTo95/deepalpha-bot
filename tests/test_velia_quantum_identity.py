@@ -19,7 +19,7 @@ def test_identity_capability_tracks_quantum_configuration(enabled, monkeypatch, 
         monkeypatch.delenv("EXPLABS_API_KEY", raising=False)
     monkeypatch.setattr(routes, "authenticate_access_token", lambda token:
         {"user_id": 77, "session_id": "test-session"} if token == "va_identity_test" else None)
-    monkeypatch.setattr(routes, "get_user", lambda user_id: {"first_name": "Test account"})
+    monkeypatch.setattr(routes, "get_user", lambda user_id: {"first_name": "Test account", "language":"ja-JP"})
     monkeypatch.setattr(routes, "is_subscribed", lambda user_id: False)
     monkeypatch.setattr(routes, "get_subscription_until", lambda user_id: None)
     monkeypatch.setattr(routes, "is_velia_chat_enabled_for_user", lambda user_id: True)
@@ -36,6 +36,7 @@ def test_identity_capability_tracks_quantum_configuration(enabled, monkeypatch, 
                     headers={"Authorization": "Bearer va_identity_test"}) as response:
                 assert response.status == 200
                 result = await response.json()
+                assert result["user"]["language"] == "ja-JP"
                 assert result["features"]["chat_quantum"] is available
                 assert result["features"]["chat_quantum_attachments"] is False
                 assert result["features"]["chat_quantum_source"] == (

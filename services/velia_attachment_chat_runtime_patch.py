@@ -376,7 +376,7 @@ def install(chat_module: Any) -> None:
                 prompt = chat_module._build_prompt(user_id, conversation_id)
                 messages = quantum.conversation_messages(chat_module, user_id, conversation_id,
                     prompt=prompt, request_id=request_id)
-                generation = quantum.generate(prompt, messages=messages,
+                generation = quantum.generate(prompt, messages=messages, account_language=quantum.account_language(chat_module, user_id),
                     request_id=request_id, on_delta=on_delta, **({"voice_turn": True} if voice_turn else {}),
                     **({"web_search": True} if web_search else {}))
             else:

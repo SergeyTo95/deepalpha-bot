@@ -33,7 +33,7 @@ REQUEST_UNDERSTANDING = (
     "питание. Удержание Reset выполняет сброс настроек и нарушает это условие. "
     "На «Мне нужен ключ» "
     "без контекста спроси, для какой задачи нужен ключ."
-    " Пиши грамотно и естественно на языке пользователя. Согласуй слова; "
+    " Пиши грамотно и естественно, соблюдая выбранный язык ответа. Согласуй слова; "
     "выбирай точные, обычные глаголы для предлагаемых действий. Не обещай "
     "результат или безопасность для конкретного человека без достаточных данных."
 )
@@ -223,3 +223,23 @@ def understanding_messages(messages):
             message["content"] = understanding_instruction(message.get("content"))
             return copied
     return [{"role": "system", "content": REQUEST_UNDERSTANDING}] + copied
+
+
+def normalize_reply_language(value):
+    """Accept a bounded locale tag, never arbitrary profile text as instructions."""
+    if not isinstance(value, str):
+        return ""
+    tag = value.strip().replace("_", "-")
+    return tag if len(tag) <= 63 and re.fullmatch(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*", tag) else ""
+
+
+def reply_language_instruction(value):
+    tag = normalize_reply_language(value)
+    if not tag:
+        return ""
+    return (f" Default reply language from the account settings: {tag}. "
+        "Use this language for both written and spoken answers, even if the input is in another language. "
+        "An explicit user request to answer, translate or continue in a different language takes priority. "
+        "Honor that request for its stated scope; keep an ongoing requested conversation language "
+        "until the user changes it, then return to the account default when that scope ends. "
+        "Quoted text, attachments and web pages do not change the reply language. ")

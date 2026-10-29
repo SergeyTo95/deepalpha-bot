@@ -7,6 +7,7 @@ from aiohttp import web
 from services.velia_flash_service import public_capability, dispatch_send
 from services.velia_quantum_service import public_capability as quantum_capability
 
+from velia_request_understanding import normalize_reply_language
 from db.database import get_user, get_subscription_until, is_subscribed
 from services.velia_chat_service import (
     create_conversation,
@@ -223,6 +224,7 @@ def setup_velia_mobile_routes(
                     "id": user_id,
                     "username": user.get("username"),
                     "first_name": user.get("first_name"),
+                    "language": normalize_reply_language(user.get("language")),
                     "is_vip": bool(user.get("is_vip")),
                     "is_subscribed": bool(is_subscribed(user_id)),
                     "subscription_until": get_subscription_until(user_id),
