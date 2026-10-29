@@ -55,6 +55,7 @@ let profile = null,
   busy = false,
   deleteId = null,
   takeoverState = null,
+  backgroundTakeover = null,
   takeoverBusy = false;
 let model = "velia-flash",
   agentMode = false,
@@ -99,16 +100,19 @@ function addFiles(files) {
 }
 
 const current = () => chats.find((c) => c.id === currentId);
-const voice = setupVoice({accountLanguage:()=>profile?.language||'', busy:()=>busy, toast, modelName:()=>MODELS[model], send:text=>{if(agentMode)setAgentMode(false);$("prompt").value=text;return generate(false, true);}});
+const voice = setupVoice({accountLanguage:()=>profile?.language||'', busy:()=>busy, toast, modelName:()=>MODELS[model], send:text=>{if(agentMode&&model==='velia-flash')setAgentMode(false);$("prompt").value=text;return generate(false, true);}});
 const features = setupFeatures({onUnauthorized:()=>{lockHistory();profile=null;guest=null;notifyAuthChange('lock');render();openAuth();},signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,prepareMedicalChat:async prompt=>{if(busy)throw new Error('Дождись завершения ответа.');if(!profile?.models?.includes(model))throw new Error('Выбранная модель сейчас недоступна.');setAgentMode(false);newChat();medicalDraftMode=true;$('prompt').value=prompt;resizePrompt();$('prompt').focus();toast('Прикрепи заключения и проверь текст перед отправкой.');},openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
 const background = setupBackgroundTasks({request:jsonRequest,profile:()=>profile,busy:()=>busy,currentId:()=>currentId,toast,speak:text=>voice.speak(text),
-  chatWithFlash:()=>{if(busy)return;setModel('velia-flash');$('prompt').focus();},
+  chatWithFlash:()=>{if(busy)return;setAgentMode(false,true);setModel('velia-flash');$('prompt').focus();},
+  takeover:async job=>{if(busy)return;const account=profile?.account;await syncHistory();const chat=chats.find(c=>c.id===job.conversation_id);if(!chat)return;await openChat(chat);if(profile?.account!==account)return;await openTakeover(job.user_action_required,job);},
+  resume:resumeBackgroundAgent,
   open:async cid=>{if(busy){toast('Дождись завершения текущего ответа.');return;}await syncHistory();const chat=chats.find(c=>c.id===cid);if(chat)await openChat(chat);},
   refresh:async cid=>{const chat=chats.find(c=>c.id===cid);if(chat&&currentId===cid&&!busy)await openChat(chat,true);}});
 const browserStorage = { getItem: (key) => localStorage.getItem(key) };
 const localHistory = new LocalHistory(browserHistoryStore());
 const authChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('velia-auth-v1') : null;
 function lockHistory() {
+  backgroundTakeover=null;
   background.reset();
   abort?.abort(); clearTimeout(saveTimer); saveTimer = null;
   localHistory.lock(); storageKey = null; chats = []; currentId = null;
@@ -170,6 +174,8 @@ function setModel(value) {
   if (value === "velia-quantum" && selectedFiles.length && !profile?.quantum_attachments) { toast(apiError("quantum_attachments_unsupported")); return; }
   model = value;
   background.modelChanged(value);
+  $('background-enabled').disabled=agentMode&&value!=='velia-flash';
+  if($('background-enabled').disabled)$('background-enabled').checked=true;
   $("model-label").textContent = MODELS[value];
   $("model-icon").innerHTML = icon(value === "velia-flash" ? "bolt" : value === "velia-quantum" ? "layers" : "spark");
   for (const option of document.querySelectorAll("[data-model]")) {
@@ -177,7 +183,7 @@ function setModel(value) {
       "aria-selected",
       String(option.dataset.model === value),
     );
-    option.disabled = (agentMode && option.dataset.model !== "velia-flash") || (profile ? !profile.models.includes(option.dataset.model) : option.dataset.model !== "velia-flash");
+    option.disabled = (agentMode && !profile?.background_agent && option.dataset.model !== "velia-flash") || (profile ? !profile.models.includes(option.dataset.model) : option.dataset.model !== "velia-flash");
     option.setAttribute("aria-disabled", String(option.disabled));
   }
   try {
@@ -185,10 +191,10 @@ function setModel(value) {
   } catch {}
   closeModels();
 }
-function setAgentMode(value) {
+function setAgentMode(value, preserveChat=false) {
   let enabled = !!value && !!profile?.browser_agent;
-  if (enabled && model !== "velia-flash") { toast("Браузерный Agent пока доступен с Flash. Выбранная модель сохранена."); enabled = false; }
-  if (agentMode !== enabled && !busy) {
+  if (enabled && model !== "velia-flash" && !profile?.background_agent) { toast("Agent с выбранной моделью сейчас недоступен."); enabled = false; }
+  if (agentMode !== enabled && !busy && !preserveChat && !(model!=='velia-flash'&&profile?.background_agent)) {
     currentId = null;
     render();
     save();
@@ -199,8 +205,8 @@ function setAgentMode(value) {
   button.classList.toggle("active", enabled);
   button.setAttribute("aria-pressed", String(enabled));
   button.title = enabled
-    ? "Browser Agent включён · VELIA Flash может открывать сайты и выполнять действия"
-    : "VELIA Agent Core · браузерные действия через Flash";
+    ? "Agent включён · выбранная модель ведёт задачу, Agent выполняет действия в браузере"
+    : "VELIA Agent Core · действия на сайтах";
   button.querySelector("span:last-child").textContent = enabled ? "AGENT ON" : "AGENT";
   $("model-button").disabled = busy;
   $("flash-description").textContent = enabled ? "Быстрые ответы и действия на сайтах через VELIA Agent Core" : "Быстрые ответы, повседневные вопросы и живой разговор";
@@ -475,7 +481,8 @@ async function refreshTakeover() {
     takeoverBusy = false;
   }
 }
-async function openTakeover(kind) {
+async function openTakeover(kind, task=null) {
+  backgroundTakeover=task;
   const chat = current();
   if (!chat || busy || !profile) return;
   takeoverState = {kind};
@@ -511,6 +518,7 @@ async function continueAfterTakeover() {
   takeoverBusy = true;
   $("takeover-status").textContent = "Передаю управление обратно VELIA…";
   try {
+    if(backgroundTakeover){await resumeBackgroundAgent(backgroundTakeover);return;}
     await takeoverRequest("agent/browser/takeover/action", {
       session_id: chat.id,
       action: "finish",
@@ -529,6 +537,21 @@ async function continueAfterTakeover() {
   } finally {
     takeoverBusy = false;
   }
+}
+
+async function resumeBackgroundAgent(job){
+  if(busy)return;
+  const account=profile?.account;
+  try{
+    try{await takeoverRequest('agent/browser/takeover/action',{session_id:job.conversation_id,action:'finish'});}
+    catch(error){if(error.status!==409)throw error;}
+    if(profile?.account!==account)return;
+    await background.submit(job.conversation_id,{content:'Продолжи исходную задачу с текущей страницы после ручного шага.',model:'velia-'+job.model,
+      agent:true,resume_job_id:job.id,idempotency_key:crypto.randomUUID()});
+    if(profile?.account!==account)return;
+    backgroundTakeover=null;$('takeover-dialog').close();setAgentMode(false,true);setModel('velia-flash');
+    toast('Задача продолжается в фоне. С Flash можно пообщаться здесь.');
+  }catch(error){toast(error.message);}
 }
 
 async function openChat(chat, background = false) {
@@ -694,19 +717,22 @@ async function generate(retry = false, voiceTurn = false) {
     if (busy) return;
     if (!guest || guest.remaining <= 0) { openAuth(); return; }
   }
-  if (profile && !agentMode && !profile.models.includes(model)) {
+  if (profile && !profile.models.includes(model)) {
     toast(apiError(profile.pro_locked_reason || "pro_tokens_required"));
     return;
   }
   const text = $("prompt").value.trim() || (selectedFiles.length ? "Проанализируй прикреплённые файлы." : "");
+  const backgroundAgent=agentMode&&model!=='velia-flash';
+  if(backgroundAgent&&!profile?.background_agent){toast(apiError('background_agent_unavailable'));return;}
   if (!retry && !text) return;
   let chat = current();
+  if(backgroundAgent&&chat&&!chat.remote){currentId=null;chat=null;}
   if (retry) {
     if (!chat || chat.messages.at(-1)?.role !== "assistant") return;
     chat.messages.pop();
   } else {
     if (!chat) {
-      if (!profile || agentMode) {
+      if (!profile || agentMode&&!backgroundAgent) {
         chat = {id: crypto.randomUUID(), title: text.replace(/\s+/g, " ").slice(0, 70),
           updated: Date.now(), messages: [], agent: agentMode};
       } else {
@@ -738,21 +764,22 @@ async function generate(retry = false, voiceTurn = false) {
     $("prompt").value = "";
     resizePrompt();
   }
-  const selected = agentMode ? "velia-flash" : model,
+  const selected = agentMode&&!backgroundAgent ? "velia-flash" : model,
     user = chat.messages.at(-1),
-    payload = agentMode ? {prompt: user.content, session_id: chat.id} : chat.remote ? {content: user.content, model: selected,
+    payload = agentMode&&!backgroundAgent ? {prompt: user.content, session_id: chat.id} : chat.remote ? {content: user.content, model: selected,
       idempotency_key: user.requestId || (user.requestId = crypto.randomUUID()), ...(user.attachmentIds?.length ? {attachment_ids:user.attachmentIds} : {})} : chatPayload(chat, selected),
     answer = { role: "assistant", content: "", model: selected, pending: true, agent: agentMode };
   if(chat.medicalNoSearch && !agentMode){payload.medical_no_search=true;payload.web_search=false;}
   if (voiceTurn) payload.voice_turn=true;
   if (!agentMode && internetAvailable && !chat.medicalNoSearch) payload.web_search = true;
-  if(!agentMode&&chat.remote&&profile?.background_tasks&&background.wants(selected)){
+  if(backgroundAgent)payload.agent=true;
+  if(chat.remote&&profile?.background_tasks&&(backgroundAgent||!agentMode&&background.wants(selected))){
     const owner=profile.account;setBusy(true);render();save();
     try{
       const taskPayload={...payload};delete taskPayload.medical_no_search;
       const job=await background.submit(chat.id,taskPayload);
       if(profile?.account!==owner)return;
-      setBusy(false);setModel('velia-flash');
+      setBusy(false);if(backgroundAgent)setAgentMode(false,true);setModel('velia-flash');
       if(voiceTurn)voice.backgroundAccepted(taskAcknowledgement(profile.language));
       toast(`${job.model==='pro'?'PRO':'Quantum'} работает в фоне. Разговор продолжит Flash.`);
     }catch(error){toast(error.message);if(voiceTurn)voice.failure(false,error.message);}

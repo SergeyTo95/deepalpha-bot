@@ -18,6 +18,8 @@ ERRORS = {"conversation_not_found", "generation_in_progress", "flash_busy", "fla
     "velia_chat_disabled", "pro_tokens_required", "token_balance_unavailable",
     "idempotency_mode_mismatch", "user_daily_limit_exceeded", "global_daily_limit_exceeded"}
 ERRORS |= QUANTUM_ERRORS
+ERRORS |= {'background_agent_unavailable','background_agent_context_too_long','background_agent_failed',
+    'background_agent_interrupted','background_agent_invalid_plan','background_agent_review_failed'}
 ERRORS |= {free_models.error_code(code, mode) for code in QUANTUM_ERRORS for mode in ("flash", "pro")}
 LOG = logging.getLogger(__name__)
 _PREPARATION_HEARTBEAT_SECONDS = 8.0
@@ -325,12 +327,16 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
                 if action == "cancel" and data or action == "revise" and (set(data)!={"note","idempotency_key"} or not isinstance(data.get("note"),str) or not 1<=len(data["note"].strip())<=2000 or not REQUEST_ID.fullmatch(str(data.get("idempotency_key","")))) or action not in {"cancel","revise"}:
                     return error("invalid_request",400)
             else:
-                if (set(data)-{"web_search","voice_turn","attachment_ids"}!={"content","model","idempotency_key"}
+                if (set(data)-{"web_search","voice_turn","attachment_ids","agent","resume_job_id"}!={"content","model","idempotency_key"}
                         or data.get("model") not in {MODEL_ID,QUANTUM_ID}
                         or not isinstance(data.get("content"),str) or not 1<=len(data["content"].strip())<=12000
                         or not REQUEST_ID.fullmatch(str(data.get("idempotency_key","")))
-                        or any(k in data and type(data[k]) is not bool for k in ("web_search","voice_turn"))):
+                        or any(k in data and type(data[k]) is not bool for k in ("web_search","voice_turn","agent"))):
                     return error("invalid_request",400)
+                if data.get('agent') and not session.background_agent:
+                    return error('background_agent_unavailable',503)
+                if 'resume_job_id' in data and (not data.get('agent') or not isinstance(data['resume_job_id'],str) or not ID.fullmatch(data['resume_job_id'])):
+                    return error('invalid_request',400)
                 permission = await authorize_model(session.access,data["model"],files=bool(data.get("attachment_ids")))
                 if permission:
                     return error(*permission)
@@ -341,7 +347,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
         status,result = await upstream(request.method,path,token=session.access,data=data)
         if not result.get("ok"):
             code = result.get("error")
-            safe = {"background_tasks_unavailable","background_task_not_found","background_task_active","background_task_finished","background_revision_limit","background_queue_full","invalid_request","invalid_attachment_ids","attachment_not_found","attachment_not_ready","attachment_already_linked"} | ERRORS
+            safe = {"background_agent_unavailable","background_agent_context_too_long","background_tasks_unavailable","background_task_not_found","background_task_active","background_task_finished","background_revision_limit","background_queue_full","invalid_request","invalid_attachment_ids","attachment_not_found","attachment_not_ready","attachment_already_linked"} | ERRORS
             return error(code if code in safe else "account_service_unavailable",status)
         def public(value):
             if (not isinstance(value,dict) or not ID.fullmatch(str(value.get("id",""))) or not ID.fullmatch(str(value.get("conversation_id","")))
@@ -349,7 +355,11 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
                 raise ValueError("invalid_background_response")
             return {k:value.get(k) for k in ("id","conversation_id","model","status","revision","created_at","updated_at","assistant_message_id")} | {
                 "title":str(value.get("title", ""))[:160],"result":str(value.get("result", ""))[:64000],
-                "error":value.get("error") if value.get("error") in ERRORS | {"background_task_failed","background_task_cancelled","background_task_interrupted"} else None,
+                "agent":value.get('agent') is True,
+                "resumed":value.get('resumed') is True,
+                "agent_state":value.get('agent_state') if value.get('agent_state') in {'planning','browser','checking','waiting_user'} else None,
+                "user_action_required":value.get('user_action_required') if value.get('user_action_required') in {'credentials','otp','passkey','captcha','device_approval'} else None,
+                "error":value.get("error") if value.get("error") in ERRORS | {"background_task_failed","background_task_cancelled","background_task_interrupted","background_agent_failed","background_agent_interrupted","background_agent_invalid_plan","background_agent_unavailable","background_agent_context_too_long"} else None,
                 "notes":[str(n)[:2000] for n in value.get("notes",[])[:3]]}
         return json_response({"ok":True,**({"job":public(result["job"])} if "job" in result else {"jobs":[public(j) for j in result.get("jobs",[])[:30]]})},status)
 

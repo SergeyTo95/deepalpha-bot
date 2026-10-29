@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir -r desktop/requirements-gateway.txt pytest==8.4.2
 COPY velia_free_models.py velia_desktop_routes.py velia_quantum_provider.py velia_quantum_turn.py velia_quantum_transport.py velia_quantum_groq_probe.py /app/
 COPY velia_request_understanding.py /app/velia_request_understanding.py
 COPY desktop/platform_status.py desktop/gateway.py desktop/admin_proxy.py desktop/probe_gateway.py desktop/probe_browser_agent_web.py desktop/probe_request_intent.py desktop/probe_quantum_independence.py desktop/quantum_intent.py desktop/answer_review.py desktop/web_routes.py desktop/feature_routes.py desktop/voice_routes.py desktop/work_store.py desktop/work_runtime.py desktop/work_routes.py desktop/upwork_connector.py desktop/account_routes.py desktop/guest_routes.py desktop/guest_store.py desktop/web_search.py desktop/request_intent.py desktop/direct_tasks.py desktop/decision_router.py desktop/spelling_hints.py desktop/flash_worker_start.py /app/desktop/
+COPY desktop/background_agent.py /app/desktop/background_agent.py
 COPY services/velia_structured_output.py /app/services/velia_structured_output.py
 COPY desktop/probe_web_voice.py /app/desktop/probe_web_voice.py
 COPY desktop/web /app/desktop/web

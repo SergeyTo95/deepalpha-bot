@@ -208,6 +208,7 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
             "quantum": features.get("chat_quantum") is True,
             "free_api": features.get("chat_free_api_tiers") is True,
             "background_tasks": features.get("chat_background_tasks") is True,
+            "background_agent": features.get("chat_background_agent") is True,
             "quantum_native_tools": features.get("chat_quantum_native_tools") is True,
             "quantum_attachments": features.get("chat_quantum_attachments") is True}
 
@@ -274,8 +275,8 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
         try:
             async with app[CLIENT].post(
                     config.agent_origin + "/v1/run",
-                    json={"prompt": prompt},
-                    headers=headers,
+                    data=json.dumps({"prompt": prompt}, ensure_ascii=False).encode('utf-8'),
+                    headers={**headers,'Content-Type':'application/json'},
                     allow_redirects=False,
                     timeout=ClientTimeout(total=460, sock_read=450)) as response:
                 body = bytearray()
@@ -485,6 +486,9 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
             and bool(config.agent_origin)
             and bool(str(os.getenv("VELIA_AGENT_CORE_INTERNAL_KEY", "") or "").strip())
         )
+        if agent_available:
+            from desktop.background_agent import setup_background_agent
+            setup_background_agent(app, browser_agent_run)
         setup_web_routes(app, origin=origin, upstream=upstream, authenticate=authenticate,
             allowed=allowed, valid_session=valid_session, json_response=json_response, handlers=handlers,
             account_balance=account_balance, authorize_model=authorize_model, upstream_stream=upstream_stream,

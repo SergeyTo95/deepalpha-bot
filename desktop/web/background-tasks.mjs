@@ -1,6 +1,6 @@
 import {apiError} from "./core.mjs";
 // Server owns execution. This module only submits, polls and renders task state.
-export function setupBackgroundTasks({request, profile, busy, currentId, open, refresh, speak, toast, chatWithFlash}) {
+export function setupBackgroundTasks({request, profile, busy, currentId, open, refresh, speak, toast, chatWithFlash, takeover, resume}) {
   const panel=document.getElementById('background-tasks'), option=document.getElementById('background-option'), toggle=document.getElementById('background-enabled');
   let jobs=[], owner=null, timer=null, loading=false, generation=0;
   const notified=new Set(), restored=new Set(), dismissed=new Set(), preferences=new Map();
@@ -31,10 +31,12 @@ export function setupBackgroundTasks({request, profile, busy, currentId, open, r
   function render(){
     if(panel.contains(document.activeElement)&&document.activeElement.tagName==='TEXTAREA')return;
     panel.replaceChildren();panel.hidden=!jobs.length;
-    for(const job of jobs.filter(j=>(active(j)||!dismissed.has(j.id))&&(active(j)||j.conversation_id===currentId()||Date.now()/1000-Number(j.updated_at||j.created_at||0)<86400)).slice(0,4)){
+    for(const job of jobs.filter(j=>!j.resumed&&(active(j)||!dismissed.has(j.id))&&(active(j)||j.conversation_id===currentId()||Date.now()/1000-Number(j.updated_at||j.created_at||0)<86400)).slice(0,4)){
       const card=document.createElement('article');card.className='background-task';
       const header=document.createElement('div');header.className='background-heading';
-      const heading=document.createElement('strong');heading.textContent=`${job.model==='pro'?'PRO':'Quantum'} · ${labels[job.status]||'Проверяю состояние'}`;
+      const stages={planning:'Обдумываю задачу',browser:'Agent работает в браузере',checking:'Проверяю результат'};
+      const status=job.user_action_required?'Нужно действие в браузере':active(job)&&job.agent?stages[job.agent_state]:labels[job.status];
+      const heading=document.createElement('strong');heading.textContent=`${job.model==='pro'?'PRO':'Quantum'}${job.agent?' + Agent':''} · ${status||'Проверяю состояние'}`;
       header.append(heading);
       if(!active(job)){
         const close=document.createElement('button');close.type='button';close.className='background-close';close.textContent='×';
@@ -47,13 +49,17 @@ export function setupBackgroundTasks({request, profile, busy, currentId, open, r
       const actions=document.createElement('div');actions.className='background-actions';
       const button=(text,fn)=>{const b=document.createElement('button');b.type='button';b.textContent=text;b.onclick=fn;actions.append(b);return b;};
       button(job.status==='completed'?'Открыть результат':'Открыть диалог',()=>open(job.conversation_id));
+      if(job.user_action_required){
+        const manual=button('Открыть браузер',()=>takeover(job));manual.disabled=busy();
+        const proceed=button('Продолжить после ручного шага',()=>resume(job));proceed.disabled=busy();
+      }
       if(active(job)){
         const hint=document.createElement('p');hint.className='background-hint';
         hint.textContent=`Пока ждёшь результат ${job.model==='pro'?'PRO':'Quantum'}, можно пообщаться с Flash. Задача продолжится в фоне, а ответ появится в исходном диалоге.`;
         card.append(hint);
         const chat=button('Поговорить с Flash',()=>{if(!busy())chatWithFlash();});
         chat.disabled=busy();
-        button('Отменить',async()=>{try{await request(`background-tasks/${job.id}/cancel`,{});await poll();}catch(e){toast(e.message);}});
+        button('Отменить',async()=>{try{await request(`background-tasks/${job.id}/cancel`,{});if(job.agent)toast('Задача остановлена. Уже отправленное действие в браузере может завершиться.');await poll();}catch(e){toast(e.message);}});
         button('Дополнить',()=>{
           if(card.querySelector('textarea'))return;
           const input=document.createElement('textarea');input.maxLength=2000;input.rows=2;input.placeholder='Что учесть в задаче?';input.setAttribute('aria-label','Уточнение задачи');
@@ -79,9 +85,10 @@ export function setupBackgroundTasks({request, profile, busy, currentId, open, r
       if(generation!==token||profile()?.account!==account)return;
       jobs=data.jobs||[];render();
       for(const job of jobs){
+        if(job.resumed)continue;
         if(job.status==='error'&&!notified.has(job.id)){notified.add(job.id);toast(`${job.model==='pro'?'PRO':'Quantum'}: ${apiError(job.error)}`);}
         if(job.status==='completed'){
-          if(!notified.has(job.id)){notified.add(job.id);toast(`${job.model==='pro'?'PRO':'Quantum'}: результат готов.`);}
+          if(!notified.has(job.id)){notified.add(job.id);toast(`${job.model==='pro'?'PRO':'Quantum'}: ${job.user_action_required?'нужно действие в браузере.':'результат готов.'}`);}
           if(!restored.has(job.id)&&job.conversation_id===currentId()&&!busy()){
             await refresh(job.conversation_id);
             if(generation!==token||profile()?.account!==account)return;

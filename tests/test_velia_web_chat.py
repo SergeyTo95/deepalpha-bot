@@ -291,6 +291,35 @@ async def login(server, client):
         return response.cookies[COOKIE].value, await response.json(), response.headers["Set-Cookie"]
 
 
+def test_background_browser_bridge_is_private_owner_scoped_and_at_most_once(monkeypatch):
+    async def scenario():
+        key='background-bridge-fixture-key-'+'a'*32
+        monkeypatch.setenv('VELIA_BACKGROUND_AGENT_KEY',key)
+        async with fixture(monkeypatch,features={'chat_free_api_tiers':True,'chat_background_tasks':True,
+                'chat_background_agent':True,'chat_quantum':True}) as (server,client,state):
+            cookie,profile,_=await login(server,client)
+            assert profile['background_agent'] is True
+            data={'job_id':str(uuid.uuid4()),'conversation_id':str(uuid.uuid4()),'user_id':7,'prompt':'Прочти открытую страницу'}
+            endpoint=server.make_url('/internal/background-agent/run')
+            async with client.post(endpoint,headers=headers(cookie),json=data) as response:assert response.status==401
+            async with client.post(endpoint,headers={'Authorization':'Bearer '+key},json={**data,'provider':'forged'}) as response:assert response.status==400
+            async with client.post(endpoint,headers={'Authorization':'Bearer '+key},json=data) as response:
+                assert response.status==200 and (await response.json())['tool_count']==2
+            async with client.post(endpoint,headers={'Authorization':'Bearer '+key},json=data) as response:assert response.status==409
+            assert len(state['agent_calls'])==1
+            assert state['agent_calls'][0]['user']=='7' and state['agent_calls'][0]['session']==data['conversation_id']
+            assert state['agent_calls'][0]['prompt']==data['prompt']
+            body={'model':'velia-pro','content':'Read the page','idempotency_key':'agent-owner-task','agent':True}
+            cid=str(uuid.uuid4())
+            async with client.post(server.make_url('/web-api/v1/conversations/'+cid+'/tasks'),headers=headers(cookie),json=body) as response:assert response.status==202
+            assert state['background_calls'][-1]['data']['agent'] is True
+            state['credits']=0
+            async with client.post(server.make_url('/web-api/v1/conversations/'+cid+'/tasks'),headers=headers(cookie),json=body) as response:assert response.status==402
+            state['features']['chat_background_agent']=False
+            async with client.post(server.make_url('/web-api/v1/conversations/'+cid+'/tasks'),headers=headers(cookie),json={**body,'model':'velia-quantum'}) as response:assert response.status==503
+    asyncio.run(scenario())
+
+
 def test_quantum_account_routing_history_and_capability_revocation(monkeypatch):
     async def run():
         async with fixture(monkeypatch, credits=0, features={"chat_quantum": True,

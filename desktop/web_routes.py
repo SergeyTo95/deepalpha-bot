@@ -134,6 +134,7 @@ class Session:
     language: str = ""
     free_api: bool = False
     background_tasks: bool = False
+    background_agent: bool = False
     quantum: bool = False
     quantum_attachments: bool = False
     quantum_native_tools: bool = False
@@ -225,6 +226,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             session.quantum = identity.get("quantum") is True
             session.free_api = identity.get("free_api") is True
             session.background_tasks = identity.get("background_tasks") is True
+            session.background_agent = identity.get("background_agent") is True
             session.quantum_attachments = identity.get("quantum_attachments") is True
             session.quantum_native_tools = identity.get("quantum_native_tools") is True
             session.selected_model_inputs = identity.get("selected_model_inputs") is True
@@ -244,6 +246,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             "selected_model_inputs": session.selected_model_inputs,
             **({"free_api_tiers": True} if session.free_api else {}),
             **({"background_tasks": True} if session.background_tasks and session.free_api else {}),
+            **({"background_agent": True} if session.background_tasks and session.background_agent and session.free_api and browser_agent_run else {}),
             "browser_agent": browser_agent_run is not None,
             **({"quantum_attachments": session.quantum_attachments} if session.quantum else {}),
             "pro_locked_reason": None if credits and credits > 0 else
@@ -301,6 +304,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             session.quantum = identity.get("quantum") is True
             session.free_api = identity.get("free_api") is True
             session.background_tasks = identity.get("background_tasks") is True
+            session.background_agent = identity.get("background_agent") is True
             session.quantum_attachments = identity.get("quantum_attachments") is True
             session.quantum_native_tools = identity.get("quantum_native_tools") is True
             session.selected_model_inputs = identity.get("selected_model_inputs") is True
