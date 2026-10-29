@@ -3,11 +3,16 @@ import {apiError} from "./core.mjs";
 export function setupBackgroundTasks({request, profile, busy, currentId, open, refresh, speak, toast}) {
   const panel=document.getElementById('background-tasks'), option=document.getElementById('background-option'), toggle=document.getElementById('background-enabled');
   let jobs=[], owner=null, timer=null, loading=false, generation=0;
-  const notified=new Set(), restored=new Set();
+  const notified=new Set(), restored=new Set(), preferences=new Map();
+  let selectedModel=null;
+  toggle.onchange=()=>{if(selectedModel)preferences.set(selectedModel,toggle.checked);};
   const active=j=>['queued','running'].includes(j.status);
   const labels={queued:'В очереди',running:'Готовлю результат',completed:'Готово',error:'Задача не выполнена',cancelled:'Отменена'};
-  function reset(){generation++;owner=null;jobs=[];notified.clear();restored.clear();clearTimeout(timer);timer=null;loading=false;panel.replaceChildren();panel.hidden=true;option.hidden=true;toggle.checked=false;}
-  function modelChanged(model){option.hidden=!profile()?.background_tasks||!['velia-quantum','velia-pro'].includes(model);}
+  function reset(){generation++;owner=null;jobs=[];notified.clear();restored.clear();preferences.clear();selectedModel=null;clearTimeout(timer);timer=null;loading=false;panel.replaceChildren();panel.hidden=true;option.hidden=true;toggle.checked=false;}
+  function modelChanged(model){
+    selectedModel=model;option.hidden=!profile()?.background_tasks||!['velia-quantum','velia-pro'].includes(model);
+    if(!option.hidden)toggle.checked=preferences.get(model)??true;
+  }
   function wants(model){return !option.hidden&&toggle.checked&&['velia-quantum','velia-pro'].includes(model);}
   function render(){
     if(panel.contains(document.activeElement)&&document.activeElement.tagName==='TEXTAREA')return;

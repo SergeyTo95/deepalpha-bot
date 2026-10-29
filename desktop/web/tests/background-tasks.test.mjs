@@ -26,7 +26,10 @@ test('background jobs preserve foreground availability and restore a ready resul
   const controller=setupBackgroundTasks({request:async()=>({jobs:[{...job,status}]}),profile:()=>({account:'owner',background_tasks:true}),busy:()=>blocked,currentId:()=>job.conversation_id,
     open(){},refresh:async()=>{restores++;},speak(){},toast:text=>notifications.push(text)});
   try{
-    controller.modelChanged('velia-pro');nodes['background-enabled'].checked=true;assert.equal(controller.wants('velia-pro'),true);
+    controller.modelChanged('velia-pro');assert.equal(nodes['background-enabled'].checked,true);assert.equal(controller.wants('velia-pro'),true);
+    nodes['background-enabled'].checked=false;nodes['background-enabled'].onchange();
+    controller.modelChanged('velia-flash');controller.modelChanged('velia-pro');assert.equal(controller.wants('velia-pro'),false);
+    controller.modelChanged('velia-quantum');assert.equal(controller.wants('velia-quantum'),true);
     await controller.poll();assert.equal(restores,0);assert.equal(nodes['background-tasks'].hidden,false);
     const card=nodes['background-tasks'].children[0];assert.equal(card.children[1].textContent,job.title);
     status='completed';await controller.poll();assert.equal(restores,0);assert.equal(notifications.length,1);

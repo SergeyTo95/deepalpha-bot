@@ -33,7 +33,7 @@ try{
  await import('../web/app.mjs');await new Promise(r=>setTimeout(r,30));
  document.querySelector('[data-model="velia-pro"]').click();
  assert.equal(document.querySelector('#background-option').hidden,false);
- document.querySelector('#background-enabled').checked=true;
+ assert.equal(document.querySelector('#background-enabled').checked,true);
  document.querySelector('#prompt').value='Prepare a careful comparison';
  document.querySelector('#composer').dispatchEvent(new window.Event('submit',{cancelable:true}));
  await new Promise(r=>setTimeout(r,50));
