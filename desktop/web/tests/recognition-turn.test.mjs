@@ -74,3 +74,27 @@ test('single utterance is sent on browser end without adding the one-second sett
  const s=session(false);s.result(['Связь проверена']);s.r.onend();
  assert.deepEqual(s.finished,['Связь проверена']);assert.equal(s.counts().stops,0);
 });
+
+test('one-shot independent result slots preserve the whole phrase including negation and amounts',()=>{
+ for(const parts of [
+  ['Я хочу купить','но не сейчас'],
+  ['Не отправляй','125 рублей','на этот адрес'],
+  ['hayır','125 lira gönderme'],
+  ['لا ترسل','125'],
+ ]){
+  const s=session(false);s.result(...parts.map(text=>[text]));s.r.onend();
+  assert.deepEqual(s.finished,[parts.join(' ')]);
+ }
+});
+test('a cumulative revision can be followed by independent slots without losing either',()=>{
+ const s=session(false);s.result(['Я хочу'],['Я хочу проверить'],['но ничего не отправляй']);s.r.onend();
+ assert.deepEqual(s.finished,['Я хочу проверить но ничего не отправляй']);
+});
+test('one-shot incomplete slots are never silently discarded for a later final slot',()=>{
+ const s=session(false);s.result(['Не отправляй',false],['125 рублей']);s.r.onend();
+ assert.deepEqual(s.finished,[]);assert.equal(s.counts().misses,1);
+});
+test('identical independent slots preserve intentional repeated words without a cumulative expansion',()=>{
+ const s=session(false);s.result(['нет'],['нет']);s.r.onend();
+ assert.deepEqual(s.finished,['нет нет']);
+});

@@ -177,6 +177,24 @@ def streaming_app():
 STREAM_HEADERS={'Origin':'https://velia.example','X-Velia-Request':'1','X-Test-Session':'yes'}
 STREAM_DATA={'text':'Привет!','voice':'edge:en-US-AvaMultilingualNeural','rate':1}
 
+def test_recognition_diagnostics_require_auth_origin_and_fixed_codes_without_speech(monkeypatch, caplog):
+    async def scenario():
+        async with TestServer(streaming_app()) as server, ClientSession() as client:
+            endpoint = server.make_url('/web-api/v1/voice/events')
+            data = {'event': 'recognition_error', 'code': 'network', 'attempt': 1}
+            assert (await client.post(endpoint, json=data)).status == 403
+            assert (await client.post(endpoint, json=data, headers={**STREAM_HEADERS, 'X-Test-Session': ''})).status == 401
+            for bad in ({**data, 'transcript': 'private speech'}, {**data, 'code': 'private speech'},
+                        {**data, 'attempt': True}, {**data, 'attempt': 4}, [], None):
+                assert (await client.post(endpoint, json=bad, headers=STREAM_HEADERS)).status == 400
+            for _ in range(20):
+                response = await client.post(endpoint, json=data, headers=STREAM_HEADERS)
+                assert response.status == 200 and (await response.json())['ok'] is True
+            assert (await client.post(endpoint, json=data, headers=STREAM_HEADERS)).status == 429
+    asyncio.run(scenario())
+    assert 'VELIA_WEB_RECOGNITION_ERROR code=network attempt=1' in caplog.text
+    assert 'private speech' not in caplog.text
+
 def test_mp3_first_chunk_reaches_browser_before_provider_finishes(monkeypatch):
     monkeypatch.setenv('VELIA_WEB_TTS_PROVIDER','edge')
     async def run():

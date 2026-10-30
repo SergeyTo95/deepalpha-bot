@@ -155,7 +155,38 @@ async def synthesize(fields):
 
 def setup_voice_routes(app, *, session_for, same_origin, json_response):
     requests = {}
+    event_requests = {}
     slots = asyncio.Semaphore(4)
+    async def events(request):
+        if not same_origin(request):
+            return json_response({"error": "invalid_origin"}, 403)
+        try:
+            session = await session_for(request)
+            if not session:
+                return json_response({"error": "unauthorized"}, 401)
+            if request.content_length and request.content_length > 1024:
+                return json_response({"error": "request_too_large"}, 413)
+            data = await request.json()
+            if (not isinstance(data, dict) or set(data) != {"event", "code", "attempt"}
+                    or data["event"] != "recognition_error"
+                    or data["code"] not in ("network", "aborted", "not-allowed", "service-not-allowed",
+                                             "audio-capture", "language-not-supported", "unknown")
+                    or type(data["attempt"]) is not int or not 1 <= data["attempt"] <= 3):
+                return json_response({"error": "invalid_voice_event"}, 400)
+            now = time.monotonic()
+            for key in list(event_requests):
+                if event_requests[key][0] <= now - 60:
+                    del event_requests[key]
+            since, count = event_requests.get(session.user_id, (now, 0))
+            if count >= 20:
+                return json_response({"error": "voice_event_rate_limit"}, 429)
+            event_requests[session.user_id] = (since, count + 1)
+            LOG.warning("VELIA_WEB_RECOGNITION_ERROR code=%s attempt=%d", data["code"], data["attempt"])
+            return json_response({"ok": True})
+        except AuthenticationUnavailable:
+            return json_response({"error": "authentication_unavailable"}, 503)
+        except (ValueError, TypeError):
+            return json_response({"error": "invalid_voice_event"}, 400)
     async def catalog(request):
         try:
             if not await session_for(request):
@@ -201,3 +232,4 @@ def setup_voice_routes(app, *, session_for, same_origin, json_response):
             return json_response({"error": "tts_unavailable"}, 503)
     app.router.add_get("/web-api/v1/voice/voices", catalog)
     app.router.add_post("/web-api/v1/voice/speech", speech)
+    app.router.add_post("/web-api/v1/voice/events", events)
