@@ -82,3 +82,27 @@ def test_research_progress_and_cancel_preserve_session_and_backend_access_checks
             assert seen[-1][1].endswith('/research/runs/r1/cancel')
             assert seen[-1][2]['token'] == 'owner-token'
     asyncio.run(scenario())
+
+
+def test_agent_settings_relay_preserves_boolean_without_bypassing_owner_authorization():
+    async def scenario():
+        seen=[]
+        async def session_for(request):
+            return SimpleNamespace(access='owner-session',user_id=7) if request.headers.get('X-Test') else None
+        async def upstream(method,path,**kwargs):
+            seen.append((method,path,kwargs))
+            return 404,{'ok':False,'error':'velia_agent_builder_agent_not_found'}
+        app=web.Application()
+        setup_feature_routes(app,session_for=session_for,same_origin=lambda r:r.headers.get('Origin')=='https://velia.example',upstream=upstream,json_response=lambda d,status=200:web.json_response(d,status=status))
+        async with TestServer(app) as server,ClientSession() as client:
+            url=str(server.make_url('/web-api/v1/features/agents/a-123'))
+            assert (await client.patch(url,json={'spec_mode_enabled':True})).status==403
+            assert (await client.get(url)).status==401
+            h={'Origin':'https://velia.example','X-Test':'1'}
+            response=await client.patch(url,headers=h,json={'spec_mode_enabled':False})
+            assert response.status==404
+            assert seen[-1][2]['data']=={'spec_mode_enabled':False}
+            assert seen[-1][2]['token']=='owner-session'
+            assert (await client.get(url,headers=h)).status==404
+            assert not route_allowed('POST','agents/a-123/execute')
+    asyncio.run(scenario())

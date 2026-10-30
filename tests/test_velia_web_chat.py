@@ -308,7 +308,12 @@ def test_background_browser_bridge_is_private_owner_scoped_and_at_most_once(monk
             async with client.post(endpoint,headers={'Authorization':'Bearer '+key},json=data) as response:assert response.status==409
             assert len(state['agent_calls'])==1
             assert state['agent_calls'][0]['user']=='7' and state['agent_calls'][0]['session']==data['conversation_id']
-            assert state['agent_calls'][0]['prompt']==data['prompt']
+            assert state['agent_calls'][0]['prompt'].endswith('ORIGINAL_TASK:\n'+data['prompt'])
+            assert 'observable completion criteria' in state['agent_calls'][0]['prompt']
+            assert 'grants no new permissions' in state['agent_calls'][0]['prompt']
+            async with client.post(endpoint,headers={'Authorization':'Bearer '+key},json={**data,'job_id':str(uuid.uuid4()),'prompt':'\n'*8500+'task'}) as response:
+                assert response.status==400
+            assert len(state['agent_calls'])==1
             body={'model':'velia-pro','content':'Read the page','idempotency_key':'agent-owner-task','agent':True}
             cid=str(uuid.uuid4())
             async with client.post(server.make_url('/web-api/v1/conversations/'+cid+'/tasks'),headers=headers(cookie),json=body) as response:assert response.status==202
@@ -412,11 +417,13 @@ def test_browser_agent_is_account_only_flash_and_keeps_internal_secret_server_si
                 }
                 wire = json.dumps(result, ensure_ascii=False)
                 assert "fixture-browser-agent-secret" not in wire
-            assert state["agent_calls"] == [{
-                "prompt": "Открой example.com и скажи заголовок.",
-                "user": "7",
-                "session": "11111111-1111-4111-8111-111111111111",
-            }]
+            assert len(state["agent_calls"]) == 1
+            task = state["agent_calls"][0]
+            assert task['user'] == '7'
+            assert task['session'] == '11111111-1111-4111-8111-111111111111'
+            assert task['prompt'].endswith('ORIGINAL_TASK:\nОткрой example.com и скажи заголовок.')
+            assert 'observable completion criteria' in task['prompt']
+            assert 'login/OTP/manual handoff rules' in task['prompt']
             assert state["payloads"] == []
 
             async with client.post(

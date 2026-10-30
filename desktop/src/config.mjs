@@ -47,7 +47,7 @@ export function profilePatch(baseURL, credentialPath, localGateway) {
     { id: 'agent-default-model', config: { provider: 'velia', model: 'velia-pro' } },
     { id: 'system-prompt', config: {
       personaPrefix: 'Ты Велия (VELIA), ИИ-помощница. Говори о себе в женском роде. По умолчанию отвечай по-русски. Выполняй задачи с помощью доступных инструментов.',
-      personaSuffix: 'Your working directory is {{cwd}}.\nFor software tasks only:\n'+engineering.rules.join('\n')+'\n'+engineering.stages.desktop,
+      personaSuffix: 'Your working directory is {{cwd}}.\nFor software tasks only:\n'+engineering.rules.join('\n')+'\n'+engineering.stages.desktop+'\n'+engineering.spec_workflow.implementation,
     } },
     { id: 'desktop-product-telemetry', disabled: true },
     { id: 'product-analytics', disabled: true },

@@ -1503,3 +1503,11 @@ dialog::backdrop {
 .background-task textarea { width: 100%; margin: 8px 0; box-sizing: border-box; }
 #background-option { display: flex; align-items: center; gap: 6px; min-height: 32px; margin-bottom: 6px; font-size: 12px; white-space: nowrap; }
 #background-option[hidden] { display: none; }
+
+/* Owner-selected structured task workflow. */
+.feature-form .feature-check:has(input[role=switch]) { display: grid; grid-template-columns: 44px 1fr; gap: 6px 12px; }
+.feature-form input[role=switch] { appearance: none; width: 44px; height: 26px; padding: 3px; border-radius: 16px; background: var(--border); cursor: pointer; }
+.feature-form input[role=switch]::before { content: ''; display: block; width: 18px; height: 18px; border-radius: 50%; background: var(--text); }
+.feature-form input[role=switch]:checked { background: var(--strong); }
+.feature-form input[role=switch]:checked::before { transform: translateX(18px); background: var(--bg); }
+.feature-form .feature-check:has(input[role=switch]) .field-hint { grid-column: 2; }

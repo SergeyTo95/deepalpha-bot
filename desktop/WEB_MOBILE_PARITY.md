@@ -449,3 +449,15 @@ Synthetic acceptance supports `VELIA_SMOKE_BACKGROUND_AGENT=true` and `VELIA_SMO
 ## Coding guidance
 
 Native model turns use the compact software-only guidance from `desktop/src/engineering-policy.json`; Desktop `profilePatch` uses its full rules. The policy adapts ub-mode engineering principles without bundling upstream installers or analyzers. It favors small verifiable changes, root-cause fixes, contract preservation, behavioral tests and honest reports. Ordinary chat does not start source analyzers, tests or another model call. The backend Coding Agent additionally checks bounded Python/JSON syntax before committing; raw chat code answers are guidance-driven and are not advertised as tested patches. Real coverage, CRAP and mutation measurements require actual project tool evidence.
+
+
+### Owner-selected specification workflow
+
+“Мои агенты” supports creating and editing `spec_mode_enabled` with an accessible switch.
+Existing profiles and omitted creates default to false. The authenticated feature proxy relays
+GET/PATCH profile requests to the owner-checked backend. Capability selections and the existing
+child-chat permission survive editing. A custom-agent conversation uses the server profile;
+background tasks freeze that guidance on admission. This is workflow guidance, not new tools,
+permissions or a public external-agent execution endpoint. Future API adapters must honor the
+stored workflow contract. Shared Desktop software guidance also includes the spec/plan/task
+process and arrives in the next installed app build. No Spec Kit CLI is installed at runtime.

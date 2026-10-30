@@ -9,6 +9,8 @@ import velia_free_models as free_models
 from collections import deque
 import asyncio
 from dataclasses import dataclass
+from velia_code_quality import spec_guidance
+
 import json
 import logging
 import os
@@ -249,6 +251,12 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
             return 503, {"ok": False, "error": "browser_agent_unavailable"}
         if not isinstance(session_id, str) or not re.fullmatch(r"[0-9A-Fa-f-]{36}", session_id):
             return 400, {"ok": False, "error": "invalid_browser_task"}
+        if not isinstance(prompt, str) or not prompt.strip():
+            return 400, {"ok": False, "error": "invalid_browser_task"}
+        task_prompt = spec_guidance('browser')+'\nORIGINAL_TASK:\n'+prompt
+        task_body = json.dumps({"prompt": task_prompt}, ensure_ascii=False).encode('utf-8')
+        if len(task_prompt.encode('utf-8')) > 12000 or len(task_body) > 16000:
+            return 400, {"ok": False, "error": "invalid_browser_task"}
         headers = {
             "Authorization": "Bearer " + secret,
             "User-Agent": "VELIA-Web-Browser-Agent/0.2",
@@ -275,7 +283,7 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
         try:
             async with app[CLIENT].post(
                     config.agent_origin + "/v1/run",
-                    data=json.dumps({"prompt": prompt}, ensure_ascii=False).encode('utf-8'),
+                    data=task_body,
                     headers={**headers,'Content-Type':'application/json'},
                     allow_redirects=False,
                     timeout=ClientTimeout(total=460, sock_read=450)) as response:
