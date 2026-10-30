@@ -128,6 +128,16 @@ test("a provider error preserves validated partial text from the same chunk", as
     value => {visible = value;}));
   assert.equal(visible, "Часть ответа");
 });
+
+test('a standalone reset frame never publishes blank speech while replacement arrives later',async()=>{
+ const visible=[];
+ const frames=[{choices:[{delta:{content:'Привет!'}}]}, {reset:true},
+  {choices:[{delta:{content:'Привет!'},finish_reason:'stop'}]}];
+ const wire=frames.map(event=>'data: '+JSON.stringify(event)+'\n\n').concat('data: [DONE]\n\n');
+ const stream=new ReadableStream({start(c){for(const frame of wire)c.enqueue(new TextEncoder().encode(frame));c.close();}});
+ const result=await readCompletion(new Response(stream,{headers:{'content-type':'text/event-stream'}}),text=>visible.push(text));
+ assert.deepEqual(visible,['Привет!','Привет!']);assert.equal(result.text,'Привет!');
+});
 test("server refusal keeps an actionable error and status", async () => {
   await assert.rejects(
     readCompletion(

@@ -322,7 +322,9 @@ export async function readCompletion(response, onText, onSearch = () => {}, onPr
     }
     if (event.reset === true) {
       output = "";
-      changed = true;
+      // A reset and its replacement can arrive in different network reads.
+      // Keep the last visible/spoken snapshot until replacement text exists.
+      changed = false;
     }
     const choice = event.choices?.[0];
     if (choice?.finish_reason) finish = choice.finish_reason;

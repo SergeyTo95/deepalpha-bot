@@ -247,7 +247,7 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH', 
     if(!active||(!pending&&!final)||streamBlocked)return;
     text=String(text||'');
     if(streamCursor&&text.slice(0,streamCursor)!==streamText.slice(0,streamCursor)){
-      streamBlocked=true;speechPaused=false;resumeSpeech.hidden=true;streamQueue=[];speechEpoch++;cancelAudio();clearTimeout(speechTimer);currentUtterance=null;synth?.cancel();return;
+      streamBlocked=true;speechPaused=false;resumeSpeech.hidden=true;streamQueue=[];speechEpoch++;cancelAudio();clearTimeout(speechTimer);currentUtterance=null;synth?.cancel();status('Уточняю ответ…','thinking');return;
     }
     streamText=text;if(document.hidden)return;
     let cut;while((cut=speechReady(streamText.slice(streamCursor),final))>0){
@@ -261,7 +261,13 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH', 
   function complete(text){
     clearTimeout(waitingTimer);if(!pending||!active)return;
     if(document.hidden){deferredAnswer=text;status('Ответ готов','thinking');return;}
-    if(streamBlocked){pending=false;active=false;status('Ответ уточнён. Полный текст сохранён в диалоге.','error');return;}
+    if(streamBlocked||streamCursor&&String(text||'').slice(0,streamCursor)!==streamText.slice(0,streamCursor)){
+      // A real correction supersedes draft audio, but must not terminate the
+      // conversation. Read the final answer once, then reopen the microphone.
+      streamBlocked=false;speechPaused=false;resumeSpeech.hidden=true;streamQueue=[];
+      streamText='';streamCursor=0;streamDone=false;speechEpoch++;cancelAudio();
+      clearTimeout(speechTimer);clearTimeout(timer);currentUtterance=null;synth?.cancel();
+    }
     if(!speechChunks(text).length){if(!String(text||'').trim())failure(true);else {streamDone=true;pending=false;pumpStream();}return;}
     update(text,true);pending=false;
   }
