@@ -1,3 +1,5 @@
+import {highlightCode, CODE_RENDER_BUDGET} from './syntax.mjs';
+
 export const MODELS = Object.freeze(
   Object.assign(Object.create(null), {
     "velia-pro": "VELIA PRO",
@@ -36,11 +38,12 @@ function inline(text) {
     .join("");
 }
 /** Raw HTML is text; only this generated markup is trusted. */
-export function renderMarkdown(value) {
+export function renderMarkdown(value, {highlight = true} = {}) {
   const lines = String(value).replace(/\r\n?/g, "\n").split("\n");
   let html = "",
     paragraph = [],
-    list = null;
+    list = null,
+    highlightBudget = CODE_RENDER_BUDGET;
   const flush = () => {
     if (paragraph.length) {
       html += `<p>${paragraph.map(inline).join("<br>")}</p>`;
@@ -61,7 +64,13 @@ export function renderMarkdown(value) {
       const language = line.slice(3).trim().slice(0, 40),
         code = [];
       while (++i < lines.length && !/^```/.test(lines[i])) code.push(lines[i]);
-      html += `<div class="code-block"><div class="code-heading"><span>${escapeHTML(language || "Код")}</span><button class="copy-code" type="button">Копировать</button></div><pre><code>${escapeHTML(code.join("\n"))}</code></pre></div>`;
+      const source = code.join("\n");
+      let colored = null;
+      if (highlight && source.length <= highlightBudget) {
+        highlightBudget -= source.length;
+        colored = highlightCode(source, language);
+      }
+      html += `<div class="code-block"><div class="code-heading"><span>${escapeHTML(language || "Код")}</span><button class="copy-code" type="button">Копировать</button></div><pre><code>${colored ?? escapeHTML(source)}</code></pre></div>`;
       continue;
     }
     if (!line.trim()) {

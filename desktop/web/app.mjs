@@ -297,7 +297,7 @@ function messageNode(message, index) {
   if (message.role === "user") content.textContent = message.content;
   else
     content.innerHTML = message.content
-      ? renderMarkdown(message.content)
+      ? renderMarkdown(message.content, {highlight: !message.pending})
       : busy && !message.failed
         ? '<div class="thinking" aria-label="Велия готовит ответ"><span></span><span></span><span></span></div>'
         : "";
@@ -825,7 +825,7 @@ async function generate(retry = false, voiceTurn = false) {
     if (end < answer.content.length && /[\uDC00-\uDFFF]/.test(answer.content[end])) end++;
     displayed = answer.content.slice(0, end);
     const shouldScroll = conversationScroll.scrollHeight - conversationScroll.scrollTop - conversationScroll.clientHeight < 180;
-    contentNode.innerHTML = renderMarkdown(displayed);
+    contentNode.innerHTML = renderMarkdown(displayed, {highlight: false});
     if (shouldScroll) scrollDown(true);
     if (displayed !== answer.content) paintFrame = requestAnimationFrame(paint);
     else finishPaint?.();

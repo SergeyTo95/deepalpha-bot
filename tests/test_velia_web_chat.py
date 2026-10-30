@@ -592,7 +592,7 @@ def test_unauthenticated_browser_cannot_use_models_or_read_assets(monkeypatch):
         async with fixture(monkeypatch) as (server, client, state):
             async with client.post(server.make_url("/web-api/v1/chat/completions"), headers=headers(), json={}) as response:
                 assert response.status == 401
-            for path in ("/", "/web/app.mjs", "/web/work.mjs", "/web/voice.mjs", "/web/speech-audio.mjs", "/web/style.css"):
+            for path in ("/", "/web/app.mjs", "/web/work.mjs", "/web/voice.mjs", "/web/speech-audio.mjs", "/web/style.css", "/web/syntax.mjs", "/web/syntax-vendor.mjs"):
                 async with client.get(server.make_url(path)) as response:
                     assert response.status == 200
                     assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
