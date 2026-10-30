@@ -40,7 +40,7 @@ the comparison therefore uses the actual app branch.
 | Research | Missions, literature, synthesis, bounded autonomy, reports, sources, claims, evidence and alerts. |
 | Medical | Contrast/abdomen confirmations, cases, DICOM ZIP/NIfTI, resumable 8 MiB chunks with SHA-256, completion, result refresh and research creation. |
 | Agents | Capability selection, agent creation/list/delete, child conversation creation. |
-| Autopilot | Repository selection, bounded missions, activate/pause, enqueue/cancel tasks, run history and CI/review/merge-policy reads. |
+| Tasks | Running/finished chat tasks and existing schedules; development is inside Projects → Repositories. |
 | Account | Shared personalization, plugin switches, credits and usage. |
 | Voice | User-started browser recognition, language/voice settings, voice dialog and answer playback; answers remain in chat. |
 
@@ -474,3 +474,38 @@ and voice persona. This reserve may have lower reasoning quality than the primar
 background PRO/Quantum tasks remain on their original selected model. Saved voice turns have
 a separate bounded daily allowance in the backend; the gateway passes clear voice-limit errors.
 The policy does not change or guarantee availability of browser ASR or the TTS provider.
+
+## Tasks and repository development
+
+The former Autopilot navigation item is now **Задачи**. Its stable internal key
+and backend routes remain compatible. Running and finished tabs reuse the chat's
+owner-scoped background task controller, including its existing polling timer;
+opening a tab does not start a model request. Cards link to the original cloud
+conversation. Tasks requiring a browser handoff stay in the running list, and
+opening them restores a previously dismissed handoff card. Dismissed terminal
+cards remain available in task history. Cancellation uses the same existing
+owner-authorized endpoint. Failed refreshes retain the previous snapshot and
+show an unavailable-state message instead of reporting tasks as failed.
+
+The new-task action returns to the chat, preserves the unsent draft, selects an
+available Quantum/PRO mode and explicitly enables its existing background mode.
+The schedule action in the chat still prefills the scheduled-action form.
+Schedules retain the existing supported templates, paused creation and approval
+controls; arbitrary scheduled browser instructions and Telegram notifications
+are not added.
+
+Repository development lives under **Проекты → Репозитории и разработка** and is
+loaded only when expanded. Each repository opens its own filtered work list;
+creation submits the fixed selected project ID. The required path scope remains
+visible and unchanged; numerical limits move into a collapsed additional-settings
+panel, with the original bounds preserved. Works still start paused and require
+an explicit queue activation. The UI describes readiness flags as configuration,
+not as proof of a successful end-to-end run, and discloses the separate development
+API budget. No worker flags, model routes, budgets, database data or infrastructure
+are changed. Existing project materials and resources remain available.
+
+Validation: 109 Node tests, the 915-test gateway Docker qualification list,
+`smoke-web-tasks.mjs` (synthetic JSDOM task states, literal content, original-chat
+results, cleanup, schedule preservation, repository isolation, paused creation),
+and the existing synthetic background PRO and Quantum+Agent/manual-handoff flows.
+Physical phone layout and live model execution are not inferred from these checks.

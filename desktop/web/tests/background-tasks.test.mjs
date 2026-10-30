@@ -21,6 +21,21 @@ function surface(){
 }
 const job={id:'00000000-0000-4000-8000-000000000001',conversation_id:'conversation',model:'pro',status:'running',title:'<img src=x onerror=alert(1)>',result:'Answer',notes:[]};
 
+test('task hub shares polling, keeps dismissed history and clears snapshots on account changes',async()=>{
+  surface();let account='owner',failure=false,calls=0,events=0;
+  const controller=setupBackgroundTasks({request:async()=>{calls++;if(failure)throw Error('offline');return{jobs:[{...job,status:'completed'}]};},profile:()=>({account,background_tasks:true}),busy:()=>true,currentId:()=>null,open(){},refresh(){},speak(){},toast(){}});
+  const unsubscribe=controller.subscribe(()=>events++);
+  try{
+    await controller.poll();assert.equal(calls,1);assert.equal(controller.list().length,1);
+    const snapshot=controller.list();snapshot[0].title='changed';assert.equal(controller.list()[0].title,job.title);
+    failure=true;await controller.poll();assert.deepEqual(controller.status(),{loaded:true,failed:true});assert.equal(controller.list().length,1);
+    failure=false;await controller.poll();assert.equal(controller.status().failed,false);
+    const before=events;unsubscribe();await controller.poll();assert.equal(events,before);
+    account='another-owner';assert.deepEqual(controller.list(),[]);
+    controller.reset();assert.deepEqual(controller.status(),{loaded:false,failed:false});
+  }finally{controller.reset();unsubscribe();}
+});
+
 test('background jobs preserve foreground availability and restore a ready result once',async()=>{
   const nodes=surface();let blocked=true,status='running';let restores=0;const notifications=[];
   const controller=setupBackgroundTasks({request:async()=>({jobs:[{...job,status}]}),profile:()=>({account:'owner',background_tasks:true}),busy:()=>blocked,currentId:()=>job.conversation_id,

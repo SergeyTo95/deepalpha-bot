@@ -4,7 +4,7 @@ import {mountWork} from './work.mjs';
 export const SECTIONS = Object.freeze([
   ['studio', 'Studio'], ['projects', 'Проекты'], ['research', 'Исследования'],
   ['medical', 'Медицинский центр'], ['agents', 'Мои агенты'],
-  ['work', 'Работа и заработок'], ['autopilot', 'Автопилот'], ['profile', 'Персонализация'],
+  ['work', 'Работа и заработок'], ['autopilot', 'Задачи'], ['profile', 'Персонализация'],
   ['plugins', 'Плагины'], ['balance', 'Баланс и использование'], ['voice', 'Голос'],
 ]);
 export function mediaPath(value) {
@@ -184,8 +184,8 @@ function renderResearchReport(item) {
 const node = (tag, text, cls) => {const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n;};
 const button = (text, action) => {const b = node('button', text); b.type = 'button'; b.onclick = action; return b;};
 const labels = {claim:'Утверждение',confidence:'Уверенность',limitations:'Ограничения',open_questions:'Открытые вопросы',source_ids:'Источники',sources:'Источники',recommendations:'Рекомендации',reason:'Причина',message:'Сообщение',results:'Результаты',amount:'Сумма',balance:'Баланс',next_run_at:'Следующий запуск',last_run_at:'Последний запуск',timezone:'Часовой пояс',items:'Результаты',notes:'Описание',completed:'Выполнено',start:'Начало',end:'Окончание',goal:'Цель', title:'Название', name:'Имя', description:'Описание', instructions:'Инструкции', audience:'Аудитория', style:'Стиль', constraints:'Ограничения', status:'Статус', domain:'Направление', content:'Содержание', summary:'Результат', conclusion:'Вывод', text:'Текст', created_at:'Создано', updated_at:'Обновлено', preferred_name:'Как обращаться', about_me:'О себе', credits:'Токены', user_messages:'Сообщения сегодня', user_cost_usd:'Расход сегодня, $', enabled:'Включено', available:'Доступно', revision:'Версия', query:'Поисковый запрос', kind:'Тип', prompt:'Описание', duration_seconds:'Длительность, сек.', error_code:'Ошибка', rationale:'Обоснование',spec_mode_enabled:'Работать по плану',workflow_version:'Версия процесса'};
-const statuses={draft:'Черновик',planned:'Запланировано',paused:'Приостановлено',active:'Активно',completed:'Завершено',failed:'Ошибка',pending:'Ожидает',running:'Выполняется',queued:'В очереди',ready:'Готово',awaiting_approval:'Ожидает подтверждения',cancelled:'Отменено'};
-const descriptions = {work:'Команда агентов, задания и управление рабочим бюджетом.',studio:'Создавай изображения, видео и музыку в одном месте.',projects:'Собирай идеи, задачи и материалы вокруг одной цели.',research:'От вопроса к источникам, выводам и отчёту.',medical:'Загружай исследования и следи за результатами анализа.',agents:'Настраивай помощников под свои задачи.',autopilot:'Задачи по расписанию, результаты и разработка в одном месте.',profile:'Помоги Велии лучше понимать тебя.',plugins:'Выбирай инструменты, которые нужны в работе.',balance:'Следи за доступными токенами и использованием.',voice:'Настрой язык и голос для разговора с Велией.'};
+const statuses={draft:'Черновик',planned:'Запланировано',paused:'Приостановлено',active:'Активно',completed:'Завершено',failed:'Ошибка',pending:'Ожидает',running:'Выполняется',queued:'В очереди',ready:'Готово',awaiting_approval:'Ожидает подтверждения',cancelled:'Отменено',planning:'Планирую',executing:'Выполняется',claimed:'Готовится к выполнению',blocked:'Нужно уточнение',ready_for_review:'Готово к проверке'};
+const descriptions = {work:'Команда агентов, задания и управление рабочим бюджетом.',studio:'Создавай изображения, видео и музыку в одном месте.',projects:'Собирай идеи, материалы и разработку вокруг своих проектов.',research:'От вопроса к источникам, выводам и отчёту.',medical:'Загружай исследования и следи за результатами анализа.',agents:'Настраивай помощников под свои задачи.',autopilot:'Следи за выполнением поручений, открывай результаты и настраивай расписания.',profile:'Помоги Велии лучше понимать тебя.',plugins:'Выбирай инструменты, которые нужны в работе.',balance:'Следи за доступными токенами и использованием.',voice:'Настрой язык и голос для разговора с Велией.'};
 const hiddenKeys = new Set(['id','user_id','project_id','session_id','generation_id','client_request_id','signature','provider','model','input_sha256','worker_status','workflow_version']);
 function display(value, depth = 0) {
   const box = node('div', undefined, 'feature-detail');
@@ -203,10 +203,10 @@ function display(value, depth = 0) {
   return box;
 }
 
-export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, onUnauthorized = () => {}}) {
+export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, taskState=()=>null, prepareTask=()=>{}, onUnauthorized = () => {}}) {
   const root = document.getElementById('feature-view'), nav = document.getElementById('feature-nav');
-  let epoch = 0, section = null, controller = null;
-  const close = () => {epoch++; controller?.abort(); root.replaceChildren(); root.hidden = true; section = null; nav.querySelectorAll('button').forEach(b=>b.removeAttribute('aria-current')); document.getElementById('conversation-scroll').hidden = false; document.querySelector('.composer-area').hidden = false;};
+  let epoch = 0, section = null, controller = null, cleanup=()=>{};
+  const close = () => {epoch++; cleanup();cleanup=()=>{};controller?.abort(); root.replaceChildren(); root.hidden = true; section = null; nav.querySelectorAll('button').forEach(b=>b.removeAttribute('aria-current')); document.getElementById('conversation-scroll').hidden = false; document.querySelector('.composer-area').hidden = false;};
   const call = async (p, o = {}) => {
     try {return await featureRequest(p, {...o, signal: o.signal ?? controller?.signal});}
     catch(error) {if(error.status === 401) onUnauthorized(); throw error;}
@@ -338,7 +338,27 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
         body.replaceChildren(form(fields,'Создать проект',async d=>{await call('projects',{method:'POST',data:{passport:d},key:crypto.randomUUID()});await refresh();}));
         const list=node('div');body.append(list);
         const detail=async(p,card)=>{const r=await call('projects/'+p.id);card.replaceChildren(form(fields,'Сохранить изменения',async d=>{await call('projects/'+p.id,{method:'PATCH',data:{passport:d,expected_revision:r.project.revision}});await detail(p,card);},r.project.passport));const resources=node('div');card.append(form([['kind','Тип','select',[['chat','Диалог'],['deepalpha','DeepAlpha'],['image','Изображения'],['video','Видео'],['music','Музыка']]],['title','Название'],['query','Запрос','textarea']],'Добавить ресурс',async d=>{await call('project-resources',{method:'POST',data:{...d,project_id:p.id},key:crypto.randomUUID()});await collection('project-resources?project_id='+encodeURIComponent(p.id),'resources',resources);}));card.append(resources);await collection('project-resources?project_id='+encodeURIComponent(p.id),'resources',resources);};
-        const refresh=()=>collection('projects','projects',list,detail);await refresh();
+        const refresh=()=>collection('projects','projects',list,detail);
+        try{await refresh();}catch(e){if(e.name==='AbortError')throw e;if(ticket===epoch)list.replaceChildren(node('p','Не удалось загрузить материалы проектов. Подключённые репозитории можно открыть ниже.','feature-notice'));}
+        if(ticket!==epoch)return;
+        const repositories=node('details',undefined,'feature-advanced');
+        repositories.append(node('summary','Репозитории и разработка'));
+        const repositoryList=node('div');repositories.append(repositoryList);body.append(repositories);
+        let loaded=false;
+        repositories.ontoggle=async()=>{
+          if(!repositories.open||loaded)return;
+          loaded=true;repositoryList.replaceChildren(node('p','Загрузка репозиториев…'));
+          try{
+            const data=await call('developer/projects');if(ticket!==epoch)return;
+            repositoryList.replaceChildren();
+            if(!data.projects?.length)repositoryList.append(node('p','Подключённых репозиториев пока нет. Здесь появятся проекты, которым ты разрешишь доступ в GitHub.','feature-empty'));
+            for(const project of data.projects||[]){
+              const card=node('article',undefined,'feature-card');
+              card.append(node('h3',project.repository_full_name||project.name||'Репозиторий'),node('p',project.selected_branch?'Ветка: '+project.selected_branch:'Выбери проект для разработки.'));
+              actions(card,[['Открыть разработку',()=>development(card,project)]]);repositoryList.append(card);
+            }
+          }catch(e){if(ticket===epoch&&e.name!=='AbortError'){loaded=false;repositoryList.replaceChildren(node('p',e.message,'feature-notice'));}}
+        };
       } else if (name === 'work') {
         body.replaceChildren(); await mountWork(body,{signal:controller.signal,toast});
       } else if (name === 'agents') {
@@ -375,34 +395,126 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
         };
         const refresh=()=>collection('medical/cases','cases',list,detail).catch(e=>{if(e.name==='AbortError')return;list.replaceChildren(node('p','История КТ сейчас недоступна. Локальное сравнение показателей работает независимо.','feature-notice'),button('Повторить загрузку истории',refresh));});await refresh();
       } else if (name === 'autopilot') {
-        await autopilot(body,draft);
+        await taskHub(body,draft);
       }
     } catch(e) {if(e.name!=='AbortError'&&ticket===epoch){const message=node('p',e.message,'feature-notice');message.setAttribute('role','alert');body.replaceChildren(message,button('Повторить',()=>open(name)));}}
   }
-  async function development(body) {
+  async function development(body, project) {
     const ticket=epoch;
     const readiness=await call('developer/autopilot/status');
-    body.replaceChildren(node('p',readiness.worker_ready ? 'Исполнитель разработки готов. Миссии создаются на паузе; результат — черновик PR.' : 'Исполнитель разработки отключён или не готов. Активация миссии не гарантирует запуск.', 'feature-notice'));
-        const projects=await call('developer/projects'); if(ticket!==epoch)return;
-        body.append(form([['project_id','Проект','select',(projects.projects||[]).map(p=>[p.id,p.name||p.title||p.repository_full_name||p.id])],['name','Название'],['allowed_paths','Разрешённые пути, по одному на строку','textarea'],['max_steps','Максимум шагов','number'],['max_files','Максимум файлов','number']],'Создать миссию',async d=>{await call('developer/autopilot/missions',{method:'POST',data:{...d,allowed_paths:d.allowed_paths.split('\n').map(x=>x.trim()).filter(Boolean),blocked_paths:[]}});await refresh();},{max_steps:5,max_files:5}));
-        const list=node('div');body.append(list);
-        const refresh=()=>collection('developer/autopilot/missions','missions',list,async(m,card)=>{card.append(display(m));actions(card,[['Активировать',async()=>{if(!readiness.worker_ready){toast('Исполнитель разработки не готов.');return;}await call(`developer/autopilot/missions/${m.id}/activate`,{method:'POST'});await refresh();}],['Приостановить',async()=>{await call(`developer/autopilot/missions/${m.id}/pause`,{method:'POST'});await refresh();}]]);card.append(form([['instruction','Задача','textarea']],'Добавить задачу',async d=>{await call(`developer/autopilot/missions/${m.id}/tasks`,{method:'POST',data:{...d,priority:0,client_request_id:crypto.randomUUID()}});}));const tasks=node('div'),runs=node('div');card.append(tasks,runs);actions(card,[['История запусков',()=>collection(`developer/autopilot/missions/${m.id}/runs`,'runs',runs,async(r,rc)=>{const out=node('div');rc.append(out);actions(rc,['ci','reviews','merge-policy'].map((k,i)=>[['Проверки CI','Ревью','Условия мержа'][i],async()=>{const v=await call(`developer/autopilot/runs/${r.id}/${k}`);out.replaceChildren(display(v));}]));})]]);await collection(`developer/autopilot/missions/${m.id}/tasks`,'tasks',tasks,async(t,tc)=>{tc.append(display(t));actions(tc,[['Отменить задачу',async()=>{await call(`developer/autopilot/tasks/${t.id}/cancel`,{method:'POST'});tc.append(node('p','Задача отменена'));}]]);});});await refresh();
-    if(!readiness.worker_ready)body.querySelectorAll('button').forEach(b=>{if(b.textContent==='Активировать')b.disabled=true;});
-  }
-  async function autopilot(body,draft) {
-    body.replaceChildren();const tabs=node('div',undefined,'feature-tabs'),panel=node('div');body.append(tabs,panel);
-    let version=0;
-    async function select(key) {
-      const current=++version,ticket=epoch;tabs.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.tab===key)));
-      panel.replaceChildren(node('p','Загрузка…','feature-empty'));
-      // Each tab has its own detached mount, so late responses cannot overwrite another tab.
-      const mount=node('div');
-      try {if(key==='development')await development(mount);else await schedules(mount,draft);}
-      catch(e){if(e.name==='AbortError')return;mount.replaceChildren(node('p',e.message,'feature-notice'),button('Повторить',()=>select(key)));}
-      if(current===version&&ticket===epoch)panel.replaceChildren(mount);
+    if(ticket!==epoch)return;
+    body.replaceChildren(node('h3',project.repository_full_name||project.name||'Разработка проекта'));
+    body.append(node('p',readiness.worker_ready
+      ? 'Настройки разработки включены. Работы создаются на паузе; запуск выполняется отдельно.'
+      : 'Запуск разработки сейчас недоступен. Сохранённые работы появятся ниже, если доступ к ним открыт.','feature-notice'));
+    body.append(node('p','Разработка использует отдельный API-бюджет. Результат — черновик PR для проверки. Автоматической публикации сайта нет.','feature-help'));
+    const create=form([['name','Название работы'],['allowed_paths','Где можно менять код','textarea'],['max_steps','Максимум шагов','number'],['max_files','Максимум файлов','number']],
+      'Создать работу',async data=>{
+        await call('developer/autopilot/missions',{method:'POST',data:{...data,project_id:project.id,
+          allowed_paths:data.allowed_paths.split('\n').map(x=>x.trim()).filter(Boolean),blocked_paths:[]}});
+        await refresh();
+      },{max_steps:5,max_files:5});
+    create.querySelector('[type=submit]').disabled=!readiness.worker_ready&&!(readiness.enabled&&readiness.coding_enabled);
+    create.elements.allowed_paths.placeholder='Например: src/ или services/chat.py — по одному пути на строку';
+    create.elements.allowed_paths.closest('label').append(node('small','Укажи конкретные папки или файлы. Остальной код останется вне разрешённой области.'));
+    const advanced=node('details',undefined,'feature-advanced');advanced.append(node('summary','Дополнительные ограничения'));
+    create.insertBefore(advanced,create.querySelector('[type=submit]'));
+    for(const name of ['max_steps','max_files'])advanced.append(create.elements[name].closest('label'));
+    create.elements.max_steps.min=1;create.elements.max_steps.max=5;
+    create.elements.max_files.min=1;create.elements.max_files.max=12;
+    advanced.addEventListener('invalid',()=>{advanced.open=true;},true);
+    body.append(create);
+    actions(body,[['Обновить работы',()=>refresh()]]);
+    const list=node('div');body.append(list);
+    async function refresh(){
+      const data=await call('developer/autopilot/missions');if(ticket!==epoch)return;
+      list.replaceChildren();
+      const missions=(data.missions||[]).filter(m=>String(m.project_id)===String(project.id));
+      if(!missions.length)list.append(node('p','Работ пока нет. Создай работу, добавь задачу и запусти очередь, когда всё проверишь.','feature-empty'));
+      for(const mission of missions){
+        const id=mission.mission_id||mission.id,card=node('article',undefined,'feature-card');
+        card.append(node('h3',mission.name||'Работа над проектом'),node('small',statuses[mission.status]||mission.status));
+        const controls=node('div',undefined,'feature-actions');
+        const active=mission.status==='active';
+        const toggle=button(active?'Приостановить':'Запустить очередь',()=>run(toggle,async()=>{
+          await call(`developer/autopilot/missions/${id}/${active?'pause':'activate'}`,{method:'POST'});await refresh();
+        }));toggle.disabled=!active&&!readiness.worker_ready;controls.append(toggle);card.append(controls);
+        card.append(form([['instruction','Что нужно сделать','textarea']],'Добавить задачу',async data=>{
+          await call(`developer/autopilot/missions/${id}/tasks`,{method:'POST',data:{...data,priority:0,client_request_id:crypto.randomUUID()}});await refresh();
+        }));
+        const tasks=await call(`developer/autopilot/missions/${id}/tasks`);if(ticket!==epoch)return;
+        for(const task of tasks.tasks||[]){
+          const row=node('div',undefined,'feature-card');row.append(node('p',task.instruction||task.title||'Задача'),node('small',statuses[task.status]||task.status));
+          if(['queued','pending','running','claimed'].includes(task.status))actions(row,[['Отменить задачу',async()=>{await call(`developer/autopilot/tasks/${task.task_id||task.id}/cancel`,{method:'POST'});await refresh();}]]);
+          card.append(row);
+        }
+        const runs=node('div');
+        actions(card,[['Результаты и проверки',async()=>{
+          const result=await call(`developer/autopilot/missions/${id}/runs`);if(ticket!==epoch)return;
+          runs.replaceChildren();if(!result.runs?.length)runs.append(node('p','Запусков пока нет.'));
+          for(const attempt of result.runs||[]){
+            const runId=attempt.run_id||attempt.id,entry=node('article',undefined,'feature-card');
+            entry.append(node('strong',statuses[attempt.status]||attempt.status));
+            const pr=attempt.pull_request_url||attempt.result?.pull_request?.url;
+            try{const url=new URL(pr);if(url.protocol==='https:'&&url.hostname==='github.com'&&url.pathname.startsWith('/'+project.repository_full_name+'/pull/')){
+              const link=node('a','Открыть Pull Request');link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';entry.append(link);
+            }}catch{}
+            const evidence=node('div');
+            actions(entry,['ci','reviews','merge-policy'].map((key,index)=>[['Проверки CI','Ревью','Условия слияния'][index],async()=>{
+              const value=await call(`developer/autopilot/runs/${runId}/${key}`);if(ticket===epoch)evidence.replaceChildren(display(value));
+            }]));entry.append(evidence);runs.append(entry);
+          }
+        }]]);card.append(runs);list.append(card);
+      }
     }
-    for(const [key,title] of [['schedules','Задачи и расписания'],['development','Разработка']]){const b=button(title,()=>select(key));b.dataset.tab=key;tabs.append(b);}
-    await select('schedules');
+    await refresh();
+  }
+  async function taskHub(body,draft) {
+    body.replaceChildren();
+    const ticket=epoch,tabs=node('div',undefined,'feature-tabs task-tabs'),panel=node('div');body.append(tabs,panel);
+    let version=0,unsubscribe=()=>{};
+    cleanup=()=>unsubscribe();
+    async function select(key){
+      unsubscribe();unsubscribe=()=>{};
+      const current=++version;tabs.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.tab===key)));
+      const mount=node('div');panel.replaceChildren(mount);
+      if(key==='schedules'){
+        mount.append(node('p','Загрузка…','feature-empty'));
+        try{await schedules(mount,draft);}catch(e){if(e.name!=='AbortError'&&ticket===epoch&&current===version)mount.replaceChildren(node('p',e.message,'feature-notice'),button('Повторить',()=>select(key)));}
+        return;
+      }
+      const state=taskState();
+      if(!state){mount.append(node('p','Фоновые поручения сейчас недоступны для этого аккаунта. Расписания можно проверить в соседней вкладке.','feature-empty'));return;}
+      const list=node('div');
+      mount.append(button('Поставить задачу в чате',prepareTask),list);
+      const render=()=>{
+        if(ticket!==epoch||current!==version||!signedIn())return;
+        list.replaceChildren();
+        const waiting=job=>['queued','running'].includes(job.status)||!!job.user_action_required;
+        const availability=state.status?.()||{loaded:true,failed:false};
+        if(availability.failed)list.append(node('p','Не удалось обновить задачи. Показано последнее известное состояние.','feature-notice'),button('Повторить загрузку',()=>state.poll()));
+        else if(!availability.loaded)list.append(node('p','Загрузка поручений…','feature-empty'));
+        const jobs=state.list().filter(job=>!job.resumed&&(key==='active'?waiting(job):!waiting(job)));
+        if(!jobs.length&&availability.loaded)list.append(node('p',key==='active'?'Сейчас нет выполняемых поручений. Поставь задачу в чате — здесь появится её состояние.':'Здесь появятся результаты завершённых поручений.','feature-empty'));
+        for(const job of jobs){
+          const card=node('article',undefined,'feature-card');
+          const status=job.user_action_required?'Нужно действие в браузере':({queued:'В очереди',running:'Выполняется',completed:'Готово',error:'Не удалось выполнить',cancelled:'Отменено'})[job.status]||'Проверяю состояние';
+          card.append(node('h3',job.title||'Поручение'),node('small',`${job.model==='pro'?'PRO':'Quantum'}${job.agent?' + Agent':''} · ${status}`));
+          if(job.notes?.length)card.append(node('p','Уточнение: '+job.notes.at(-1)));
+          if(job.error)card.append(node('p',apiError(job.error),'feature-notice'));
+          actions(card,[[job.status==='completed'&&!job.user_action_required?'Открыть результат':'Открыть диалог',()=>{if(job.user_action_required)state.reveal?.(job.id);return openConversation({id:job.conversation_id});}],
+            ...(['queued','running'].includes(job.status)?[['Отменить',()=>state.cancel(job)]]:[])]);
+          list.append(card);
+        }
+      };
+      unsubscribe=state.subscribe(render);render();
+      // Reuse the chat's existing owner-scoped poller; no second polling loop.
+      await state.poll();
+    }
+    for(const [key,title] of [['active','Выполняются'],['schedules','Запланировано'],['finished','Завершены']]){
+      const b=button(title,()=>select(key));b.dataset.tab=key;tabs.append(b);
+    }
+    await select(draft.instruction?'schedules':'active');
   }
   async function schedules(body,draft) {
     const [status,core]=await Promise.all([call('agent/schedules/status'),call('agent/status')]);
