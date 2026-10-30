@@ -107,10 +107,10 @@ async def _next_audio(source, request):
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 
-async def stream_speech(request, fields):
+async def stream_speech(request, fields, source=None):
     response = None
     try:
-        async with aclosing(stream_edge(fields)) as source:
+        async with aclosing(source if source is not None else stream_edge(fields)) as source:
             # Validate the first provider bytes before committing HTTP 200.
             first = await _next_audio(source, request)
             response = web.StreamResponse(headers={"Content-Type": "audio/mpeg",
@@ -156,7 +156,42 @@ async def synthesize(fields):
 def setup_voice_routes(app, *, session_for, same_origin, json_response):
     requests = {}
     event_requests = {}
+    preparations = {}
     slots = asyncio.Semaphore(4)
+    pool = None
+    if os.getenv("VELIA_WEB_TTS_REUSE_ENABLED", "").lower() in {"true", "1"}:
+        from desktop.voice_transport import EdgeSpeechPool
+        pool = EdgeSpeechPool()
+        async def pool_lifecycle(application):
+            await pool.start()
+            try:
+                yield
+            finally:
+                await pool.close()
+        app.cleanup_ctx.append(pool_lifecycle)
+    async def prepare(request):
+        if not same_origin(request):
+            return json_response({"error": "invalid_origin"}, 403)
+        try:
+            session = await session_for(request)
+            if not session:
+                return json_response({"error": "unauthorized"}, 401)
+            if request.content_length and request.content_length > 128:
+                return json_response({"error": "request_too_large"}, 413)
+            if await request.json() != {}:
+                return json_response({"error": "invalid_voice_preparation"}, 400)
+            now = time.monotonic()
+            for key in list(preparations):
+                if preparations[key] <= now - 10:
+                    del preparations[key]
+            if pool and os.getenv("VELIA_WEB_TTS_PROVIDER") == "edge" and session.user_id not in preparations:
+                preparations[session.user_id] = now
+                pool.prepare(session.user_id)
+            return json_response({"ok": True})
+        except AuthenticationUnavailable:
+            return json_response({"error": "authentication_unavailable"}, 503)
+        except (ValueError, TypeError):
+            return json_response({"error": "invalid_voice_preparation"}, 400)
     async def events(request):
         if not same_origin(request):
             return json_response({"error": "invalid_origin"}, 403)
@@ -221,8 +256,15 @@ def setup_voice_routes(app, *, session_for, same_origin, json_response):
                     "progressive" if request.query.get("stream") == "1" and "edge_voice" in fields else "buffered",
                     "playback-clock-v1" if request.headers.get("X-Velia-Voice-Client") == "playback-clock-v1" else "legacy")
                 if request.query.get("stream") == "1" and "edge_voice" in fields:
+                    if pool:
+                        source = pool.stream(fields, session.user_id, lambda: stream_edge(fields))
+                        return await stream_speech(request, fields, source)
                     return await stream_speech(request, fields)
-                audio = await synthesize(fields)
+                if pool and "edge_voice" in fields:
+                    async with aclosing(pool.stream(fields, session.user_id, lambda: stream_edge(fields))) as source:
+                        audio = b"".join([chunk async for chunk in source])
+                else:
+                    audio = await synthesize(fields)
             return web.Response(body=audio, content_type="audio/mpeg", headers={"Cache-Control": "no-store"})
         except AuthenticationUnavailable:
             return json_response({"error": "authentication_unavailable"}, 503)
@@ -233,3 +275,4 @@ def setup_voice_routes(app, *, session_for, same_origin, json_response):
     app.router.add_get("/web-api/v1/voice/voices", catalog)
     app.router.add_post("/web-api/v1/voice/speech", speech)
     app.router.add_post("/web-api/v1/voice/events", events)
+    app.router.add_post("/web-api/v1/voice/prepare", prepare)

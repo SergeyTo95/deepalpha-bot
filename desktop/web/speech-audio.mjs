@@ -1,4 +1,27 @@
 // Progressive MP3 playback is optional; other browsers keep the Blob player.
+const SILENT_WAV='data:audio/wav;base64,UklGRsQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+
+// Unlock the same HTML audio element in the opening user gesture, then keep it
+// for real playback. Late warm-up promises cannot pause a newer speech segment.
+export function createPreparedAudioPlayer(AudioClass=globalThis.Audio) {
+ let player=null,generation=0,warming=null,unlocked=false;
+ const get=()=>{if(!player&&AudioClass){player=new AudioClass();player.preload='auto';}return player;};
+ const reset=()=>{if(!player)return;for(const name of ['onended','onerror','onplaying','ontimeupdate','onwaiting','onpause'])player[name]=null;player.pause();player.removeAttribute?.('src');player.load?.();};
+ return {
+  warm(){
+   if(unlocked||warming||!AudioClass)return;
+   try{
+    const audio=get(),token=++generation;audio.src=SILENT_WAV;
+    const job=Promise.resolve(audio.play()).then(()=>{if(token===generation){unlocked=true;reset();}})
+     .catch(()=>{if(token===generation)reset();}).finally(()=>{if(warming===job)warming=null;});
+    warming=job;
+   }catch{reset();}
+  },
+  take(){generation++;warming=null;reset();return get();},
+  release(){generation++;warming=null;reset();},
+ };
+}
+
 export function canStreamAudio(Source=globalThis.window?.MediaSource) {
   try{return !!Source?.isTypeSupported('audio/mpeg');}catch{return false;}
 }

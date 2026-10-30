@@ -5,7 +5,7 @@ import {readCompletion} from '../core.mjs';
 
 function fixture(t,{responder,speech=false}={}) {
  t.mock.timers.enable({apis:['setTimeout']});
- const recognizers=[],sent=[],events=[],spoken=[];let completion;
+ const recognizers=[],sent=[],events=[],spoken=[],preparations=[];let completion;
  class Element {
   constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.listeners={};this.isConnected=true;}
   append(...nodes){this.children.push(...nodes);}
@@ -28,13 +28,13 @@ function fixture(t,{responder,speech=false}={}) {
  const globals={window:{SpeechRecognition:Recognition,...(speech?{speechSynthesis:synth}:{})},document:doc,
   SpeechSynthesisUtterance:class {constructor(text){this.text=text;}},
   navigator:{language:'ru-RU'},localStorage:{getItem:()=>null},
-  fetch:async(url,options)=>{if(options?.body)events.push(JSON.parse(options.body));return {ok:true,json:async()=>({voices:[]})};}};
+  fetch:async(url,options)=>{if(url.endsWith('/events'))events.push(JSON.parse(options.body));if(url.endsWith('/prepare'))preparations.push(JSON.parse(options.body));return {ok:true,json:async()=>({voices:[]})};}};
  const previous=new Map();
  for(const [key,value] of Object.entries(globals)){previous.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});}
  const voice=setupVoice({send:text=>{sent.push(text);return completion=responder?responder(voice):Promise.resolve(voice.complete(''));},busy:()=>false,toast(){},accountLanguage:()=> 'ru'});
  t.after(()=>{voice.stop();for(const [key,descriptor] of previous){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];}});
  voice.open();
- return {voice,recognizers,sent,events,spoken,get completion(){return completion;},tick:ms=>t.mock.timers.tick(ms),status:()=>body.children[0].children.find(n=>n.tag==='p'&&n.className==='voice-status')?.textContent};
+ return {voice,recognizers,sent,events,spoken,preparations,get completion(){return completion;},tick:ms=>t.mock.timers.tick(ms),status:()=>body.children[0].children.find(n=>n.tag==='p'&&n.className==='voice-status')?.textContent};
 }
 
 test('temporary recognition failure reconnects without submitting an unfinished phrase',t=>{
@@ -100,4 +100,10 @@ test('a correction arriving only at completion is delivered and does not leave t
  submit(s);await s.completion;
  assert.deepEqual(s.spoken.map(u=>u.text),['Первый ответ.','Итоговый ответ.']);
  s.spoken[1].onend();s.tick(400);assert.equal(s.status(),'Слушаю тебя…');
+});
+
+test('opening voice prepares transport without speech text or blocking the microphone',t=>{
+ const s=fixture(t);assert.deepEqual(s.preparations,[{}]);
+ assert.equal(s.recognizers.length,1);assert.equal(s.recognizers[0].started,true);assert.deepEqual(s.sent,[]);
+ s.voice.open();assert.equal(s.recognizers.length,1);assert.equal(s.preparations.length,1);
 });

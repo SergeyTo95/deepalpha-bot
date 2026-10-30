@@ -512,7 +512,7 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.WARNING)
-    for name in ("desktop.account_routes", "desktop.quantum_intent", "desktop.voice_routes"):
+    for name in ("desktop.account_routes", "desktop.quantum_intent", "desktop.voice_routes", "desktop.voice_transport"):
         logging.getLogger(name).setLevel(logging.INFO)
     web.run_app(create_app(), host="0.0.0.0", port=int(os.getenv("PORT", "8080")), access_log=None,
                 handler_cancellation=True)

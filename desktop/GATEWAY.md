@@ -20,7 +20,19 @@ VELIA_DESKTOP_PRO_MODEL=${{deepalpha-bot.KIMI_MODEL}}
 VELIA_DESKTOP_REASONING_EFFORT=low
 ```
 
-### Public account access
+### Voice connection preparation
+
+`VELIA_WEB_TTS_REUSE_ENABLED=true` opts the existing Edge voice route into a
+bounded pool of account-scoped WebSocket connections. Opening voice mode starts
+authenticated, same-origin preparation in the background, without sending speech
+text or making a synthesis request. The browser prepares and reuses its audio
+element in that same opening gesture. The model, speaker, rate, SSML and MP3
+format are unchanged. Idle sockets expire after 45 seconds; shutdown, interrupted
+audio and mismatched request IDs close their sockets. Connection failures before
+the first audio byte fall back to the original transport; partial audio is never
+replayed. The option defaults off for a controlled rollout.
+
+### Public account access configuration
 
 Set `VELIA_PUBLIC_ACCESS_ENABLED=true` on the gateway to admit all accounts
 verified by the existing identity authority, without listing Telegram IDs in

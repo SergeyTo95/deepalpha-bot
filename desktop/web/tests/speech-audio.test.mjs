@@ -1,6 +1,42 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {canStreamAudio,attachAudioStream,trackPlaybackStatus} from '../speech-audio.mjs';
+import {canStreamAudio,attachAudioStream,trackPlaybackStatus,createPreparedAudioPlayer} from '../speech-audio.mjs';
+
+test('opening gesture prepares the same player and late warm-up cannot pause real audio',async()=>{
+ const instances=[];let finishWarm;
+ class Audio {
+  constructor(){instances.push(this);this.pauses=0;}
+  play(){return new Promise(resolve=>{finishWarm=resolve;});}
+  pause(){this.pauses++;}
+  removeAttribute(){this.src='';}
+  load(){}
+ }
+ const prepared=createPreparedAudioPlayer(Audio);
+ prepared.warm();prepared.warm();assert.equal(instances.length,1);
+ assert.match(instances[0].src,/^data:audio\/wav;base64,/);
+ const silence=Buffer.from(instances[0].src.split(',')[1],'base64');
+ assert.equal(silence.subarray(0,4).toString(),'RIFF');assert.ok(silence.subarray(44).every(byte=>byte===0));
+ const player=prepared.take();player.src='blob:real-answer';
+ const pauses=player.pauses;finishWarm();await Promise.resolve();await Promise.resolve();
+ assert.equal(player.src,'blob:real-answer');assert.equal(player.pauses,pauses);
+ prepared.release();assert.equal(player.src,'');assert.equal(prepared.take(),player);
+});
+
+test('denied audio preparation is harmless and a later gesture can retry',async()=>{
+ let calls=0;
+ class Audio {
+  play(){calls++;return Promise.reject(new Error('not allowed'));}
+  pause(){}
+  removeAttribute(){this.src='';}
+  load(){}
+ }
+ const prepared=createPreparedAudioPlayer(Audio);
+ prepared.warm();await new Promise(resolve=>setImmediate(resolve));
+ prepared.warm();await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(calls,2);assert.equal(prepared.take().src,'');
+ prepared.release();
+ const missing=createPreparedAudioPlayer(null);missing.warm();assert.equal(missing.take(),null);
+});
 
 test('playing without media-clock progress stays in preparation, even after repeated events',()=>{
  const audio={currentTime:0,paused:false},states=[];

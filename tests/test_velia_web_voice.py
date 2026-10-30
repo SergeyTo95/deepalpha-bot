@@ -195,6 +195,38 @@ def test_recognition_diagnostics_require_auth_origin_and_fixed_codes_without_spe
     assert 'VELIA_WEB_RECOGNITION_ERROR code=network attempt=1' in caplog.text
     assert 'private speech' not in caplog.text
 
+
+def test_preparation_is_authenticated_bounded_and_reused_transport_keeps_exact_fields(monkeypatch):
+    from desktop import voice_transport
+    calls = []
+    class Pool:
+        async def start(self): calls.append(('start',))
+        async def close(self): calls.append(('close',))
+        def prepare(self, owner): calls.append(('prepare', owner))
+        async def stream(self, fields, owner, fallback):
+            calls.append(('stream', owner, fields)); yield b'pooled-original-voice'
+    monkeypatch.setattr(voice_transport, 'EdgeSpeechPool', Pool)
+    monkeypatch.setenv('VELIA_WEB_TTS_REUSE_ENABLED', 'true')
+    monkeypatch.setenv('VELIA_WEB_TTS_PROVIDER', 'edge')
+    async def scenario():
+        async with TestServer(streaming_app()) as server, ClientSession() as client:
+            prepare = server.make_url('/web-api/v1/voice/prepare')
+            assert (await client.post(prepare, json={})).status == 403
+            assert (await client.post(prepare, json={}, headers={**STREAM_HEADERS, 'X-Test-Session': ''})).status == 401
+            for body in ({'text': 'do not synthesize'}, [], None, {'url': 'https://invalid.example'}):
+                assert (await client.post(prepare, json=body, headers=STREAM_HEADERS)).status == 400
+            for _ in range(3):
+                assert (await client.post(prepare, json={}, headers=STREAM_HEADERS)).status == 200
+            assert calls.count(('prepare', 7)) == 1
+            assert not any(c[0] == 'stream' for c in calls)
+            for suffix in ('', '?stream=1'):
+                response = await client.post(server.make_url('/web-api/v1/voice/speech'+suffix),
+                    json=STREAM_DATA, headers=STREAM_HEADERS)
+                assert response.status == 200 and await response.read() == b'pooled-original-voice'
+            assert all(c[1:] == (7, routes.validate(STREAM_DATA)) for c in calls if c[0] == 'stream')
+    asyncio.run(scenario())
+    assert calls[0] == ('start',) and calls[-1] == ('close',)
+
 def test_mp3_first_chunk_reaches_browser_before_provider_finishes(monkeypatch):
     monkeypatch.setenv('VELIA_WEB_TTS_PROVIDER','edge')
     async def run():
