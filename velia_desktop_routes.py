@@ -1,7 +1,7 @@
 """Opt-in desktop agent gateway; upstream credentials stay on the server.
 
-Preview access is restricted to explicitly configured user ids. This route does
-not execute tools: Harness executes them on the user's computer.
+Access requires an authenticated account and either an explicit preview entry or
+the public-access opt-in. Harness executes tools on the user's computer.
 """
 import velia_free_models as free_models
 import asyncio
@@ -20,6 +20,19 @@ MAX_BODY = 1024 * 1024
 MODEL_ID = "velia-pro"
 FLASH_ID = "velia-flash"
 QUANTUM_ID = quantum.MODEL_ID
+
+
+def public_access_enabled():
+    return os.getenv("VELIA_PUBLIC_ACCESS_ENABLED", "").strip().lower() in {"true", "1"}
+
+
+def account_allowed(user_id):
+    value = str(user_id)
+    if not value.isascii() or not value.isdigit() or int(value) <= 0:
+        return False
+    return public_access_enabled() or value in {
+        item.strip() for item in os.getenv("VELIA_DESKTOP_PREVIEW_USER_IDS", "").split(",")
+    }
 
 
 def flash_endpoint():
@@ -279,9 +292,8 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
             return None, error("authentication_unavailable", 503)
         if not identity:
             return None, error("unauthorized", 401)
-        allowed = {value.strip() for value in os.getenv("VELIA_DESKTOP_PREVIEW_USER_IDS", "").split(",")}
         user_id = str(identity["user_id"])
-        if user_id not in allowed:
+        if not account_allowed(user_id):
             return None, error("preview_access_required", 403)
         return user_id, None
 

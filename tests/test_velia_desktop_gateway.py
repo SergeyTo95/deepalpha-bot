@@ -65,6 +65,29 @@ def test_model_catalog_requires_opt_in_authenticated_allowlisted_user(monkeypatc
         assert json.loads(result.text)['data'][0]['id'] == 'velia-pro'
 
 
+@pytest.mark.parametrize('public,token,expected', [
+    ('true', 'va_test', 200), ('1', 'va_test', 200),
+    ('false', 'va_test', 403), ('', 'va_test', 403),
+    ('true', '', 401), ('true', 'invalid', 401),
+])
+def test_public_access_requires_verified_account(monkeypatch, public, token, expected):
+    monkeypatch.setenv('VELIA_DESKTOP_API_ENABLED', 'true')
+    monkeypatch.setenv('VELIA_DESKTOP_PREVIEW_USER_IDS', '')
+    monkeypatch.setenv('VELIA_PUBLIC_ACCESS_ENABLED', public)
+    route = handlers(lambda value: {'user_id': 123456789} if value == 'va_test' else None)
+    result = asyncio.run(route['/desktop-api/v1/models:GET'](
+        SimpleNamespace(headers={'Authorization': 'Bearer ' + token})))
+    assert result.status == expected
+
+
+def test_public_access_rejects_invalid_account_ids(monkeypatch):
+    from velia_desktop_routes import account_allowed
+    monkeypatch.setenv('VELIA_PUBLIC_ACCESS_ENABLED', 'true')
+    for user_id in (None, True, False, '', 0, -1, 'anonymous', '７'):
+        assert account_allowed(user_id) is False
+    assert account_allowed(123456789) is True
+
+
 def test_invalid_body_never_reaches_model_provider(monkeypatch):
     monkeypatch.setenv('VELIA_DESKTOP_API_ENABLED', 'true')
     monkeypatch.setenv('VELIA_DESKTOP_PREVIEW_USER_IDS', '7')

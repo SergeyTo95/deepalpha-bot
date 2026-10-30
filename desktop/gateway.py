@@ -19,7 +19,8 @@ import time
 from urllib.parse import urlsplit
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, DummyCookieJar, TCPConnector, web
-from velia_desktop_routes import AuthenticationUnavailable, setup_velia_desktop_routes
+from velia_desktop_routes import (AuthenticationUnavailable, setup_velia_desktop_routes,
+                                 account_allowed as allowed, public_access_enabled)
 from desktop.web_routes import prepare_web_payload, public_web_stream, setup_web_routes, WEB_CHAT, WEB_MODEL, WEB_SESSION
 from desktop.admin_proxy import setup_owner_admin_proxy
 from velia_quantum_provider import MODEL_ID as QUANTUM_ID
@@ -78,11 +79,6 @@ class GatewayConfig:
 def json_response(data, status=200):
     return web.json_response(data, status=status, headers={"Cache-Control": "no-store",
         "Pragma": "no-cache", "X-Content-Type-Options": "nosniff"})
-
-
-def allowed(user_id):
-    return str(user_id) in {s.strip() for s in
-        os.getenv("VELIA_DESKTOP_PREVIEW_USER_IDS", "").split(",") if s.strip()}
 
 
 def valid_session(data):
@@ -408,7 +404,8 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
     async def health(request):
         ready = (app[READY] and bool(os.getenv("KIMI_API_KEY", "").strip())
                  and os.getenv("VELIA_DESKTOP_API_ENABLED", "").lower() in {"true", "1"}
-                 and bool(os.getenv("VELIA_DESKTOP_PREVIEW_USER_IDS", "").strip()))
+                 and (public_access_enabled()
+                      or bool(os.getenv("VELIA_DESKTOP_PREVIEW_USER_IDS", "").strip())))
         from desktop.decision_router import status as decision_status
         return json_response({"ok": ready, "service": "velia-desktop-gateway",
                               "decision_router": decision_status()}, 200 if ready else 503)

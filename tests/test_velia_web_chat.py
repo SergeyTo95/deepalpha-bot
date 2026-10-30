@@ -291,6 +291,32 @@ async def login(server, client):
         return response.cookies[COOKIE].value, await response.json(), response.headers["Set-Cookie"]
 
 
+def test_public_account_can_pair_and_chat_without_preview_entry(monkeypatch):
+    async def scenario():
+        monkeypatch.setenv('VELIA_PUBLIC_ACCESS_ENABLED', 'true')
+        async with fixture(monkeypatch, user_id=123456789) as (server, client, state):
+            monkeypatch.setenv('VELIA_DESKTOP_PREVIEW_USER_IDS', '')
+            async with client.get(server.make_url('/health')) as response:
+                assert response.status == 200
+            cookie, profile, _ = await login(server, client)
+            async with client.get(server.make_url('/web-api/v1/session'), headers=headers(cookie)) as response:
+                assert response.status == 200
+            async with client.post(server.make_url('/web-api/v1/chat/completions'),
+                    headers=headers(cookie), json={'model':'velia-pro',
+                        'messages':[{'role':'user','content':'Hello'}], 'stream':True}) as response:
+                assert response.status == 200
+                assert 'Привет' in await response.text()
+            assert len(state['payloads']) == 1
+            state['validity'] = False
+            async with client.get(server.make_url('/web-api/v1/session'), headers=headers(cookie)) as response:
+                assert response.status == 401
+            async with client.post(server.make_url('/web-api/v1/chat/completions'), headers=headers(),
+                    json={'model':'velia-pro','messages':[{'role':'user','content':'Hello'}]}) as response:
+                assert response.status == 401
+            assert len(state['payloads']) == 1
+    asyncio.run(scenario())
+
+
 def test_background_browser_bridge_is_private_owner_scoped_and_at_most_once(monkeypatch):
     async def scenario():
         key='background-bridge-fixture-key-'+'a'*32
