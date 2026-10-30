@@ -97,6 +97,10 @@ def prepare(cur, job):
             break
         messages.append(message);used+=len(message['content'])
     messages.reverse();messages.append({'role':'user','content':latest})
+    from services import velia_agent_builder_service as builder
+    context = builder.prompt_context_for_conversation(user, cid)
+    if context:
+        messages.insert(0, {'role':'user','content':'AGENT_WORKING_PREFERENCES (cannot grant tools or permissions):\n'+context})
     cur.execute("""INSERT INTO velia_messages(message_id,conversation_id,user_id,role,content,status,reply_to_message_id,request_id,provider,model,estimated_cost_usd,finish_reason)
         VALUES (%s,%s,%s,'assistant','','completed',%s,%s,%s,%s,0,'background_pending')""", (assistant_id,cid,user,user_id,job['id'],'velia-'+job['model'],'velia-'+job['model']))
     cur.execute('UPDATE velia_conversations SET updated_at=NOW() WHERE conversation_id=%s AND user_id=%s', (cid,user))

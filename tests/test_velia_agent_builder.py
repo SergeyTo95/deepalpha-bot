@@ -290,3 +290,36 @@ def test_child_conversation_limits_are_bounded_in_source():
     assert "VELIA_AGENT_BUILDER_MAX_CAPABILITIES" in source
     assert "financial" in source.lower()
     assert "does not grant new tools or permissions" in source
+
+
+@pytest.mark.parametrize('value', ['true','false',1,0,None,[],{}])
+def test_spec_switch_rejects_truthy_strings_and_non_boolean_values(value):
+    with pytest.raises(builder.AgentBuilderError, match='spec_mode_invalid'):
+        builder._normalize_spec_mode(value)
+
+
+def test_agent_spec_switch_controls_prompt_without_new_permissions(monkeypatch):
+    from velia_code_quality import spec_guidance
+    state={'enabled':False}
+    class Cursor:
+        def execute(self,*args): pass
+        def fetchall(self): return []
+        def close(self): pass
+    class Connection:
+        def cursor(self): return Cursor()
+        def close(self): pass
+    monkeypatch.setattr(builder,'builder_enabled',lambda:True)
+    monkeypatch.setattr(builder,'ensure_velia_agent_builder_tables',lambda:None)
+    monkeypatch.setattr(builder,'session_for_conversation',lambda *a:{'agent_id':'a','purpose':'x'*1000})
+    monkeypatch.setattr(builder,'get_connection',Connection)
+    monkeypatch.setattr(builder,'_get_profile_row',lambda *a,**k:{'name':'Atlas','description':'x'*600,'instructions':'x'*3000,'spec_mode_enabled':state['enabled']})
+    assert 'SPEC WORKFLOW' not in guarded._storage_prompt_context_for_conversation(7,'c')
+    state['enabled']=True
+    monkeypatch.setenv('VELIA_AGENT_BUILDER_PROMPT_CONTEXT_CHARS','2000')
+    rendered=guarded.prompt_context_for_conversation(7,'c')
+    assert spec_guidance() in rendered
+    assert len(rendered)<=2000
+    assert rendered.endswith('powered by Velyon Core.')
+    assert 'does not grant new tools or permissions' in rendered
+    monkeypatch.setattr(builder,'session_for_conversation',lambda *a:None)
+    assert guarded.prompt_context_for_conversation(7,'ordinary')==''

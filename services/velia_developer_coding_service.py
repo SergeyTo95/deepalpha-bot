@@ -21,7 +21,7 @@ from services import velia_developer_github_write_service as write_service
 from services import velia_developer_taste_skill_service as taste_skill
 
 from services.velia_repository_context_security import redact_source, sensitive_context_path
-from velia_code_quality import guidance as engineering_guidance, inspect_changes, QualityError
+from velia_code_quality import spec_guidance, guidance as engineering_guidance, inspect_changes, QualityError
 
 
 class DeveloperCodingError(RuntimeError):
@@ -474,7 +474,7 @@ def _plan_prompt(
     branch = str(project.get("selected_branch") or "")
     profile = taste_profile if isinstance(taste_profile, dict) else {}
     taste_guidance = taste_skill.planning_guidance(profile)
-    guidance_block = '\n\n'+engineering_guidance('planning')+(f"\n\n{taste_guidance}" if taste_guidance else "")
+    guidance_block = '\n\n'+engineering_guidance('planning')+'\n'+spec_guidance('planning')+(f"\n\n{taste_guidance}" if taste_guidance else "")
     design_schema = ""
     design_rule = ""
     if profile.get("active"):
@@ -503,7 +503,8 @@ Verified repository excerpts:
 
 Return ONLY one compact JSON object with this schema:
 {{
-{design_schema}  "title": "short PR title",
+{design_schema}  "specification": {{"goal":"observable user outcome", "constraints":["scope boundary"], "acceptance":["verifiable criterion"], "assumptions":["explicit non-blocking assumption"]}},
+  "title": "short PR title",
   "summary": "what will be changed and why",
   "steps": [
     {{
@@ -579,6 +580,19 @@ def _normalize_plan(
         "summary": str(value.get("summary") or "Implement the requested repository change.").strip()[:2000],
         "steps": steps,
         "suggestions": suggestions,
+    }
+    specification = value.get("specification") if isinstance(value.get("specification"), dict) else {}
+    def bounded_items(key):
+        items = specification.get(key)
+        if not isinstance(items, list):
+            return []
+        return [item.strip()[:300] for item in items if isinstance(item, str) and item.strip()][:8]
+    result['specification'] = {
+        'goal': str(specification.get('goal') or result['summary']).strip()[:2000],
+        'constraints': bounded_items('constraints'),
+        'acceptance': bounded_items('acceptance') or [check for step in steps for check in step['checks']][:8],
+        'assumptions': bounded_items('assumptions'),
+        'verification': 'not_run',
     }
     design = taste_skill.normalize_design(
         value.get("design") if isinstance(value, dict) else {},
@@ -796,12 +810,16 @@ def _step_prompt(
             required_checks.append(item)
     required_checks = required_checks[:12]
     taste_guidance = taste_skill.execution_guidance(design, step)
-    guidance_block = '\n\n'+engineering_guidance('implementation')+(f"\n\n{taste_guidance}" if taste_guidance else "")
+    guidance_block = '\n\n'+engineering_guidance('implementation')+'\n'+spec_guidance('implementation')+(f"\n\n{taste_guidance}" if taste_guidance else "")
     return f"""You are the execution stage of VELIA Coding Agent.
 Repository: {project.get('repository_full_name')}
 Base branch: {job.get('base_branch')}
 Work branch: {job.get('work_branch')}
 Overall goal: {job.get('goal')}
+Specification (acceptance criteria are targets, not passed checks):
+{json.dumps(plan.get('specification', {}), ensure_ascii=False)}
+Persisted plan (scope and dependencies; only current task files are authorized):
+{json.dumps([{'index': s.get('index'), 'objective': s.get('objective'), 'checks': s.get('checks')} for s in plan.get('steps', [])], ensure_ascii=False)}
 Current task {step.get('index')}/{job.get('total_steps')}: {step.get('title')}
 Objective: {step.get('objective')}
 Allowed files: {json.dumps(allowed, ensure_ascii=False)}
@@ -1001,6 +1019,11 @@ def _pr_body(job: Dict[str, Any], results: List[Dict[str, Any]]) -> str:
         "",
         str(plan.get("summary") or job.get("goal") or ""),
     ]
+    specification = plan.get('specification') or {}
+    if specification:
+        lines.extend(['', '## Acceptance criteria (verification pending)', str(specification.get('goal') or '')])
+        lines.extend('- [ ] '+criterion for criterion in specification.get('acceptance', []))
+        lines.append('These are planned outcomes. Creating commits does not verify acceptance; review actual CI and behavior evidence.')
     design = plan.get("design") if isinstance(plan.get("design"), dict) else {}
     if design.get("active"):
         lines.extend(

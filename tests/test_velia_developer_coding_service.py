@@ -285,3 +285,16 @@ def test_format_plan_requires_one_explicit_approval():
     )
     assert "Выполняй план" in text
     assert "a.py" in text
+
+
+def test_specification_is_persistable_and_acceptance_is_not_a_claim_of_success():
+    raw={'summary':'Build export','specification':{'goal':'Owner downloads their data','constraints':['Owner scoped'],'acceptance':['Other owners receive 404'],'assumptions':['Reuse auth']},'steps':[{'objective':'Owner scoped export','files':['app.py'],'checks':['Check other owner gets 404']}]}
+    plan=coding._normalize_plan(raw)
+    assert plan['specification']['acceptance']==['Other owners receive 404']
+    assert plan['specification']['verification']=='not_run'
+    job={'plan':plan,'goal':'Build export','total_steps':1}
+    prompt=coding._step_prompt(PROJECT,job,plan['steps'][0],'source')
+    assert 'Other owners receive 404' in prompt and 'Owner scoped export' in prompt
+    body=coding._pr_body(job,[])
+    assert '- [ ] Other owners receive 404' in body
+    assert 'verification pending' in body

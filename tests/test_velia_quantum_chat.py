@@ -1161,3 +1161,39 @@ def test_background_agent_review_failure_keeps_unverified_evidence_without_repea
     stored=jobs.get(77,job['id'])
     assert stored['status']=='error' and 'Observed result' in stored['result'] and 'не проверен' in stored['result']
     assert 'agent_result' not in stored['payload']
+
+
+def test_postgres_custom_agent_spec_mode_migrates_roundtrips_and_follows_background(monkeypatch,postgres_chat,free_tiers):
+    from services import velia_agent_builder_service as builder,velia_agent_builder_guarded_service as guarded,velia_background_chat_service as background,velia_attachment_service as files
+    _,connect=postgres_chat
+    monkeypatch.setattr(builder,'get_connection',connect)
+    monkeypatch.setattr(guarded,'get_connection',connect)
+    monkeypatch.setattr(files,'get_connection',connect);files.ensure_velia_attachment_tables()
+    monkeypatch.setattr(builder,'_SCHEMA_READY',False)
+    monkeypatch.setattr(builder,'builder_enabled',lambda:True)
+    monkeypatch.setenv('VELIA_CHAT_ENABLED','true');monkeypatch.setenv('VELIA_BACKGROUND_CHAT_ENABLED','true')
+    monkeypatch.setattr(background.quantum,'account_language',lambda *a:'ru')
+    # Existing installations get an additive FALSE default, never an opt-in backfill.
+    with connect() as conn,conn.cursor() as cur:
+        cur.execute("CREATE TABLE velia_agent_profiles (agent_id TEXT PRIMARY KEY,user_id BIGINT NOT NULL,name TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',instructions TEXT NOT NULL DEFAULT '',can_create_chats BOOLEAN NOT NULL DEFAULT FALSE,memory_mode TEXT NOT NULL DEFAULT 'isolated',status TEXT NOT NULL DEFAULT 'active',created_at TIMESTAMP NOT NULL DEFAULT NOW(),updated_at TIMESTAMP NOT NULL DEFAULT NOW())")
+        cur.execute("INSERT INTO velia_agent_profiles(agent_id,user_id,name) VALUES ('legacy-agent',77,'Legacy')")
+    builder.ensure_velia_agent_builder_tables()
+    assert builder.get_agent(77,'legacy-agent')['spec_mode_enabled'] is False
+    profile=guarded.create_agent(77,'Planner',spec_mode_enabled=True)
+    assert profile['spec_mode_enabled'] is True
+    assert builder.get_agent(77,profile['id'])['workflow_version']=='velia-spec-v1'
+    assert any(a['spec_mode_enabled'] for a in builder.list_agents(77))
+    with pytest.raises(builder.AgentBuilderError,match='agent_not_found'):
+        builder.update_agent(78,profile['id'],{'spec_mode_enabled':False})
+    conversation=builder.create_agent_conversation(77,profile['id'])['conversation']
+    cid=conversation['id']
+    assert 'SPEC WORKFLOW' in builder.prompt_context_for_conversation(77,cid)
+    assert builder.prompt_context_for_conversation(78,cid)==''
+    jobs=background.store();jobs.initialize()
+    task=jobs.create(77,cid,'pro','spec-mode-background',{'content':'Build the export','web_search':False,'voice_turn':False,'attachment_ids':[]})
+    assert 'SPEC WORKFLOW' in task['payload']['messages'][0]['content']
+    builder.update_agent(77,profile['id'],{'spec_mode_enabled':False})
+    assert builder.get_agent(77,profile['id'])['spec_mode_enabled'] is False
+    assert 'SPEC WORKFLOW' not in builder.prompt_context_for_conversation(77,cid)
+    # A queued task retains the explicit profile snapshot it was created with.
+    assert 'SPEC WORKFLOW' in jobs.get(77,task['id'])['payload']['messages'][0]['content']

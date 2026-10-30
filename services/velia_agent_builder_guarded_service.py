@@ -76,6 +76,7 @@ def create_agent(
     instructions: str = "",
     capability_ids: Any = None,
     can_create_chats: bool = False,
+    spec_mode_enabled: bool = False,
 ) -> Dict[str, Any]:
     """Serialize per-user allocations so the configured agent quota is atomic."""
 
@@ -89,6 +90,7 @@ def create_agent(
             instructions=str(instructions or ""),
             capability_ids=capability_ids,
             can_create_chats=bool(can_create_chats),
+            spec_mode_enabled=spec_mode_enabled,
         ),
     )
 

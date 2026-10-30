@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from velia_code_quality import spec_guidance
+
 import json
 import os
 import re
@@ -320,6 +322,7 @@ Do not execute anything. Do not claim that an action succeeded.
 Do not invent tools, credentials, account connections, dates, recipients or missing required arguments.
 If a required value is missing, return an empty actions list and one concise suggestion asking for that value.
 Use the user's language in summary and suggestions.
+{spec_guidance('planning')}
 
 Available tools:
 {json.dumps(tools, ensure_ascii=False, separators=(',', ':'))}

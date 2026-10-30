@@ -103,6 +103,7 @@ def setup_velia_agent_builder_routes(app: web.Application, routes_module: Any) -
                 "product": "VELIA",
                 "brain": "Velyon Core",
                 "custom_agents": True,
+                "spec_workflow": True,
                 "conversation_scoped_agent_context": True,
                 "dedicated_long_term_agent_memory": memory_available,
                 "memory_scope": "agent" if memory_available else "unavailable",
@@ -173,6 +174,7 @@ def setup_velia_agent_builder_routes(app: web.Application, routes_module: Any) -
                 instructions=str(payload.get("instructions") or ""),
                 capability_ids=payload.get("capability_ids"),
                 can_create_chats=bool(payload.get("can_create_chats", False)),
+                spec_mode_enabled=payload.get("spec_mode_enabled", False),
             )
             return routes_module._json_response(
                 {

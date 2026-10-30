@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from velia_code_quality import spec_guidance
+
 import json
 import os
 import re
@@ -268,6 +270,9 @@ def ensure_velia_agent_builder_tables() -> None:
                 """
             )
             cursor.execute(
+                "ALTER TABLE velia_agent_profiles ADD COLUMN IF NOT EXISTS spec_mode_enabled BOOLEAN NOT NULL DEFAULT FALSE"
+            )
+            cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS velia_agent_profile_capabilities (
                     agent_id TEXT NOT NULL REFERENCES velia_agent_profiles(agent_id) ON DELETE CASCADE,
@@ -485,6 +490,7 @@ def _serialize_profile(cursor, row: Any) -> Dict[str, Any]:
             "status",
             "created_at",
             "updated_at",
+            "spec_mode_enabled",
         ],
     )
     return {
@@ -493,6 +499,8 @@ def _serialize_profile(cursor, row: Any) -> Dict[str, Any]:
         "description": str(item.get("description") or ""),
         "instructions": str(item.get("instructions") or ""),
         "can_create_chats": bool(item.get("can_create_chats")),
+        "spec_mode_enabled": item.get("spec_mode_enabled") is True,
+        "workflow_version": "velia-spec-v1" if item.get("spec_mode_enabled") is True else None,
         "memory_mode": str(item.get("memory_mode") or "isolated"),
         "status": str(item.get("status") or "active"),
         "capabilities": _profile_capabilities(cursor, str(item.get("agent_id") or "")),
@@ -506,7 +514,7 @@ def _serialize_profile(cursor, row: Any) -> Dict[str, Any]:
 def _get_profile_row(cursor, user_id: int, agent_id: str, *, active_only: bool = True) -> Any:
     status_clause = "AND status='active'" if active_only else ""
     cursor.execute(
-        "SELECT agent_id,user_id,name,description,instructions,can_create_chats,memory_mode,status,created_at,updated_at "
+        "SELECT agent_id,user_id,name,description,instructions,can_create_chats,memory_mode,status,created_at,updated_at,spec_mode_enabled "
         "FROM velia_agent_profiles WHERE agent_id=%s AND user_id=%s "
         + status_clause
         + " LIMIT 1",
@@ -581,6 +589,12 @@ def reconcile_archived_agent_conversations(user_id: int) -> int:
             conn.close()
 
 
+def _normalize_spec_mode(value: Any) -> bool:
+    if type(value) is not bool:
+        raise AgentBuilderError("velia_agent_builder_spec_mode_invalid")
+    return value
+
+
 def create_agent(
     user_id: int,
     name: str,
@@ -589,8 +603,10 @@ def create_agent(
     instructions: str = "",
     capability_ids: Any = None,
     can_create_chats: bool = False,
+    spec_mode_enabled: bool = False,
 ) -> Dict[str, Any]:
     ensure_velia_agent_builder_tables()
+    normalized_spec_mode = _normalize_spec_mode(spec_mode_enabled)
     normalized_name = _normalize_text(name, maximum=80, required=True)
     normalized_description = _normalize_text(description, maximum=600)
     normalized_instructions = _normalize_text(instructions, maximum=3000)
@@ -610,8 +626,8 @@ def create_agent(
         cursor.execute(
             """
             INSERT INTO velia_agent_profiles (
-                agent_id,user_id,name,description,instructions,can_create_chats,memory_mode,status,created_at,updated_at
-            ) VALUES (%s,%s,%s,%s,%s,%s,'isolated','active',%s,%s)
+                agent_id,user_id,name,description,instructions,can_create_chats,memory_mode,status,created_at,updated_at,spec_mode_enabled
+            ) VALUES (%s,%s,%s,%s,%s,%s,'isolated','active',%s,%s,%s)
             """,
             (
                 agent_id,
@@ -622,6 +638,7 @@ def create_agent(
                 bool(can_create_chats),
                 now,
                 now,
+                normalized_spec_mode,
             ),
         )
         for index, capability_id in enumerate(selected, start=1):
@@ -661,7 +678,7 @@ def list_agents(user_id: int, *, include_archived: bool = False, limit: int = 50
     try:
         clause = "" if include_archived else "AND status='active'"
         cursor.execute(
-            "SELECT agent_id,user_id,name,description,instructions,can_create_chats,memory_mode,status,created_at,updated_at "
+            "SELECT agent_id,user_id,name,description,instructions,can_create_chats,memory_mode,status,created_at,updated_at,spec_mode_enabled "
             "FROM velia_agent_profiles WHERE user_id=%s "
             + clause
             + " ORDER BY updated_at DESC LIMIT %s",
@@ -678,7 +695,7 @@ def update_agent(user_id: int, agent_id: str, changes: Mapping[str, Any]) -> Dic
     ensure_velia_agent_builder_tables()
     if not isinstance(changes, Mapping):
         raise AgentBuilderError("velia_agent_builder_json_invalid")
-    allowed = {"name", "description", "instructions", "capability_ids", "can_create_chats"}
+    allowed = {"name", "description", "instructions", "capability_ids", "can_create_chats", "spec_mode_enabled"}
     unknown = [key for key in changes if key not in allowed]
     if unknown:
         raise AgentBuilderError("velia_agent_builder_field_invalid", detail=str(unknown[0]))
@@ -688,6 +705,9 @@ def update_agent(user_id: int, agent_id: str, changes: Mapping[str, Any]) -> Dic
         _get_profile_row(cursor, user_id, agent_id, active_only=True)
         fields: List[str] = []
         values: List[Any] = []
+        if "spec_mode_enabled" in changes:
+            fields.append("spec_mode_enabled=%s")
+            values.append(_normalize_spec_mode(changes["spec_mode_enabled"]))
         if "name" in changes:
             fields.append("name=%s")
             values.append(_normalize_text(changes.get("name"), maximum=80, required=True))
@@ -1057,6 +1077,7 @@ def prompt_context_for_conversation(user_id: int, conversation_id: str) -> str:
                 "status",
                 "created_at",
                 "updated_at",
+                "spec_mode_enabled",
             ],
         )
         cursor.execute(
@@ -1074,7 +1095,8 @@ def prompt_context_for_conversation(user_id: int, conversation_id: str) -> str:
         cursor.close()
         conn.close()
 
-    lines = [
+    # Reserve workflow before editable profile fields under small context limits.
+    lines = ([spec_guidance()] if profile.get("spec_mode_enabled") is True else []) + [
         "VELIA agent configuration (server-controlled):",
         f"Display name: {str(profile.get('name') or '')[:80]}",
         f"Mission: {str(profile.get('description') or '')[:600] or 'General assistance'}",

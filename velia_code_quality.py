@@ -24,6 +24,10 @@ def guidance(stage='implementation', *, compact=False):
     return 'VELIA ENGINEERING:\n'+'\n'.join(POLICY['rules'])+'\n'+POLICY['stages'][stage]
 
 
+def spec_guidance(stage='agent'):
+    return POLICY['spec_workflow'][stage]
+
+
 def _strict_json(source):
     def unique(items):
         result = {}
