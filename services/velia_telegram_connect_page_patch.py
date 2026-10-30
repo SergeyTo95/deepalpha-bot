@@ -1,6 +1,5 @@
 import html
 import os
-import re
 from typing import Any, Callable, Optional
 
 from aiohttp import web
@@ -14,11 +13,8 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 def _bot_username() -> str:
-    raw = str(os.getenv("BOT_USERNAME", "DeepAlphaAI_bot") or "DeepAlphaAI_bot")
-    candidate = raw.lstrip("@")
-    if re.fullmatch(r"[A-Za-z0-9_]{5,32}", candidate):
-        return candidate
-    return "DeepAlphaAI_bot"
+    from services.velia_telegram_config import bot_username
+    return bot_username()
 
 
 def build_telegram_connect_url() -> str:
@@ -63,7 +59,7 @@ def build_unauthenticated_connect_page() -> str:
   <main>
     <div class="logo">V</div>
     <h1>Подключение VELIA</h1>
-    <p>Получи одноразовый код в личном сообщении от DeepAlpha AI Bot.</p>
+    <p>Получи одноразовый код в личном сообщении от бота VELIA.</p>
     <p>Код привязан к твоему Telegram ID, действует 5 минут и срабатывает только один раз.</p>
     <a class="button" href="{telegram_url}">Получить код в Telegram</a>
     <a class="button secondary" href="/app">Войти через WebApp</a>
@@ -136,4 +132,6 @@ def install(
     setup_velia_conversation_ux_routes(app, mobile_routes_module)
     setup_velia_conversation_links_routes(app, mobile_routes_module)
 
+    from services.velia_telegram_runtime import lifecycle
+    app.cleanup_ctx.append(lifecycle)
     app["velia_telegram_connect_page_patch_installed"] = True

@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import re
 import time
 from typing import Any, Dict
 
@@ -32,10 +31,8 @@ def is_velia_admin_login_start(text: str) -> bool:
 
 
 def bot_username() -> str:
-    candidate = str(os.getenv("BOT_USERNAME", "DeepAlphaAI_bot") or "DeepAlphaAI_bot").lstrip("@")
-    if re.fullmatch(r"[A-Za-z0-9_]{5,32}", candidate):
-        return candidate
-    return "DeepAlphaAI_bot"
+    from services.velia_telegram_config import bot_username as configured_bot_username
+    return configured_bot_username()
 
 
 def build_admin_login_url() -> str:
@@ -49,7 +46,7 @@ def build_admin_login_message(code: str, expires_in: int) -> str:
         f"Код входа: <code>{code}</code>\n\n"
         f"⏳ Действует {minutes} минут и только один раз.\n"
         "Новый код автоматически отменяет предыдущий.\n\n"
-        "Вернись на deepalpha-ai.com/admin и введи код.\n"
+        "Вернись в VELIA Control Center и введи код.\n"
         "Никому не пересылай его."
     )
 

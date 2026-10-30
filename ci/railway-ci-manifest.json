@@ -69,5 +69,12 @@
       4
     ],
     "sha256": "78000b16e8f68c1924afca91f2bdcb1fb97374acfe00de0f2d4660afe6a1b85c"
+  },
+  "velia-telegram.yml": {
+    "group": "backend",
+    "steps": [
+      3
+    ],
+    "sha256": "6031a5622fb12fb150e5f0029d3e88fdce081e5d99f391be9b539e823cc977bb"
   }
 }

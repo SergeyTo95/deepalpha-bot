@@ -152,7 +152,8 @@ class VeliaTelegramPairingMiddleware(BaseMiddleware):
             raise CancelHandler()
 
         if str(message.chat.type or "") != "private":
-            await message.answer("Открой @DeepAlphaAI_bot в личных сообщениях и повтори подключение.")
+            from services.velia_telegram_config import bot_username
+            await message.answer(f"Открой @{bot_username()} в личных сообщениях и повтори подключение.")
             raise CancelHandler()
 
         if not _env_bool("VELIA_MOBILE_API_ENABLED", False):
