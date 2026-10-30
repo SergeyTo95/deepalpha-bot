@@ -153,11 +153,23 @@ async def synthesize(fields):
                 raise RuntimeError("tts_unavailable")
             return b"".join(chunks)
 
-def setup_voice_routes(app, *, session_for, same_origin, json_response):
+def setup_voice_routes(app, *, session_for, same_origin, json_response, origin=None):
     requests = {}
     event_requests = {}
     preparations = {}
     slots = asyncio.Semaphore(4)
+    def reserve(owner):
+        now = time.monotonic()
+        for key in list(requests):
+            if not requests[key] or requests[key][-1] <= now - 60:
+                del requests[key]
+        history = requests.setdefault(owner, deque())
+        while history and history[0] <= now - 60:
+            history.popleft()
+        if len(history) >= 40:
+            return False
+        history.append(now)
+        return True
     pool = None
     if os.getenv("VELIA_WEB_TTS_REUSE_ENABLED", "").lower() in {"true", "1"}:
         from desktop.voice_transport import EdgeSpeechPool
@@ -169,6 +181,19 @@ def setup_voice_routes(app, *, session_for, same_origin, json_response):
             finally:
                 await pool.close()
         app.cleanup_ctx.append(pool_lifecycle)
+    async def audio_source(fields, owner):
+        if 'edge_voice' in fields:
+            source = pool.stream(fields, owner, lambda: stream_edge(fields)) if pool else stream_edge(fields)
+            async with aclosing(source) as source:
+                async for audio in source:
+                    yield audio
+        else:
+            yield await synthesize(fields)
+    channel_enabled = bool(origin) and os.getenv('VELIA_WEB_TTS_CHANNEL_ENABLED', '').lower() in {'true', '1'}
+    if channel_enabled:
+        from desktop.voice_channel import setup_voice_channel
+        setup_voice_channel(app, origin=origin, session_for=session_for, json_response=json_response,
+            validate=validate, audio_source=audio_source, reserve=reserve, slots=slots, enabled=enabled)
     async def prepare(request):
         if not same_origin(request):
             return json_response({"error": "invalid_origin"}, 403)
@@ -202,11 +227,18 @@ def setup_voice_routes(app, *, session_for, same_origin, json_response):
             if request.content_length and request.content_length > 1024:
                 return json_response({"error": "request_too_large"}, 413)
             data = await request.json()
-            if (not isinstance(data, dict) or set(data) != {"event", "code", "attempt"}
-                    or data["event"] != "recognition_error"
-                    or data["code"] not in ("network", "aborted", "not-allowed", "service-not-allowed",
-                                             "audio-capture", "language-not-supported", "unknown")
-                    or type(data["attempt"]) is not int or not 1 <= data["attempt"] <= 3):
+            recognition = (isinstance(data, dict) and set(data) == {"event", "code", "attempt"}
+                and data["event"] == "recognition_error"
+                and data["code"] in ("network", "aborted", "not-allowed", "service-not-allowed",
+                                    "audio-capture", "language-not-supported", "unknown")
+                and type(data["attempt"]) is int and 1 <= data["attempt"] <= 3)
+            latency = (isinstance(data, dict)
+                and set(data) == {"event", "model", "clock", "recognition_ms", "first_text_ms", "first_audio_ms"}
+                and data["event"] == "voice_latency" and data["model"] in ("flash", "quantum", "pro")
+                and data["clock"] in ("media", "device")
+                and all(type(data[key]) is int for key in ("recognition_ms", "first_text_ms", "first_audio_ms"))
+                and 0 <= data["recognition_ms"] <= data["first_text_ms"] <= data["first_audio_ms"] <= 180000)
+            if not (recognition or latency):
                 return json_response({"error": "invalid_voice_event"}, 400)
             now = time.monotonic()
             for key in list(event_requests):
@@ -216,7 +248,11 @@ def setup_voice_routes(app, *, session_for, same_origin, json_response):
             if count >= 20:
                 return json_response({"error": "voice_event_rate_limit"}, 429)
             event_requests[session.user_id] = (since, count + 1)
-            LOG.warning("VELIA_WEB_RECOGNITION_ERROR code=%s attempt=%d", data["code"], data["attempt"])
+            if recognition:
+                LOG.warning("VELIA_WEB_RECOGNITION_ERROR code=%s attempt=%d", data["code"], data["attempt"])
+            else:
+                LOG.info("VELIA_WEB_VOICE_LATENCY model=%s clock=%s recognition_ms=%d first_text_ms=%d first_audio_ms=%d",
+                    data["model"], data["clock"], data["recognition_ms"], data["first_text_ms"], data["first_audio_ms"])
             return json_response({"ok": True})
         except AuthenticationUnavailable:
             return json_response({"error": "authentication_unavailable"}, 503)
@@ -226,7 +262,7 @@ def setup_voice_routes(app, *, session_for, same_origin, json_response):
         try:
             if not await session_for(request):
                 return json_response({"error": "unauthorized"}, 401)
-            return json_response({"voices": voice_catalog()})
+            return json_response({"voices": voice_catalog(), **({'channel': True} if channel_enabled else {})})
         except AuthenticationUnavailable:
             return json_response({"error": "authentication_unavailable"}, 503)
     async def speech(request):
@@ -241,16 +277,8 @@ def setup_voice_routes(app, *, session_for, same_origin, json_response):
             if request.content_length and request.content_length > 8192:
                 return json_response({"error": "request_too_large"}, 413)
             fields = validate(await request.json())
-            now = time.monotonic()
-            for key in list(requests):
-                if not requests[key] or requests[key][-1] <= now - 60:
-                    del requests[key]
-            history = requests.setdefault(session.user_id, deque())
-            while history and history[0] <= now - 60:
-                history.popleft()
-            if len(history) >= 40 or slots.locked():
+            if slots.locked() or not reserve(session.user_id):
                 return json_response({"error": "tts_rate_limit"}, 429)
-            history.append(now)
             async with slots:
                 LOG.info("VELIA_WEB_TTS_DELIVERY mode=%s client=%s",
                     "progressive" if request.query.get("stream") == "1" and "edge_voice" in fields else "buffered",

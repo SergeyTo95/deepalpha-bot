@@ -22,6 +22,18 @@ VELIA_DESKTOP_REASONING_EFFORT=low
 
 ### Voice connection preparation
 
+`VELIA_WEB_TTS_CHANNEL_ENABLED=true` additionally advertises one same-origin
+`velia-voice-v1` WebSocket per answer. Its opening request validates the account;
+each segment keeps the existing voice, size and per-user rate checks. Origin and
+protocol checks, three pending segments, two channels per owner, sixteen global
+channels and a three-minute maximum lifetime bound the channel. Closing or
+correcting an answer cancels pending speech. Legacy HTTP remains the fallback
+before audio starts; partially delivered audio is never replayed. The browser
+prepares one or two next segments based on remaining playback and observed
+delivery latency. Timing events contain only the model tier, clock type and
+durations for recognition, first text and playback start relative to the browser's
+speech-end event. They contain no speech text or audio.
+
 `VELIA_WEB_TTS_REUSE_ENABLED=true` opts the existing Edge voice route into a
 bounded pool of account-scoped WebSocket connections. Opening voice mode starts
 authenticated, same-origin preparation in the background, without sending speech

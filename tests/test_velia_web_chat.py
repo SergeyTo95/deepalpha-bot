@@ -317,6 +317,18 @@ def test_public_account_can_pair_and_chat_without_preview_entry(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_voice_channel_module_and_media_policy_support_the_browser_flow(monkeypatch):
+    async def scenario():
+        async with fixture(monkeypatch) as (server, client, state):
+            async with client.get(server.make_url('/web/voice-channel.mjs')) as response:
+                assert response.status == 200
+                assert 'createSpeechChannel' in await response.text()
+                policy = response.headers['Content-Security-Policy']
+                assert "media-src 'self' blob: data:" in policy
+                assert 'wss://' in policy and "connect-src 'self'" in policy
+    asyncio.run(scenario())
+
+
 def test_background_browser_bridge_is_private_owner_scoped_and_at_most_once(monkeypatch):
     async def scenario():
         key='background-bridge-fixture-key-'+'a'*32

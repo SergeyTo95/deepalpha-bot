@@ -227,6 +227,23 @@ def test_preparation_is_authenticated_bounded_and_reused_transport_keeps_exact_f
     asyncio.run(scenario())
     assert calls[0] == ('start',) and calls[-1] == ('close',)
 
+
+def test_voice_latency_accepts_only_bounded_timings_without_speech(monkeypatch,caplog):
+    async def scenario():
+        async with TestServer(streaming_app()) as server, ClientSession() as client:
+            endpoint=server.make_url('/web-api/v1/voice/events')
+            data={'event':'voice_latency','model':'flash','clock':'media',
+                'recognition_ms':100,'first_text_ms':1500,'first_audio_ms':1800}
+            with caplog.at_level('INFO',logger='desktop.voice_routes'):
+                assert (await client.post(endpoint,json=data,headers=STREAM_HEADERS)).status==200
+            for bad in ({**data,'text':'private speech'}, {**data,'first_text_ms':True},
+                        {**data,'first_audio_ms':180001}, {**data,'first_text_ms':2000},
+                        {**data,'clock':'private speech'}, {**data,'model':'private provider'}):
+                assert (await client.post(endpoint,json=bad,headers=STREAM_HEADERS)).status==400
+    asyncio.run(scenario())
+    assert 'VELIA_WEB_VOICE_LATENCY model=flash clock=media recognition_ms=100 first_text_ms=1500 first_audio_ms=1800' in caplog.text
+    assert 'private speech' not in caplog.text
+
 def test_mp3_first_chunk_reaches_browser_before_provider_finishes(monkeypatch):
     monkeypatch.setenv('VELIA_WEB_TTS_PROVIDER','edge')
     async def run():

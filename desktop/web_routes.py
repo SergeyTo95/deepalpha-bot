@@ -456,12 +456,13 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
 
     async def asset(request):
         name = request.match_info.get("name", "index.html")
-        if name not in {"index.html", "app.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "features.mjs", "work.mjs", "voice.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
+        if name not in {"index.html", "app.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "features.mjs", "work.mjs", "voice.mjs", "voice-channel.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
             raise web.HTTPNotFound()
         response = web.FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
         response.headers.update({"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
             "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; "
-                "img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; font-src 'self'; object-src 'none'; "
+                "img-src 'self' data: blob:; media-src 'self' blob: data:; "
+                f"connect-src 'self' {origin.replace('https://', 'wss://', 1)}; font-src 'self'; object-src 'none'; "
                 "base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
             "Permissions-Policy": "camera=(), microphone=(self), geolocation=()"})
         return response
@@ -479,7 +480,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
         upstream=upstream, upstream_stream=upstream_stream, authenticate=authenticate, allowed=allowed,
         handlers=handlers, web_search=web_search, origin=origin)
     from desktop.voice_routes import setup_voice_routes
-    setup_voice_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response)
+    setup_voice_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response, origin=origin)
     from desktop.account_routes import setup_account_routes
     from desktop.feature_routes import setup_feature_routes
     setup_feature_routes(app, session_for=session_for, same_origin=same_origin, upstream=upstream,
