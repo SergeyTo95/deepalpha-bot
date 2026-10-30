@@ -1218,7 +1218,12 @@ def test_voice_allowance_is_separate_bounded_and_shared_across_modes(free_tiers,
 
 
 def test_postgres_voice_survives_text_limit_without_resetting_voice_quota_or_replay(free_tiers,monkeypatch,postgres_chat):
+    from services import velia_attachment_service as files
     _,connect=postgres_chat
+    # The sender builds real attachment-aware history even for text-only input.
+    # Its tables must exist in this test's dedicated schema too.
+    monkeypatch.setattr(files,'get_connection',connect)
+    files.ensure_velia_attachment_tables()
     monkeypatch.setenv('VELIA_CHAT_ENABLED','true')
     monkeypatch.setenv('VELIA_VOICE_RESERVES_ENABLED','true')
     monkeypatch.setenv('VELIA_FLASH_USER_DAILY_LIMIT','1')
@@ -1232,9 +1237,11 @@ def test_postgres_voice_survives_text_limit_without_resetting_voice_quota_or_rep
     cid=chat.create_conversation(77)['id']
     def send(user,cid,mode,key,voice=False):
         return quantum.dispatch_free(user,cid,'Привет',chat_mode=mode,voice_turn=voice,idempotency_key=key)
-    assert send(77,cid,'flash','text-first-001')['ok']
-    first=send(77,cid,'flash','voice-first-001',True);assert first['ok']
-    assert send(77,cid,'quantum','voice-second-001',True)['ok']
+    text_result=send(77,cid,'flash','text-first-001')
+    assert text_result['ok'], text_result
+    first=send(77,cid,'flash','voice-first-001',True);assert first['ok'], first
+    second=send(77,cid,'quantum','voice-second-001',True)
+    assert second['ok'], second
     assert send(77,cid,'flash','voice-third-001',True)['error']=='voice_daily_user_limit_exceeded'
     assert send(77,cid,'flash','text-second-001')['error']=='flash_daily_user_limit_exceeded'
     replay=send(77,cid,'flash','voice-first-001',True);assert replay['ok'] and replay['duplicate']
