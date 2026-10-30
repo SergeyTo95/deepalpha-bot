@@ -174,6 +174,8 @@ export function apiError(code) {
       pro_provider_error: "Сервис PRO временно недоступен. Попробуй позже.",
       pro_invalid_response: "Ответ PRO прервался. Можно повторить запрос.",
       pro_context_too_long: "Для PRO этот диалог слишком большой. Начни новый диалог.",
+      voice_daily_user_limit_exceeded: "Твой дневной лимит голосового общения исчерпан. Текстовый чат имеет отдельный лимит.",
+      voice_daily_global_limit_exceeded: "Общий дневной лимит голосового общения исчерпан. Можно продолжить текстом, если его лимит доступен.",
       pro_daily_user_limit_exceeded: "Дневной лимит PRO исчерпан. Попробуй завтра.",
       pro_daily_global_limit_exceeded: "Общий дневной лимит PRO исчерпан. Попробуй завтра.",
       token_balance_unavailable: "Не удалось проверить баланс. Пока используй Flash.",

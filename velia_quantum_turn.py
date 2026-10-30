@@ -165,13 +165,14 @@ class Turn:
         self.searched, self.sources = True, result
 
 
-async def stream_turn(client, config, messages, *, search=None, max_tokens=None):
+async def stream_turn(client, config, messages, *, search=None, max_tokens=None, voice_turn=False):
     turn = Turn(config, messages, search_enabled=search is not None, max_tokens=max_tokens)
     while True:
         body = turn.body()
         async with completion_async(client, turn.config, body, retry_overload=turn.calls == 1,
                 backup=groq_backup_configuration(turn.config) if not free_models.enabled() and turn.calls == 1 else None,
-                on_route=lambda selected: setattr(turn, "config", selected)) as response:
+                on_route=lambda selected: setattr(turn, "config", selected),
+                reserves=free_models.voice_reserves() if voice_turn and turn.calls==1 else ()) as response:
             if "text/event-stream" not in response.headers.get("Content-Type", ""):
                 raise QuantumError("quantum_invalid_response")
             async for chunk in response.content.iter_chunked(8192):

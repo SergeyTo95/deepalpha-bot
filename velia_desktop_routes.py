@@ -371,7 +371,8 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                         "Cache-Control": "no-store", "X-Accel-Buffering": "no"})
                     await response.prepare(request)
                     async for event in stream_turn(client, quantum_config, payload["messages"],
-                            search=quantum_search if request.get(SEARCH) else None, max_tokens=payload.get("max_tokens")):
+                            search=quantum_search if request.get(SEARCH) else None, max_tokens=payload.get("max_tokens"),
+                            voice_turn=bool(request.get(WEB_VOICE))):
                         if "sources" in event:
                             await response.write(source_event(event["sources"]))
                         if "text" in event:

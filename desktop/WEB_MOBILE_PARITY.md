@@ -461,3 +461,16 @@ background tasks freeze that guidance on admission. This is workflow guidance, n
 permissions or a public external-agent execution endpoint. Future API adapters must honor the
 stored workflow contract. Shared Desktop software guidance also includes the spec/plan/task
 process and arrives in the next installed app build. No Spec Kit CLI is installed at runtime.
+
+
+### Voice-only reserve routing
+
+The shared native transport supports an explicitly enabled Z.ai → Groq Free → Cloudflare
+Workers Free → OpenRouter/free reserve chain for voice, with per-route opt-in/configuration.
+Missing keys or Free-plan attestations remain inactive. OpenRouter requires a verified hard
+$0 key cap. No stream/tool continuation can switch provider, and no network/partial stream
+is replayed. Responses preserve the selected product label, history, account reply language
+and voice persona. This reserve may have lower reasoning quality than the primary model;
+background PRO/Quantum tasks remain on their original selected model. Saved voice turns have
+a separate bounded daily allowance in the backend; the gateway passes clear voice-limit errors.
+The policy does not change or guarantee availability of browser ASR or the TTS provider.
