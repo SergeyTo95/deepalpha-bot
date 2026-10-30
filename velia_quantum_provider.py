@@ -39,6 +39,7 @@ ERRORS = frozenset({"quantum_unavailable", "quantum_quota_exhausted", "quantum_a
     "quantum_invalid_response", "quantum_context_too_long",
     "quantum_attachments_unsupported", "quantum_daily_user_limit_exceeded",
     "quantum_daily_global_limit_exceeded", "quantum_free_guard_required",
+    "voice_daily_user_limit_exceeded", "voice_daily_global_limit_exceeded",
     "quantum_spend_cap_reached", "quantum_rate_limited", "quantum_overloaded", "quantum_web_search_unavailable"})
 ZAI_ERROR_REASONS = {
     "1000": "authentication_failed", "1001": "authentication_missing", "1003": "authentication_expired",
@@ -241,6 +242,10 @@ def require_zero_spend_key(raw):
 
 
 async def verify_zero_spend_async(client, config):
+    if config.provider.startswith('voice_'):
+        from velia_free_models import verify_voice_key_async
+        await verify_voice_key_async(client, config)
+        return
     if config.provider == 'groq':
         require_groq_route(config)
         return
@@ -272,6 +277,10 @@ async def verify_zero_spend_async(client, config):
 
 
 def verify_zero_spend(client, config):
+    if config.provider.startswith('voice_'):
+        from velia_free_models import verify_voice_key
+        verify_voice_key(client, config)
+        return
     if config.provider == 'groq':
         require_groq_route(config)
         return
@@ -336,6 +345,9 @@ def payload(config, messages, *, stream=False, max_tokens=None, tools=None, tool
         raise QuantumError("quantum_context_too_long", 400)
     result = {"model": config.model, "messages": messages, "stream": stream,
         "max_tokens": min(config.max_tokens, max_tokens or config.max_tokens)}
+    if config.provider.startswith("voice_"):
+        from velia_free_models import voice_payload
+        result = voice_payload(config, result, tools, tool_choice)
     if config.provider == "experiential":
         result["reasoning_effort"] = "low"
         result["gateway"] = {"retry":{"max_attempts_per_route":1,"max_total_attempts":1},

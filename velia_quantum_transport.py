@@ -9,6 +9,9 @@ failures; no stream or tool continuation can trigger a provider switch.
 import asyncio
 from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
 import hashlib
+import math
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import logging
 import os
 import random
@@ -40,6 +43,7 @@ def check_overload(config):
             LOG.info("VELIA_QUANTUM_OVERLOAD_COOLDOWN active=true")
             error = QuantumError("quantum_overloaded", 503)
             error.before_response = True
+            error.voice_retryable = True
             raise error
 
 
@@ -115,6 +119,8 @@ def _completion(client, config, body, *, timeout, retry_overload=False):
             if delay is None:
                 error = response_error(response.status_code, provider_code=code, quota_reason=reason)
                 error.before_response = response.status_code == 429 and code in {"1302", "1305"}
+                error.voice_retryable = response.status_code in {402,429,502,503,529} and code not in {"1301","1000","1001","1003","1005","1220"}
+                error.voice_retry_after = _voice_delay(response.headers)
                 raise error
         LOG.info("VELIA_QUANTUM_OVERLOAD_RETRY attempt=2")
         time.sleep(delay)  # Response closed before waiting; one retry maximum.
@@ -140,6 +146,8 @@ async def _completion_async(client, config, body, *, retry_overload=False):
             if delay is None:
                 error = response_error(response.status, provider_code=code, quota_reason=reason)
                 error.before_response = response.status == 429 and code in {"1302", "1305"}
+                error.voice_retryable = response.status in {402,429,502,503,529} and code not in {"1301","1000","1001","1003","1005","1220"}
+                error.voice_retry_after = _voice_delay(response.headers)
                 raise error
         LOG.info("VELIA_QUANTUM_OVERLOAD_RETRY attempt=2")
         await asyncio.sleep(delay)
@@ -156,9 +164,13 @@ def _backup_body(config, backup, body, exc):
 
 
 @contextmanager
-def completion(client, config, body, *, timeout, retry_overload=False, backup=None, on_route=None):
+def completion(client, config, body, *, timeout, retry_overload=False, backup=None, on_route=None, reserves=()):
     # Catch only entry failures: exceptions while consuming a successful stream
     # propagate to the caller and can never restart a turn on another provider.
+    if reserves:
+        with _voice_completion(client, config, body, timeout=timeout, reserves=reserves, on_route=on_route) as response:
+            yield response
+        return
     with ExitStack() as stack:
         try:
             response = stack.enter_context(_completion(client, config, body,
@@ -172,7 +184,11 @@ def completion(client, config, body, *, timeout, retry_overload=False, backup=No
 
 
 @asynccontextmanager
-async def completion_async(client, config, body, *, retry_overload=False, backup=None, on_route=None):
+async def completion_async(client, config, body, *, retry_overload=False, backup=None, on_route=None, reserves=()):
+    if reserves:
+        async with _voice_completion_async(client, config, body, reserves=reserves, on_route=on_route) as response:
+            yield response
+        return
     async with AsyncExitStack() as stack:
         try:
             response = await stack.enter_async_context(_completion_async(client, config, body,
@@ -183,3 +199,84 @@ async def completion_async(client, config, body, *, retry_overload=False, backup
                 on_route(backup)
             response = await stack.enter_async_context(_completion_async(client, backup, converted))
         yield response
+
+
+_VOICE_CIRCUITS = {}
+
+
+def _voice_ready(config):
+    with _LOCK:
+        return _VOICE_CIRCUITS.get(_identity(config),0)<=time.monotonic()
+
+
+def _voice_delay(headers):
+    value=headers.get('Retry-After')
+    if value is None:return 30
+    try:
+        seconds=float(value)
+    except (ValueError,TypeError):
+        try:
+            seconds=(parsedate_to_datetime(value)-datetime.now(timezone.utc)).total_seconds()
+        except (ValueError,TypeError,OverflowError):
+            return 30
+    return max(30,seconds) if math.isfinite(seconds) else 30
+
+
+def _voice_failed(config, delay=30):
+    with _LOCK:
+        if len(_VOICE_CIRCUITS)>=256:_VOICE_CIRCUITS.pop(next(iter(_VOICE_CIRCUITS)))
+        _VOICE_CIRCUITS[_identity(config)]=time.monotonic()+delay
+
+
+def _voice_candidates(config, reserves, body):
+    from velia_free_models import require_voice_reserve
+    if config.provider!='zai' or len(reserves)>3 or any(m.get('role')=='tool' or m.get('tool_calls') for m in body['messages']):
+        raise QuantumError('quantum_free_guard_required',503)
+    for candidate in reserves:require_voice_reserve(candidate)
+    return [config,*reserves]
+
+
+def _voice_body(config, primary, body):
+    return body if config==primary else payload(config,body['messages'],stream=True,max_tokens=body.get('max_tokens'),
+        tools=body.get('tools'),tool_choice=body.get('tool_choice'))
+
+
+@contextmanager
+def _voice_completion(client, config, body, *, timeout, reserves, on_route):
+    last=QuantumError('quantum_overloaded',503)
+    with ExitStack() as stack:
+        for candidate in _voice_candidates(config,reserves,body):
+            if not _voice_ready(candidate):continue
+            try:
+                response=stack.enter_context(_completion(client,candidate,_voice_body(candidate,config,body),timeout=timeout))
+            except QuantumError as exc:
+                if not getattr(exc,'voice_retryable',False):raise
+                last=exc;_voice_failed(candidate,getattr(exc,'voice_retry_after',30))
+                continue
+            if candidate!=config:
+                LOG.info("VELIA_VOICE_RESERVE provider=%s",candidate.provider)
+                if on_route:on_route(candidate)
+            # Yield outside the except block: a failed stream is never replayed.
+            yield response
+            return
+    raise last
+
+
+@asynccontextmanager
+async def _voice_completion_async(client, config, body, *, reserves, on_route):
+    last=QuantumError('quantum_overloaded',503)
+    async with AsyncExitStack() as stack:
+        for candidate in _voice_candidates(config,reserves,body):
+            if not _voice_ready(candidate):continue
+            try:
+                response=await stack.enter_async_context(_completion_async(client,candidate,_voice_body(candidate,config,body)))
+            except QuantumError as exc:
+                if not getattr(exc,'voice_retryable',False):raise
+                last=exc;_voice_failed(candidate,getattr(exc,'voice_retry_after',30))
+                continue
+            if candidate!=config:
+                LOG.info("VELIA_VOICE_RESERVE provider=%s",candidate.provider)
+                if on_route:on_route(candidate)
+            yield response
+            return
+    raise last

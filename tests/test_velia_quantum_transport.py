@@ -72,15 +72,15 @@ def setup(monkeypatch):
     transport._CIRCUITS.clear()
 
 
-def request(kind, client, config, *, retry=True, consume=None, backup=None, on_route=None):
+def request(kind, client, config, *, retry=True, consume=None, backup=None, on_route=None, reserves=()):
     body = {"model": config.model, "messages": [{"role": "user", "content": "private prompt"}]}
     if kind == "sync":
-        with transport.completion(client, config, body, timeout=(3, 15), retry_overload=retry, backup=backup, on_route=on_route) as response:
+        with transport.completion(client, config, body, timeout=(3, 15), retry_overload=retry, backup=backup, on_route=on_route, reserves=reserves) as response:
             if consume:
                 consume(response)
     else:
         async def run():
-            async with transport.completion_async(client, config, body, retry_overload=retry, backup=backup, on_route=on_route) as response:
+            async with transport.completion_async(client, config, body, retry_overload=retry, backup=backup, on_route=on_route, reserves=reserves) as response:
                 if consume:
                     consume(response)
         asyncio.run(run())
@@ -355,3 +355,113 @@ def test_groq_acceptance_qualifies_key_tool_stream_without_output_leaks(monkeypa
     output = capsys.readouterr().out
     assert ('GROQ_PROBE_OK' in output) is (failure is None)
     assert 'private' not in output and 'fixture-secret' not in output and 'api_key' not in output
+
+
+@pytest.fixture
+def voice_routes(monkeypatch):
+    import velia_free_models as free
+    monkeypatch.setenv('VELIA_FREE_API_TIERS_ENABLED','true')
+    monkeypatch.setenv('VELIA_VOICE_RESERVES_ENABLED','true')
+    monkeypatch.setenv('GROQ_API_KEY','groq-private-key')
+    monkeypatch.setenv('VELIA_VOICE_GROQ_FREE_ACCOUNT','true')
+    monkeypatch.setenv('VELIA_VOICE_CF_API_TOKEN','cf-private-key')
+    monkeypatch.setenv('VELIA_VOICE_CF_ACCOUNT_ID','a'*32)
+    monkeypatch.setenv('VELIA_VOICE_CF_FREE_ACCOUNT','true')
+    monkeypatch.setenv('VELIA_VOICE_OPENROUTER_API_KEY','or-private-key')
+    transport._VOICE_CIRCUITS.clear()
+    yield free.voice_reserves()
+    transport._VOICE_CIRCUITS.clear()
+
+
+class GuardedClient(Client):
+    def __init__(self,*replies,cap=0):
+        super().__init__(*replies);self.cap=cap;self.guards=[]
+    def get(self,url,**kwargs):
+        self.guards.append((url,kwargs))
+        return Response(body=json.dumps({'data':{'limit':self.cap}}).encode())
+
+
+def test_voice_reserves_need_explicit_free_plan_and_ignore_untrusted_model_overrides(voice_routes,monkeypatch):
+    import velia_free_models as free
+    assert [r.model for r in voice_routes]==['openai/gpt-oss-20b','@cf/qwen/qwen3-30b-a3b-fp8','openrouter/free']
+    monkeypatch.setenv('VELIA_VOICE_GROQ_FREE_ACCOUNT','false')
+    monkeypatch.setenv('VELIA_VOICE_CF_FREE_ACCOUNT','false')
+    monkeypatch.setenv('VELIA_QUANTUM_GROQ_BACKUP_ENABLED','true')
+    monkeypatch.setenv('VELIA_VOICE_GROQ_MODEL','paid-model')
+    assert [r.provider for r in free.voice_reserves()]==['voice_openrouter']
+    monkeypatch.delenv('VELIA_VOICE_OPENROUTER_API_KEY')
+    assert free.voice_reserves()==()
+    monkeypatch.setenv('VELIA_VOICE_RESERVES_ENABLED','false')
+    assert free.voice_reserves()==()
+
+
+@pytest.mark.parametrize('kind',['sync','async'])
+def test_voice_rejected_quota_uses_bounded_chain_preserves_context_and_scopes_credentials(setup,voice_routes,kind):
+    config,_,waits=setup
+    client=GuardedClient(Response(429,'1308'),Response(429,'rate_limit_exceeded'),Response(503,'busy'),Response())
+    selected=[]
+    request(kind,client,config,reserves=voice_routes,on_route=selected.append)
+    assert len(client.calls)==4 and not waits and selected==[voice_routes[-1]]
+    bodies=[kwargs['json'] for _,kwargs in client.calls]
+    assert all(body['messages']==bodies[0]['messages'] for body in bodies)
+    assert bodies[1]['max_completion_tokens']==1024 and bodies[1]['reasoning_effort']=='low'
+    assert bodies[-1]['model']=='openrouter/free'
+    assert bodies[-1]['provider']['max_price']=={'prompt':0,'completion':0}
+    for (url,kwargs),route in zip(client.calls,[config,*voice_routes]):
+        assert url==route.base_url+'/chat/completions'
+        assert kwargs['headers']['Authorization']=='Bearer '+route.api_key
+        assert kwargs['allow_redirects'] is False
+    assert len(client.guards)==1 and client.guards[0][0]=='https://openrouter.ai/api/v1/key'
+
+
+@pytest.mark.parametrize('kind',['sync','async'])
+@pytest.mark.parametrize('status,code',[(401,'auth'),(403,'auth'),(400,'bad_request'),(429,'1301')])
+def test_voice_never_retries_auth_validation_or_content_rejections(setup,voice_routes,kind,status,code):
+    config,_,_=setup;client=GuardedClient(Response(status,code),Response())
+    with pytest.raises(QuantumError):request(kind,client,config,reserves=voice_routes)
+    assert len(client.calls)==1
+
+
+@pytest.mark.parametrize('kind',['sync','async'])
+def test_voice_stream_failure_and_network_failure_never_restart_a_turn(setup,voice_routes,kind):
+    config,_,_=setup
+    def failed(_response):raise QuantumError('quantum_quota_exhausted',429)
+    client=GuardedClient(Response(),Response())
+    with pytest.raises(QuantumError):request(kind,client,config,reserves=voice_routes,consume=failed)
+    assert len(client.calls)==1
+    client=GuardedClient(OSError('network'),Response())
+    with pytest.raises(OSError):request(kind,client,config,reserves=voice_routes)
+    assert len(client.calls)==1
+
+
+@pytest.mark.parametrize('kind',['sync','async'])
+@pytest.mark.parametrize('cap',[None,True,1,-1])
+def test_openrouter_voice_requires_a_numeric_hard_zero_spend_cap(setup,voice_routes,kind,cap):
+    config,_,_=setup;client=GuardedClient(Response(429,'1308'),cap=cap)
+    with pytest.raises(QuantumError,match='free_guard_required'):
+        request(kind,client,config,reserves=(voice_routes[-1],))
+    assert len(client.calls)==1 and len(client.guards)==1
+
+
+@pytest.mark.parametrize('kind',['sync','async'])
+def test_voice_cooldown_honors_retry_after_and_does_not_poison_other_keys(setup,voice_routes,kind):
+    from dataclasses import replace
+    config,clock,_=setup
+    client=GuardedClient(Response(429,'1308',retry_after='120'),Response())
+    request(kind,client,config,reserves=voice_routes[:1])
+    clock[0]+=31
+    client=GuardedClient(Response())
+    request(kind,client,config,reserves=voice_routes[:1])
+    assert client.calls[0][0]==voice_routes[0].base_url+'/chat/completions'
+    client=GuardedClient(Response())
+    request(kind,client,replace(config,api_key='other-user-key'),reserves=voice_routes[:1])
+    assert client.calls[0][0]==config.base_url+'/chat/completions'
+
+
+def test_voice_chain_rejects_tool_continuations_and_foreign_routes(setup,voice_routes):
+    from dataclasses import replace
+    config,_,_=setup
+    with pytest.raises(QuantumError,match='free_guard_required'):
+        transport._voice_candidates(config,voice_routes,{'messages':[{'role':'tool','content':'already executed'}]})
+    with pytest.raises(QuantumError,match='free_guard_required'):
+        transport._voice_candidates(config,[replace(voice_routes[0],base_url='https://attacker.example')],{'messages':[]})

@@ -217,7 +217,8 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False, web_sear
                 with completion(client, config, body, timeout=(5, 60) if voice_turn else (10, 120),
                         retry_overload=turn.calls == 1,
                         backup=groq_backup_configuration(config) if not free_tier and turn.calls == 1 else None,
-                        on_route=select_route) as response:
+                        on_route=select_route,
+                        reserves=free_models.voice_reserves(chat_mode) if free_tier and voice_turn and turn.calls==1 else ()) as response:
                     if headers_at is None:
                         headers_at = time.monotonic()
                     if "text/event-stream" not in response.headers.get("Content-Type", ""):
@@ -313,11 +314,14 @@ def dispatch_send(user_id, conversation_id, content, *, on_delta=None, on_reset=
         conn.close()
 
 
-def free_budget_error(cursor, user_id, mode):
+def free_budget_error(cursor, user_id, mode, *, voice_turn=False):
+    if free_models.voice_reserves_enabled() and voice_turn:
+        return voice_budget_error(cursor,user_id)
     aliases = {"flash": ("velia-flash", "bonsai"), "quantum": ("velia-quantum",), "pro": ("velia-pro",)}[mode]
+    voice_filter=" AND voice_turn=FALSE" if free_models.voice_reserves_enabled() else ""
     cursor.execute("""SELECT COUNT(*) FILTER (WHERE user_id=%s) AS user_count, COUNT(*) AS total_count
         FROM velia_messages WHERE role='assistant' AND provider = ANY(%s)
-        AND created_at>=CURRENT_DATE""", (int(user_id), list(aliases)))
+        AND created_at>=CURRENT_DATE"""+voice_filter, (int(user_id), list(aliases)))
     row = cursor.fetchone()
     counts = list(row.values()) if isinstance(row, dict) else row
     prefix = "VELIA_" + mode.upper()
@@ -325,6 +329,21 @@ def free_budget_error(cursor, user_id, mode):
         return mode + "_daily_user_limit_exceeded"
     if int(counts[1]) >= bounded_int(prefix + "_GLOBAL_DAILY_LIMIT", 200 if mode == "flash" else 50, 1, 10000):
         return mode + "_daily_global_limit_exceeded"
+    return None
+
+
+def voice_budget_error(cursor,user_id):
+    # The existing free-tier provider lock serializes admission. Pending/error
+    # attempts count too; an idempotent replay is resolved before this check.
+    cursor.execute("""SELECT COUNT(*) FILTER (WHERE user_id=%s) AS user_count, COUNT(*) AS total_count
+        FROM velia_messages WHERE role='assistant' AND voice_turn=TRUE
+        AND provider=ANY(%s) AND created_at>=CURRENT_DATE""",
+        (int(user_id),['velia-flash','velia-quantum','velia-pro']))
+    row=cursor.fetchone();counts=list(row.values()) if isinstance(row,dict) else row
+    if int(counts[0])>=bounded_int('VELIA_VOICE_USER_DAILY_LIMIT',100,1,10000):
+        return 'voice_daily_user_limit_exceeded'
+    if int(counts[1])>=bounded_int('VELIA_VOICE_GLOBAL_DAILY_LIMIT',1000,1,10000):
+        return 'voice_daily_global_limit_exceeded'
     return None
 
 

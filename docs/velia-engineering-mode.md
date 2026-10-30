@@ -74,3 +74,62 @@ API relay authorization, persisted plan/unchecked criteria, and synthetic browse
 edit → reload → same-agent conversation. The dedicated PostgreSQL acceptance test also covers
 migration of a pre-existing table, default false, cross-owner rejection and frozen background
 profile context; it runs only with `VELIA_FLASH_TEST_DATABASE_URL` in isolated test schemas.
+
+
+## Voice continuity reserves (2026-10-30)
+
+`VELIA_VOICE_RESERVES_ENABLED=true` enables the optional voice-only routing policy and a
+separate, bounded voice allowance. Text/background/Browser Agent tasks keep their selected
+model routes. A voice turn starts on its selected primary Z.ai model. Only an explicit HTTP
+402/429/502/503/529 rejection (not authentication, validation or content refusal) before a
+successful response may select the next configured reserve, once per route:
+
+1. Existing `GROQ_API_KEY` + `VELIA_VOICE_GROQ_FREE_ACCOUNT=true`: exact Groq endpoint,
+   `openai/gpt-oss-20b`, low reasoning, 1024 output-token cap.
+2. `VELIA_VOICE_CF_API_TOKEN`, a 32-hex `VELIA_VOICE_CF_ACCOUNT_ID`, and
+   `VELIA_VOICE_CF_FREE_ACCOUNT=true`: exact account Workers AI OpenAI-compatible endpoint,
+   `@cf/qwen/qwen3-30b-a3b-fp8`, 1024 output-token cap.
+3. `VELIA_VOICE_OPENROUTER_API_KEY`: exact OpenRouter endpoint, `openrouter/free` alone,
+   zero prompt/completion max-price filter, provider data collection denied, no paid model
+   fallback array, plugins, built-in tools or BYOK. The documented key-info endpoint must
+   return a strict numeric `data.limit=0` before any inference; null, booleans, missing cap,
+   failed reads, oversized or invalid JSON fail closed.
+
+The Groq/Cloudflare Free flags are explicit operator attestations, not remote billing proofs.
+A present key, old legacy Groq backup flags, rate-limit headers, or a free trial balance do
+not establish Free account status. Do not set attestations without checking the current plan;
+clear them before upgrading billing. Neither provider exposes an implemented account-plan
+verification here. This release does not purchase credits, upgrade plans, or activate these
+attestations automatically. Missing keys/plans remain inactive. No Gemini route is included.
+
+Each provider receives only its own configured credential. Endpoints/models are not client
+parameters; redirects are disabled. Original messages, account language, persona and selected
+public mode remain intact. Reserve quality can differ from the primary model: this is a
+continuity route for conversation, not equivalent PRO reasoning. A switched route stays pinned
+for any web-search continuation. Network exceptions, successful-response/SSE failures, partial
+answers and existing tool transcripts never trigger replay. Per-key/model cooldowns honor
+Retry-After (minimum 30 seconds); they are bounded worker-local metadata and contain no prompts.
+They reduce repeated failures, not replace provider quotas or provide an availability SLA.
+
+For signed-in persisted free-tier chats, `velia_messages.voice_turn` is an additive boolean
+with FALSE default. Existing rows remain text/legacy. Voice admission counts pending, completed
+and failed attempts across Flash/Quantum/PRO against one user/global allowance, default
+100/1000 turns daily (configurable, hard bounded 1..10000). Text admission excludes the newly
+marked voice attempts while the policy is enabled. Idempotency resolves before admission;
+replaying a request doesn't consume another turn. The existing provider admission lock makes
+check/insert atomic. User ownership, PRO token access and other access/guest/rate limits remain
+in force. A user's exhausted voice allowance cannot be bypassed by changing model/provider.
+Disabling the policy restores the legacy combined daily count. Server/database daily reset
+semantics are unchanged. No historical voice attempt is reclassified retroactively.
+
+The setting and provider keys must exist on both the backend production service and the
+existing browser gateway environment for both saved and applicable browser routes. TTS and
+browser speech recognition have independent availability; these changes reserve model answers,
+not an unlimited audio service. No automatic retry of external browser actions is added.
+
+Validation uses sync/async mocked HTTP streams: full reserve chain, independent credentials,
+fixed $0 routing, strict key caps, unknown/auth/content refusals, stream/network failures,
+Retry-After and separate-key cooldowns. Account tests verify voice-only activation and preserved
+language/history/persona. A dedicated PostgreSQL test checks exhausted text quota → voice
+admission, cross-mode/global voice limits, persistence and idempotency in an isolated test schema.
+No live paid inference or production database write is used for local QA.

@@ -1197,3 +1197,75 @@ def test_postgres_custom_agent_spec_mode_migrates_roundtrips_and_follows_backgro
     assert 'SPEC WORKFLOW' not in builder.prompt_context_for_conversation(77,cid)
     # A queued task retains the explicit profile snapshot it was created with.
     assert 'SPEC WORKFLOW' in jobs.get(77,task['id'])['payload']['messages'][0]['content']
+
+
+def test_voice_allowance_is_separate_bounded_and_shared_across_modes(free_tiers,monkeypatch):
+    monkeypatch.setenv('VELIA_VOICE_RESERVES_ENABLED','true')
+    monkeypatch.setenv('VELIA_VOICE_USER_DAILY_LIMIT','2')
+    class Cursor:
+        calls=[]
+        def execute(self,query,params):self.calls.append((query,params))
+        def fetchone(self):return {'user_count':2,'total_count':3}
+    cur=Cursor()
+    assert quantum.free_budget_error(cur,77,'flash',voice_turn=True)=='voice_daily_user_limit_exceeded'
+    assert 'voice_turn=TRUE' in cur.calls[-1][0]
+    assert cur.calls[-1][1][1]==['velia-flash','velia-quantum','velia-pro']
+    quantum.free_budget_error(cur,77,'quantum')
+    assert 'voice_turn=FALSE' in cur.calls[-1][0]
+    monkeypatch.setenv('VELIA_VOICE_RESERVES_ENABLED','false')
+    quantum.free_budget_error(cur,77,'flash',voice_turn=True)
+    assert 'voice_turn' not in cur.calls[-1][0]
+
+
+def test_postgres_voice_survives_text_limit_without_resetting_voice_quota_or_replay(free_tiers,monkeypatch,postgres_chat):
+    _,connect=postgres_chat
+    monkeypatch.setenv('VELIA_CHAT_ENABLED','true')
+    monkeypatch.setenv('VELIA_VOICE_RESERVES_ENABLED','true')
+    monkeypatch.setenv('VELIA_FLASH_USER_DAILY_LIMIT','1')
+    monkeypatch.setenv('VELIA_VOICE_USER_DAILY_LIMIT','2')
+    monkeypatch.setenv('VELIA_VOICE_GLOBAL_DAILY_LIMIT','2')
+    calls=[]
+    def generated(prompt,**kwargs):
+        calls.append(kwargs)
+        return {'ok':True,'text':'Готова помочь.','usage':{},'finish_reason':'stop','provider':'velia-'+kwargs['chat_mode'],'model':'velia-'+kwargs['chat_mode']}
+    monkeypatch.setattr(quantum,'generate',generated)
+    cid=chat.create_conversation(77)['id']
+    def send(user,cid,mode,key,voice=False):
+        return quantum.dispatch_free(user,cid,'Привет',chat_mode=mode,voice_turn=voice,idempotency_key=key)
+    assert send(77,cid,'flash','text-first-001')['ok']
+    first=send(77,cid,'flash','voice-first-001',True);assert first['ok']
+    assert send(77,cid,'quantum','voice-second-001',True)['ok']
+    assert send(77,cid,'flash','voice-third-001',True)['error']=='voice_daily_user_limit_exceeded'
+    assert send(77,cid,'flash','text-second-001')['error']=='flash_daily_user_limit_exceeded'
+    replay=send(77,cid,'flash','voice-first-001',True);assert replay['ok'] and replay['duplicate']
+    other=chat.create_conversation(78)['id']
+    assert send(78,other,'flash','voice-other-001',True)['error']=='voice_daily_global_limit_exceeded'
+    assert len(calls)==3
+    with connect() as conn,conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM velia_messages WHERE role='assistant' AND voice_turn=TRUE")
+        assert cur.fetchone()[0]==2
+
+
+@pytest.mark.parametrize('voice',[True,False])
+def test_account_only_voice_can_use_reserve_with_same_history_language_and_female_persona(free_tiers,monkeypatch,voice):
+    from velia_quantum_transport import _VOICE_CIRCUITS
+    _VOICE_CIRCUITS.clear()
+    monkeypatch.setenv('VELIA_VOICE_RESERVES_ENABLED','true')
+    monkeypatch.setenv('VELIA_VOICE_GROQ_FREE_ACCOUNT','true')
+    class SequenceClient(Client):
+        def post(self,url,**kwargs):
+            self.calls.append((url,kwargs))
+            return Response(429,json.dumps({'error':{'code':'1308'}}).encode()) if len(self.calls)==1 else Response(body=wire('Поняла. Продолжаем.'))
+    client=SequenceClient(None)
+    monkeypatch.setattr(quantum.requests,'Session',lambda:client)
+    history=[{'role':'user','content':'Объясни термин'},{'role':'assistant','content':'Какой именно?'},{'role':'user','content':'Идемпотентность'}]
+    result=quantum.generate('',messages=history,chat_mode='quantum',voice_turn=voice,account_language='ru')
+    assert result['ok'] is voice
+    assert len(client.calls)==(2 if voice else 1)
+    if voice:
+        assert result['fallback_used'] is True and result['model']=='velia-quantum'
+        body=client.calls[-1][1]['json']
+        assert body['model']=='openai/gpt-oss-20b'
+        assert body['messages'][1:]==history
+        assert 'feminine' in body['messages'][0]['content'] and 'account settings: ru' in body['messages'][0]['content']
+    _VOICE_CIRCUITS.clear()

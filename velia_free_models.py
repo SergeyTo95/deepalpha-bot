@@ -58,3 +58,101 @@ def public_capability():
 
 def error_code(code, mode):
     return str(code).replace("quantum_", mode + "_", 1)
+
+
+VOICE_PROVIDERS = frozenset({'voice_groq', 'voice_cloudflare', 'voice_openrouter'})
+
+
+def _on(name):
+    return os.getenv(name, '').strip().lower() in {'1','true','yes','on'}
+
+
+def voice_reserves_enabled():
+    return enabled() and _on('VELIA_VOICE_RESERVES_ENABLED')
+
+
+def _key(name):
+    value = os.getenv(name, '').strip()
+    return value if value and '${{' not in value and not any(c in value for c in '\r\n') else ''
+
+
+def voice_reserves(mode='flash'):
+    """Fixed endpoints/models. Account-plan attestations are not billing API proofs."""
+    if not voice_reserves_enabled() or mode not in TIERS:
+        return ()
+    routes = []
+    key = _key('GROQ_API_KEY')
+    if key and _on('VELIA_VOICE_GROQ_FREE_ACCOUNT'):
+        routes.append(QuantumConfig('voice_groq','https://api.groq.com/openai/v1','openai/gpt-oss-20b',key,1024))
+    key, account = _key('VELIA_VOICE_CF_API_TOKEN'), os.getenv('VELIA_VOICE_CF_ACCOUNT_ID','').strip()
+    if key and re.fullmatch(r'[a-fA-F0-9]{32}',account) and _on('VELIA_VOICE_CF_FREE_ACCOUNT'):
+        routes.append(QuantumConfig('voice_cloudflare',f'https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1',
+            '@cf/qwen/qwen3-30b-a3b-fp8',key,1024))
+    key = _key('VELIA_VOICE_OPENROUTER_API_KEY')
+    if key:
+        routes.append(QuantumConfig('voice_openrouter','https://openrouter.ai/api/v1','openrouter/free',key,1024))
+    return tuple(routes)
+
+
+def require_voice_reserve(config):
+    from velia_quantum_provider import QuantumError
+    if config not in voice_reserves():
+        raise QuantumError('quantum_free_guard_required',503)
+
+
+def voice_payload(config, result, tools, tool_choice):
+    from velia_quantum_provider import QuantumError
+    require_voice_reserve(config)
+    if (tools and any(t.get('type')!='function' for t in tools)) or tool_choice not in (None,'auto','required'):
+        raise QuantumError('quantum_free_guard_required',503)
+    if config.provider=='voice_groq':
+        result['max_completion_tokens']=result.pop('max_tokens')
+        result.update(reasoning_effort='low',include_reasoning=False)
+    if config.provider=='voice_cloudflare':
+        result['options']={'rejectIfBusy':True}
+    if config.provider=='voice_openrouter':
+        # The free router on its own cannot fall back to a paid model. No plugins,
+        # built-in tools, paid model arrays, BYOK or client-supplied routing fields.
+        result['provider']={'max_price':{'prompt':0,'completion':0},'data_collection':'deny'}
+    return result
+
+
+def verify_voice_key(client, config):
+    from velia_quantum_provider import QuantumError, require_zero_spend_key
+    import time
+    require_voice_reserve(config)
+    if config.provider!='voice_openrouter':
+        return
+    try:
+        deadline=time.monotonic()+5
+        with client.get('https://openrouter.ai/api/v1/key',headers={'Authorization':'Bearer '+config.api_key,'Cache-Control':'no-cache'},
+                timeout=(2,3),stream=True,allow_redirects=False) as response:
+            if response.status_code!=200:raise ValueError
+            raw=bytearray()
+            for part in response.iter_content(2048):
+                raw.extend(part)
+                if len(raw)>8192 or time.monotonic()>deadline:raise ValueError
+            require_zero_spend_key(raw)
+    except Exception:
+        raise QuantumError('quantum_free_guard_required',503) from None
+
+
+async def verify_voice_key_async(client, config):
+    from velia_quantum_provider import QuantumError, require_zero_spend_key
+    import asyncio
+    require_voice_reserve(config)
+    if config.provider!='voice_openrouter':
+        return
+    async def read():
+        async with client.get('https://openrouter.ai/api/v1/key',headers={'Authorization':'Bearer '+config.api_key,'Cache-Control':'no-cache'},
+                allow_redirects=False) as response:
+            if response.status!=200:raise ValueError
+            raw=bytearray()
+            async for part in response.content.iter_chunked(2048):
+                raw.extend(part)
+                if len(raw)>8192:raise ValueError
+            require_zero_spend_key(raw)
+    try:
+        await asyncio.wait_for(read(),timeout=5)
+    except Exception:
+        raise QuantumError('quantum_free_guard_required',503) from None

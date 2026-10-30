@@ -235,7 +235,7 @@ def install(chat_module: Any) -> None:
                 conn.rollback()
                 return existing
 
-            budget_error = (quantum.free_budget_error(cursor, user_id, chat_mode) if free_models.enabled() else flash.budget_error(cursor, user_id) if chat_mode == "flash"
+            budget_error = (quantum.free_budget_error(cursor, user_id, chat_mode, **({"voice_turn":True} if voice_turn else {})) if free_models.enabled() else flash.budget_error(cursor, user_id) if chat_mode == "flash"
                             else quantum.budget_error(cursor, user_id) if chat_mode == "quantum"
                             else chat_module._budget_error(user_id))
             if budget_error:
@@ -304,6 +304,8 @@ def install(chat_module: Any) -> None:
             )
 
             if free_models.enabled():
+                if voice_turn and free_models.voice_reserves_enabled():
+                    cursor.execute("UPDATE velia_messages SET voice_turn=TRUE WHERE message_id=%s AND user_id=%s",(assistant_message_id,int(user_id)))
                 cursor.execute("UPDATE velia_messages SET provider=%s, model=%s, estimated_cost_usd=0 WHERE message_id=%s AND user_id=%s",
                     ("velia-"+chat_mode, "velia-"+chat_mode, assistant_message_id, int(user_id)))
             elif chat_mode == "flash":

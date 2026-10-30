@@ -157,6 +157,8 @@ def ensure_velia_chat_tables() -> None:
             )
             """
         )
+        cursor.execute("ALTER TABLE velia_messages ADD COLUMN IF NOT EXISTS voice_turn BOOLEAN NOT NULL DEFAULT FALSE")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_velia_messages_voice_day ON velia_messages(voice_turn,created_at,user_id) WHERE role='assistant'")
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_velia_messages_conversation_created "
             "ON velia_messages(conversation_id, created_at ASC)"
