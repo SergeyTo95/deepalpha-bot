@@ -8,11 +8,44 @@ Set `VELIA_FREE_API_TIERS_ENABLED=true` only with the existing Z.ai Standard API
 | VELIA Quantum | Z.ai `glm-4.7-flash` | Thinking disabled | Same model, short spoken answer |
 | VELIA PRO | Z.ai `glm-4.7-flash` | Thinking for tasks, 8192-token budget | Same model, thinking for tasks, 4096-token budget |
 
-Z.ai lists both selected GLM models at zero token price. Quantum and PRO share GLM-4.7-Flash; PRO enables thinking for text and voice tasks, which may help complex tasks but increases latency and does not guarantee better answers. Only a bounded allowlist of self-contained social greetings disables thinking on the same PRO model and caps completion at 1024 tokens. Confirmations, continuations, mixed greetings plus tasks, attachments and unknown languages retain normal reasoning. This adds no classifier/model call and does not shorten conversation history. Shared native-turn instructions require feminine self-reference in all modes without rewriting quotations or the user’s gender. Provider queuing and overload can still delay any request. PRO uses a larger bounded completion budget because thinking consumes tokens; spoken answers remain short. No Groq key is required for these tiers. This is not a promise of unlimited quota or zero hosting cost. No paid model ID, provider built-in search, Coding Plan endpoint, or automatic cross-model fallback is selected. Errors stop the selected route.
+Z.ai lists both selected GLM models at zero token price. Quantum and PRO share GLM-4.7-Flash; PRO enables thinking for text and voice tasks, which may help complex tasks but increases latency and does not guarantee better answers. Only a bounded allowlist of self-contained social greetings disables thinking on the same PRO model and caps completion at 1024 tokens. Confirmations, continuations, mixed greetings plus tasks, attachments and unknown languages retain normal reasoning. This adds no classifier/model call and does not shorten conversation history. Shared native-turn instructions require feminine self-reference in all modes without rewriting quotations or the user’s gender. Provider queuing and overload can still delay any request. PRO uses a larger bounded completion budget because thinking consumes tokens; spoken answers remain short. No Groq key is required for these tiers. This is not a promise of unlimited quota or zero hosting cost. No paid model ID, provider built-in search or Coding Plan endpoint is selected. Text errors stop the selected route; voice reserves require the explicit configuration below.
 
 Normal chat uses one streaming completion, or two when the selected model calls one bounded local web-search function. Existing search keys/quotas remain; no new paid search integration is enabled. No separate Flash planner, Decision call, Bonsai prompt render/tokenize request, or answer-review model call precedes normal free-tier chat. Desktop function tools still use validated tool messages on the pinned selected model. No new Railway service or project is needed.
 
 The browser speech input and device/Edge output pipeline are unchanged. Voice mode passes the selected mode through to its own model, uses account-language defaults, and preserves the existing call lifecycle and transcript corrections. Native inference is not a speed guarantee: measure physical voice latency and multilingual answer quality after deployment.
+
+## Voice provider timeout recovery
+
+The account backend, not the browser gateway, executes saved-chat model requests.
+Configure reserves on that exact service and environment. A Groq key configured
+only on the preview gateway does not provide a reserve for production chat.
+
+For the existing free Groq account, add `GROQ_API_KEY` to the existing production
+`deepalpha-bot` service through Railway Variables, and set
+`VELIA_VOICE_GROQ_FREE_ACCOUNT=true` and `VELIA_VOICE_RESERVES_ENABLED=true` there.
+Keep the key server-side. OAuth tools return variable names only; do not replace
+an inaccessible key with an empty value or an unresolved cross-environment
+reference. Railway service/shared-variable references must resolve in the target
+environment. The reserve remains inactive until an actual key is present.
+
+Free-tier voice turns bound initial response-header waiting to 12 seconds after
+connection (connect timeout at most 3 seconds). Before accepting any response,
+a timeout can advance once to each explicitly configured free reserve; an
+unresponsive route is skipped for 30 seconds. With no usable reserve the request
+returns the selected mode's timeout error instead of waiting the old 60 seconds.
+Text requests keep their previous timeout/retry policy. After response headers,
+the ordinary stream timeout is restored, including PRO thinking. Accepted streams,
+partial answers, tool continuations, cancellation, invalid requests and auth
+failures never restart on another provider. No extra stored request or message
+is created by a provider switch; the existing idempotency and generation locks
+remain in force. A reserve uses a different model and does not promise identical
+answer quality. No new project, service, paid fallback or model is provisioned.
+
+`VELIA_VOICE_HEADER_TIMEOUT` and `VELIA_QUANTUM_RESPONSE_TIMING` identify provider,
+public mode/upstream model and configured reserve count without prompt text,
+audio or credentials. Validate live reserve availability after setting the key
+and deploying. Local regression coverage uses real Requests/aiohttp loopback
+servers to distinguish slow headers from a slow but accepted streamed body.
 
 Existing account ownership, request idempotency, generation locks, guest 30-message trial, application quotas, and PRO token-access rules stay enforced. New saved-chat requests fail closed if the gateway is upgraded before a backend advertising the free tiers. PRO image uploads use local text/OCR extraction in this mode, rather than a paid vision model. General image understanding is not claimed.
 

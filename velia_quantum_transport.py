@@ -1,7 +1,8 @@
 """Bounded Z.ai overload handling shared by sync and async Quantum chat.
 
-Only an explicit HTTP 429/1305 before the first completion starts is retried.
-No network, stream, quota or authentication failure is replayed. Cooldowns are
+Only an explicit HTTP 429/1305 retries the same route. Voice turns can move to
+an explicitly configured reserve after a timeout before response headers. No
+accepted stream, tool continuation or authentication failure is replayed. Cooldowns are
 process-local, scoped to endpoint/model/key, and never contain user messages.
 An explicitly configured Groq reserve can handle pre-response Z.ai capacity
 failures; no stream or tool continuation can trigger a provider switch.
@@ -17,6 +18,7 @@ import os
 import random
 import threading
 import time
+import requests
 
 from velia_quantum_provider import (QuantumError, provider_error_details,
     read_provider_error, response_error, verify_zero_spend, verify_zero_spend_async, payload)
@@ -27,6 +29,32 @@ HEADERS = {"Accept": "text/event-stream", "Accept-Encoding": "identity",
 _LOCK = threading.Lock()
 _CIRCUITS = {}
 COOLDOWN_SECONDS = 30
+VOICE_HEADER_TIMEOUT_SECONDS = 12
+
+
+def _header_timeout(timeout):
+    connect, read = timeout if isinstance(timeout, tuple) else (timeout, timeout)
+    return (min(connect or 3, 3), min(read or VOICE_HEADER_TIMEOUT_SECONDS, VOICE_HEADER_TIMEOUT_SECONDS))
+
+
+def _restore_stream_timeout(response, timeout):
+    # Requests exposes the urllib3 response through raw. Restore its live socket
+    # after headers so a short admission timeout never cuts off PRO reasoning.
+    raw = getattr(response, "raw", None)
+    if raw is None:  # Lightweight provider adapters without a socket.
+        return
+    connection = getattr(raw, "connection", None)
+    sock = getattr(connection, "sock", None)
+    if sock is None:
+        # HTTP/1.0 and Connection: close detach the connection's socket while
+        # the response body is still available through the buffered reader.
+        reader = getattr(getattr(raw, "_fp", None), "fp", None)
+        sock = getattr(getattr(reader, "raw", None), "_sock", None)
+    if sock is None:
+        if getattr(raw, "closed", False):
+            return
+        raise QuantumError("quantum_provider_error", 503)
+    sock.settimeout(timeout[1] if isinstance(timeout, tuple) else timeout)
 
 
 def _identity(config):
@@ -100,14 +128,16 @@ def sync_error_details(response):
 
 
 @contextmanager
-def _completion(client, config, body, *, timeout, retry_overload=False):
+def _completion(client, config, body, *, timeout, retry_overload=False, voice_entry=False):
     for attempt in range(2):
         check_overload(config)
         verify_zero_spend(client, config)
         with client.post(config.base_url + "/chat/completions", json=body,
                 headers={**HEADERS, "Authorization": "Bearer " + config.api_key},
-                timeout=timeout, stream=True, allow_redirects=False) as response:
+                timeout=_header_timeout(timeout) if voice_entry else timeout, stream=True, allow_redirects=False) as response:
             if response.status_code == 200:
+                if voice_entry:
+                    _restore_stream_timeout(response, timeout)
                 _healthy(config)
                 yield response
                 return
@@ -127,13 +157,17 @@ def _completion(client, config, body, *, timeout, retry_overload=False):
 
 
 @asynccontextmanager
-async def _completion_async(client, config, body, *, retry_overload=False):
+async def _completion_async(client, config, body, *, retry_overload=False, voice_entry=False):
     for attempt in range(2):
         check_overload(config)
         await verify_zero_spend_async(client, config)
-        async with client.post(config.base_url + "/chat/completions", json=body,
+        async with AsyncExitStack() as stack:
+            context = client.post(config.base_url + "/chat/completions", json=body,
                 headers={**HEADERS, "Authorization": "Bearer " + config.api_key},
-                allow_redirects=False) as response:
+                allow_redirects=False)
+            # Bound entry only; preserve the client's normal streamed-body timeout.
+            async with asyncio.timeout(VOICE_HEADER_TIMEOUT_SECONDS if voice_entry else None):
+                response = await stack.enter_async_context(context)
             if response.status == 200:
                 _healthy(config)
                 yield response
@@ -164,10 +198,10 @@ def _backup_body(config, backup, body, exc):
 
 
 @contextmanager
-def completion(client, config, body, *, timeout, retry_overload=False, backup=None, on_route=None, reserves=()):
+def completion(client, config, body, *, timeout, retry_overload=False, backup=None, on_route=None, reserves=(), voice_turn=False):
     # Catch only entry failures: exceptions while consuming a successful stream
     # propagate to the caller and can never restart a turn on another provider.
-    if reserves:
+    if reserves or (voice_turn and config.provider == "zai"):
         with _voice_completion(client, config, body, timeout=timeout, reserves=reserves, on_route=on_route) as response:
             yield response
         return
@@ -184,8 +218,8 @@ def completion(client, config, body, *, timeout, retry_overload=False, backup=No
 
 
 @asynccontextmanager
-async def completion_async(client, config, body, *, retry_overload=False, backup=None, on_route=None, reserves=()):
-    if reserves:
+async def completion_async(client, config, body, *, retry_overload=False, backup=None, on_route=None, reserves=(), voice_turn=False):
+    if reserves or (voice_turn and config.provider == "zai"):
         async with _voice_completion_async(client, config, body, reserves=reserves, on_route=on_route) as response:
             yield response
         return
@@ -248,7 +282,12 @@ def _voice_completion(client, config, body, *, timeout, reserves, on_route):
         for candidate in _voice_candidates(config,reserves,body):
             if not _voice_ready(candidate):continue
             try:
-                response=stack.enter_context(_completion(client,candidate,_voice_body(candidate,config,body),timeout=timeout))
+                response=stack.enter_context(_completion(client,candidate,_voice_body(candidate,config,body),timeout=timeout,voice_entry=True))
+            except requests.Timeout:
+                last=QuantumError('quantum_timeout',504)
+                _voice_failed(candidate)
+                LOG.warning("VELIA_VOICE_HEADER_TIMEOUT provider=%s upstream=%s reserves=%d",candidate.provider,candidate.model,len(reserves))
+                continue
             except QuantumError as exc:
                 if not getattr(exc,'voice_retryable',False):raise
                 last=exc;_voice_failed(candidate,getattr(exc,'voice_retry_after',30))
@@ -269,7 +308,12 @@ async def _voice_completion_async(client, config, body, *, reserves, on_route):
         for candidate in _voice_candidates(config,reserves,body):
             if not _voice_ready(candidate):continue
             try:
-                response=await stack.enter_async_context(_completion_async(client,candidate,_voice_body(candidate,config,body)))
+                response=await stack.enter_async_context(_completion_async(client,candidate,_voice_body(candidate,config,body),voice_entry=True))
+            except TimeoutError:
+                last=QuantumError('quantum_timeout',504)
+                _voice_failed(candidate)
+                LOG.warning("VELIA_VOICE_HEADER_TIMEOUT provider=%s upstream=%s reserves=%d",candidate.provider,candidate.model,len(reserves))
+                continue
             except QuantumError as exc:
                 if not getattr(exc,'voice_retryable',False):raise
                 last=exc;_voice_failed(candidate,getattr(exc,'voice_retry_after',30))

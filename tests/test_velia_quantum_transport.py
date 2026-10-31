@@ -1,4 +1,12 @@
 import asyncio
+from dataclasses import replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
+import time
+import requests
+from aiohttp import ClientSession, ClientTimeout, web
+from aiohttp.test_utils import TestServer
+import velia_quantum_provider as provider
 import json
 from types import SimpleNamespace
 
@@ -465,3 +473,263 @@ def test_voice_chain_rejects_tool_continuations_and_foreign_routes(setup,voice_r
         transport._voice_candidates(config,voice_routes,{'messages':[{'role':'tool','content':'already executed'}]})
     with pytest.raises(QuantumError,match='free_guard_required'):
         transport._voice_candidates(config,[replace(voice_routes[0],base_url='https://attacker.example')],{'messages':[]})
+
+
+# Voice admission deadlines must not truncate or replay accepted streams.
+
+
+@pytest.fixture
+def routes(monkeypatch):
+    import velia_free_models as free
+    monkeypatch.setenv('VELIA_FREE_API_TIERS_ENABLED', 'true')
+    monkeypatch.setenv('VELIA_VOICE_RESERVES_ENABLED', 'true')
+    monkeypatch.setenv('VELIA_VOICE_GROQ_FREE_ACCOUNT', 'true')
+    monkeypatch.setenv('GROQ_API_KEY', 'private-reserve-key')
+    transport._VOICE_CIRCUITS.clear()
+    transport._CIRCUITS.clear()
+    primary = QuantumConfig('zai', ZAI_URL, 'glm-4.5-flash', 'private-primary-key', 1024)
+    yield primary, free.voice_reserves()[:1]
+    transport._VOICE_CIRCUITS.clear()
+    transport._CIRCUITS.clear()
+
+
+def body(config):
+    return {'model': config.model, 'messages': [{'role': 'user', 'content': 'private context'}]}
+
+
+@pytest.mark.parametrize('kind', ['sync', 'async'])
+def test_header_timeout_moves_once_to_reserve_preserving_context(routes, kind, caplog):
+    primary, reserves = routes
+    error = requests.ReadTimeout('private error') if kind == 'sync' else asyncio.TimeoutError('private error')
+    client, selected = Client(error, Response()), []
+    if kind == 'sync':
+        with transport.completion(client, primary, body(primary), timeout=(5, 60), reserves=reserves, on_route=selected.append):
+            pass
+        assert client.calls[0][1]['timeout'] == (3, 12)
+    else:
+        async def run():
+            async with transport.completion_async(client, primary, body(primary), reserves=reserves, on_route=selected.append):
+                pass
+        asyncio.run(run())
+    assert selected == [reserves[0]] and len(client.calls) == 2
+    assert client.calls[1][1]['json']['messages'] == body(primary)['messages']
+    assert client.calls[1][1]['headers']['Authorization'] == 'Bearer private-reserve-key'
+    assert 'private' not in caplog.text
+    # A failing route is skipped on the next turn, rather than adding another wait.
+    assert not transport._voice_ready(primary)
+
+
+@pytest.mark.parametrize('kind', ['sync', 'async'])
+def test_missing_reserve_reports_timeout_without_repeating_primary(routes, kind):
+    primary, _ = routes
+    error = requests.ConnectTimeout() if kind == 'sync' else asyncio.TimeoutError()
+    client = Client(error, Response())
+    with pytest.raises(QuantumError, match='quantum_timeout'):
+        if kind == 'sync':
+            with transport.completion(client, primary, body(primary), timeout=(5, 60), voice_turn=True):
+                pass
+        else:
+            async def run():
+                async with transport.completion_async(client, primary, body(primary), voice_turn=True):
+                    pass
+            asyncio.run(run())
+    assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize('kind', ['sync', 'async'])
+def test_timeout_after_headers_never_restarts_stream(routes, kind):
+    primary, reserves = routes
+    client = Client(Response(), Response())
+    error = requests.ReadTimeout() if kind == 'sync' else asyncio.TimeoutError()
+    with pytest.raises(type(error)):
+        if kind == 'sync':
+            with transport.completion(client, primary, body(primary), timeout=(5, 60), reserves=reserves):
+                raise error
+        else:
+            async def run():
+                async with transport.completion_async(client, primary, body(primary), reserves=reserves):
+                    raise error
+            asyncio.run(run())
+    assert len(client.calls) == 1
+    assert transport._voice_ready(primary)
+
+
+def test_async_cancellation_does_not_start_reserve(routes):
+    primary, reserves = routes
+    client = Client(asyncio.CancelledError(), Response())
+    async def run():
+        async with transport.completion_async(client, primary, body(primary), reserves=reserves):
+            pass
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(run())
+    assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize('close_connection', [False, True])
+def test_real_requests_restores_body_timeout_after_fast_headers(routes, monkeypatch, close_connection):
+    """A slow body can outlive the admission deadline, including HTTP close."""
+    primary, _ = routes
+    monkeypatch.setattr(transport, 'VOICE_HEADER_TIMEOUT_SECONDS', .08)
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = 'HTTP/1.1'
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            payload = wire('Full answer')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream')
+            self.send_header('Content-Length', str(len(payload)))
+            if close_connection:
+                self.send_header('Connection', 'close')
+            self.end_headers()
+            self.wfile.flush()
+            time.sleep(.18)
+            self.wfile.write(payload)
+        def log_message(self, *_args):
+            pass
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    local = replace(primary, base_url=f'http://127.0.0.1:{server.server_port}')
+    monkeypatch.setattr(provider, 'ZAI_URL', local.base_url)
+    try:
+        with requests.Session() as client:
+            client.trust_env = False
+            with transport.completion(client, local, body(local), timeout=(1, 1), voice_turn=True) as response:
+                assert b'Full answer' in b''.join(response.iter_content(1))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_real_async_deadline_bounds_headers_only(routes, monkeypatch):
+    primary, _ = routes
+    monkeypatch.setattr(transport, 'VOICE_HEADER_TIMEOUT_SECONDS', .05)
+    async def run():
+        mode = ['headers']
+        async def handle(request):
+            if mode[0] == 'headers':
+                await asyncio.sleep(.15)
+                return web.Response(body=wire())
+            response = web.StreamResponse(headers={'Content-Type': 'text/event-stream'})
+            await response.prepare(request)
+            await asyncio.sleep(.15)
+            await response.write(wire('Complete reasoning'))
+            return response
+        app = web.Application()
+        app.router.add_post('/chat/completions', handle)
+        async with TestServer(app) as server:
+            local = replace(primary, base_url=str(server.make_url('')).rstrip('/'))
+            monkeypatch.setattr(provider, 'ZAI_URL', local.base_url)
+            async with ClientSession(timeout=ClientTimeout(total=2, sock_read=1)) as client:
+                with pytest.raises(QuantumError, match='quantum_timeout'):
+                    async with transport.completion_async(client, local, body(local), voice_turn=True):
+                        pytest.fail('Late headers were accepted')
+                transport._VOICE_CIRCUITS.clear()
+                mode[0] = 'body'
+                async with transport.completion_async(client, local, body(local), voice_turn=True) as response:
+                    assert b'Complete reasoning' in await response.read()
+    asyncio.run(run())
+
+
+def test_real_requests_header_timeout_reaches_reserve(routes, monkeypatch):
+    import velia_free_models as free
+    primary, reserves = routes
+    monkeypatch.setattr(transport, 'VOICE_HEADER_TIMEOUT_SECONDS', .05)
+    seen = []
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = 'HTTP/1.1'
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            seen.append(self.path)
+            if self.path.startswith('/primary'):
+                time.sleep(.2)
+            payload = wire('Reserve answer')
+            try:
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        def log_message(self, *_args):
+            pass
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    origin = f'http://127.0.0.1:{server.server_port}'
+    local = replace(primary, base_url=origin+'/primary')
+    monkeypatch.setattr(provider, 'ZAI_URL', local.base_url)
+    backup = replace(reserves[0], base_url=origin+'/reserve')
+    monkeypatch.setattr(free, 'voice_reserves', lambda: (backup,))
+    try:
+        with requests.Session() as client:
+            client.trust_env = False
+            with transport.completion(client, local, body(local), timeout=(1, 1), reserves=(backup,)) as response:
+                assert b'Reserve answer' in response.content
+        assert seen == ['/primary/chat/completions', '/reserve/chat/completions']
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+@pytest.mark.parametrize('mode', ['flash', 'quantum', 'pro'])
+@pytest.mark.parametrize('reserve_available', [True, False])
+def test_account_generator_uses_timeout_boundary_for_each_selected_mode(routes, monkeypatch, mode, reserve_available, caplog):
+    """Exercise the deployed account generator without loading unrelated DB code."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+    from types import SimpleNamespace
+    import velia_free_models as free
+    monkeypatch.setitem(sys.modules, 'services.velia_chat_streaming_runtime_patch',
+                        SimpleNamespace(run_streaming_send=lambda *_a, **_k: None))
+    spec = importlib.util.spec_from_file_location('voice_account_generator_test',
+        Path(__file__).resolve().parents[1]/'services/velia_quantum_service.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setenv('VELIA_ZAI_API_KEY', 'private-primary-key')
+    if not reserve_available:
+        monkeypatch.delenv('GROQ_API_KEY')
+    # No other machine-wide reserve settings may influence this regression.
+    monkeypatch.delenv('VELIA_VOICE_CF_API_TOKEN', raising=False)
+    monkeypatch.delenv('VELIA_VOICE_OPENROUTER_API_KEY', raising=False)
+    client = Client(requests.ReadTimeout('private exception'), Response(body=wire('Готова помочь.')))
+    monkeypatch.setattr(module.requests, 'Session', lambda: client)
+    emitted = []
+    history = [{'role': 'user', 'content': 'Сохрани контекст'},
+               {'role': 'assistant', 'content': 'Предложила решение'},
+               {'role': 'user', 'content': 'Продолжай'}]
+    caplog.set_level('INFO', logger=module.LOG.name)
+    result = module.generate('unused prompt', chat_mode=mode, voice_turn=True,
+        request_id='same-request', messages=history, on_delta=emitted.append)
+    assert result['request_id'] == 'same-request' and result['model'] == 'velia-'+mode
+    assert client.calls[0][1]['timeout'] == (3, 12)
+    primary_body = client.calls[0][1]['json']
+    assert primary_body['model'] == free.TIERS[mode][1]
+    assert primary_body['messages'][1:] == history
+    assert primary_body['thinking']['type'] == ('enabled' if mode == 'pro' else 'disabled')
+    if reserve_available:
+        assert result['ok'] and result['fallback_used'] and result['text'] == 'Готова помочь.'
+        assert emitted == ['Готова помочь.'] and len(client.calls) == 2
+        assert client.calls[1][1]['json']['messages'] == primary_body['messages']
+    else:
+        assert not result['ok'] and result['reason'] == mode+'_timeout'
+        assert not emitted and len(client.calls) == 1
+    assert 'mode='+mode in caplog.text and 'private' not in caplog.text
+
+
+def test_async_voice_generator_without_reserve_uses_short_entry_timeout(routes, monkeypatch):
+    from velia_quantum_turn import stream_turn
+    primary, _ = routes
+    monkeypatch.delenv('GROQ_API_KEY')
+    monkeypatch.delenv('VELIA_VOICE_CF_API_TOKEN', raising=False)
+    monkeypatch.delenv('VELIA_VOICE_OPENROUTER_API_KEY', raising=False)
+    client = Client(asyncio.TimeoutError(), Response())
+    async def run():
+        return [event async for event in stream_turn(client, primary,
+            [{'role': 'user', 'content': 'Continue'}], voice_turn=True)]
+    with pytest.raises(QuantumError, match='quantum_timeout'):
+        asyncio.run(run())
+    assert len(client.calls) == 1

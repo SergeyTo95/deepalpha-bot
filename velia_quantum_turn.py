@@ -170,6 +170,7 @@ async def stream_turn(client, config, messages, *, search=None, max_tokens=None,
     while True:
         body = turn.body()
         async with completion_async(client, turn.config, body, retry_overload=turn.calls == 1,
+                voice_turn=bool(free_models.enabled() and voice_turn and turn.calls == 1),
                 backup=groq_backup_configuration(turn.config) if not free_models.enabled() and turn.calls == 1 else None,
                 on_route=lambda selected: setattr(turn, "config", selected),
                 reserves=free_models.voice_reserves() if voice_turn and turn.calls==1 else ()) as response:

@@ -215,6 +215,7 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False, web_sear
             while True:
                 body = turn.body()
                 with completion(client, config, body, timeout=(5, 60) if voice_turn else (10, 120),
+                        voice_turn=bool(free_tier and voice_turn and turn.calls == 1),
                         retry_overload=turn.calls == 1,
                         backup=groq_backup_configuration(config) if not free_tier and turn.calls == 1 else None,
                         on_route=select_route,
@@ -267,8 +268,8 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False, web_sear
     finally:
         def elapsed(point):
             return round((point - started) * 1000) if point is not None else -1
-        LOG.info("VELIA_QUANTUM_RESPONSE_TIMING provider=%s voice=%s headers_ms=%d first_byte_ms=%d first_text_ms=%d total_ms=%d outcome=%s",
-            config.provider, bool(voice_turn), elapsed(headers_at), elapsed(first_byte_at),
+        LOG.info("VELIA_QUANTUM_RESPONSE_TIMING provider=%s mode=%s upstream=%s voice=%s reserves=%d headers_ms=%d first_byte_ms=%d first_text_ms=%d total_ms=%d outcome=%s",
+            config.provider, chat_mode, config.model, bool(voice_turn), len(free_models.voice_reserves(chat_mode)), elapsed(headers_at), elapsed(first_byte_at),
             elapsed(first_text_at), elapsed(time.monotonic()), outcome)
 
 
