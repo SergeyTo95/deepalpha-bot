@@ -14,6 +14,22 @@ test('canonical speech reconciliation keeps full matching phrases and preserves 
  assert.equal(reconcileSpeech('Привет!',['Привет!']).remaining,'');
 });
 
+test('thousands grouping is speech-equivalent while signs, decimals, words and every digit remain significant',()=>{
+ for(const [before,after] of [['215000','215 000'],['215\u00a0000','215000'],['215\u202f000','215000'],['-1234567,50','-1 234 567,50']]){
+  const phrase='Результат '+before+'.',canonical='Результат '+after+'. Дальше история.';
+  const plan=reconcileSpeech(canonical,[phrase]);assert.deepEqual(plan.completed,[phrase]);assert.equal(plan.remaining,'Дальше история.');
+  assert.equal(reconcileSpeech(canonical,[],phrase).keepCurrent,true);
+ }
+ for(const [before,after] of [['215000','215001'],['-215000','215000'],['1,25','125'],['12','125'],['12 34','1234'],['1 234.5','1234,5']]){
+  const phrase='Результат '+before+'.',canonical='Результат '+after+'. Дальше.';
+  assert.equal(reconcileSpeech(canonical,[],phrase).keepCurrent,false,before+' -> '+after);
+  assert.equal(reconcileSpeech(canonical,[phrase]).remaining,canonical);
+ }
+ assert.equal(speechReady('Получилось 215.'),0);
+ const decimal='Получилось 215.5. Продолжение';assert.equal(decimal.slice(0,speechReady(decimal)),'Получилось 215.5.');
+ assert.equal(speechReady('Получилось 215.',true),15);
+});
+
 test('fast voice uses only an actually reported local voice in the selected language',()=>{
  const voices=[{name:'Ава',voiceURI:'edge:en-US-AvaMultilingualNeural',lang:'ru-RU',localService:false},
   {name:'Cloud',voiceURI:'cloud',lang:'ru-RU',localService:false},

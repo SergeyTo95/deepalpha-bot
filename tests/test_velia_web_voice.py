@@ -244,6 +244,26 @@ def test_voice_latency_accepts_only_bounded_timings_without_speech(monkeypatch,c
     assert 'VELIA_WEB_VOICE_LATENCY model=flash clock=media recognition_ms=100 first_text_ms=1500 first_audio_ms=1800' in caplog.text
     assert 'private speech' not in caplog.text
 
+def test_voice_flow_accepts_only_bounded_counts_and_durations_without_content(caplog):
+    async def scenario():
+        async with TestServer(streaming_app()) as server, ClientSession() as client:
+            endpoint=server.make_url('/web-api/v1/voice/events')
+            data={'event':'voice_flow','model':'flash','outcome':'complete','segments':5,
+                'corrections':1,'interruptions':0,'pauses':0,'max_gap_ms':800,'max_synthesis_ms':1500}
+            for outcome in ('complete','cancelled','error'):
+                with caplog.at_level('INFO',logger='desktop.voice_routes'):
+                    assert (await client.post(endpoint,json={**data,'outcome':outcome},headers=STREAM_HEADERS)).status==200
+            for bad in ({**data,'text':'private speech'}, {**data,'segments':True},
+                        {**data,'max_gap_ms':600001}, {**data,'interruptions':-1},
+                        {**data,'outcome':'private speech'}, {**data,'model':'private provider'},
+                        {**data,'max_synthesis_ms':float('inf')}):
+                assert (await client.post(endpoint,json=bad,headers=STREAM_HEADERS)).status==400
+            assert (await client.post(endpoint,json=data)).status==403
+            assert (await client.post(endpoint,json=data,headers={**STREAM_HEADERS,'X-Test-Session':''})).status==401
+    asyncio.run(scenario())
+    assert 'VELIA_WEB_VOICE_FLOW model=flash outcome=complete segments=5 corrections=1 interruptions=0 pauses=0 max_gap_ms=800 max_synthesis_ms=1500' in caplog.text
+    assert 'private speech' not in caplog.text
+
 def test_mp3_first_chunk_reaches_browser_before_provider_finishes(monkeypatch):
     monkeypatch.setenv('VELIA_WEB_TTS_PROVIDER','edge')
     async def run():

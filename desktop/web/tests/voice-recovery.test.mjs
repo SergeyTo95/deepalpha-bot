@@ -276,6 +276,55 @@ test('identical greetings in separate voice turns are both spoken and are never 
  assert.deepEqual(s.spoken.map(u=>u.text),['Привет!','Привет!']);assert.equal(s.recognizers.length,3);
 });
 
+for(const finished of [false,true])test('formatting a calculated number in the final answer does not replay '+(finished?'completed':'playing')+' speech',async t=>{
+ let release;const waiting=new Promise(resolve=>{release=resolve;});
+ const calculation='625 умножить на 344 равно 215000.';
+ const canonical='625 умножить на 344 равно 215 000.\n\nА вот историческая история: в 79 году н.э. произошло извержение Везувия.';
+ const s=fixture(t,{speech:true,responder:async voice=>{voice.update(calculation+'\n\n');await waiting;voice.update(canonical);voice.complete(canonical);}});
+ submit(s);assert.deepEqual(s.spoken.map(u=>u.text),[calculation]);
+ if(finished)s.spoken[0].onend();release();await s.completion;
+ if(!finished)s.spoken[0].onend();
+ assert.equal(s.spoken.filter(u=>u.text.includes('625')).length,1);
+ for(let i=1;i<s.spoken.length;i++)s.spoken[i].onend();
+ s.tick(400);assert.equal(s.recognizers.length,2);
+ assert.ok(s.spoken.slice(1).map(u=>u.text).join(' ').includes('произошло извержение Везувия.'));
+});
+
+test('remote speech retains the same channel after a completed calculation is reformatted',async t=>{
+ let release;const waiting=new Promise(resolve=>{release=resolve;});
+ const s=fixture(t,{remote:true,responder:async voice=>{
+  voice.update('Ответ 215000.\n');await waiting;
+  const text='Ответ 215 000. Дальше история.';voice.update(text);voice.complete(text);
+ }});
+ await flush();submit(s);await flush();s.media[0].ended();
+ release();await s.completion;await flush();
+ assert.equal(s.sockets.length,1);assert.equal(s.media.length,2);
+ assert.deepEqual(s.sockets[0].sent.filter(x=>x.type==='speak').map(x=>x.text),['Ответ 215000.','Дальше история.']);
+ s.media[1].ended();s.tick(400);assert.equal(s.recognizers.length,2);
+});
+
+test('a decimal split across network reads is never spoken as an already finished integer',async t=>{
+ const s=fixture(t,{speech:true,responder:async voice=>{
+  voice.update('Ответ 215.');assert.equal(s.spoken.length,0);
+  voice.update('Ответ 215.5. Дальше.');voice.complete('Ответ 215.5. Дальше.');
+ }});
+ submit(s);await s.completion;assert.equal(s.spoken[0].text,'Ответ 215.5.');
+ s.spoken[0].onend();s.spoken[1].onend();s.tick(400);assert.equal(s.recognizers.length,2);
+});
+
+test('completed voice flow reports the maximum audible gap once without speech content',async t=>{
+ let now=0,release;t.mock.method(performance,'now',()=>now);
+ const waiting=new Promise(resolve=>{release=resolve;});
+ const s=fixture(t,{speech:true,responder:async voice=>{
+  voice.update('Считаю.');await waiting;voice.complete('Считаю. Продолжаю рассказ.');
+ }});
+ submit(s);now=1000;s.spoken[0].onend();now=1800;release();await s.completion;
+ now=2300;s.spoken[1].onend();s.spoken[1].onend();
+ const flows=s.events.filter(e=>e.event==='voice_flow');assert.equal(flows.length,1);
+ assert.deepEqual(flows[0],{event:'voice_flow',model:'flash',outcome:'complete',segments:2,corrections:0,interruptions:0,pauses:0,max_gap_ms:800,max_synthesis_ms:0});
+ s.voice.stop();assert.equal(s.events.filter(e=>e.event==='voice_flow').length,1);
+});
+
 test('opening voice prepares transport without speech text or blocking the microphone',t=>{
  const s=fixture(t);assert.deepEqual(s.preparations,[{}]);
  assert.equal(s.recognizers.length,1);assert.equal(s.recognizers[0].started,true);assert.deepEqual(s.sent,[]);

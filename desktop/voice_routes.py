@@ -240,7 +240,13 @@ def setup_voice_routes(app, *, session_for, same_origin, json_response, origin=N
                 and data["clock"] in ("media", "device")
                 and all(type(data[key]) is int for key in ("recognition_ms", "first_text_ms", "first_audio_ms"))
                 and 0 <= data["recognition_ms"] <= data["first_text_ms"] <= data["first_audio_ms"] <= 180000)
-            if not (recognition or latency):
+            flow = (isinstance(data, dict)
+                and set(data) == {"event", "model", "outcome", "segments", "corrections", "interruptions", "pauses", "max_gap_ms", "max_synthesis_ms"}
+                and data["event"] == "voice_flow" and data["model"] in ("flash", "quantum", "pro")
+                and data["outcome"] in ("complete", "cancelled", "error")
+                and all(type(data[key]) is int and 0 <= data[key] <= 500 for key in ("segments", "corrections", "interruptions", "pauses"))
+                and all(type(data[key]) is int and 0 <= data[key] <= 600000 for key in ("max_gap_ms", "max_synthesis_ms")))
+            if not (recognition or latency or flow):
                 return json_response({"error": "invalid_voice_event"}, 400)
             now = time.monotonic()
             for key in list(event_requests):
@@ -252,9 +258,12 @@ def setup_voice_routes(app, *, session_for, same_origin, json_response, origin=N
             event_requests[session.user_id] = (since, count + 1)
             if recognition:
                 LOG.warning("VELIA_WEB_RECOGNITION_ERROR code=%s attempt=%d", data["code"], data["attempt"])
-            else:
+            elif latency:
                 LOG.info("VELIA_WEB_VOICE_LATENCY model=%s clock=%s recognition_ms=%d first_text_ms=%d first_audio_ms=%d",
                     data["model"], data["clock"], data["recognition_ms"], data["first_text_ms"], data["first_audio_ms"])
+            else:
+                LOG.info("VELIA_WEB_VOICE_FLOW model=%s outcome=%s segments=%d corrections=%d interruptions=%d pauses=%d max_gap_ms=%d max_synthesis_ms=%d",
+                    data["model"], data["outcome"], data["segments"], data["corrections"], data["interruptions"], data["pauses"], data["max_gap_ms"], data["max_synthesis_ms"])
             return json_response({"ok": True})
         except AuthenticationUnavailable:
             return json_response({"error": "authentication_unavailable"}, 503)

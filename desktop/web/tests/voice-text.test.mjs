@@ -7,6 +7,9 @@ test('streaming speech does not pause at abbreviations, initials or decimals',()
  }
  assert.equal(sentenceBoundary('Это т. е.'),0);
  assert.equal(sentenceBoundary('Готово! Ещё'),7);
+ assert.equal(sentenceBoundary('В 79 году н.'),0);
+ const history='В 79 году н.э. произошло извержение. Продолжение';
+ assert.equal(history.slice(sentenceBoundary(history)).trim(),'Продолжение');
 });
 test('speech-only Russian normalization preserves quantities, negation and chat source',()=>{
  const source='Не отправляй 1 ₽ и 22 руб. до 2026-10-31, т. е. завтра.';

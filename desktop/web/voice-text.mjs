@@ -4,12 +4,28 @@ export function sentenceBoundary(text) {
  const endings=/[.!?](?=\s|$)/g;let match;
  while((match=endings.exec(text))){
   const prefix=text.slice(0,match.index+1);
+  // A numeric full stop at the current network boundary can still become a
+  // decimal (215. -> 215.5). Wait for the next character or final completion.
+  if(match[0]==='.'&&match.index===text.length-1&&/\d\.$/.test(prefix))continue;
   if(match[0]==='.'&&(
-   /(?:^|\s)(?:т\.|т\.\s*е\.|т\.\s*д\.|т\.\s*п\.|руб\.|коп\.|ул\.|д\.|г\.|стр\.|им\.|рис\.|Mr\.|Mrs\.|Dr\.|Prof\.|e\.g\.|i\.e\.)$/iu.test(prefix)
+   /(?:^|\s)(?:т\.|т\.\s*е\.|т\.\s*д\.|т\.\s*п\.|т\.\s*к\.|н\.|н\.\s*э\.|руб\.|коп\.|ул\.|д\.|г\.|стр\.|им\.|рис\.|Mr\.|Mrs\.|Dr\.|Prof\.|e\.g\.|i\.e\.)$/iu.test(prefix)
    ||/(?:^|\s)\p{Lu}\.$/u.test(prefix)))continue;
   return match.index+1;
  }
  return 0;
+}
+
+// Ignore only validated thousands-group whitespace for speech reconciliation.
+// Keep every digit, decimal separator, sign, word and punctuation mark. Offsets
+// map the matched key back to the canonical source so its tail stays exact.
+export function speechIdentity(text) {
+ const skipped=new Set();
+ for(const match of text.matchAll(/(^|[^\p{L}\p{N}])(\d{1,3}(?:[ \u00a0\u202f]\d{3})+)(?![\p{L}\p{N}])/gu)){
+  for(let i=0;i<match[2].length;i++)if(/[ \u00a0\u202f]/.test(match[2][i]))skipped.add(match.index+match[1].length+i);
+ }
+ let key='';const ends=[];
+ for(let i=0;i<text.length;i++)if(!skipped.has(i)){key+=text[i];ends.push(i+1);}
+ return {key,ends};
 }
 const dates=['первое','второе','третье','четвёртое','пятое','шестое','седьмое','восьмое','девятое','десятое','одиннадцатое','двенадцатое','тринадцатое','четырнадцатое','пятнадцатое','шестнадцатое','семнадцатое','восемнадцатое','девятнадцатое','двадцатое','двадцать первое','двадцать второе','двадцать третье','двадцать четвёртое','двадцать пятое','двадцать шестое','двадцать седьмое','двадцать восьмое','двадцать девятое','тридцатое','тридцать первое'];
 const months=['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];

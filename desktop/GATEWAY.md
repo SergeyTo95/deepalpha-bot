@@ -164,3 +164,35 @@ while recording, backgrounding the tab and resuming audio work on each device.
 Unsupported browsers offer keyboard dictation/text instead of claiming full
 voice support. Neural VAD, RNNoise, sound classification and offline ASR are not
 part of this release; this fallback uses the browser's own capture processing.
+
+### Voice pauses and numeric finalization
+
+A canonical update that changes `215000` to `215 000` (including non-breaking
+or narrow spaces) now retains matching spoken phrases and the active player /
+answer channel. Reconciliation compares validated thousands-group whitespace
+only and maps the match back to the exact canonical tail. Changed digits, minus
+signs, decimal separators and negation still require correction. A spoken result
+is not replayed merely because its numeric formatting changes. The regression
+was reproduced for both completed and in-flight calculation audio before this fix.
+
+The sentence boundary detector waits when a numeric full stop is the last
+available streaming character, because it may still become a decimal point.
+Final completion flushes that text immediately. Russian `н.э.` and `т.к.` do not
+split a spoken clause; a split `н.` prefix is also retained.
+
+Authenticated `voice_flow` diagnostics report a single bounded summary per voice
+turn: model, outcome, audible segment count, canonical correction count, active
+interruptions, recoverable playback pauses, maximum gap from a completed segment
+to the next audible segment, and maximum time from requesting playback to its
+first audible progress. They contain no text, audio, account IDs, phrase hashes
+or provider credentials, and retain the existing event rate limit. These numbers
+separate model/transport waiting from client-side interruptions; they do not
+claim to measure physical speaker output. Real phone tests are still needed.
+
+The 2026-10-31 15:38 Istanbul incident had one successful Flash model call:
+provider first text about 6.0 s, gateway first text about 6.9 s, browser first text
+7.4 s, browser first audio 9.8 s, gateway completion about 16.4 s. Runtime logs
+alone do not establish that the particular utterance replayed or reveal the gap
+between its spoken parts. Synthetic regression tests cover the formatting replay
+case, preservation of one remote channel, decimal streaming boundaries and
+content-free gap diagnostics.
