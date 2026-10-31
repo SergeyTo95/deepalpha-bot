@@ -1,6 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {speechChunks,availableVoices,voiceChoice,speechReady,isRemoteVoice,recognitionLanguage,isVoiceEndCommand,conversationLanguages,fastDeviceVoice,automaticVoice} from '../voice.mjs';
+import {speechChunks,availableVoices,voiceChoice,speechReady,isRemoteVoice,recognitionLanguage,isVoiceEndCommand,conversationLanguages,fastDeviceVoice,automaticVoice,reconcileSpeech} from '../voice.mjs';
+
+test('canonical speech reconciliation keeps full matching phrases and preserves changed numbers and negation',()=>{
+ for(const greeting of ['Привет!','Merhaba!','مرحبا!','こんにちは！']){
+  const plan=reconcileSpeech(greeting+' Новый факт.',[],greeting);
+  assert.equal(plan.keepCurrent,true);assert.equal(plan.remaining,'Новый факт.');
+ }
+ assert.equal(reconcileSpeech('125 рублей',[], '12').keepCurrent,false);
+ assert.equal(reconcileSpeech('Не отправляй 125 рублей.',['Отправляй 125 рублей.']).remaining,'Не отправляй 125 рублей.');
+ const plan=reconcileSpeech('**Привет!**  🎵\nНе отправляй 125 рублей.',['Привет!'],'Отправляй 125 рублей.');
+ assert.deepEqual(plan.completed,['Привет!']);assert.equal(plan.keepCurrent,false);assert.equal(plan.remaining,'Не отправляй 125 рублей.');
+ assert.equal(reconcileSpeech('Привет!',['Привет!']).remaining,'');
+});
 
 test('fast voice uses only an actually reported local voice in the selected language',()=>{
  const voices=[{name:'Ава',voiceURI:'edge:en-US-AvaMultilingualNeural',lang:'ru-RU',localService:false},

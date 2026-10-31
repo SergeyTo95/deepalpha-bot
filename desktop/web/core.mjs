@@ -269,6 +269,15 @@ export function safeSearch(value) {
   }
   return {sources, retrieved_at: typeof value?.retrieved_at === "string" ? value.retrieved_at.slice(0, 40) : ""};
 }
+export function normalizeNetworkError(error) {
+  if (!error?.status && (error?.name === 'NetworkError' ||
+      ['Error', 'TypeError'].includes(error?.name) && /^(?:network error|failed to fetch|load failed|networkerror when attempting to fetch resource\.?)$/i.test(String(error.message||'').trim()))) {
+    const failure = new Error(apiError('model_connection_failed'));
+    failure.code = 'model_connection_failed';
+    return failure;
+  }
+  return error;
+}
 export async function readCompletion(response, onText, onSearch = () => {}, onProgress = () => {}) {
   if (!response.ok) {
     let data;
@@ -359,6 +368,8 @@ export async function readCompletion(response, onText, onSearch = () => {}, onPr
     if (!done) throw new Error(apiError("stream_incomplete"));
     if (!output.trim()) throw new Error(apiError("empty_response"));
     return { text: output, finish, ...(search ? {search} : {}) };
+  } catch (error) {
+    throw normalizeNetworkError(error);
   } finally {
     await reader.cancel().catch(() => {});
     reader.releaseLock();

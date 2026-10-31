@@ -6,6 +6,7 @@ import {
   loadChats,
   chatPayload,
   apiError,
+  normalizeNetworkError,
   safeSearch,
 } from "./core.mjs";
 import {setupFeatures, featureRequest} from "./features.mjs";
@@ -80,7 +81,7 @@ const request = (path, data, signal) =>
         : { "Content-Type": "application/json", "X-Velia-Request": "1" },
     body: data === undefined ? undefined : JSON.stringify(data),
     signal,
-  });
+  }).catch(error => { throw normalizeNetworkError(error); });
 let selectedFiles = [];
 const fileTools=setupFileTools({toast});
 function clearFiles(){selectedFiles=[];$("attachment-input").value="";$("attachment-preview").replaceChildren();}

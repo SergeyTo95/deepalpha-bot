@@ -8,7 +8,28 @@ import {
   safeSearch,
   MODELS,
   apiError,
+  normalizeNetworkError,
 } from "../core.mjs";
+
+test('browser transport failures have a usable message while cancellation and HTTP errors retain their meaning',()=>{
+ for(const message of ['network error','Failed to fetch','Load failed','NetworkError when attempting to fetch resource.']){
+  const error=normalizeNetworkError(new TypeError(message));
+  assert.equal(error.code,'model_connection_failed');assert.match(error.message,/Соединение прервалось/);
+ }
+ const aborted=new DOMException('cancelled','AbortError');assert.equal(normalizeNetworkError(aborted),aborted);
+ const denied=Object.assign(new Error('session expired'),{status:401});assert.equal(normalizeNetworkError(denied),denied);
+ const bug=new TypeError('unexpected application bug');assert.equal(normalizeNetworkError(bug),bug);
+});
+
+test('a network error while reading SSE preserves already received text and never retries the request',async()=>{
+ const received=[];let pulls=0;
+ const stream=new ReadableStream({pull(controller){
+  if(pulls++===0)controller.enqueue(new TextEncoder().encode('data: '+JSON.stringify({choices:[{delta:{content:'Полученная часть.'}}]})+'\n\n'));
+  else controller.error(new TypeError('network error'));
+ }});
+ await assert.rejects(readCompletion(new Response(stream,{headers:{'content-type':'text/event-stream'}}),text=>received.push(text)),/Соединение прервалось/);
+ assert.deepEqual(received,['Полученная часть.']);assert.equal(pulls,2);
+});
 
 test("Quantum history retains its mode and quota failures remain actionable", () => {
   assert.equal(MODELS["velia-quantum"], "VELIA QUANTUM");

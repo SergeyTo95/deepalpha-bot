@@ -32,6 +32,17 @@ guard, not acoustic classification, speaker identification or a wake-word mode.
 Android browser recognition keeps its existing microphone source; no extra
 capture/upload, speech provider, permission or voiceprint storage is introduced.
 
+When a persisted answer replaces its streamed draft, speech is reconciled against
+completed phrases and the current phrase, rather than the cursor that also
+includes unsaid prefetched text. Matching phrases are retained, changed queued
+audio is cancelled, and only the canonical remainder is spoken. A matching
+phrase keeps its player and connection. Changed words (including negation and
+amounts) are not treated as duplicates; a changed phrase must be corrected.
+Already audible draft speech cannot be retracted. This adds no model call or
+wait for the whole answer. Local speech callbacks are fenced by utterance identity
+so a late end event cannot advance another phrase. Fetch/stream network errors
+use a readable message while retaining received text, without automatic POST replay.
+
 The browser Agent predeploy acceptance retries up to three times only for
 502/503/504 or a connection timeout/failure. Every retry uses a fresh synthetic
 session and repeats the two fixed read-only example.com checks. Invalid results,

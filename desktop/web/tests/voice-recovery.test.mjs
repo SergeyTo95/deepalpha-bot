@@ -162,6 +162,76 @@ test('a correction arriving only at completion is delivered and does not leave t
  s.spoken[1].onend();s.tick(400);assert.equal(s.status(),'Слушаю тебя…');
 });
 
+test('canonical tail correction keeps an unchanged greeting in flight instead of greeting twice',async t=>{
+ const s=fixture(t,{speech:true,responder:async voice=>{
+  voice.update('Привет! Черновое продолжение.');
+  voice.complete('Привет! Система работает нормально.');
+ }});
+ submit(s);await s.completion;
+ assert.deepEqual(s.spoken.map(u=>u.text),['Привет!']);
+ s.spoken[0].onend();s.spoken[0].onend();assert.deepEqual(s.spoken.map(u=>u.text),['Привет!','Система работает нормально.']);
+ s.spoken[1].onend();s.tick(400);assert.equal(s.recognizers.length,2);
+});
+
+test('a split canonical SSE replacement preserves the shared greeting through update and completion',async t=>{
+ const s=fixture(t,{speech:true,responder:async voice=>{
+  const frames=[{choices:[{delta:{content:'Привет! Черновой факт.'}}]}, {reset:true},
+   {choices:[{delta:{content:'Привет! Окончательный факт.'},finish_reason:'stop'}]}];
+  const stream=new ReadableStream({start(c){for(const event of frames)c.enqueue(new TextEncoder().encode('data: '+JSON.stringify(event)+'\n\n'));c.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));c.close();}});
+  const result=await readCompletion(new Response(stream,{headers:{'content-type':'text/event-stream'}}),text=>voice.update(text));
+  voice.complete(result.text);
+ }});
+ submit(s);await s.completion;assert.deepEqual(s.spoken.map(u=>u.text),['Привет!']);
+ s.spoken[0].onend();assert.deepEqual(s.spoken.map(u=>u.text),['Привет!','Окончательный факт.']);
+ s.spoken[1].onend();s.tick(400);assert.equal(s.recognizers.length,2);
+});
+
+test('an incomplete replacement prefix does not interrupt an unchanged current phrase',async t=>{
+ const s=fixture(t,{speech:true,responder:async voice=>{
+  voice.update('Привет! Старый факт.');voice.update('При');
+  voice.update('Привет! Новый факт.');voice.complete('Привет! Новый факт.');
+ }});
+ submit(s);await s.completion;assert.deepEqual(s.spoken.map(u=>u.text),['Привет!']);
+ s.spoken[0].onend();assert.deepEqual(s.spoken.map(u=>u.text),['Привет!','Новый факт.']);
+ s.spoken[1].onend();s.tick(400);assert.equal(s.recognizers.length,2);
+});
+
+test('completed common phrases stay spoken once when the canonical tail changes later',async t=>{
+ let release;const waiting=new Promise(resolve=>{release=resolve;});
+ const s=fixture(t,{speech:true,responder:async voice=>{
+  voice.update('Привет! Продолжаю. Старый факт.');await waiting;
+  voice.complete('Привет! Продолжаю. Новый факт.');
+ }});
+ submit(s);s.spoken[0].onend();s.spoken[1].onend();release();await s.completion;
+ assert.deepEqual(s.spoken.map(u=>u.text),['Привет!','Продолжаю.','Старый факт.','Новый факт.']);
+ const stale=s.spoken[2].onend;stale();s.tick(400);assert.equal(s.recognizers.length,1);
+ s.spoken[3].onend();s.tick(400);assert.equal(s.recognizers.length,2);
+});
+
+test('a remote canonical correction keeps the current player and socket while replacing prefetched tail',async t=>{
+ let release;const waiting=new Promise(resolve=>{release=resolve;});
+ const s=fixture(t,{remote:true,responder:async voice=>{
+  voice.update('Привет! Черновой факт.');await waiting;
+  voice.complete('Привет! Окончательный факт.');
+ }});
+ const flush=()=>new Promise(resolve=>setImmediate(resolve));await flush();submit(s);await flush();
+ assert.equal(s.media.length,1);const player=s.media[0].player;
+ release();await s.completion;await flush();
+ assert.equal(s.media.length,1);assert.equal(s.sockets.length,1);assert.equal(s.sockets[0].readyState,1);
+ s.media[0].ended();await flush();assert.equal(s.media.length,2);assert.equal(s.media[1].player,player);
+ s.media[1].ended();s.tick(400);assert.equal(s.recognizers.length,2);
+ assert.equal(s.sockets[0].sent.filter(x=>x.type==='speak'&&x.text==='Привет!').length,1);
+ assert.deepEqual(s.httpSpeech,[]);
+});
+
+test('identical greetings in separate voice turns are both spoken and are never globally deduplicated',async t=>{
+ const s=fixture(t,{speech:true,responder:async voice=>{voice.update('Привет!');voice.complete('Привет!');}});
+ for(let turn=0;turn<2;turn++){
+  submit(s);await s.completion;s.spoken[turn].onend();s.tick(400);
+ }
+ assert.deepEqual(s.spoken.map(u=>u.text),['Привет!','Привет!']);assert.equal(s.recognizers.length,3);
+});
+
 test('opening voice prepares transport without speech text or blocking the microphone',t=>{
  const s=fixture(t);assert.deepEqual(s.preparations,[{}]);
  assert.equal(s.recognizers.length,1);assert.equal(s.recognizers[0].started,true);assert.deepEqual(s.sent,[]);
