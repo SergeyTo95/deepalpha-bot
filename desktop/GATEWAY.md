@@ -22,6 +22,22 @@ VELIA_DESKTOP_REASONING_EFFORT=low
 
 ### Voice connection preparation
 
+The voice dialog's microphone button pauses input without stopping an in-flight
+answer or its playback. Late callbacks from the paused recognizer cannot submit
+text, and the microphone resumes only after an explicit button press. Closing the
+conversation resets this pause. Empty/punctuation-only recognition output and
+explicit `[noise]`/`[music]`-style markers are ignored; actual short words, numbers,
+negation and low-confidence transcripts are preserved. This is a transcript
+guard, not acoustic classification, speaker identification or a wake-word mode.
+Android browser recognition keeps its existing microphone source; no extra
+capture/upload, speech provider, permission or voiceprint storage is introduced.
+
+The browser Agent predeploy acceptance retries up to three times only for
+502/503/504 or a connection timeout/failure. Every retry uses a fresh synthetic
+session and repeats the two fixed read-only example.com checks. Invalid results,
+authentication/quota failures and lost session continuity still block release.
+This policy never retries real user Agent actions. No check is removed or skipped.
+
 `VELIA_WEB_TTS_CHANNEL_ENABLED=true` additionally advertises one same-origin
 `velia-voice-v1` WebSocket per answer. Its opening request validates the account;
 each segment keeps the existing voice, size and per-user rate checks. Origin and

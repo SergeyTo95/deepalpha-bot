@@ -59,7 +59,7 @@ function fixture(t,{responder,speech=false,remote=false}={}) {
  const voice=setupVoice({send:text=>{sent.push(text);return completion=responder?responder(voice):Promise.resolve(voice.complete(''));},busy:()=>false,toast(){},accountLanguage:()=> 'ru'});
  t.after(()=>{voice.stop();for(const [key,descriptor] of previous){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];}});
  voice.open();
- return {voice,recognizers,sent,events,spoken,preparations,media,sockets,httpSpeech,get completion(){return completion;},tick:ms=>t.mock.timers.tick(ms),status:()=>body.children[0].children.find(n=>n.tag==='p'&&n.className==='voice-status')?.textContent};
+ return {voice,recognizers,sent,events,spoken,preparations,media,sockets,httpSpeech,mute:()=>body.children[0].children.find(n=>n.className==='voice-mute'),get completion(){return completion;},tick:ms=>t.mock.timers.tick(ms),status:()=>body.children[0].children.find(n=>n.tag==='p'&&n.className==='voice-status')?.textContent};
 }
 
 test('temporary recognition failure reconnects without submitting an unfinished phrase',t=>{
@@ -83,6 +83,41 @@ test('network recovery is bounded and never launches two microphones at once',t=
  }
  s.tick(10000);assert.equal(s.recognizers.length,3);assert.deepEqual(s.sent,[]);
  assert.deepEqual(s.events.map(e=>e.attempt),[1,2,3]);
+});
+
+test('muting invalidates captured speech and late recognition callbacks until explicitly resumed',t=>{
+ const s=fixture(t),old=s.recognizers[0];
+ old.onresult({results:[Object.assign([{transcript:'Фоновая реплика'}],{isFinal:true})]});
+ s.mute().onclick();old.onend();old.onerror({error:'network'});s.tick(10000);
+ assert.deepEqual(s.sent,[]);assert.deepEqual(s.events,[]);assert.equal(s.recognizers.length,1);
+ assert.equal(s.mute().textContent,'Включить микрофон');assert.match(s.status(),/Микрофон выключен/);
+ s.mute().onclick();assert.equal(s.recognizers.length,2);assert.equal(s.recognizers[1].started,true);
+ old.onresult({results:[Object.assign([{transcript:'Поздняя реплика'}],{isFinal:true})]});old.onend();
+ assert.deepEqual(s.sent,[]);
+});
+
+test('muting during an answer preserves playback and does not automatically reopen the microphone',async t=>{
+ const s=fixture(t,{speech:true,responder:async voice=>{voice.update('Продолжаю ответ.');voice.complete('Продолжаю ответ.');}});
+ submit(s);await s.completion;s.mute().onclick();
+ assert.deepEqual(s.spoken.map(u=>u.text),['Продолжаю ответ.']);
+ s.spoken[0].onend();s.tick(400);assert.equal(s.recognizers.length,1);assert.match(s.status(),/Микрофон выключен/);
+ s.mute().onclick();assert.equal(s.recognizers.length,2);assert.equal(s.status(),'Слушаю тебя…');
+});
+
+test('muting cancels pending network recovery and a new conversation starts with microphone enabled',t=>{
+ const s=fixture(t);s.recognizers[0].onerror({error:'network'});s.mute().onclick();s.tick(10000);
+ assert.equal(s.recognizers.length,1);s.voice.stop();s.voice.open();
+ assert.equal(s.recognizers.length,2);assert.equal(s.mute().textContent,'Выключить микрофон');
+});
+
+test('non-speech result markers never send a model request or end the conversation',t=>{
+ const s=fixture(t);
+ for(const text of ['…','[noise]','[музыка]','[silence] [noise]']){
+  const r=s.recognizers.at(-1);r.onresult({results:[Object.assign([{transcript:text}],{isFinal:true})]});r.onend();s.tick(800);
+  assert.deepEqual(s.sent,[]);assert.equal(s.recognizers.at(-1).started,true);
+ }
+ const r=s.recognizers.at(-1);r.onresult({results:[Object.assign([{transcript:'Нет',confidence:0}],{isFinal:true})]});r.onend();
+ assert.deepEqual(s.sent,['Нет']);
 });
 
 test('permission denial never retries and stopping cancels a scheduled recovery',t=>{

@@ -23,6 +23,13 @@ export function recognitionLanguage(saved, page, device, account='') {
   return LANGUAGES.find(([id])=>id.toLowerCase()===language.toLowerCase())?.[0]
     || LANGUAGES.find(([id])=>id.split('-')[0]===language.toLowerCase())?.[0] || language;
 }
+// Drop only empty recognition output or explicit non-speech markers. Ordinary
+// short words, numbers and low-confidence results can be valid user replies.
+export function hasRecognizedSpeech(text) {
+ const value=String(text||'').trim();
+ if(!/[\p{L}\p{N}]/u.test(value))return false;
+ return !/^(?:\[(?:noise|music|silence|background noise|inaudible|unintelligible|шум|музыка|тишина|неразборчиво)\]\s*)+$/iu.test(value);
+}
 // Keep accepting final results after stop(): the browser may finalize captured
 // audio asynchronously. Never submit an interim hypothesis or a truncated turn.
 export function bindRecognitionTurn(r,{valid,finish,incomplete,speechEnded=()=>{},setTimer=setTimeout,clearTimer=clearTimeout}) {
@@ -114,7 +121,7 @@ export function speechChunks(text, limit = 240) {
 export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH', accountLanguage = () => ''}) {
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const synth = window.speechSynthesis;
-  let recognition = null, active = false, pending = false, epoch = 0, timer = null, speechEpoch = 0, recognitionFailures = 0;
+  let recognition = null, active = false, pending = false, epoch = 0, timer = null, speechEpoch = 0, recognitionFailures = 0, micMuted=false;
   let speechTimer = null, currentUtterance = null, deferredAnswer = null, waitingTimer = null, cancelRecognitionTurn=()=>{}, speechPaused = false, resumeWhenVisible=false;
   let catalogLoaded=false,catalogRequest=null,remoteVoices=[],remoteAudio=null,remoteAbort=null,remoteURL=null,remoteStream=null,releasePlaybackStatus=null;
   const audioJobs=new Set();
@@ -142,6 +149,15 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH', 
   const orb = node('div', 'V', 'voice-orb'); orb.setAttribute('aria-hidden','true');
   const close = node('button','×','voice-close');close.setAttribute('aria-label','Закрыть разговор');
   const reconnect=node('button','Повторить подключение','voice-reconnect');reconnect.hidden=true;reconnect.onclick=()=>begin();
+  const mute=node('button','Выключить микрофон','voice-mute');mute.hidden=true;mute.setAttribute('aria-pressed','false');
+  mute.onclick=()=>{
+    if(!active)return;
+    micMuted=!micMuted;mute.textContent=micMuted?'Включить микрофон':'Выключить микрофон';mute.setAttribute('aria-pressed',String(micMuted));
+    if(micMuted){
+      clearTimeout(timer);cancelRecognitionTurn();const old=recognition;recognition=null;old?.abort();
+      if(!pending&&!currentUtterance)status('Микрофон выключен. Нажми «Включить микрофон», чтобы продолжить.','paused');
+    }else if(!pending&&!currentUtterance)listen();
+  };
   const resumeSpeech=node('button','Продолжить озвучку','voice-resume');resumeSpeech.hidden=true;
   resumeSpeech.onclick=()=>{if(!active||!speechPaused)return;speechPaused=false;resumeSpeech.hidden=true;speechEpoch++;pumpStream();};
   const voiceSelectors=new Set(), speechTests=new Set();
@@ -213,22 +229,23 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH', 
     }catch(error){if(token===speechEpoch&&error.name!=='AbortError'){cancelAudio();fail();}}
   }
   function voiceControl(){const label=node('label','Голос Велии','voice-profile'), select=node('select');select.setAttribute('aria-label','Голос');voiceSelectors.add(select);select.onchange=()=>{const reopen=dialog.open;stop();voiceURI=select.value;save();refreshVoices();if(reopen)begin();};label.append(select);return label;}
-  dialog.append(close,title,modelLabel,orb,state,voiceControl(),fastVoice,resumeSpeech,reconnect,node('p','Ответы сохраняются в диалоге.','voice-hint'));
+  dialog.append(close,title,modelLabel,orb,state,voiceControl(),mute,fastVoice,resumeSpeech,reconnect,node('p','Ответы сохраняются в диалоге.','voice-hint'));
   document.body.append(dialog);refreshVoices();synth?.addEventListener('voiceschanged',refreshVoices);
-  const status = (text, phase='idle') => {state.textContent=text;dialog.dataset.phase=phase;reconnect.hidden=active||phase!=='error';};
+  const status = (text, phase='idle') => {if(active&&micMuted&&phase==='listening'){text='Микрофон выключен. Нажми «Включить микрофон», чтобы продолжить.';phase='paused';}state.textContent=text;dialog.dataset.phase=phase;reconnect.hidden=active||phase!=='error';mute.hidden=!active;};
   const save=()=>{try {localStorage.setItem('velia-voice-mode',voiceURI?'manual':'auto');localStorage.setItem('velia-voice-uri',voiceURI);localStorage.setItem('velia-voice-rate',String(rate));}catch{}};
   let streamText='',streamCursor=0,streamQueue=[],streamDone=false,streamBlocked=false;
-  function stop(){resumeWhenVisible=false;speechPaused=false;resumeSpeech.hidden=true;recognitionFailures=0;lastSpeechEnd=null;latency=null;cancelAudio();streamText='';streamCursor=0;streamQueue=[];streamDone=false;streamBlocked=false;clearTimeout(waitingTimer);cancelRecognitionTurn();deferredAnswer=null;active=false;pending=false;epoch++;speechEpoch++;clearTimeout(timer);clearTimeout(speechTimer);currentUtterance=null;const old=recognition;recognition=null;old?.abort();synth?.cancel();status('Разговор завершён.');}
+  function stop(){resumeWhenVisible=false;micMuted=false;mute.textContent='Выключить микрофон';mute.setAttribute('aria-pressed','false');speechPaused=false;resumeSpeech.hidden=true;recognitionFailures=0;lastSpeechEnd=null;latency=null;cancelAudio();streamText='';streamCursor=0;streamQueue=[];streamDone=false;streamBlocked=false;clearTimeout(waitingTimer);cancelRecognitionTurn();deferredAnswer=null;active=false;pending=false;epoch++;speechEpoch++;clearTimeout(timer);clearTimeout(speechTimer);currentUtterance=null;const old=recognition;recognition=null;old?.abort();synth?.cancel();status('Разговор завершён.');}
   close.onclick=()=>{stop();dialog.close();};dialog.addEventListener('cancel',stop);dialog.addEventListener('close',stop);
   function later(token, delay=400){clearTimeout(timer);timer=setTimeout(()=>{if(active&&token===epoch)listen();},delay);}
   function listen(){
     if(!active||pending||recognition||currentUtterance||speechPaused||!Recognition||document.hidden)return;
     clearTimeout(timer);
+    if(micMuted){status('Микрофон выключен. Нажми «Включить микрофон», чтобы продолжить.','paused');return;}
     if(busy()){later(epoch);return;}
     const token=epoch, r=new Recognition();recognition=r;r.lang=language;r.interimResults=true;r.continuous=false;r.maxAlternatives=1;
     lastSpeechEnd=null;
     status('Слушаю тебя…','listening');
-    const valid=()=>active&&token===epoch&&recognition===r;
+    const valid=()=>active&&!micMuted&&token===epoch&&recognition===r;
     const incomplete=()=>{if(!valid())return;recognition=null;status('Не расслышала конец фразы. Повтори, пожалуйста.','listening');later(token,800);};
     cancelRecognitionTurn=bindRecognitionTurn(r,{valid,finish:finishTurn,incomplete,speechEnded:()=>{lastSpeechEnd=performance.now();}});
     r.onerror=e=>{
@@ -243,7 +260,7 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH', 
       if(recoverable&&attempt<=2){status('Восстанавливаю распознавание. Повтори фразу после подключения…','thinking');later(token,attempt*750);return;}
       active=false;status(({ 'not-allowed':'Разреши микрофон в настройках сайта и повтори подключение.', 'service-not-allowed':'Браузер запретил распознавание речи.', 'audio-capture':'Микрофон не найден или занят другим приложением.', network:'Сервис распознавания недоступен. Проверь соединение и повтори подключение.', 'language-not-supported':'Браузер не поддерживает распознавание языка аккаунта. Напиши сообщение текстом.' })[e.error]||'Не удалось распознать речь. Повтори подключение.','error');
     };
-    async function finishTurn(text){if(!valid())return;recognition=null;if(!text){status('Жду твою реплику…','listening');later(token,800);return;}recognitionFailures=0;if(isVoiceEndCommand(text)){close.click();return;}const now=performance.now();latency={started:lastSpeechEnd??now,recognized:now,firstText:null,reported:false,model:/quantum/i.test(modelName())?'quantum':/pro/i.test(modelName())?'pro':'flash'};pending=true;streamText='';streamCursor=0;streamQueue=[];streamDone=false;streamBlocked=false;status('Велия готовит ответ…','thinking');waitingTimer=setTimeout(()=>{if(pending&&active&&!speechPaused)status('Ответ задерживается. Запрос ещё выполняется…','thinking');},20000);try{const sending=send(text);prepareAnswerChannel();await sending;if(pending&&deferredAnswer===null&&active&&token===epoch)failure();}catch{if(token===epoch)failure();}}
+    async function finishTurn(text){if(!valid())return;recognition=null;if(!hasRecognizedSpeech(text)){status('Жду твою реплику…','listening');later(token,800);return;}recognitionFailures=0;if(isVoiceEndCommand(text)){close.click();return;}const now=performance.now();latency={started:lastSpeechEnd??now,recognized:now,firstText:null,reported:false,model:/quantum/i.test(modelName())?'quantum':/pro/i.test(modelName())?'pro':'flash'};pending=true;streamText='';streamCursor=0;streamQueue=[];streamDone=false;streamBlocked=false;status('Велия готовит ответ…','thinking');waitingTimer=setTimeout(()=>{if(pending&&active&&!speechPaused)status('Ответ задерживается. Запрос ещё выполняется…','thinking');},20000);try{const sending=send(text);prepareAnswerChannel();await sending;if(pending&&deferredAnswer===null&&active&&token===epoch)failure();}catch{if(token===epoch)failure();}}
     try{r.start();}catch{cancelRecognitionTurn();recognition=null;active=false;status('Микрофон недоступен. Проверь разрешение и повтори.','error');}
   }
   function begin(){if(active)return;stop();if(!Recognition){status('Распознавание речи недоступно. Открой разговор в Chrome или Edge.','error');return;}if(synth){const unlock=new SpeechSynthesisUtterance('.');unlock.volume=0;unlock.lang=language;synth.speak(unlock);synth.resume?.();}active=true;prepareMedia();if(busy())status('Дождусь завершения ответа…','thinking');listen();}

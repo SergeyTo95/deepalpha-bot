@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {bindRecognitionTurn} from '../voice.mjs';
+import {bindRecognitionTurn,hasRecognizedSpeech} from '../voice.mjs';
+
+test('speech filter keeps short replies and literal sound words without confidence thresholds',()=>{
+ for(const text of ['Да','Нет','0','125,5','Шум','Музыка','ха-ха','Напиши [noise]','hayır','لا','嗯','[noise] но продолжай'])assert.equal(hasRecognizedSpeech(text),true,text);
+ for(const text of ['','  ','…','?!','🎵','[noise]','[silence] [music]','[НЕРАЗБОРЧИВО]'])assert.equal(hasRecognizedSpeech(text),false,text);
+});
 
 function session(continuous=true) {
  let now=0,next=0,live=true,stops=0,aborts=0,misses=0;

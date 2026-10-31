@@ -13,7 +13,7 @@ import os
 import secrets
 import uuid
 
-from aiohttp import ClientSession, DummyCookieJar, web
+from aiohttp import ClientConnectionError, ClientSession, DummyCookieJar, web
 from aiohttp.test_utils import TestServer
 
 from desktop.gateway import GatewayConfig, create_app
@@ -24,6 +24,42 @@ PAIRING = "ABCDEFGH23456789"
 ACCESS = "va_" + "a" * 48
 REFRESH = "vr_" + "r" * 48
 ORIGIN = "https://velia-agent-probe.invalid"
+
+
+class TransientProbeFailure(RuntimeError):
+    pass
+
+
+async def probe_turns(client, url, headers, prompts, *, wait=asyncio.sleep):
+    """Retry only this fixed read-only acceptance, with a fresh isolated session.
+
+    A transient upstream outage must still produce two verified turns before a
+    release can pass. Never apply this retry policy to actual user Agent jobs.
+    """
+    for attempt in range(1, 4):
+        agent_chat_id = str(uuid.uuid4())
+        turns = []
+        try:
+            for index, prompt in enumerate(prompts, start=1):
+                async with client.post(url, headers=headers,
+                        json={"prompt": prompt, "session_id": agent_chat_id}) as response:
+                    if response.status in {502, 503, 504}:
+                        raise TransientProbeFailure()
+                    if response.status != 200:
+                        raise RuntimeError(f"browser_agent_web_turn_{index}_status_{response.status}")
+                    body = await response.json()
+                    if (body.get("ok") is not True or body.get("model") != "velia-flash"
+                            or type(body.get("tool_count")) is not int or body["tool_count"] < 1
+                            or not str(body.get("text") or "").strip()
+                            or not str(body.get("session_id") or "").strip()):
+                        raise RuntimeError(f"browser_agent_web_turn_{index}_result_invalid")
+                    turns.append(body)
+            return turns
+        except (TransientProbeFailure, ClientConnectionError, TimeoutError):
+            if attempt == 3:
+                raise RuntimeError("browser_agent_web_unavailable_after_3_attempts") from None
+            print(f"VELIA_WEB_BROWSER_AGENT_PROBE_RETRY attempt={attempt+1} reason=upstream_unavailable", flush=True)
+            await wait(attempt)
 
 
 @asynccontextmanager
@@ -125,7 +161,6 @@ async def run():
                         cookie = response.cookies[COOKIE].value
 
                     headers["Cookie"] = COOKIE + "=" + cookie
-                    agent_chat_id = str(uuid.uuid4())
                     prompts = [
                         (
                             "Открой https://example.com. Прочитай заголовок страницы и первый абзац. "
@@ -138,26 +173,8 @@ async def run():
                             "точный URL и заголовок страницы одной короткой фразой."
                         ),
                     ]
-                    turns = []
-                    for index, prompt in enumerate(prompts, start=1):
-                        async with client.post(
-                            gateway.make_url("/web-api/v1/agent/browser"),
-                            headers=headers,
-                            json={"prompt": prompt, "session_id": agent_chat_id},
-                        ) as response:
-                            body = await response.json()
-                            if response.status != 200:
-                                raise RuntimeError(
-                                    f"browser_agent_web_turn_{index}_status_{response.status}"
-                                )
-                            if (body.get("ok") is not True or body.get("model") != "velia-flash"
-                                    or int(body.get("tool_count") or 0) < 1
-                                    or not str(body.get("text") or "").strip()
-                                    or not str(body.get("session_id") or "").strip()):
-                                raise RuntimeError(
-                                    f"browser_agent_web_turn_{index}_result_invalid"
-                                )
-                            turns.append(body)
+                    turns = await probe_turns(client,
+                        gateway.make_url("/web-api/v1/agent/browser"), headers, prompts)
 
                     if turns[0]["session_id"] != turns[1]["session_id"]:
                         raise RuntimeError("browser_agent_web_session_not_resumed")

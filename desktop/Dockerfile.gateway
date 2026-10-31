@@ -27,6 +27,8 @@ COPY services/velia_structured_output.py /app/services/velia_structured_output.p
 COPY desktop/probe_web_voice.py /app/desktop/probe_web_voice.py
 COPY tests/test_velia_voice_transport.py /app/tests/test_velia_voice_transport.py
 COPY tests/test_velia_voice_channel.py /app/tests/test_velia_voice_channel.py
+COPY tests/test_velia_browser_agent_probe.py /app/tests/test_velia_browser_agent_probe.py
+RUN python -m pytest -q -p no:cacheprovider tests/test_velia_browser_agent_probe.py
 RUN python -m pytest -q -p no:cacheprovider tests/test_velia_voice_channel.py
 RUN python -m pytest -q -p no:cacheprovider tests/test_velia_voice_transport.py
 COPY desktop/web /app/desktop/web
