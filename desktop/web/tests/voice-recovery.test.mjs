@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {setupVoice} from '../voice.mjs';
 import {readCompletion} from '../core.mjs';
+const flush=()=>new Promise(resolve=>setImmediate(resolve));
 
-function fixture(t,{responder,speech=false,remote=false}={}) {
+function fixture(t,{responder,speech=false,remote=false,recognition='standard',recording=false}={}) {
  t.mock.timers.enable({apis:['setTimeout']});
- const recognizers=[],sent=[],events=[],spoken=[],preparations=[],media=[],sockets=[],httpSpeech=[];let completion;
+ const recognizers=[],sent=[],events=[],spoken=[],preparations=[],media=[],sockets=[],httpSpeech=[],recorders=[],tracks=[],transcriptions=[];let completion;
  class Element {
   constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.listeners={};this.isConnected=true;}
   append(...nodes){this.children.push(...nodes);}
@@ -20,6 +21,12 @@ function fixture(t,{responder,speech=false,remote=false}={}) {
   start(){this.started=true;}
   abort(){this.onend?.();}
   stop(){this.onend?.();}
+ }
+ class Recorder {
+  static isTypeSupported(type){return type==='audio/mp4';}
+  constructor(stream,options){this.mimeType=options.mimeType;recorders.push(this);}
+  start(){this.state='recording';}
+  stop(){this.state='inactive';this.ondataavailable?.({data:new Blob(['fixture'],{type:this.mimeType})});this.onstop?.();}
  }
  const body=new Element('body'), doc={body,hidden:false,documentElement:{lang:'ru'},
   createElement:tag=>new Element(tag),addEventListener(){}};
@@ -49,18 +56,55 @@ function fixture(t,{responder,speech=false,remote=false}={}) {
   }
   close(){this.readyState=3;this.onclose?.();}
  }
- const globals={window:{SpeechRecognition:Recognition,...(speech?{speechSynthesis:synth}:{})},document:doc,
+ const globals={window:{...(recognition==='webkit'?{webkitSpeechRecognition:Recognition}:recognition==='standard'?{SpeechRecognition:Recognition}:{}),...(speech?{speechSynthesis:synth}:{})},document:doc,
+  ...(recording?{MediaRecorder:Recorder}:{}),
   ...(remote?{Audio,WebSocket:Socket,location:{href:'https://velia.example/'}}:{}),
   SpeechSynthesisUtterance:class {constructor(text){this.text=text;}},
-  navigator:{language:'ru-RU'},localStorage:{getItem:()=>null},
-  fetch:async(url,options)=>{if(url.endsWith('/events'))events.push(JSON.parse(options.body));if(url.endsWith('/prepare'))preparations.push(JSON.parse(options.body));if(url.includes('/speech')){httpSpeech.push(url);throw Error('unexpected HTTP speech');}return {ok:true,json:async()=>remote?{voices:[{voiceURI:'edge:ru-RU-SvetlanaNeural',lang:'ru-RU',name:'Светлана'}],channel:true}:{voices:[]}};}};
+  navigator:{language:'ru-RU',...(recording?{mediaDevices:{getUserMedia:async()=>{const track={stopped:false,stop(){this.stopped=true;}};tracks.push(track);return {getTracks:()=>[track]};}}}:{})},localStorage:{getItem:()=>null},
+  fetch:async(url,options)=>{if(url.includes('/transcribe?')){transcriptions.push(options);return {ok:true,json:async()=>({text:'Не отправляй 125 рублей'})};}if(url.endsWith('/events'))events.push(JSON.parse(options.body));if(url.endsWith('/prepare'))preparations.push(JSON.parse(options.body));if(url.includes('/speech')){httpSpeech.push(url);throw Error('unexpected HTTP speech');}return {ok:true,json:async()=>remote?{voices:[{voiceURI:'edge:ru-RU-SvetlanaNeural',lang:'ru-RU',name:'Светлана'}],channel:true}:{voices:[],transcription:recording}};}};
  const previous=new Map();
  for(const [key,value] of Object.entries(globals)){previous.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});}
  const voice=setupVoice({send:text=>{sent.push(text);return completion=responder?responder(voice):Promise.resolve(voice.complete(''));},busy:()=>false,toast(){},accountLanguage:()=> 'ru'});
  t.after(()=>{voice.stop();for(const [key,descriptor] of previous){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];}});
  voice.open();
- return {voice,recognizers,sent,events,spoken,preparations,media,sockets,httpSpeech,mute:()=>body.children[0].children.find(n=>n.className==='voice-mute'),get completion(){return completion;},tick:ms=>t.mock.timers.tick(ms),status:()=>body.children[0].children.find(n=>n.tag==='p'&&n.className==='voice-status')?.textContent};
+ return {voice,recognizers,sent,events,spoken,preparations,media,sockets,httpSpeech,recorders,tracks,transcriptions,
+  transcript:()=>body.children[0].children.find(n=>n.className==='voice-transcript'),
+  record:()=>body.children[0].children.find(n=>n.className==='voice-record'),
+  native:()=>body.children[0].children.find(n=>n.className==='voice-native'),
+  mute:()=>body.children[0].children.find(n=>n.className==='voice-mute'),get completion(){return completion;},tick:ms=>t.mock.timers.tick(ms),status:()=>body.children[0].children.find(n=>n.tag==='p'&&n.className==='voice-status')?.textContent};
 }
+
+test('Safari prefixed recognition displays revisions but sends only the final complete phrase once',t=>{
+ const s=fixture(t,{recognition:'webkit'}),r=s.recognizers[0];
+ r.onresult({results:[Object.assign([{transcript:'Не от',confidence:0}],{isFinal:false})]});
+ assert.equal(s.transcript().textContent,'Не от');assert.deepEqual(s.sent,[]);
+ r.onresult({results:[Object.assign([{transcript:'Не отправляй 125 рублей'}],{isFinal:true})]});r.onend();r.onend();
+ assert.deepEqual(s.sent,['Не отправляй 125 рублей']);
+});
+
+test('without native recognition the Safari recording fallback waits for a gesture and returns to manual listening after an answer',async t=>{
+ const s=fixture(t,{recognition:'none',recording:true,speech:true,responder:async voice=>{voice.update('Хорошо, не отправляю.');voice.complete('Хорошо, не отправляю.');}});
+ await flush();assert.equal(s.record().hidden,false);assert.equal(s.recorders.length,0);
+ s.record().onclick();await flush();assert.equal(s.recorders.length,1);assert.equal(s.recorders[0].mimeType,'audio/mp4');
+ s.record().onclick();await flush();await s.completion;
+ assert.deepEqual(s.sent,['Не отправляй 125 рублей']);assert.equal(s.transcriptions.length,1);assert.equal(s.tracks[0].stopped,true);
+ assert.equal(s.transcript().textContent,'Не отправляй 125 рублей');assert.deepEqual(s.spoken.map(u=>u.text),['Хорошо, не отправляю.']);
+ s.spoken[0].onend();s.tick(400);assert.equal(s.recorders.length,1);assert.match(s.status(),/Записать реплику/);
+});
+
+test('muting during a fallback recording discards captured audio and late recorder events',async t=>{
+ const s=fixture(t,{recognition:'none',recording:true});await flush();s.record().onclick();await flush();s.mute().onclick();await flush();
+ assert.deepEqual(s.sent,[]);assert.deepEqual(s.transcriptions,[]);assert.ok(s.tracks.every(track=>track.stopped));
+ assert.equal(s.transcript().hidden,true);
+});
+
+test('switching from manual recording back to native recognition cancels captured audio',async t=>{
+ const s=fixture(t,{recognition:'webkit',recording:true});await flush();
+ const old=s.recognizers[0];s.record().onclick();await flush();assert.equal(s.native().hidden,false);
+ s.native().onclick();await flush();assert.equal(s.recognizers.length,2);assert.equal(s.native().hidden,true);
+ old.onresult({results:[Object.assign([{transcript:'Старая реплика'}],{isFinal:true})]});old.onend();
+ assert.deepEqual(s.sent,[]);assert.deepEqual(s.transcriptions,[]);assert.ok(s.tracks.every(track=>track.stopped));
+});
 
 test('temporary recognition failure reconnects without submitting an unfinished phrase',t=>{
  const s=fixture(t),old=s.recognizers[0];

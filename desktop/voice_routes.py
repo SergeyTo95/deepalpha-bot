@@ -154,6 +154,8 @@ async def synthesize(fields):
             return b"".join(chunks)
 
 def setup_voice_routes(app, *, session_for, same_origin, json_response, origin=None):
+    from desktop.voice_transcription import setup_transcription, enabled as transcription_enabled
+    setup_transcription(app, session_for=session_for, same_origin=same_origin, json_response=json_response)
     requests = {}
     event_requests = {}
     preparations = {}
@@ -262,7 +264,7 @@ def setup_voice_routes(app, *, session_for, same_origin, json_response, origin=N
         try:
             if not await session_for(request):
                 return json_response({"error": "unauthorized"}, 401)
-            return json_response({"voices": voice_catalog(), **({'channel': True} if channel_enabled else {})})
+            return json_response({"voices": voice_catalog(), **({"transcription": True} if transcription_enabled() else {}), **({'channel': True} if channel_enabled else {})})
         except AuthenticationUnavailable:
             return json_response({"error": "authentication_unavailable"}, 503)
     async def speech(request):

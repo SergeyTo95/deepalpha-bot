@@ -120,10 +120,12 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
         if request.method != "GET" and not same_origin(request):
             return error("invalid_origin", 403)
         try:
+            auth_started = time.monotonic()
             session = await session_for(request)
             if not session:
                 return error("unauthorized", 401)
             request[ACCOUNT_SESSION] = session
+            request[ACCOUNT_AUTH_MS] = round((time.monotonic() - auth_started) * 1000)
             value = request.match_info.get("conversation_id")
             if value is not None and not ID.fullmatch(value):
                 return error("conversation_not_found", 404)
@@ -181,6 +183,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
         return json_response({"ok": bool(result.get("ok")), **({"error": result["error"]} if "error" in result else {})}, status)
 
     async def send(request):
+        accepted_at = time.monotonic()
         data = await read_body(request)
         if (set(data) - {"web_search", "attachment_ids", "voice_turn", "medical_no_search"} != {"content", "model", "idempotency_key"}
                 or ("web_search" in data and type(data["web_search"]) is not bool)
@@ -297,10 +300,11 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
                 with suppress(asyncio.CancelledError, Exception):
                     await preparation
             finished = time.monotonic()
-            LOG.info("VELIA_ACCOUNT_RESPONSE_TIMING model=%s voice=%s prepare_ms=%d first_text_ms=%d total_ms=%d outcome=%s code=%s",
+            LOG.info("VELIA_ACCOUNT_RESPONSE_TIMING model=%s voice=%s prepare_ms=%d first_text_ms=%d total_ms=%d outcome=%s code=%s auth_ms=%d admission_ms=%d",
                 data["model"], bool(data.get("voice_turn")), round(((prepared_at or finished) - started) * 1000),
                 round((first_text_at - started) * 1000) if first_text_at is not None else -1,
-                round((finished - started) * 1000), outcome, failure_code)
+                round((finished - started) * 1000), outcome, failure_code,
+                request.get(ACCOUNT_AUTH_MS, 0), round((started-accepted_at)*1000))
             try:
                 if stream is not None:
                     await stream.aclose()
@@ -375,3 +379,4 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
 
 
 ACCOUNT_SESSION = web.RequestKey("velia_account_session", object)
+ACCOUNT_AUTH_MS = web.RequestKey("velia_account_auth_ms", int)

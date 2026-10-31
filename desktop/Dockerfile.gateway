@@ -23,6 +23,9 @@ COPY desktop/platform_status.py desktop/gateway.py desktop/admin_proxy.py deskto
 COPY desktop/background_agent.py /app/desktop/background_agent.py
 COPY desktop/voice_transport.py /app/desktop/voice_transport.py
 COPY desktop/voice_channel.py /app/desktop/voice_channel.py
+COPY desktop/voice_transcription.py /app/desktop/voice_transcription.py
+COPY tests/test_velia_voice_transcription.py /app/tests/test_velia_voice_transcription.py
+RUN python -m pytest -q -p no:cacheprovider tests/test_velia_voice_transcription.py
 COPY services/velia_structured_output.py /app/services/velia_structured_output.py
 COPY desktop/probe_web_voice.py /app/desktop/probe_web_voice.py
 COPY tests/test_velia_voice_transport.py /app/tests/test_velia_voice_transport.py

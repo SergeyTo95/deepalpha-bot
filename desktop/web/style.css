@@ -1554,3 +1554,7 @@ dialog::backdrop {
 .feature-form input[role=switch]:checked { background: var(--strong); }
 .feature-form input[role=switch]:checked::before { transform: translateX(18px); background: var(--bg); }
 .feature-form .feature-check:has(input[role=switch]) .field-hint { grid-column: 2; }
+
+.voice-transcript { overflow-wrap: anywhere; max-height: 7em; overflow-y: auto; text-align: left; padding: 10px 12px; border-left: 2px solid var(--border); }
+.voice-transcript[data-interim="true"] { opacity: .8; }
+.voice-dialog .voice-record-notice { font-size: 12px; line-height: 1.4; }

@@ -117,3 +117,50 @@ The existing full backend retains all its original build, Flash and production g
 The Windows app accepts `VELIA_GATEWAY_URL` and, in the gateway update, `VELIA_DESKTOP_HOME`. The small application-resource update and preview launcher reuse the existing executable and bundled runtime. The launcher selects a separate preview credential directory under `%LOCALAPPDATA%`, preserving the original account store. Close the existing app before updating. A credential store paired to another origin must not be reused silently.
 
 Native Windows GUI/credential-store acceptance and pairing through the real owner's signed-in browser require the owner's machine. Do not report those as verified from synthetic HTTP identities or the provider probe.
+
+### Voice input across iPhone, Android and desktop browsers
+
+Voice mode feature-detects `SpeechRecognition` and Safari's
+`webkitSpeechRecognition`. Native interim hypotheses are displayed in the call
+window; only the final complete turn is submitted. Cancelling or muting clears
+the display and invalidates late recognition callbacks.
+
+If `GROQ_API_KEY` and the existing explicit free-account declaration
+`VELIA_VOICE_GROQ_FREE_ACCOUNT=true` are configured, the authenticated voice
+catalog advertises an optional recording fallback. No new paid provider or plan
+is enabled. The UI explains that a recording is sent to Groq before the user
+presses **Записать реплику**. The second press submits the complete utterance.
+After the reply, recording again requires a press; this avoids continuously
+sending background audio. It also works when native browser recognition is
+missing or unavailable.
+
+The recorder negotiates MP4/AAC (Safari), WebM/Opus or Ogg/Opus at runtime;
+requests echo cancellation, noise suppression and automatic gain control where
+supported; and releases microphone tracks immediately when stopped, cancelled,
+muted or hidden. Recordings remain in memory and are not logged or stored by the
+gateway. Groq's data handling still applies. Uploads are limited to 1 MiB and
+recording to 45 seconds; exceeding either rejects the turn rather than sending a
+truncated phrase. The server requires a signed-in same-origin request, validates
+the container signature, allows two concurrent uploads and eight attempts per
+user/minute, and uses only the fixed `whisper-large-v3-turbo` endpoint. Provider
+429 responses stop the request without switching to a paid service. Free
+provider quotas are shared with other requests using that account.
+
+Speech-only Russian normalization expands common abbreviations, valid ISO dates
+and ruble amounts without changing chat text or phrase reconciliation identities.
+Sentence segmentation avoids pauses inside common abbreviations and initials.
+`VELIA_ACCOUNT_RESPONSE_TIMING` additionally reports `auth_ms` and `admission_ms`,
+and `VELIA_VOICE_STT` records duration only. No transcript/audio is included in
+these diagnostics.
+
+Validation: Node tests cover Safari's prefixed API, native interim revisions,
+three recording containers, exactly-once submission, mute/close races, late
+microphone permission, recording/upload bounds and speech normalization. Server
+tests cover auth/origin, free-account gating, fixed model/URL, MIME/signatures,
+limits and cancellation. These tests use synthetic hardware; physical iPhone,
+Android, macOS and Windows microphone/playback testing remains necessary. Check
+that microphone permission, one short Russian phrase, a second turn, closing
+while recording, backgrounding the tab and resuming audio work on each device.
+Unsupported browsers offer keyboard dictation/text instead of claiming full
+voice support. Neural VAD, RNNoise, sound classification and offline ASR are not
+part of this release; this fallback uses the browser's own capture processing.
