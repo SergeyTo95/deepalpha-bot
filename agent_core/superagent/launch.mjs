@@ -76,14 +76,19 @@ let closing;
 async function close() {
   if (closing) return closing;
   closing = (async () => {
-    if (child.exitCode === null && child.signalCode === null) {
-      const exited = once(child, 'exit');
-      process.kill(-child.pid, 'SIGTERM');
-      await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 10000).unref())]);
-      if (child.exitCode === null && child.signalCode === null) process.kill(-child.pid, 'SIGKILL');
+    try {
+      if (child.pid && child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, 'exit');
+        try { process.kill(-child.pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+        await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 10000).unref())]);
+        if (child.exitCode === null && child.signalCode === null) {
+          try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+        }
+      }
+    } finally {
+      await proxy.close();
+      await rm(credentialFile, { force: true });
     }
-    await proxy.close();
-    await rm(credentialFile, { force: true });
   })();
   return closing;
 }
