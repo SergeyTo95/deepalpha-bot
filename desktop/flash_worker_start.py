@@ -1,0 +1,48 @@
+"""Desktop worker: keep exact inference settings and reuse computed prompt state."""
+import os
+from pathlib import Path
+
+
+def number(name, default, low, high):
+    try:
+        result = int(os.getenv(name, str(default)))
+    except ValueError:
+        result = default
+    return str(min(high, max(low, result)))
+
+
+def worker_args(key_path):
+    # Tune only prompt-processing block sizes. Keep the verified defaults and
+    # cap the physical block at the logical block to bound working memory.
+    batch = number("VELIA_FLASH_BATCH_TOKENS", 256, 1, 512)
+    microbatch = number("VELIA_FLASH_MICROBATCH_TOKENS", 128, 1, int(batch))
+    args = ["/opt/bonsai/llama-server", "-m", "/opt/bonsai/model.gguf",
+            "--alias", "velia-flash", "--host", "::", "--port", os.getenv("PORT", "8080"),
+            "--api-key-file", str(key_path), "-ngl", "0", "--parallel", "1",
+            "-c", number("VELIA_FLASH_CONTEXT_TOKENS", 2048, 2048, 8192),
+            "-t", number("VELIA_FLASH_CPU_THREADS", 8, 1, 24),
+            "-tb", number("VELIA_FLASH_CPU_THREADS", 8, 1, 24),
+            "-b", batch, "-ub", microbatch, "-n", "512", "--jinja",
+            "--reasoning", "auto", "--reasoning-budget", "0",
+            # Keep prompt states when the single slot switches between intent,
+            # answer and editor. This reuses computed tokens, never answers.
+            # Bound RAM independently of the full model/context allocation.
+            "--reasoning-format", "deepseek", "--cache-ram",
+            number("VELIA_FLASH_PROMPT_CACHE_MIB", 1024, 0, 8192),
+            "--chat-template-kwargs", '{"enable_thinking": false}',
+            "--no-webui"]
+    if os.getenv("VELIA_FLASH_REPACK", "false").lower() in {"false", "0", "no"}:
+        args.append("--no-repack")
+    return args
+
+
+if __name__ == "__main__":
+    key = os.environ.get("VELIA_FLASH_API_KEY", "").strip()
+    if len(key) < 32 or "\n" in key:
+        raise SystemExit("VELIA_FLASH_API_KEY must contain at least 32 characters")
+    key_path = Path("/tmp/velia-flash-api-key")
+    descriptor = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w") as stream:
+        stream.write(key + "\n")
+    args = worker_args(key_path)
+    os.execv(args[0], args)

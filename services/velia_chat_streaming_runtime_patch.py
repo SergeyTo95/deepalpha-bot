@@ -2,6 +2,7 @@ import logging
 import threading
 import time
 from typing import Any, Callable, Dict, Optional
+from velia_request_understanding import clarification_result
 
 from services import kimi_gateway, llm_service
 from services.kimi_streaming_gateway import call_kimi_stream
@@ -251,6 +252,10 @@ def install(chat_module: Any) -> None:
             )
 
         message = _latest_request_user_message(str(request_id or ""), int(user_id))
+        prepared = clarification_result(message, provider=resolve_velia_provider(), model="",
+            request_id=str(request_id or ""), on_delta=on_delta)
+        if prepared is not None:
+            return prepared
         if not _should_stream_message(message):
             return original_generate(
                 prompt,

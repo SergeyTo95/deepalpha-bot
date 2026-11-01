@@ -7,14 +7,43 @@ import os
 import time
 import logging
 import threading
+from contextlib import contextmanager
 from urllib.parse import urlsplit
 
 import requests
+from velia_request_understanding import understanding_instruction, clarification_result, clarification_reply, interpreted_content
+from services.velia_flash_context_engine import compact_history_level
 
 MODEL = "velia-flash"
 PROVIDER = "bonsai"
 logger = logging.getLogger(__name__)
 _VOICE_CONTEXT = threading.local()
+
+
+@contextmanager
+def _request_context(user_id, voice_turn):
+    """Bind personalization to this request, including nested calls and failures."""
+    from services.velia_user_profile_service import account_identity_context, get_user_profile_context
+    missing = object()
+    previous = {key: getattr(_VOICE_CONTEXT, key, missing) for key in ("enabled", "user_context")}
+    try:
+        try:
+            # Flash has a small context window; keep personalization separate
+            # from history and bound it before the voice path skips tokenization.
+            context = get_user_profile_context(int(user_id), max_about_chars=400)
+        except Exception as exc:
+            logger.warning("VELIA_FLASH_PROFILE_SKIPPED error=%s", type(exc).__name__)
+            context = account_identity_context(int(user_id))
+        _VOICE_CONTEXT.enabled = bool(voice_turn)
+        _VOICE_CONTEXT.user_context = context
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is missing:
+                if hasattr(_VOICE_CONTEXT, key):
+                    delattr(_VOICE_CONTEXT, key)
+            else:
+                setattr(_VOICE_CONTEXT, key, value)
 
 
 def env_bool(name, default=False):
@@ -123,6 +152,8 @@ def _with_live_context(messages, user_id):
         return copied
     latest = _latest_user_message(copied)
     if not latest:
+        return copied
+    if clarification_reply(latest) is not None or "\n\nLIVE_WEB_CONTEXT_UNTRUSTED:\n" in latest:
         return copied
     try:
         from services.velia_plugin_router import resolve_live_plugin_context
@@ -235,6 +266,9 @@ def build_prompt(chat_module, user_id, conversation_id):
         from services.velia_attachment_service import attachment_context_sql
         attachment_sql = ", " + attachment_context_sql()
 
+    # Context Engine reads a wider prompt window than the old 12-message slice.
+    # Older turns are compacted before inference; persistent rows stay untouched.
+    history_messages = bounded_int("VELIA_FLASH_HISTORY_MESSAGES", 24, 6, 48)
     conn = chat_module.get_connection()
     cursor = chat_module._dict_cursor(conn)
     try:
@@ -244,8 +278,8 @@ def build_prompt(chat_module, user_id, conversation_id):
               AND deleted_at IS NULL AND role IN ('user', 'assistant')
             ORDER BY created_at DESC,
               CASE WHEN role='user' THEN 0 ELSE 1 END DESC, message_id DESC
-            LIMIT 12
-        """, (int(user_id), str(conversation_id)))
+            LIMIT %s
+        """, (int(user_id), str(conversation_id), history_messages))
         rows = list(reversed(cursor.fetchall() or []))
     finally:
         cursor.close()
@@ -267,6 +301,8 @@ def build_prompt(chat_module, user_id, conversation_id):
                 )
         messages.append({"role": role, "content": content})
 
+    if clarification_reply(_latest_user_message(messages)) is not None:
+        return messages
     if _voice_fast_enabled():
         # Intent routing is local and cheap for ordinary speech. Preserve live
         # weather/search capability only when the existing router actually
@@ -280,6 +316,11 @@ def build_prompt(chat_module, user_id, conversation_id):
 def _generate_once(messages, *, request_id="", on_delta=None):
     if not available():
         return error("flash_unavailable", request_id)
+    if messages and messages[-1].get("role") == "user":
+        prepared = clarification_result(messages[-1].get("content"), provider=PROVIDER,
+            model=MODEL, request_id=request_id, on_delta=on_delta)
+        if prepared is not None:
+            return prepared
     timeout = bounded_int("VELIA_FLASH_TIMEOUT_SECONDS", 180, 15, 300)
     voice_fast = _voice_fast_enabled()
     output_limit = (
@@ -290,7 +331,7 @@ def _generate_once(messages, *, request_id="", on_delta=None):
     context_limit = bounded_int("VELIA_FLASH_CONTEXT_TOKENS", 2048, 2048, 8192)
     input_limit = min(context_limit - output_limit - 32,
                       bounded_int("VELIA_FLASH_MAX_INPUT_TOKENS", 768, 128, 2048))
-    system = {"role": "system", "content": (
+    system = {"role": "system", "content": understanding_instruction(
         "You are VELIA Flash, a female AI assistant. Your persona is feminine. "
         "In languages with grammatical gender, always refer to yourself in feminine forms. "
         "In Russian use forms such as 'поняла', 'готова', 'рада', 'сделала' and never "
@@ -307,16 +348,38 @@ def _generate_once(messages, *, request_id="", on_delta=None):
         + (
             "This is a live voice conversation: answer naturally in 1 to 2 short spoken "
             "sentences unless the user explicitly asks for detail. Start with the answer. "
-            "If speech recognition wording is imperfect, infer the intended meaning from "
-            "the recent conversation before asking. If clarification is truly required, "
+            "For clear speech-recognition mistakes, use user-confirmed recent context. "
+            "For ambiguity that changes the answer, clarify instead of guessing. "
+            "If clarification is truly required, "
             "ask at most one short question. Never use a numbered clarification questionnaire. "
             "Avoid headings, lists and filler. "
             if voice_fast else ""
         )
     )}
-    history = [dict(m) for m in messages if m.get("role") in {"user", "assistant"}]
+    user_context = getattr(_VOICE_CONTEXT, "user_context", "")
+    if user_context:
+        system["content"] += "\n\n" + user_context
+    history = [{**m, "content": interpreted_content(m.get("content"))} if m.get("role") == "user" else dict(m)
+        for m in messages if m.get("role") in {"user", "assistant"}]
     if not history:
         return error("empty_message", request_id)
+
+    context_engine_enabled = bool(
+        not voice_fast and env_bool("VELIA_FLASH_CONTEXT_ENGINE_ENABLED", True)
+    )
+    context_compaction_level = 0
+    if context_engine_enabled:
+        compacted, context_stats = compact_history_level(history, 1)
+        if context_stats["compacted_messages"] > 0:
+            logger.info(
+                "VELIA_FLASH_CONTEXT_COMPACTED request_id=%s level=1 messages=%s chars_before=%s chars_after=%s",
+                str(request_id)[:80],
+                int(context_stats["compacted_messages"]),
+                int(context_stats["input_chars"]),
+                int(context_stats["output_chars"]),
+            )
+        history = compacted
+        context_compaction_level = 1
     started = time.monotonic()
     session = requests.Session()
     session.trust_env = False
@@ -349,23 +412,41 @@ def _generate_once(messages, *, request_id="", on_delta=None):
                     raise ValueError("flash_invalid_response")
                 if len(tokens) <= input_limit:
                     break
-                if len(history) > 1:
-                    history.pop(0)
-                    while len(history) > 1 and history[0]["role"] != "user":
-                        history.pop(0)
-                    continue
+
+                # First reduce server-added enrichment, then compact older chat
+                # more aggressively. Only after those loss-minimizing steps do
+                # we fall back to dropping the oldest complete turn.
                 if _shrink_latest_live_web_context(
                     history,
                     token_count=len(tokens),
                     input_limit=input_limit,
                 ):
                     continue
+                if context_engine_enabled and context_compaction_level < 3:
+                    context_compaction_level += 1
+                    history, context_stats = compact_history_level(
+                        history, context_compaction_level
+                    )
+                    logger.info(
+                        "VELIA_FLASH_CONTEXT_COMPACTED request_id=%s level=%s messages=%s chars_before=%s chars_after=%s",
+                        str(request_id)[:80],
+                        int(context_compaction_level),
+                        int(context_stats["compacted_messages"]),
+                        int(context_stats["input_chars"]),
+                        int(context_stats["output_chars"]),
+                    )
+                    continue
+                if len(history) > 1:
+                    history.pop(0)
+                    while len(history) > 1 and history[0]["role"] != "user":
+                        history.pop(0)
+                    continue
                 return error("flash_context_too_long", request_id)
             else:
                 return error("flash_context_too_long", request_id)
         payload = {"model": MODEL, "messages": [system] + history,
-                   "max_tokens": output_limit, "temperature": 0.7,
-                   "top_p": 0.8, "top_k": 20, "presence_penalty": 1.5,
+                   "max_tokens": output_limit, "temperature": 0.3,
+                   "top_p": 0.8, "top_k": 20, "min_p": 0.0, "presence_penalty": 0.0,
                    "chat_template_kwargs": {"enable_thinking": False},
                    "reasoning_format": "deepseek",
                    "thinking_budget_tokens": 0,
@@ -541,19 +622,9 @@ def dispatch_send(sender, user_id, conversation_id, content, *, chat_mode="pro",
         global_lock = bool(_first_value(cursor.fetchone()))
         if not global_lock:
             return {"ok": False, "error": "flash_busy"}
-        previous_voice = getattr(_VOICE_CONTEXT, "enabled", None)
-        _VOICE_CONTEXT.enabled = bool(voice_turn)
-        try:
+        with _request_context(user_id, voice_turn):
             return core(user_id, conversation_id, content, chat_mode="flash",
                         on_delta=on_delta, on_reset=on_reset, **kwargs)
-        finally:
-            if previous_voice is None:
-                try:
-                    delattr(_VOICE_CONTEXT, "enabled")
-                except AttributeError:
-                    pass
-            else:
-                _VOICE_CONTEXT.enabled = previous_voice
     finally:
         conn.rollback()
         if global_lock:

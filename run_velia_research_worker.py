@@ -79,7 +79,15 @@ def main() -> None:
                 if model_run:
                     worked = True
                     model_status = model_lab.execute_claimed(model_run, worker)
-                    logger.info("VELIA_MODEL_LAB_STEP run=%s status=%s", model_run["id"], model_status)
+                    error_code = ""
+                    if model_status == "failed":
+                        try:
+                            refreshed = model_lab.get_run(model_run["owner_id"], model_run["id"])
+                            error_code = str((refreshed or {}).get("error_code") or "")
+                        except Exception:
+                            error_code = "status_lookup_failed"
+                    logger.info("VELIA_MODEL_LAB_STEP run=%s status=%s error_code=%s",
+                                model_run["id"], model_status, error_code)
             if director_on:
                 run = director.claim_next(worker)
                 if run:

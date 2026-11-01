@@ -7,12 +7,14 @@ import pytest
 import requests
 
 from services import velia_flash_service as flash
+from services import velia_flash_context_engine as context_engine
 from services import velia_chat_service as chat
 from services import velia_attachment_chat_runtime_patch as attachment
 from services import velia_chat_streaming_runtime_patch as streaming
 from services import velia_plugin_router
 from services import velia_plugin_service
 from services.velia_mobile_streaming_service import _stream_send_kwargs
+from velia_request_understanding import REQUEST_UNDERSTANDING, clarification_content, restoration_content, interpreted_content
 
 
 @pytest.fixture
@@ -78,6 +80,35 @@ class Session:
         pass
 
 
+def test_flash_profile_survives_voice_history_and_does_not_leak(enabled, monkeypatch):
+    from services import velia_user_profile_service as profiles
+    monkeypatch.setenv("VELIA_VOICE_FAST_PATH_ENABLED", "true")
+    monkeypatch.setattr(profiles, "get_user_profile_context", lambda uid, **kwargs: f"USER_PROFILE_JSON=profile-{uid}")
+    session = Session()
+    monkeypatch.setattr(flash.requests, "Session", lambda: session)
+    with flash._request_context(7, True):
+        assert flash.generate([{"role": "user", "content": "Спасибо"}])["ok"]
+        payload = next(kwargs["json"] for url, kwargs in session.calls if url.endswith("/v1/chat/completions"))
+        assert "profile-7" in payload["messages"][0]["content"]
+        assert "profile-7" not in payload["messages"][1]["content"]
+        with pytest.raises(RuntimeError), flash._request_context(8, False):
+            assert flash._VOICE_CONTEXT.user_context.endswith("profile-8")
+            raise RuntimeError("test")
+        assert flash._VOICE_CONTEXT.user_context.endswith("profile-7")
+    assert not hasattr(flash._VOICE_CONTEXT, "user_context")
+    assert not hasattr(flash._VOICE_CONTEXT, "enabled")
+
+
+def test_flash_profile_failure_preserves_verified_identity(monkeypatch):
+    from services import velia_user_profile_service as profiles
+    monkeypatch.setenv("ADMIN_ID", "7")
+    def unavailable(uid, **kwargs):
+        raise RuntimeError("private profile text must not be logged")
+    monkeypatch.setattr(profiles, "get_user_profile_context", unavailable)
+    with flash._request_context(7, True):
+        assert '"project_owner":true' in flash._VOICE_CONTEXT.user_context
+
+
 def test_real_template_budget_and_free_result(enabled, monkeypatch):
     session = Session()
     monkeypatch.setattr(flash.requests, "Session", lambda: session)
@@ -91,6 +122,119 @@ def test_real_template_budget_and_free_result(enabled, monkeypatch):
     assert session.calls[-1][1]["json"]["thinking_budget_tokens"] == 0
     assert session.calls[-1][1]["json"]["reasoning_format"] == "deepseek"
     assert session.calls[-1][1]["json"]["max_tokens"] == 768
+
+
+def test_native_flash_uses_shared_understanding_without_editing_user_text(enabled, monkeypatch):
+    session = Session()
+    monkeypatch.setattr(flash.requests, "Session", lambda: session)
+    question = "Испраь app.py, не меняй порт 8080 и строку «0,5 TON»."
+    assert flash.generate([{"role": "user", "content": question}])["ok"]
+    sent = session.calls[-1][1]["json"]["messages"]
+    assert REQUEST_UNDERSTANDING in sent[0]["content"]
+    assert sent[1:] == [{"role": "user", "content": question}]
+
+
+def test_native_resolved_spelling_generates_instead_of_returning_a_prepared_question(enabled, monkeypatch):
+    session = Session()
+    monkeypatch.setattr(flash.requests, "Session", lambda: session)
+    question = "Объясни revnue и оставь 0.5 TON"
+    start = question.index("revnue")
+    content = restoration_content(question, [start, start + len("revnue")], "revenue")
+    result = flash.generate([{"role": "user", "content": content}])
+    assert result["ok"] and not result.get("prepared_clarification")
+    assert session.calls[-1][0].endswith("/v1/chat/completions")
+    assert session.calls[-1][1]["json"]["messages"][-1]["content"] == question.replace("revnue", "revenue")
+    assert content.startswith(question)
+
+
+@pytest.mark.parametrize("with_attachments", [False, True])
+def test_pro_prompt_renders_repairs_without_rewriting_storage(monkeypatch, with_attachments):
+    question = "Объясни revnue и оставь 0.5 TON"
+    start = question.index("revnue")
+    raw = restoration_content(question, [start, start + len("revnue")], "revenue")
+    rows = [{"role": "user", "content": raw, "attachment_context": "attachment literal revnue"}]
+    cursor = SimpleNamespace(execute=lambda *a, **k: None, fetchall=lambda: rows, close=lambda: None)
+    conn = SimpleNamespace(cursor=lambda *a, **k: cursor, close=lambda: None)
+    monkeypatch.setattr(chat, "get_connection", lambda: conn)
+    monkeypatch.setattr(attachment, "get_connection", lambda: conn)
+    prompt = (attachment._build_prompt_with_attachments(chat, 7, "c") if with_attachments
+        else chat._build_prompt(7, "c"))
+    assert question.replace("revnue", "revenue") in prompt
+    assert REQUEST_UNDERSTANDING in prompt
+    assert raw not in prompt and rows[0]["content"] == raw
+    if with_attachments:
+        assert "attachment literal revnue" in prompt
+
+
+def test_browser_provided_native_sources_do_not_trigger_another_search(enabled, monkeypatch):
+    monkeypatch.setattr(flash, "web_search_available", lambda: True)
+    def unexpected_search(*args, **kwargs):
+        pytest.fail("Browser-provided sources triggered another interpretation/search")
+    monkeypatch.setattr(velia_plugin_router, "resolve_live_plugin_context", unexpected_search)
+    content = "Вопрос" + flash._LIVE_WEB_CONTEXT_MARKER + "Серверные источники"
+    messages = [{"role": "user", "content": content}]
+    assert flash._with_live_context(messages, 7) == messages
+
+
+@pytest.mark.parametrize("candidate", ["", "гистамин, апноэ"])
+def test_native_flash_persists_the_same_complete_question_without_another_model_call(enabled, monkeypatch, candidate):
+    def unexpected_session():
+        pytest.fail("Clarification unexpectedly reached a provider")
+    monkeypatch.setattr(flash.requests, "Session", unexpected_session)
+    question = "У меня гестамин эпное и астма"
+    fragment = "гестамин эпное"
+    start = question.index(fragment)
+    deltas = []
+    result = flash.generate([{"role": "user", "content": clarification_content(question, [start, start+len(fragment)], candidate)}],
+        request_id="clarification-123", on_delta=deltas.append)
+    assert result["ok"] and result["prepared_clarification"]
+    expected = ("Правильно ли я поняла: «гестамин» — это «гистамин», а «эпное» — «апноэ»?" if candidate
+        else "Уточните, пожалуйста, что вы имеете в виду под «гестамин эпное»?")
+    assert result["text"] == "".join(deltas) == expected
+    assert result["usage"]["total_tokens"] == 0 and not result["fallback_used"]
+
+
+@pytest.mark.parametrize("fragment,candidate", [("флумпенсор", ""), ("гестамин эпное", "гистамин, апноэ")])
+def test_native_pro_stream_persists_the_same_question_without_a_paid_call(monkeypatch, fragment, candidate):
+    question = "Что означает " + fragment + "?"
+    start = question.index(fragment)
+    encoded = clarification_content(question, [start, start + len(fragment)], candidate)
+    def unexpected_provider(*args, **kwargs):
+        pytest.fail("Prepared clarification reached a paid provider")
+    module = SimpleNamespace(generate_velia_chat_result=unexpected_provider)
+    monkeypatch.setattr(streaming, "install_client_request_id_serialization", lambda module: None)
+    monkeypatch.setattr(streaming, "_latest_request_user_message", lambda *args: encoded)
+    monkeypatch.setattr(streaming, "resolve_velia_provider", lambda: "kimi")
+    deltas = []
+    monkeypatch.setattr(streaming._STREAM_CONTEXT, "on_delta", deltas.append, raising=False)
+    streaming.install(module)
+    result = module.generate_velia_chat_result("unused prompt", user_id=7, conversation_id="c", request_id="r")
+    expected = ("Правильно ли я поняла: «гестамин» — это «гистамин», а «эпное» — «апноэ»?" if candidate
+        else "Уточните, пожалуйста, что вы имеете в виду под «флумпенсор»?")
+    assert result["text"] == "".join(deltas) == expected
+    assert result["prepared_clarification"] and result["usage"]["total_tokens"] == 0
+
+
+def test_native_pro_prompt_retains_user_correction_and_literal_constraints(monkeypatch):
+    question = "Нет, Ubuntu. Испраь app.py, но не меняй порт 8080 и «0,5 TON»."
+    class Cursor:
+        def execute(self, *args):
+            pass
+        def fetchall(self):
+            return [{"role": "user", "content": question},
+                {"role": "assistant", "content": "Ты используешь Windows."}]
+        def close(self):
+            pass
+    class Connection:
+        def cursor(self, **kwargs):
+            return Cursor()
+        def close(self):
+            pass
+    monkeypatch.setattr(chat, "get_connection", Connection)
+    prompt = chat._build_prompt(7, "test-conversation")
+    assert REQUEST_UNDERSTANDING in prompt
+    assert "ASSISTANT: Ты используешь Windows." in prompt
+    assert prompt.endswith("USER: " + question)
 
 
 class StreamResponse(Response):
@@ -496,3 +640,89 @@ def test_voice_fast_path_is_short_and_feminine(enabled, monkeypatch):
     assert "'поняла'" in system
     assert "1 to 2 short spoken sentences" in system
     assert "Never use a numbered clarification questionnaire" in system
+
+
+def test_context_engine_preserves_latest_user_and_compacts_old_turns():
+    important = (
+        "Старая задача по backend.\n"
+        + ("обычный лог " * 80)
+        + "\nВажно: не меняй порт 8080 и URL https://example.test/api/v1.\n"
+        + ("хвост " * 80)
+    )
+    latest = "Теперь проверь только последний шаг и ничего не меняй."
+    messages = [
+        {"role": "user", "content": important},
+        {"role": "assistant", "content": "Подробный ответ " + ("данные " * 120)},
+        {"role": "user", "content": "Промежуточный вопрос"},
+        {"role": "assistant", "content": "Промежуточный ответ"},
+        {"role": "user", "content": latest},
+    ]
+
+    compacted, stats = context_engine.compact_history(
+        messages,
+        preserve_recent=2,
+        old_message_chars=240,
+        old_total_chars=720,
+    )
+
+    assert len(compacted) == len(messages)
+    assert compacted[-1]["content"] == latest
+    assert stats["output_chars"] < stats["input_chars"]
+    assert stats["compacted_messages"] >= 2
+    assert "8080" in compacted[0]["content"]
+    assert "https://example.test/api/v1" in compacted[0]["content"]
+
+
+def test_context_engine_reduces_old_attachment_payload_without_touching_recent():
+    marker = "\n\nATTACHMENT_DATA_UNTRUSTED:\n"
+    old = "Что на файле?" + marker + ("row=42 repeated payload\n" * 120)
+    recent = "Используй именно число 42 из предыдущего файла."
+    messages = [
+        {"role": "user", "content": old},
+        {"role": "assistant", "content": "В файле было число 42."},
+        {"role": "user", "content": recent},
+    ]
+
+    compacted, stats = context_engine.compact_history(
+        messages,
+        preserve_recent=1,
+        old_message_chars=220,
+        old_total_chars=440,
+    )
+
+    assert marker in compacted[0]["content"]
+    assert len(compacted[0]["content"]) < len(old)
+    assert compacted[-1]["content"] == recent
+    assert stats["output_chars"] < stats["input_chars"]
+
+
+def test_native_flash_context_engine_keeps_more_turns_but_sends_less_text(enabled, monkeypatch):
+    session = Session()
+    monkeypatch.setattr(flash.requests, "Session", lambda: session)
+    messages = []
+    for index in range(5):
+        messages.append({
+            "role": "user",
+            "content": f"старый вопрос {index}: " + ("данные " * 120),
+        })
+        messages.append({
+            "role": "assistant",
+            "content": f"старый ответ {index}: " + ("подробности " * 120),
+        })
+    latest = "Финальный вопрос должен остаться без изменений."
+    messages.append({"role": "user", "content": latest})
+
+    result = flash.generate(messages)
+    assert result["ok"]
+
+    payload = session.calls[-1][1]["json"]
+    sent_history = payload["messages"][1:]
+    assert len(sent_history) == len(messages)
+    assert sent_history[-1]["content"] == latest
+    assert any(
+        "VELIA context compacted" in item["content"]
+        for item in sent_history[:-6]
+    )
+    assert sum(len(item["content"]) for item in sent_history) < sum(
+        len(item["content"]) for item in messages
+    )

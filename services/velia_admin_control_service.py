@@ -592,6 +592,41 @@ def ai_snapshot() -> Dict[str, Any]:
     }
 
 
+
+def velyon_core_snapshot() -> Dict[str, Any]:
+    """Owner R&D telemetry only; deliberately does not read DeepAlpha user records."""
+    db_health = database_health()
+    memory_health = velyon_memory_health()
+    queue = memory_queue_snapshot()
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        chat = _chat_usage_snapshot(cursor)
+    except Exception as exc:
+        chat = {"available": False, "reason": exc.__class__.__name__}
+    finally:
+        cursor.close()
+        conn.close()
+    return {
+        "velia_status": "online" if db_health.get("status") == "online" else "degraded",
+        "backend": {"status": "online", "source": "current_admin_request"},
+        "database": db_health,
+        "velyon_core": {
+            "status": "online" if db_health.get("status") == "online" else "degraded",
+            "source": "backend_process_and_database",
+        },
+        "velyon_memory": {**memory_health, "queue": queue},
+        "ai": chat,
+        "deploy": deployment_snapshot(),
+        "background_jobs": {
+            "velyon_memory_shadow": queue,
+            "other_jobs": None,
+            "other_jobs_reason": "no_canonical_background_job_registry",
+        },
+        "recent_errors": recent_errors(limit=10),
+    }
+
+
 def overview_snapshot() -> Dict[str, Any]:
     db_health = database_health()
     memory_health = velyon_memory_health()

@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from db.database import get_connection
 from services import velia_flash_service as flash
+from velia_request_understanding import understanding_instruction, interpreted_content
 from services.velia_attachment_service import (
     AttachmentError,
     attachment_context_sql,
@@ -94,6 +95,8 @@ def _build_prompt_with_attachments(
     for row in reversed(rows):
         role = str(chat_module._row_value(row, "role", 0, "user"))
         content = str(chat_module._row_value(row, "content", 1, "")).strip()
+        if role == "user":
+            content = interpreted_content(content)
         attachment_context = str(
             chat_module._row_value(row, "attachment_context", 2, "") or ""
         ).strip()
@@ -114,7 +117,7 @@ def _build_prompt_with_attachments(
         used_chars += len(chunk)
     transcript.reverse()
 
-    system_prompt = (
+    system_prompt = understanding_instruction(
         "You are Velia, a warm, capable, independent AI assistant inside the VELIA app. "
         "Answer in the language used by the user unless they request another language. "
         "Be practical, accurate and clear. Do not mention Kimi, Gemini, provider routing, "

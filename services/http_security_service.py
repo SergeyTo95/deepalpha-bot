@@ -271,10 +271,11 @@ def install_http_security(app: web.Application, admin_routes_module: Any) -> Non
     # captures the shared guard. Stage 1 handlers resolve `_guard` dynamically,
     # while Stage 2+ modules receive this hardened callable during setup.
     _install_admin_guard_fail_closed(admin_routes_module)
-    # Stage 2 is registered inside the same owner-only /admin security boundary.
-    # Production installs the ledger schema before accepting requests; preview
-    # startup skips that database bootstrap.
-    setup_velia_admin_economy(app, admin_routes_module)
+    # Velyon Core is an intelligence/R&D console, not a product-operations
+    # console. Economy/Payments routes stay outside this surface. Legacy callers
+    # that do not opt into Core-only mode keep the established behavior.
+    if not bool(getattr(admin_routes_module, "VELYON_CORE_ADMIN_ONLY", False)):
+        setup_velia_admin_economy(app, admin_routes_module)
     # Stage 1 owns /admin/login and /admin/logout inside admin_routes.py.
     # Do not expose legacy shared-secret auth.
     app.middlewares.append(deepalpha_security_middleware)

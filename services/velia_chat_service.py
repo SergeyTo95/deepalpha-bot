@@ -12,6 +12,7 @@ except ModuleNotFoundError:  # pragma: no cover - minimal unit-test environment
 
 from db.database import get_connection
 from services.velia_llm_service import generate_velia_chat_result, public_generation_metadata
+from velia_request_understanding import understanding_instruction, interpreted_content
 
 
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
@@ -525,6 +526,8 @@ def _build_prompt(user_id: int, conversation_id: str) -> str:
     for row in reversed(rows):
         role = str(_row_value(row, "role", 0, "user"))
         content = str(_row_value(row, "content", 1, "")).strip()
+        if role == "user":
+            content = interpreted_content(content)
         if not content:
             continue
         label = "USER" if role == "user" else "ASSISTANT"
@@ -535,7 +538,7 @@ def _build_prompt(user_id: int, conversation_id: str) -> str:
         used_chars += len(chunk)
     transcript.reverse()
 
-    system_prompt = (
+    system_prompt = understanding_instruction(
         "You are Velia, a warm, capable, independent female AI assistant inside the VELIA app. "
         "Your persona is feminine. In languages with grammatical gender, always refer to "
         "yourself using feminine forms. In Russian, say forms such as 'поняла', 'готова', "
