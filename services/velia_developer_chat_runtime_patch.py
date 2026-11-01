@@ -375,6 +375,8 @@ def _coding_language_text(message: str, code: str) -> str:
     russian = bool(re.search(r"[А-Яа-яЁё]", str(message or "")))
     mapping_ru = {
         "developer_coding_disabled": "VELIA Coding Agent пока выключен на сервере.",
+        "developer_superagent_unavailable": "Исполнитель superagent сейчас недоступен. Новую запись в GitHub не запускаю; проверь статус задачи перед повтором.",
+        "developer_coding_model_mismatch": "Этот план создан для другой модели. Отмени план и создай его заново в выбранном режиме чата.",
         "developer_write_disabled": "План готов, но запись в GitHub пока выключена серверным флагом.",
         "github_contents_write_permission_required": "Для выполнения плана GitHub App нужен доступ Contents: Read and write.",
         "github_pull_requests_write_permission_required": "Для создания draft PR GitHub App нужен доступ Pull requests: Read and write.",
@@ -385,6 +387,8 @@ def _coding_language_text(message: str, code: str) -> str:
     }
     mapping_en = {
         "developer_coding_disabled": "VELIA Coding Agent is currently disabled on the server.",
+        "developer_superagent_unavailable": "The superagent executor is unavailable. No new GitHub write will start; check task status before retrying.",
+        "developer_coding_model_mismatch": "This plan was created with another model. Cancel it and create a new plan in the selected chat mode.",
         "developer_write_disabled": "The plan is ready, but GitHub writes are disabled by the server flag.",
         "github_contents_write_permission_required": "The GitHub App needs Contents: Read and write to execute the plan.",
         "github_pull_requests_write_permission_required": "The GitHub App needs Pull requests: Read and write to create a draft PR.",
