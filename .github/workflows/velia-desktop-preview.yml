@@ -6,12 +6,14 @@ on:
     branches: ['feature/velia-desktop-harness']
     paths:
       - 'desktop/**'
+      - 'agent_core/superagent/**'
       - 'velia_desktop_routes.py'
       - 'tests/test_velia_desktop_gateway.py'
       - '.github/workflows/velia-desktop-preview.yml'
   pull_request:
     paths:
       - 'desktop/**'
+      - 'agent_core/superagent/**'
       - 'velia_desktop_routes.py'
       - 'tests/test_velia_desktop_gateway.py'
       - '.github/workflows/velia-desktop-preview.yml'
@@ -84,6 +86,9 @@ jobs:
       - run: npm run qualify:runtime
         working-directory: desktop
       - run: npm run qualify:web
+        working-directory: desktop
+      - run: npm run qualify:superagent
+        if: runner.os != 'Windows'
         working-directory: desktop
       - run: npx electron-builder --publish never ${{ matrix.target }}
         working-directory: desktop

@@ -30,12 +30,17 @@ module.exports = async context => {
     : { recursive: true, verbatimSymlinks: true };
   await cp(source, join(resources, 'harness'), copyOptions);
   await checkLinks(join(resources, 'harness'));
+  const developer = join(context.packager.projectDir, '.runtime', 'package', 'superagent');
+  await checkLinks(developer);
+  await cp(developer, join(resources, 'superagent'), copyOptions);
+  await checkLinks(join(resources, 'superagent'));
   const build = JSON.parse(await readFile(join(resources, 'notices', 'BUILD.json'), 'utf8'));
   if (build.platform !== context.packager.platform.nodeName) throw new Error('Runtime and installer target differ');
   const { qualificationRuntime, runtimeProbe } = await import(pathToFileURL(join(context.packager.projectDir,
     'scripts', 'qualification-runtime.mjs')).href);
   await runtimeProbe(qualificationRuntime(resources));
   const scripts = ['smoke-harness.mjs', 'smoke-web.mjs'];
+  if (build.platform !== 'win32') scripts.push('smoke-superagent.mjs');
   if (build.platform === 'win32') scripts.unshift('smoke-windows-deps.mjs');
   for (const script of scripts) {
     const result = await promisify(execFile)(process.execPath, [join(context.packager.projectDir, 'scripts', script)],

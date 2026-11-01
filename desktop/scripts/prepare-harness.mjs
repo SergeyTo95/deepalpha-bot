@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { HARNESS_COMMIT } from '../src/config.mjs';
+import { prepareSuperagent } from './prepare-superagent.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const checkout = join(root, '.runtime', 'harness');
@@ -43,5 +44,6 @@ writeFileSync(join(checkout, 'VELIA-UPSTREAM.json'), JSON.stringify({ repository
 if (process.argv.includes('--build')) {
   run('pnpm', ['install', '--frozen-lockfile'], checkout);
   run('pnpm', ['run', 'build'], checkout);
+  await prepareSuperagent();
 }
 console.log('VELIA Harness source prepared at pinned revision.');

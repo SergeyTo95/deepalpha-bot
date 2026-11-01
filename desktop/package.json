@@ -17,6 +17,8 @@
     "qualify:ui": "electron tests/electron-smoke.mjs",
     "qualify:runtime": "node scripts/smoke-harness.mjs",
     "qualify:web": "node scripts/smoke-web.mjs",
+    "qualify:superagent": "node scripts/smoke-superagent.mjs",
+    "superagent": "node ../agent_core/superagent/launch.mjs",
     "test": "node --test tests/*.test.mjs"
   },
   "devDependencies": {

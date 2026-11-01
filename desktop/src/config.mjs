@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
-export const HARNESS_COMMIT = '5badb15009ae1756c3afe0ae0cef1faafc290ccc';
+export const HARNESS_COMMIT = 'd02ea370ee15556a643207eeb21810c29ca8c437';
 export function defaultHome(value = process.env.VELIA_DESKTOP_HOME) {
   if (!value) return join(homedir(), '.velia-desktop');
   if (typeof value !== 'string' || !isAbsolute(value)) {
@@ -29,7 +29,7 @@ export function profilePatch(baseURL, credentialPath, localGateway) {
     providerURL = local.href;
   }
   return [
-    ...(credentialPath ? [{ id: 'credentials', config: { path: credentialPath } }] : []),
+    ...(credentialPath ? [{ id: 'credentials', disabled: false, config: { path: credentialPath } }] : []),
     { id: 'llm-pi-ai', config: { providers: { velia: {
       displayName: 'VELIA', apiKeyEnv: 'VELIA_ACCESS_TOKEN',
       api: 'openai-completions', baseURL: providerURL,
@@ -45,7 +45,7 @@ export function profilePatch(baseURL, credentialPath, localGateway) {
     { id: 'agent-default-model', config: { provider: 'velia', model: 'velia-pro' } },
     { id: 'system-prompt', config: {
       personaPrefix: 'Ты Велия (VELIA), ИИ-помощница. Говори о себе в женском роде. По умолчанию отвечай по-русски. Выполняй задачи с помощью доступных инструментов.',
-      personaSuffix: 'Your working directory is {{cwd}}.',
+      personaSuffix: 'Use the working directory of the active VELIA workspace.',
     } },
     { id: 'desktop-product-telemetry', disabled: true },
     { id: 'product-analytics', disabled: true },

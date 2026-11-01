@@ -21,12 +21,15 @@ WORKDIR /app/desktop
 COPY desktop/package.json desktop/package-lock.json ./
 RUN npm ci --ignore-scripts
 COPY desktop/src/config.mjs ./src/config.mjs
+COPY desktop/src/upstreams.mjs ./src/upstreams.mjs
 COPY desktop/scripts/prepare-harness.mjs ./scripts/prepare-harness.mjs
+COPY desktop/scripts/prepare-superagent.mjs ./scripts/prepare-superagent.mjs
 RUN npm run build:harness
 COPY desktop/src/ ./src/
 COPY desktop/scripts/ ./scripts/
 COPY desktop/ui/ ./ui/
 COPY desktop/tests/ ./tests/
+COPY agent_core/superagent/ /app/agent_core/superagent/
 RUN npm test \
     && python3 -m unittest discover -s tests -p 'test_artifact_server.py'
 ARG RAILWAY_GIT_COMMIT_SHA

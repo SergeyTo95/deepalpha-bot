@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, copyFile, chmod, writeFile, rename } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, copyFile, chmod, writeFile, rename, cp } from 'node:fs/promises';
 import { resolve, join, dirname } from 'node:path';
 import { HARNESS_COMMIT } from '../src/config.mjs';
 import { runtimeClosure } from './runtime-closure.mjs';
 import { qualificationRuntime, runtimeProbe } from './qualification-runtime.mjs';
+import { superagentDirectory } from './prepare-superagent.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const checkout = join(root, '.runtime', 'harness');
@@ -29,6 +30,9 @@ const node = join(destination, 'node', platform === 'win32' ? 'node.exe' : 'node
 await copyFile(platform !== process.platform ? windowsNode : process.execPath, node);
 if (platform !== 'win32') await chmod(node, 0o755);
 await mkdir(join(destination, 'notices'), { recursive: true });
+await cp(superagentDirectory, join(destination, 'superagent'), { recursive: true, dereference: true });
+await copyFile(join(superagentDirectory, 'LICENSE'), join(destination, 'notices', 'SUPERAGENT-LICENSE.txt'));
+await copyFile(join(superagentDirectory, 'VELIA-UPSTREAM.json'), join(destination, 'notices', 'SUPERAGENT-UPSTREAM.json'));
 for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'VELIA-UPSTREAM.json']) {
   await copyFile(join(checkout, name), join(destination, 'notices', name));
 }

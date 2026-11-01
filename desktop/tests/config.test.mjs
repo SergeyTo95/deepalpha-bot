@@ -35,6 +35,7 @@ test('profile uses a credential reference and turns analytics off', () => {
 });
 test('local provider exception accepts only the owned loopback gateway', () => {
   const patch = profilePatch('https://api.example/v1', '/credentials', 'http://127.0.0.1:43210/v1');
+  assert.equal(patch.find(p => p.id === 'credentials').disabled, false);
   assert.equal(patch.find(p => p.id === 'llm-pi-ai').config.providers.velia.baseURL, 'http://127.0.0.1:43210/v1');
   for (const url of ['http://attacker.example:43210/v1', 'http://localhost:43210/v1', 'http://127.0.0.1/v1']) {
     assert.throws(() => profilePatch('https://api.example/v1', '/credentials', url));

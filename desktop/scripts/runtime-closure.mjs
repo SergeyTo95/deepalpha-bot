@@ -25,6 +25,14 @@ export function runtimeClosure(checkout, targetPlatform = process.platform) {
     }
   }
   visit(cli.name);
+  // The developer bundle uses these service contracts at runtime. Keep the
+  // installation's versions rather than shipping a second set of DSH peers.
+  const extension = JSON.parse(readFileSync(join(checkout, '..', 'superagent', 'package.json'), 'utf8'));
+  for (const name of Object.keys(extension.peerDependencies || {})) {
+    if (!packages.has(name)) throw new Error('VELIA developer runtime peer missing: ' + name);
+    required.add(name);
+    visit(name);
+  }
   if (process.env.VELIA_AGENT_CORE_BROWSER_RUNTIME === 'true') {
     for (const name of [
       '@deepseek-ai/dsh-browser-use',
