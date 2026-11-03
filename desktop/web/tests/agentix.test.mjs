@@ -126,3 +126,12 @@ test('Business Builder brief must not be sent as a Browser Agent task',()=>{
   assert.equal(isAgentixBusinessBrief('Открой сайт и найди розы'),false);
   assert.equal(isAgentixBusinessBrief(null),false);
 });
+
+
+test('Business Builder asks one short question on the first turn',()=>{
+ const prompt=buildBusinessBrief({idea:BUILDER_EXAMPLE,style:'elegant',features:['orders','reports']});
+ assert.match(prompt,/НЕ БОЛЕЕ 500 символов/);
+ assert.match(prompt,/РОВНО ОДИН вопрос/);
+ assert.match(prompt,/Не перечисляй другие вопросы/);
+ assert.match(prompt,/Не выдумывай фиксированные цены/);
+});
