@@ -55,3 +55,21 @@ test('Business Builder sends a reviewed draft only through the explicit callback
     assert.match(handedOff,/Сначала согласуй со мной план/);
   }finally{globalThis.document=saved;}
 });
+
+import {businessPassportFromDraft,businessDraftFromProject,BUSINESS_PROJECT_MARKER} from '../agentix-business-builder.mjs';
+
+test('Agentix Business Builder project passport is bounded and resumable',()=>{
+  const original={idea:BUILDER_EXAMPLE,style:'elegant',delivery:'zip',features:['catalog','orders','assistant']};
+  const passport=businessPassportFromDraft(original);
+  assert.ok(passport.title.startsWith('Agentix · '));
+  assert.equal(passport.audience,BUSINESS_PROJECT_MARKER);
+  for(const [field,max] of Object.entries({title:120,goal:1200,audience:600,style:800,constraints:1000}))
+    assert.ok(passport[field].length<=max,field);
+  const restored=businessDraftFromProject({id:'p',passport});
+  assert.equal(restored.idea,original.idea);
+  assert.equal(restored.style,original.style);
+  assert.equal(restored.delivery,original.delivery);
+  assert.deepEqual(restored.features,original.features);
+  assert.equal(businessDraftFromProject({passport:{...passport,audience:'Some other project'}}),null);
+  assert.throws(()=>businessPassportFromDraft({...original,idea:'я'.repeat(1201)}),/1200/);
+});

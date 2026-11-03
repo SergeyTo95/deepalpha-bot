@@ -1644,3 +1644,15 @@ dialog::backdrop {
 .agentix-builder-feedback{min-height:1em;font-size:13px;margin:10px 0;color:var(--text)}
 .agentix-builder-footnote{font-size:12px;color:var(--soft);border-top:1px solid var(--border);margin:24px 0 0;padding-top:14px;line-height:1.6}
 @media(max-width:640px){.agentix-builder-features{grid-template-columns:1fr}.agentix-builder-actions{flex-direction:column}.agentix-builder .agentix-action{width:100%}.agentix-shop-hero{min-height:125px}.agentix-shop-nav span{font-size:9px}.agentix-shop-hero h4{font-size:20px}.agentix-builder-progress li{font-size:11px;padding:10px 3px}}
+
+
+/* Authenticated, owner-scoped Agentix projects stored via existing Velia Projects API. */
+.agentix-saved-projects{margin:16px 0 34px;padding:22px;border:1px solid var(--border);border-radius:17px;background:var(--surface)}
+.agentix-saved-projects h3{font-size:18px;margin:0 0 8px}
+.agentix-saved-projects>p{font-size:13px;line-height:1.6;margin:0 0 14px}
+.agentix-saved-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:12px}
+.agentix-saved-item{border:1px solid var(--border);border-radius:12px;padding:16px;min-width:0;background:var(--rail)}
+.agentix-saved-item strong{font-size:14px;display:block;overflow-wrap:anywhere}
+.agentix-saved-item p{font-size:12px;line-height:1.55;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.agentix-saved-item button{min-height:44px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:8px 12px;cursor:pointer}
+.agentix-builder-runtime{color:var(--soft);font-size:12px;line-height:1.6;margin:-18px 0 22px}

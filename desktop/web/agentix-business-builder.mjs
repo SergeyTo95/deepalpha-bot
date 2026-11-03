@@ -72,17 +72,45 @@ export function buildBusinessBrief({idea='',style='auto',delivery='recommend',fe
   ].join('\n');
 }
 
-export function mountBusinessBuilder(root,{onHandoff,notify}={}) {
+
+export const BUSINESS_PROJECT_MARKER='Agentix Business Builder';
+export function businessPassportFromDraft({idea='',style='auto',delivery='recommend',features=[]}={}) {
+  const goal=safeIdea(idea);
+  if(goal.length<12)throw new Error('Расскажи подробнее об идее.');
+  if(goal.length>1200)throw new Error('Для сохранения сократи описание до 1200 символов.');
+  const title='Agentix · '+goal.split(/[\n.!?]/,1)[0].trim().slice(0,100);
+  const selected=BUILDER_FEATURES.filter(x=>features.includes(x.id)).map(x=>x.title).join(' | ');
+  return {title:title.slice(0,120),goal,audience:BUSINESS_PROJECT_MARKER,
+    style:findTitle(BUILDER_STYLES,style),
+    constraints:'Функции: '+selected+'; Получение: '+findTitle(BUILDER_DELIVERY,delivery)};
+}
+export function businessDraftFromProject(project){
+  const passport=project?.passport;
+  if(!passport||passport.audience!==BUSINESS_PROJECT_MARKER||typeof passport.goal!=='string')return null;
+  const constraints=String(passport.constraints||'');
+  const features=BUILDER_FEATURES.filter(x=>constraints.includes(x.title)).map(x=>x.id);
+  const style=BUILDER_STYLES.find(x=>x.title===passport.style)?.id||'auto';
+  const delivery=BUILDER_DELIVERY.find(x=>constraints.includes('; Получение: '+x.title))?.id||'recommend';
+  return {idea:passport.goal,style,delivery,features};
+}
+
+export function mountBusinessBuilder(root,{onHandoff,onSave,onList,onStatus,isAuthenticated=()=>false}={}) {
   const draft={
     idea:'',
     style:'auto',
     delivery:'recommend',
-    features:new Set(['catalog','orders','reports','assistant'])
+    features:new Set(['catalog','orders','reports','assistant']),
+    project:null,
+    savedSignature:''
   };
   let step=0;
   const shell=element('section',null,'agentix-builder');
   shell.id='agentix-builder';
   root.append(shell);
+  const savedProjects=element('section',null,'agentix-saved-projects');
+  root.append(savedProjects);
+  const statusBlock=element('div',null,'agentix-builder-runtime');
+  root.append(statusBlock);
   const message=element('p',null,'agentix-builder-feedback');
   message.setAttribute('role','status');
   message.setAttribute('aria-live','polite');
@@ -111,6 +139,65 @@ export function mountBusinessBuilder(root,{onHandoff,notify}={}) {
     preview.append(element('small','Иллюстрация оформления на CSS — не готовый сайт и не сгенерированное изображение.','agentix-muted'));
     return preview;
   };
+
+  async function refreshProjects(){
+    savedProjects.replaceChildren();
+    if(!isAuthenticated()||typeof onList!=='function'){
+      savedProjects.append(element('p','Войди в Velia, чтобы сохранять идеи и возвращаться к ним. Без входа можно подготовить проект и перейти в чат.','agentix-muted'));
+      return;
+    }
+    savedProjects.append(element('h3','Мои проекты'),element('p','Сохранённые идеи доступны только в твоём аккаунте Velia.','agentix-muted'));
+    const state=element('p','Загружаю…','agentix-muted');savedProjects.append(state);
+    try{
+      const raw=await onList();
+      const projects=(Array.isArray(raw)?raw:[]).filter(p=>businessDraftFromProject(p)).slice(0,30);
+      state.remove?.();
+      if(!projects.length){
+        savedProjects.append(element('p','Сохранённых проектов пока нет. Создай первый выше.','agentix-muted'));
+        return;
+      }
+      const list=element('div',null,'agentix-saved-grid');
+      for(const project of projects){
+        const item=element('article',null,'agentix-saved-item');
+        item.append(element('strong',project.passport.title),element('p',project.passport.goal,'agentix-muted'));
+        const resume=makeButton('Продолжить проект',()=>{
+          const restored=businessDraftFromProject(project);
+          if(!restored)return;
+          draft.idea=restored.idea;draft.style=restored.style;draft.delivery=restored.delivery;
+          draft.features=new Set(restored.features);draft.project=project;
+          draft.savedSignature=JSON.stringify(businessPassportFromDraft({...draft,features:[...draft.features]}));
+          step=1;render();
+          shell.scrollIntoView?.({behavior:'smooth',block:'start'});
+        },'agentix-action agentix-action-secondary');
+        item.append(resume);list.append(item);
+      }
+      savedProjects.append(list);
+    }catch(e){
+      state.textContent='Не удалось загрузить проекты. Можно продолжить без сохранения.';
+    }
+  }
+  async function saveDraft(){
+    if(!isAuthenticated()||typeof onSave!=='function')return null;
+    const passport=businessPassportFromDraft({...draft,features:[...draft.features]});
+    const signature=JSON.stringify(passport);
+    if(draft.project&&draft.savedSignature===signature)return draft.project;
+    const project=await onSave(passport,draft.project);
+    draft.project=project;draft.savedSignature=signature;
+    await refreshProjects();
+    return project;
+  }
+  async function checkDeveloperReadiness(){
+    if(!isAuthenticated()||typeof onStatus!=='function')return;
+    try{
+      const result=await onStatus();
+      if(result?.ok===true){
+        const available=Boolean(result.enabled&&result.developer_enabled&&result.team_enabled);
+        statusBlock.textContent=available
+          ? 'Инструменты разработки обнаружены. Перед запуском Velia проверит подключение GitHub и необходимые разрешения.'
+          : 'Для автоматической разработки потребуется включить соответствующие возможности Velia и подключить GitHub.';
+      }
+    }catch{statusBlock.textContent='Статус разработки пока недоступен. Твой проект можно подготовить и сохранить.';}
+  }
   const render=()=>{
     shell.replaceChildren();
     const heading=element('div',null,'agentix-builder-heading');
@@ -130,7 +217,7 @@ export function mountBusinessBuilder(root,{onHandoff,notify}={}) {
       const label=element('label','Идея проекта','agentix-builder-label');
       label.htmlFor='agentix-business-idea';
       const field=element('textarea',null,'agentix-builder-idea');
-      field.id='agentix-business-idea';field.maxLength=3000;field.rows=5;
+      field.id='agentix-business-idea';field.maxLength=1200;field.rows=5;
       field.placeholder='Например: хочу интернет-магазин цветов, который принимает заказы и помогает вести учёт…';
       field.value=draft.idea;
       field.addEventListener('input',()=>{draft.idea=field.value;message.textContent='';});
@@ -198,10 +285,27 @@ export function mountBusinessBuilder(root,{onHandoff,notify}={}) {
           details.open=true;message.textContent='Копирование недоступно. Открой полный запрос и выдели текст вручную.';
         }
       },'agentix-action agentix-action-secondary'));
-      row.append(makeButton('Продолжить с Velia',()=>{
+      if(isAuthenticated()&&typeof onSave==='function')row.append(makeButton('Сохранить на потом',async()=>{
+        message.textContent='Сохраняю проект…';
+        try{await saveDraft();message.textContent='Проект сохранён в твоём аккаунте Velia.';}
+        catch(ex){message.textContent=ex?.message||'Не удалось сохранить проект. Попробуй ещё раз.';}
+      },'agentix-action agentix-action-secondary'));
+      const handoff=makeButton('Продолжить с Velia',()=>{
         if(typeof onHandoff!=='function'){error('Диалог сейчас недоступен. Скопируй запрос и открой чат Velia.');return;}
-        try{onHandoff(brief);}catch(ex){error(ex?.message || 'Не удалось открыть диалог. Скопируй запрос вручную.');}
-      },'agentix-action agentix-action-primary'));
+        const openChat=(project)=>{
+          const suffix=project?.id?'\n\nИдентификатор сохранённого проекта Velia: '+project.id:'';
+          return onHandoff(brief+suffix);
+        };
+        if(!isAuthenticated()||typeof onSave!=='function'){
+          try{openChat(null);}catch(ex){error(ex?.message||'Не удалось открыть диалог.');}
+          return;
+        }
+        handoff.disabled=true;message.textContent='Сохраняю проект и открываю диалог…';
+        saveDraft().then(project=>openChat(project)).catch(ex=>{
+          error(ex?.message||'Не удалось сохранить проект. Можно скопировать запрос.');
+        }).finally(()=>{handoff.disabled=false;});
+      },'agentix-action agentix-action-primary');
+      row.append(handoff);
       content.append(row);
       content.append(element('p','Кнопка откроет черновик сообщения в чате: отправку, создание репозитория, платежи и публикацию ты подтверждаешь отдельно.','agentix-muted'));
     }
@@ -209,5 +313,7 @@ export function mountBusinessBuilder(root,{onHandoff,notify}={}) {
     shell.append(element('p','Генерация изображений и видеосерверы не используются. Ключи Agentix, хостинг и публикация здесь не активируются.','agentix-builder-footnote'));
   };
   render();
+  void refreshProjects();
+  void checkDeveloperReadiness();
   return {getStep:()=>step};
 }
