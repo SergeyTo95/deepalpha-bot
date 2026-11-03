@@ -248,6 +248,7 @@ export function apiError(code) {
       web_search_context_too_long: "В этот диалог не помещаются веб-источники. Начни новый диалог.",
       browser_agent_busy: "Browser Agent сейчас занят. Повтори через несколько секунд.",
       browser_agent_timeout: "Browser Agent не успел завершить задачу. Попробуй ещё раз.",
+      browser_agent_failed: "Browser Agent не смог завершить выполнение. Проверь страницу перед повтором: часть действий могла сохраниться.",
       browser_agent_unavailable: "Browser Agent временно недоступен. Попробуй позже.",
       browser_storage_capacity: "Browser Agent временно не принимает задачи: хранилище заполнено. Текущая сессия сохранена. Попробуй позже.",
       browser_profile_capacity: "Достигнут лимит данных этого браузерного диалога. Создай новый диалог Agent; прежняя сессия сохранена.",

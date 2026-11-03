@@ -212,3 +212,9 @@ test("corrupt, oversized or unavailable history does not break the chat", () => 
     [],
   );
 });
+
+import {apiError as formatApiError} from '../core.mjs';
+test('Browser runtime failure is not mislabeled as an outage',()=>{
+  assert.match(formatApiError('browser_agent_failed'),/не смог завершить/);
+  assert.match(formatApiError('browser_agent_unavailable'),/временно недоступен/);
+});

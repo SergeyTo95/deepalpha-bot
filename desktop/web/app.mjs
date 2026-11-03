@@ -10,6 +10,7 @@ import {
   safeSearch,
 } from "./core.mjs";
 import {setupFeatures, featureRequest} from "./features.mjs";
+import {isAgentixBusinessBrief} from "./agentix-business-builder.mjs";
 import {prepareFile, fileSize, setupFileTools} from "./files.mjs";
 import {setupVoice} from "./voice.mjs";
 import {setupBackgroundTasks, taskAcknowledgement} from "./background-tasks.mjs";
@@ -734,6 +735,15 @@ async function generate(retry = false, voiceTurn = false) {
     return;
   }
   const text = $("prompt").value.trim() || (selectedFiles.length ? "Проанализируй прикреплённые файлы." : "");
+  // Project specification and code planning must use the normal Velia chat,
+  // never a browser-only DSH execution with an isolated Chromium session.
+  const candidate = retry ? current()?.messages?.filter(m=>m.role==='user').at(-1)?.content : text;
+  if (agentMode && isAgentixBusinessBrief(candidate)) {
+    setAgentMode(false,true);
+    if (!retry) { currentId=null; render(); save(); }
+    else if (current()) current().agent=false;
+    toast('Проект Agentix передаю в обычный чат Velia. Browser Agent нужен для действий на сайтах.');
+  }
   const backgroundAgent=agentMode&&model!=='velia-flash';
   if(backgroundAgent&&!profile?.background_agent){toast(apiError('background_agent_unavailable'));return;}
   if (!retry && !text) return;

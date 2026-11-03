@@ -115,3 +115,14 @@ test('Authenticated Business Builder deduplicates concurrent save and handoff',a
     assert.ok(saved.length===1);
   }finally{globalThis.document=previousDocument;}
 });
+
+import {isAgentixBusinessBrief,AGENTIX_BUSINESS_BRIEF_PREFIX} from '../agentix-business-builder.mjs';
+
+test('Business Builder brief must not be sent as a Browser Agent task',()=>{
+  const prompt=buildBusinessBrief({idea:BUILDER_EXAMPLE});
+  assert.equal(prompt.startsWith(AGENTIX_BUSINESS_BRIEF_PREFIX),true);
+  assert.equal(isAgentixBusinessBrief(prompt),true);
+  assert.equal(isAgentixBusinessBrief('  '+prompt),true);
+  assert.equal(isAgentixBusinessBrief('Открой сайт и найди розы'),false);
+  assert.equal(isAgentixBusinessBrief(null),false);
+});

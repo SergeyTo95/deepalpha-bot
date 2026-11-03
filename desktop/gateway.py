@@ -315,6 +315,8 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
                     return 503, {"ok": False, "error": code}
                 if response.status == 429:
                     return 429, {"ok": False, "error": "browser_agent_busy"}
+                if response.status == 502 and code == "browser_agent_failed":
+                    return 502, {"ok": False, "error": "browser_agent_failed"}
                 if response.status == 504:
                     return 504, {"ok": False, "error": "browser_agent_timeout"}
                 if response.status == 400:

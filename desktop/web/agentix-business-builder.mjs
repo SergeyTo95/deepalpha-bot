@@ -23,6 +23,8 @@ export const BUILDER_DELIVERY = Object.freeze([
   Object.freeze({id:'hosting', title:'На мой хостинг'}),
   Object.freeze({id:'zip', title:'Получить проект ZIP-архивом'})
 ]);
+export const AGENTIX_BUSINESS_BRIEF_PREFIX='VELIA / AGENTIX BUSINESS BUILDER — запрос на проект';
+export const isAgentixBusinessBrief=content=>typeof content==='string'&&content.trimStart().startsWith(AGENTIX_BUSINESS_BRIEF_PREFIX);
 export const BUILDER_EXAMPLE = 'Хочу цветочный интернет-магазин с красивым дизайном, доставкой, приёмом заказов, учётом товаров, расходов и выручки. ИИ должен помогать общаться с клиентами и готовить отчёты.';
 
 const element = (tag, text, className) => {
@@ -47,7 +49,7 @@ export function buildBusinessBrief({idea='',style='auto',delivery='recommend',fe
   const styleName=findTitle(BUILDER_STYLES,style);
   const deliveryName=findTitle(BUILDER_DELIVERY,delivery);
   return [
-    'VELIA / AGENTIX BUSINESS BUILDER — запрос на проект',
+    AGENTIX_BUSINESS_BRIEF_PREFIX,
     '',
     'Идея владельца:',
     title,
