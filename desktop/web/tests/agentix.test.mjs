@@ -135,3 +135,10 @@ test('Business Builder asks one short question on the first turn',()=>{
  assert.match(prompt,/Не перечисляй другие вопросы/);
  assert.match(prompt,/Не выдумывай фиксированные цены/);
 });
+
+
+test('Business Builder carries only explicitly selected functions into the project brief',()=>{
+ const prompt=buildBusinessBrief({idea:BUILDER_EXAMPLE,style:'elegant',features:['orders']});
+ assert.equal(prompt.split('\n').find(line=>line.startsWith('- Желаемые функции:')),'- Желаемые функции: Заказы и клиенты');
+ assert.match(prompt,/Не задавай вопросы о них повторно/);
+});
