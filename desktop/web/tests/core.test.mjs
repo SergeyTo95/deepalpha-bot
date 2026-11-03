@@ -9,6 +9,7 @@ import {
   MODELS,
   apiError,
   normalizeNetworkError,
+  CONTINUE_TRUNCATED_RESPONSE,
 } from "../core.mjs";
 
 test('browser transport failures have a usable message while cancellation and HTTP errors retain their meaning',()=>{
@@ -217,4 +218,17 @@ import {apiError as formatApiError} from '../core.mjs';
 test('Browser runtime failure is not mislabeled as an outage',()=>{
   assert.match(formatApiError('browser_agent_failed'),/не смог завершить/);
   assert.match(formatApiError('browser_agent_unavailable'),/временно недоступен/);
+});
+
+
+test("length-limited SSE preserves the partial answer and allows continuing without repetition",async()=>{
+ const content="Доступны: каталог, доставка и админ-панель,";
+ const frames="data: "+JSON.stringify({choices:[{delta:{content},finish_reason:"length"}]})+"\n\ndata: [DONE]\n\n";
+ const stream=new ReadableStream({start(c){c.enqueue(new TextEncoder().encode(frames));c.close();}});
+ const seen=[];
+ const output=await readCompletion(new Response(stream,{headers:{"content-type":"text/event-stream"}}),value=>seen.push(value));
+ assert.equal(output.finish,"length");
+ assert.equal(output.text,content);
+ assert.equal(seen.at(-1),content);
+ assert.match(CONTINUE_TRUNCATED_RESPONSE,/Не повторяй уже написанное/);
 });
