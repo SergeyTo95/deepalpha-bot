@@ -1591,3 +1591,56 @@ dialog::backdrop {
   .agentix-card { padding: 18px; }
   .agentix-layer, .agentix-roadmap li { padding: 14px; }
 }
+
+
+/* Agentix Business Builder: responsive, keyboard accessible, self-contained. */
+.agentix-builder{border:1px solid var(--border);border-radius:22px;padding:clamp(18px,3.5vw,32px);background:var(--surface);margin:22px 0 38px}
+.agentix-builder-heading h2{font-size:clamp(23px,3vw,30px);line-height:1.2;margin:12px 0}
+.agentix-builder-heading>p,.agentix-builder-content>p{line-height:1.6}
+.agentix-builder-progress{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:24px 0;padding:0;list-style:none}
+.agentix-builder-progress li{padding:10px 8px;border-radius:10px;border:1px solid var(--border);text-align:center;font-size:12px;color:var(--soft)}
+.agentix-builder-progress li.current{background:var(--hover);color:var(--text);border-color:var(--text);font-weight:700}
+.agentix-builder-progress li.done{font-weight:650;color:var(--text)}
+.agentix-builder-content h3{margin:4px 0 8px;font-size:20px;line-height:1.3}
+.agentix-builder-label{display:block;font-size:13px;font-weight:700;margin:20px 0 8px}
+.agentix-builder-idea,.agentix-builder-select{width:100%;box-sizing:border-box;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:13px 14px;font:inherit}
+.agentix-builder-idea{resize:vertical;min-height:140px;line-height:1.6}.agentix-builder-select{min-height:48px}
+.agentix-builder-example{display:block;margin:10px 0 20px;border:0;background:transparent;color:var(--text);text-decoration:underline;text-underline-offset:3px;font:inherit;font-size:13px;cursor:pointer;padding:9px 0;text-align:left}
+.agentix-builder-actions{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0 0}
+.agentix-builder .agentix-action{min-height:44px;border:1px solid var(--border);border-radius:12px;padding:10px 16px;font:inherit;font-size:14px;font-weight:650;cursor:pointer;background:var(--rail);color:var(--text)}
+.agentix-builder .agentix-action-primary{background:var(--strong);color:var(--on);border-color:var(--strong)}
+.agentix-builder button:focus-visible,.agentix-builder input:focus-visible,.agentix-builder textarea:focus-visible,.agentix-builder select:focus-visible,.agentix-builder summary:focus-visible{outline:2px solid var(--text);outline-offset:3px}
+.agentix-builder-group{margin:24px 0;border-top:1px solid var(--border);padding-top:18px}
+.agentix-builder-group h4{font-size:15px;margin:0 0 5px}.agentix-builder-group>p{margin:0 0 14px;line-height:1.5}
+.agentix-builder-chips{display:flex;gap:8px;flex-wrap:wrap}
+.agentix-builder-chip{border:1px solid var(--border);border-radius:50px;background:var(--rail);color:var(--text);font:inherit;font-size:13px;min-height:42px;padding:9px 14px;cursor:pointer}
+.agentix-builder-chip[aria-pressed=true]{border-color:var(--text);background:var(--hover);font-weight:700}
+.agentix-shop-preview{margin:16px 0 0;border-radius:16px;overflow:hidden;border:1px solid #e8ddd6;background:#f9f3ee;color:#403a37;padding:16px}
+.agentix-shop-preview[data-style=modern]{background:#f6f1fa;color:#372c4e;border-color:#e1d6ee}
+.agentix-shop-preview[data-style=warm]{background:#f5e5d6;color:#543b31;border-color:#ead2bc}
+.agentix-shop-preview[data-style=elegant]{background:#f4efeb;color:#3d3532;border-color:#ded4ce}
+.agentix-shop-nav{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:11px;border-bottom:1px solid currentColor;padding-bottom:10px}
+.agentix-shop-nav span{opacity:.7}
+.agentix-shop-hero{min-height:142px;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:20px 10px}
+.agentix-shop-hero small{font-size:10px;letter-spacing:.15em}
+.agentix-shop-hero h4{font-family:Georgia,serif;font-size:clamp(19px,3vw,29px);line-height:1.2;margin:12px 0 6px;max-width:280px}
+.agentix-shop-hero p{font-size:12px;opacity:.8}
+.agentix-shop-flower{flex:none;font-size:clamp(65px,9vw,118px);line-height:1;color:#b9748b;text-shadow:8px 10px 0 #e1b6a4;transform:rotate(-12deg)}
+.agentix-shop-preview[data-style=modern] .agentix-shop-flower{color:#9e70c5;text-shadow:9px 9px 0 #dca5d7}
+.agentix-shop-preview[data-style=warm] .agentix-shop-flower{color:#ba7752;text-shadow:9px 9px 0 #e2b883}
+.agentix-shop-preview>small{font-size:11px;color:inherit;opacity:.7;display:block}
+.agentix-builder-features{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.agentix-builder-feature{border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--rail);display:flex;align-items:flex-start;gap:10px;cursor:pointer}
+.agentix-builder-feature input{flex:none;width:18px;height:18px;accent-color:var(--text);margin:2px 0 0}
+.agentix-builder-feature strong{display:block;font-size:13px;line-height:1.35}
+.agentix-builder-feature small{display:block;font-size:12px;color:var(--soft);margin-top:5px;line-height:1.35}
+.agentix-builder-summary{background:var(--rail);border-radius:13px;border:1px solid var(--border);padding:16px;overflow-wrap:anywhere}
+.agentix-builder-summary strong{display:block;font-size:12px;margin-top:13px}
+.agentix-builder-summary strong:first-child{margin-top:0}
+.agentix-builder-summary p{margin:4px 0 0;font-size:13px;line-height:1.55;color:var(--soft)}
+.agentix-builder-details{margin-top:17px;border:1px solid var(--border);padding:14px;border-radius:12px}
+.agentix-builder-details summary{cursor:pointer;min-height:30px;font-weight:650;font-size:13px}
+.agentix-builder-brief{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;font:12px/1.6 ui-monospace,monospace;color:var(--text);margin:14px 0 0}
+.agentix-builder-feedback{min-height:1em;font-size:13px;margin:10px 0;color:var(--text)}
+.agentix-builder-footnote{font-size:12px;color:var(--soft);border-top:1px solid var(--border);margin:24px 0 0;padding-top:14px;line-height:1.6}
+@media(max-width:640px){.agentix-builder-features{grid-template-columns:1fr}.agentix-builder-actions{flex-direction:column}.agentix-builder .agentix-action{width:100%}.agentix-shop-hero{min-height:125px}.agentix-shop-nav span{font-size:9px}.agentix-shop-hero h4{font-size:20px}.agentix-builder-progress li{font-size:11px;padding:10px 3px}}

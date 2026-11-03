@@ -200,7 +200,7 @@ export function mountBusinessBuilder(root,{onHandoff,notify}={}) {
       },'agentix-action agentix-action-secondary'));
       row.append(makeButton('Продолжить с Velia',()=>{
         if(typeof onHandoff!=='function'){error('Диалог сейчас недоступен. Скопируй запрос и открой чат Velia.');return;}
-        try{onHandoff(brief);}catch(ex){error('Не удалось открыть диалог. Скопируй запрос вручную.');}
+        try{onHandoff(brief);}catch(ex){error(ex?.message || 'Не удалось открыть диалог. Скопируй запрос вручную.');}
       },'agentix-action agentix-action-primary'));
       content.append(row);
       content.append(element('p','Кнопка откроет черновик сообщения в чате: отправку, создание репозитория, платежи и публикацию ты подтверждаешь отдельно.','agentix-muted'));
