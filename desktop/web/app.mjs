@@ -102,7 +102,16 @@ function addFiles(files) {
 
 const current = () => chats.find((c) => c.id === currentId);
 const voice = setupVoice({accountLanguage:()=>profile?.language||'', busy:()=>busy, toast, modelName:()=>MODELS[model], send:text=>{if(agentMode&&model==='velia-flash')setAgentMode(false);$("prompt").value=text;return generate(false, true);}});
-const features = setupFeatures({taskState:()=>profile?.background_tasks?background:null,
+const features = setupFeatures({prepareAgentixChat:brief=>{
+  if(busy)throw new Error('Дождись завершения текущего ответа.');
+  if($('prompt').value.trim())throw new Error('В диалоге есть несохранённый текст. Сохрани или очисти его перед переходом.');
+  setAgentMode(false,true);
+  newChat();
+  $('prompt').value=brief;
+  resizePrompt();
+  $('prompt').focus();
+  toast('Черновик проекта открыт. Проверь и отправь его Велии.');
+},taskState:()=>profile?.background_tasks?background:null,
   prepareTask:()=>{const selected=['velia-quantum','velia-pro'].includes(model)?model:profile?.models?.find(id=>['velia-quantum','velia-pro'].includes(id));if(!selected){toast('Фоновые поручения сейчас недоступны.');return;}features.close();setAgentMode(false,true);setModel(selected);background.prepare(selected);$('prompt').focus();toast('Напиши задачу — результат появится в этом диалоге и в разделе «Задачи».');},
   onUnauthorized:()=>{lockHistory();profile=null;guest=null;notifyAuthChange('lock');render();openAuth();},signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,prepareMedicalChat:async prompt=>{if(busy)throw new Error('Дождись завершения ответа.');if(!profile?.models?.includes(model))throw new Error('Выбранная модель сейчас недоступна.');setAgentMode(false);newChat();medicalDraftMode=true;$('prompt').value=prompt;resizePrompt();$('prompt').focus();toast('Прикрепи заключения и проверь текст перед отправкой.');},openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
 const background = setupBackgroundTasks({request:jsonRequest,profile:()=>profile,busy:()=>busy,currentId:()=>currentId,toast,speak:text=>voice.speak(text),
