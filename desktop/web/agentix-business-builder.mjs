@@ -176,15 +176,20 @@ export function mountBusinessBuilder(root,{onHandoff,onSave,onList,onStatus,isAu
       state.textContent='Не удалось загрузить проекты. Можно продолжить без сохранения.';
     }
   }
-  async function saveDraft(){
-    if(!isAuthenticated()||typeof onSave!=='function')return null;
-    const passport=businessPassportFromDraft({...draft,features:[...draft.features]});
-    const signature=JSON.stringify(passport);
-    if(draft.project&&draft.savedSignature===signature)return draft.project;
-    const project=await onSave(passport,draft.project);
-    draft.project=project;draft.savedSignature=signature;
-    await refreshProjects();
-    return project;
+  let saveInFlight=null;
+  function saveDraft(){
+    if(saveInFlight)return saveInFlight;
+    if(!isAuthenticated()||typeof onSave!=='function')return Promise.resolve(null);
+    saveInFlight=(async()=>{
+      const passport=businessPassportFromDraft({...draft,features:[...draft.features]});
+      const signature=JSON.stringify(passport);
+      if(draft.project&&draft.savedSignature===signature)return draft.project;
+      const project=await onSave(passport,draft.project);
+      draft.project=project;draft.savedSignature=signature;
+      await refreshProjects();
+      return project;
+    })().finally(()=>{saveInFlight=null;});
+    return saveInFlight;
   }
   async function checkDeveloperReadiness(){
     if(!isAuthenticated()||typeof onStatus!=='function')return;
