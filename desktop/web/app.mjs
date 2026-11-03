@@ -8,6 +8,7 @@ import {
   apiError,
   normalizeNetworkError,
   safeSearch,
+  CONTINUE_TRUNCATED_RESPONSE,
 } from "./core.mjs";
 import {setupFeatures, featureRequest} from "./features.mjs";
 import {isAgentixBusinessBrief} from "./agentix-business-builder.mjs";
@@ -351,6 +352,13 @@ function messageNode(message, index) {
       const save=document.createElement("button");save.textContent="Сохранить .md";save.onclick=()=>fileTools.downloadText(message.content,"VELIA-answer.md");actions.append(save);
     }
     if (index === current().messages.length - 1) {
+      if (message.finish === "length" && !message.agent && !message.failed && !message.stopped) {
+        const resume = document.createElement("button");
+        resume.className = "message-continue";
+        resume.textContent = "Продолжить ответ";
+        resume.onclick = () => continueTruncatedResponse();
+        actions.append(resume);
+      }
       const retry = document.createElement("button");
       retry.innerHTML = icon("retry") + "Повторить";
       retry.onclick = () => generate(true);
@@ -951,6 +959,20 @@ async function generate(retry = false, voiceTurn = false) {
     $("prompt").focus();
     if (!profile) refreshGuest();
   }
+}
+function continueTruncatedResponse() {
+  if (busy) return;
+  const chat = current();
+  if (!chat || chat.messages.at(-1)?.role !== "assistant" ||
+      chat.messages.at(-1)?.finish !== "length" || chat.messages.at(-1)?.agent) return;
+  if ($("prompt").value.trim()) {
+    toast("Сначала отправь или сохрани уже набранное сообщение.");
+    return;
+  }
+  setAgentMode(false,true);
+  $("prompt").value = CONTINUE_TRUNCATED_RESPONSE;
+  resizePrompt();
+  void generate();
 }
 $("composer").onsubmit = (e) => {
   e.preventDefault();

@@ -1,5 +1,8 @@
 import {highlightCode, CODE_RENDER_BUDGET} from './syntax.mjs';
 
+export const CONTINUE_TRUNCATED_RESPONSE =
+  'Продолжи предыдущий ответ ровно с того места, где он оборвался. Не повторяй уже написанное, не начинай план заново. Заверши мысль полностью и задай не более одного нового вопроса.';
+
 export const MODELS = Object.freeze(
   Object.assign(Object.create(null), {
     "velia-pro": "VELIA PRO",
