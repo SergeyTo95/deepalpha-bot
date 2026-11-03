@@ -86,6 +86,16 @@ def test_flash_normalizes_template_and_preserves_correlated_tool_result():
     assert result["max_tokens"] == 512
 
 
+
+def test_flash_longer_text_budget_only_when_requested_without_tools():
+    user = {"model": "velia-flash", "messages": [{"role": "user", "content": "Составь подробный план"}]}
+    assert validate_payload(user)["max_tokens"] == 512
+    assert validate_payload({**user, "max_tokens": 1024})["max_tokens"] == 1024
+    assert validate_payload({**user, "max_tokens": 1536})["max_tokens"] == 1536
+    tool = {"type": "function", "function": {"name": "read", "parameters": {"type": "object"}}}
+    assert validate_payload({**user, "max_tokens": 1536, "tools": [tool]})["max_tokens"] == 512
+
+
 @pytest.mark.parametrize("arguments", ["{bad", "[]", "true", 7, [1]])
 def test_malformed_tool_arguments_are_rejected_before_flash(arguments):
     with pytest.raises(ValueError, match="invalid_tool_arguments"):
