@@ -427,8 +427,25 @@ def test_browser_chat_streams_each_mode_with_server_persona(monkeypatch, model):
             assert payload["messages"][0]["role"] == "system"
             assert "женском роде" in payload["messages"][0]["content"]
             assert payload["model"] == ("velia-flash" if model.endswith("flash") else "kimi-k3")
-            assert payload.get("max_tokens", payload.get("max_completion_tokens")) == (512 if model.endswith("flash") else 4096)
+            assert payload.get("max_tokens", payload.get("max_completion_tokens")) == (1024 if model.endswith("flash") else 4096)
             assert "tools" not in payload
+    asyncio.run(run())
+
+
+def test_agentix_business_brief_budget_is_larger_but_voice_unchanged(monkeypatch):
+    async def run():
+        async with fixture(monkeypatch) as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            prompt = ("VELIA / AGENTIX BUSINESS BUILDER — запрос на проект\\n"
+                      "Создай цветочный интернет-магазин с ИИ для заказов.")
+            for voice, expected in ((False, 1536), (True, 128)):
+                async with client.post(server.make_url("/web-api/v1/chat/completions"),
+                        headers=headers(cookie), json={"model": "velia-flash", "stream": True,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "voice_turn": voice}) as response:
+                    assert response.status == 200
+                    assert "[DONE]" in await response.text()
+                assert state["payloads"][-1]["max_tokens"] == expected
     asyncio.run(run())
 
 
