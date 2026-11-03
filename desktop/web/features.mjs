@@ -268,7 +268,25 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
     const body = node('div',undefined,'feature-body'); root.append(body); const loading=node('p','Загрузка…','feature-empty'); loading.setAttribute('role','status'); body.append(loading);
     try {
       if (name === 'voice') {body.replaceChildren(); voiceSettings(body); return;}
-      if (name === 'agentix') {mountAgentix(body,{onHandoff:prepareAgentixChat}); return;}
+      if (name === 'agentix') {
+        mountAgentix(body,{
+          onHandoff:prepareAgentixChat,
+          isAuthenticated:signedIn,
+          onList:async()=> (await call('projects')).projects || [],
+          onStatus:async()=>call('developer/factory/status'),
+          onSave:async(passport,previous)=>{
+            if(!signedIn())throw new Error('Войди в Velia, чтобы сохранить проект.');
+            if(previous?.id){
+              if(!/^[0-9a-f-]{36}$/i.test(previous.id))throw new Error('Некорректный идентификатор проекта.');
+              const result=await call('projects/'+previous.id,{method:'PATCH',data:{passport,expected_revision:previous.revision}});
+              return result.project;
+            }
+            const result=await call('projects',{method:'POST',data:{passport},key:'agentix:'+crypto.randomUUID()});
+            return result.project;
+          }
+        });
+        return;
+      }
       if (name === 'profile') {
         const r = await call('profile'); if (ticket !== epoch) return; body.replaceChildren(form([['preferred_name','Как обращаться'],['about_me','О себе','textarea']], 'Сохранить', d=>call('profile',{method:'PATCH',data:d}), r.profile));
       } else if (name === 'plugins') {

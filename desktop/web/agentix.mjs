@@ -41,14 +41,14 @@ function card(title,description,items=[],tag) {
   if(items.length){const list=el('ul');for(const item of items)list.append(el('li',item));section.append(list);}
   return section;
 }
-export function mountAgentix(root,{onHandoff}={}) {
+export function mountAgentix(root,{onHandoff,onSave,onList,onStatus,isAuthenticated}={}) {
   root.replaceChildren();
   root.classList.add('agentix-page');
   const hero=el('section',null,'agentix-hero');
   hero.append(el('span','VELIA PLATFORM · VELYON CORE','agentix-overline'),el('h2','Один интеллект. Тысячи продуктов.'),el('p','Agentix — платформа для встраивания возможностей Velia в SaaS, бизнес-системы, приложения, сайты и цифровые устройства.'));
   const state=el('span','Архитектура · обзор возможностей','agentix-status');
   hero.append(state);root.append(hero);
-  mountBusinessBuilder(root,{onHandoff});
+  mountBusinessBuilder(root,{onHandoff,onSave,onList,onStatus,isAuthenticated});
 
   const intro=el('section',null,'agentix-block');
   intro.append(el('h2','Что такое Agentix'),el('p','Agentix превращает Velyon Core в технологический слой для разработчиков и компаний. Пользователи получают интеллектуального помощника непосредственно в привычном продукте, а его владелец управляет доступом, функциональностью, данными и расходами.'));
