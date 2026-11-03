@@ -200,7 +200,10 @@ def validate_payload(data):
                 or not isinstance(tool["function"].get("name"), str)):
             raise ValueError("invalid_tools")
     output_limit = 8192 if data["model"] == QUANTUM_ID or free_models.enabled() and data["model"] == MODEL_ID else 4096
-    limit = data.get("max_completion_tokens", data.get("max_tokens", output_limit))
+    # Keep the historical short default for direct Flash clients, while the
+    # trusted web gateway may explicitly ask for a longer text completion.
+    default_limit = 512 if data["model"] == FLASH_ID else output_limit
+    limit = data.get("max_completion_tokens", data.get("max_tokens", default_limit))
     if type(limit) is not int or not 1 <= limit <= output_limit:
         raise ValueError("invalid_output_limit")
     if type(data.get("stream", False)) is not bool:
@@ -217,7 +220,7 @@ def validate_payload(data):
               "stream": data.get("stream", False)}
     if is_flash:
         result["messages"] = flash_messages(result["messages"])
-        result["max_tokens"] = min(result.pop("max_completion_tokens"), 512)
+        result["max_tokens"] = min(result.pop("max_completion_tokens"), 512 if tools else 1536)
         # Keep the qualified tool profile. Use a steadier plain-text profile:
         # repeated user terms must not be discouraged into malformed words.
         result.update(temperature=0.7 if tools else 0.3, top_p=0.8, top_k=20, min_p=0.05 if tools else 0.0,
