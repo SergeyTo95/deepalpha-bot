@@ -785,6 +785,31 @@ def test_browser_capacity_errors_are_allowlisted(monkeypatch, code, expected):
     asyncio.run(run())
 
 
+def test_browser_agent_reports_executor_crash_without_mislabeling_availability(monkeypatch):
+    async def run():
+        async with fixture(monkeypatch, agent_status=502, agent_error="browser_agent_failed") as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            async with client.post(server.make_url("/web-api/v1/agent/browser"), headers=headers(cookie),
+                    json={"prompt": "Найди цену роз на сайте", "session_id": "11111111-1111-4111-8111-111111111111"}) as response:
+                assert response.status == 502
+                assert (await response.json())["error"] == "browser_agent_failed"
+            assert len(state["agent_calls"]) == 1
+    asyncio.run(run())
+
+
+def test_agentix_business_project_cannot_launch_browser_agent(monkeypatch):
+    async def run():
+        async with fixture(monkeypatch) as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            async with client.post(server.make_url("/web-api/v1/agent/browser"), headers=headers(cookie),
+                    json={"prompt": "VELIA / AGENTIX BUSINESS BUILDER — запрос на проект\nХочу цветочный магазин",
+                          "session_id": "11111111-1111-4111-8111-111111111111"}) as response:
+                assert response.status == 409
+                assert (await response.json())["error"] == "agentix_project_requires_chat"
+            assert state["agent_calls"] == []
+    asyncio.run(run())
+
+
 def test_voice_account_turn_keeps_fast_reply_and_selected_search_policy(monkeypatch, tmp_path):
     from desktop.guest_store import GuestStore
     async def run():

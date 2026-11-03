@@ -249,6 +249,7 @@ export function apiError(code) {
       browser_agent_busy: "Browser Agent сейчас занят. Повтори через несколько секунд.",
       browser_agent_timeout: "Browser Agent не успел завершить задачу. Попробуй ещё раз.",
       browser_agent_failed: "Browser Agent не смог завершить выполнение. Проверь страницу перед повтором: часть действий могла сохраниться.",
+      agentix_project_requires_chat: "Для разработки проекта используй обычный чат Velia. Выключи AGENT ON и повтори отправку.",
       browser_agent_unavailable: "Browser Agent временно недоступен. Попробуй позже.",
       browser_storage_capacity: "Browser Agent временно не принимает задачи: хранилище заполнено. Текущая сессия сохранена. Попробуй позже.",
       browser_profile_capacity: "Достигнут лимит данных этого браузерного диалога. Создай новый диалог Agent; прежняя сессия сохранена.",

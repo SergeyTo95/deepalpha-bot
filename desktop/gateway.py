@@ -249,6 +249,10 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
             return 400, {"ok": False, "error": "invalid_browser_task"}
         if not isinstance(prompt, str) or not prompt.strip():
             return 400, {"ok": False, "error": "invalid_browser_task"}
+        # Browser Agent is limited to web interactions, not software project design.
+        # Guard old/cached frontends even when they still have AGENT ON selected.
+        if prompt.lstrip().startswith("VELIA / AGENTIX BUSINESS BUILDER — запрос на проект"):
+            return 409, {"ok": False, "error": "agentix_project_requires_chat"}
         task_prompt = spec_guidance('browser')+'\nORIGINAL_TASK:\n'+prompt
         task_body = json.dumps({"prompt": task_prompt}, ensure_ascii=False).encode('utf-8')
         if len(task_prompt.encode('utf-8')) > 12000 or len(task_body) > 16000:
