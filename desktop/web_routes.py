@@ -58,7 +58,12 @@ def prepare_web_payload(request, data, *, search_enabled=False):
     request[SEARCH] = (data.get("web_search", search_enabled) if data["model"] == QUANTUM_ID
         else search_enabled or bool(data.get("web_search")))
     free_config = free_models.configuration(data["model"].removeprefix("velia-"), voice=voice_turn)
-    output_limit = (1024 if free_models.enabled() or data["model"] == QUANTUM_ID else 128) if voice_turn else 512 if data["model"] == FLASH_ID else 8192 if data["model"] == QUANTUM_ID else 4096
+    output_limit = (1024 if free_models.enabled() or data["model"] == QUANTUM_ID else 128) if voice_turn else 1024 if data["model"] == FLASH_ID else 8192 if data["model"] == QUANTUM_ID else 4096
+    # The first Business Builder specification needs more room than ordinary
+    # chat. This does not enlarge voice responses or enable a paid fallback.
+    if not voice_turn and data["model"] == FLASH_ID and messages[-1]["content"].lstrip().startswith(
+            "VELIA / AGENTIX BUSINESS BUILDER — запрос на проект"):
+        output_limit = 1536
     if free_config and data["model"] == MODEL_ID:
         output_limit = free_config.max_tokens
     return {**{key: value for key, value in data.items() if key not in {"web_search", "voice_turn"}},
