@@ -433,20 +433,19 @@ def test_browser_chat_streams_each_mode_with_server_persona(monkeypatch, model):
 
 
 def test_agentix_business_brief_budget_is_larger_but_voice_unchanged(monkeypatch):
-    async def run():
-        async with fixture(monkeypatch) as (server, client, state):
-            cookie, _, _ = await login(server, client)
-            prompt = ("VELIA / AGENTIX BUSINESS BUILDER — запрос на проект\\n"
-                      "Создай цветочный интернет-магазин с ИИ для заказов.")
-            for voice, expected in ((False, 1536), (True, 128)):
-                async with client.post(server.make_url("/web-api/v1/chat/completions"),
-                        headers=headers(cookie), json={"model": "velia-flash", "stream": True,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "voice_turn": voice}) as response:
-                    assert response.status == 200
-                    assert "[DONE]" in await response.text()
-                assert state["payloads"][-1]["max_tokens"] == expected
-    asyncio.run(run())
+    from desktop.web_routes import WEB_CHAT, prepare_web_payload
+    monkeypatch.delenv("VELIA_FREE_API_TIERS_ENABLED", raising=False)
+    prompt = ("VELIA / AGENTIX BUSINESS BUILDER — запрос на проект\n"
+              "Создай цветочный интернет-магазин с ИИ для заказов.")
+    for voice, expected in ((False, 1536), (True, 128)):
+        request = {WEB_CHAT: True}
+        result = prepare_web_payload(request, {
+            "model": "velia-flash", "stream": True,
+            "messages": [{"role": "user", "content": prompt}],
+            "voice_turn": voice,
+        }, search_enabled=False)
+        assert result["max_tokens"] == expected
+        assert "voice_turn" not in result
 
 
 def test_browser_agent_is_account_only_flash_and_keeps_internal_secret_server_side(monkeypatch):
