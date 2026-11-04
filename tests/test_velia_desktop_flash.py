@@ -83,7 +83,8 @@ def test_flash_normalizes_template_and_preserves_correlated_tool_result():
     assert "reasoning_content" not in result["messages"][2]
     assert result["messages"][2]["tool_calls"][0]["function"]["arguments"] == "{}"
     assert result["messages"][3]["tool_call_id"] == "read-1"
-    assert result["max_tokens"] == 512
+    # Explicit 4096-token text requests are bounded to the new 1536 text cap.
+    assert result["max_tokens"] == 1536
 
 
 
