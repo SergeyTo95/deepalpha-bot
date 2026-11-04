@@ -142,3 +142,13 @@ test('Business Builder carries only explicitly selected functions into the proje
  assert.equal(prompt.split('\n').find(line=>line.startsWith('- Желаемые функции:')),'- Желаемые функции: Заказы и клиенты');
  assert.match(prompt,/Не задавай вопросы о них повторно/);
 });
+
+
+test('Agentix project handoff retains owner-approved design without a second design questionnaire',()=>{
+  const prompt=buildBusinessBrief({idea:BUILDER_EXAMPLE,style:'modern',delivery:'zip',features:['orders']});
+  assert.match(prompt,/^- Дизайн: Современный$/m);
+  assert.match(prompt,/^- Передача проекта: Получить проект ZIP-архивом$/m);
+  assert.match(prompt,/Выбранный дизайн и отмеченные функции уже известны/);
+  assert.match(prompt,/РОВНО ОДИН вопрос/);
+  assert.doesNotMatch(prompt,/1\. Преврати идею/);
+});
