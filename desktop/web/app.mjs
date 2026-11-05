@@ -8,7 +8,8 @@ import {
   apiError,
   normalizeNetworkError,
   safeSearch,
-  CONTINUE_TRUNCATED_RESPONSE,
+  canContinuePartialAnswer,
+  continuationPrompt,
 } from "./core.mjs";
 import {setupFeatures, featureRequest} from "./features.mjs";
 import {isAgentixBusinessBrief} from "./agentix-business-builder.mjs";
@@ -352,7 +353,7 @@ function messageNode(message, index) {
       const save=document.createElement("button");save.textContent="Сохранить .md";save.onclick=()=>fileTools.downloadText(message.content,"VELIA-answer.md");actions.append(save);
     }
     if (index === current().messages.length - 1) {
-      if (message.finish === "length" && !message.agent && !message.failed && !message.stopped) {
+      if (canContinuePartialAnswer(message)) {
         const resume = document.createElement("button");
         resume.className = "message-continue";
         resume.textContent = "Продолжить ответ";
@@ -370,7 +371,9 @@ function messageNode(message, index) {
     const state = document.createElement("div");
     state.className = "message-state";
     state.textContent =
-      message.failed ||
+      (message.failed && canContinuePartialAnswer(message)
+        ? message.failed + " Можно продолжить с места обрыва."
+        : message.failed) ||
       (message.stopped
         ? "Ответ остановлен."
         : "Достигнута длина ответа. Можно попросить продолжить.");
@@ -963,14 +966,17 @@ async function generate(retry = false, voiceTurn = false) {
 function continueTruncatedResponse() {
   if (busy) return;
   const chat = current();
-  if (!chat || chat.messages.at(-1)?.role !== "assistant" ||
-      chat.messages.at(-1)?.finish !== "length" || chat.messages.at(-1)?.agent) return;
+  const partial = chat?.messages.at(-1);
+  if (!canContinuePartialAnswer(partial)) return;
   if ($("prompt").value.trim()) {
     toast("Сначала отправь или сохрани уже набранное сообщение.");
     return;
   }
+  // This is a fresh, user-initiated chat turn, not a retry of the failed call.
+  // The failed assistant message stays visible and its ending is quoted in
+  // the prompt, even though chatPayload excludes failed messages.
   setAgentMode(false,true);
-  $("prompt").value = CONTINUE_TRUNCATED_RESPONSE;
+  $("prompt").value = continuationPrompt(partial);
   resizePrompt();
   void generate();
 }

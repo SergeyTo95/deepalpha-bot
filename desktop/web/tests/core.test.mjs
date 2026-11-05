@@ -10,6 +10,8 @@ import {
   apiError,
   normalizeNetworkError,
   CONTINUE_TRUNCATED_RESPONSE,
+  canContinuePartialAnswer,
+  continuationPrompt,
 } from "../core.mjs";
 
 test('browser transport failures have a usable message while cancellation and HTTP errors retain their meaning',()=>{
@@ -231,4 +233,38 @@ test("length-limited SSE preserves the partial answer and allows continuing with
  assert.equal(output.text,content);
  assert.equal(seen.at(-1),content);
  assert.match(CONTINUE_TRUNCATED_RESPONSE,/Не повторяй уже написанное/);
+});
+
+
+test("Flash partial answer shows continuation after a streaming failure, not only length",()=>{
+ const partial={role:"assistant",content:"5. Что потребуется подтвердить:\n- Бюджет проекта\n-",model:"velia-flash",failed:"Ответ Flash прервался. Можно повторить запрос.",pending:false};
+ assert.equal(canContinuePartialAnswer(partial),true);
+ const prompt=continuationPrompt(partial);
+ assert.match(prompt,/Не повторяй уже написанное/);
+ assert.ok(prompt.endsWith(partial.content));
+ assert.match(prompt,/Цитата|цитата/);
+ // An interrupted response is not included in a regular chat payload.
+ const chat={messages:[{role:"user",content:"Создай цветочный магазин"},partial]};
+ assert.equal(chatPayload(chat,"velia-flash").messages.length,1);
+ assert.ok(continuationPrompt(partial).includes("Бюджет проекта"));
+});
+
+test("continuation only offers a user-requested new turn for partial safe chat answers",()=>{
+ const basis={role:"assistant",content:"Часть ответа",pending:false,model:"velia-flash"};
+ assert.equal(canContinuePartialAnswer({...basis,finish:"length"}),true);
+ assert.equal(canContinuePartialAnswer({...basis,stopped:true}),true);
+ assert.equal(canContinuePartialAnswer({...basis,failed:"Прервано"}),true);
+ for(const item of [
+   {...basis,finish:"stop"},
+   {...basis,content:" ",failed:"Прервано"},
+   {...basis,pending:true,failed:"Прервано"},
+   {...basis,agent:true,failed:"Прервано"},
+   {...basis,role:"user",failed:"Прервано"},
+ ]){
+   assert.equal(canContinuePartialAnswer(item),false);
+   assert.throws(()=>continuationPrompt(item),/Нет ответа/);
+ }
+ const long={...basis,content:"x".repeat(5000),failed:"Прервано"};
+ assert.ok(continuationPrompt(long).length<2600);
+ assert.equal(continuationPrompt(long).slice(-2200),"x".repeat(2200));
 });
