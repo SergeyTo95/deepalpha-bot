@@ -16,6 +16,7 @@ import {isAgentixBusinessBrief,businessContinuationReminder} from "./agentix-bus
 import {prepareFile, fileSize, setupFileTools} from "./files.mjs";
 import {setupVoice} from "./voice.mjs";
 import {setupBackgroundTasks, taskAcknowledgement} from "./background-tasks.mjs";
+import {setupAutoloop, parseAutoloop} from './autoloop.mjs';
 const $ = (id) => document.getElementById(id);
 const icons = {
   attachment: "M21 11l-8 8a6 6 0 0 1-8-8l9-9a4 4 0 0 1 6 6l-9 9a2 2 0 0 1-3-3l8-8",
@@ -123,12 +124,22 @@ const background = setupBackgroundTasks({request:jsonRequest,profile:()=>profile
   resume:resumeBackgroundAgent,
   open:async cid=>{if(busy){toast('Дождись завершения текущего ответа.');return;}await syncHistory();const chat=chats.find(c=>c.id===cid);if(chat)await openChat(chat);},
   refresh:async cid=>{const chat=chats.find(c=>c.id===cid);if(chat&&currentId===cid&&!busy)await openChat(chat,true);}});
+const autoloop = setupAutoloop({request:jsonRequest,profile:()=>profile,currentId:()=>currentId,toast,
+  open:async cid=>{const chat=chats.find(c=>c.id===cid);if(chat)await openChat(chat);}});
+$('autoloop-create').onclick=()=>{
+  if(busy||!profile?.background_tasks)return;
+  setAgentMode(false,true);
+  if(current()&&!current().remote)newChat();
+  $('prompt').value='Повторяй каждые 60 минут: ';resizePrompt();$('prompt').focus();
+  toast('Допиши поручение и отправь. По умолчанию — один запуск в сутки; интервал можно изменить.');
+};
 const browserStorage = { getItem: (key) => localStorage.getItem(key) };
 const localHistory = new LocalHistory(browserHistoryStore());
 const authChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('velia-auth-v1') : null;
 function lockHistory() {
   backgroundTakeover=null;
   background.reset();
+  autoloop.reset();
   abort?.abort(); clearTimeout(saveTimer); saveTimer = null;
   localHistory.lock(); storageKey = null; chats = []; currentId = null;
   features.close(); features.clearMedicalData(); voice.stop(); clearFiles(); fileTools.clear();
@@ -410,6 +421,8 @@ function render() {
     chat.messages.forEach((m, i) => $("messages").append(messageNode(m, i)));
   renderHistory();
   background.render();
+  autoloop.render();
+  $('autoloop-create').hidden=!profile?.background_tasks;
 }
 function scrollDown(force = false) {
   const el = $("conversation-scroll");
@@ -643,6 +656,7 @@ async function applyProfile(value) {
   if(changed){lockHistory(); guest = null;}
   profile = value;
   background.poll();
+  autoloop.poll();
   voice.syncLanguage();
   internetAvailable = !!value.web_search;
   $("guest-notice").hidden = true;
@@ -806,6 +820,31 @@ async function generate(retry = false, voiceTurn = false) {
   if (voiceTurn) payload.voice_turn=true;
   if (!agentMode && internetAvailable && !chat.medicalNoSearch) payload.web_search = true;
   if(backgroundAgent)payload.agent=true;
+  let loopSpec;
+  try{loopSpec=parseAutoloop(user.content);}catch(error){toast(error.message);return;}
+  if(loopSpec){
+    if(!chat.remote||!profile?.background_tasks||agentMode||user.attachmentIds?.length){
+      toast('Для повторяющегося поручения открой обычный диалог после входа, без вложений.');return;
+    }
+    const account=profile.account;setBusy(true);render();save();
+    try{
+      if(loopSpec.kind==='coding'){
+        const data=await featureRequest('developer/projects');
+        if(profile?.account!==account)return;
+        const projects=(data.projects||[]).filter(p=>!p.archived);
+        const named=projects.filter(p=>String(loopSpec.instruction).toLowerCase().includes(String(p.repository_full_name||'').toLowerCase()));
+        const project=named.length===1?named[0]:named.length===0&&projects.length===1?projects[0]:null;
+        if(!project)throw Error(projects.length?'Укажи репозиторий в поручении: '+projects.map(p=>p.repository_full_name).join(', '):'Сначала подключи GitHub-проект в разделе «Проекты».');
+        loopSpec.project_id=project.id;
+      }
+      await autoloop.create(chat.id,selected,loopSpec,user.requestId,!!payload.web_search);
+      if(profile?.account!==account)return;
+      toast('Поручение сохранено. Первый запуск — по расписанию; вкладку можно закрыть.');
+      setBusy(false);await openChat(chat,true);
+    }catch(error){toast(error.message);}
+    finally{setBusy(false);render();save();}
+    return;
+  }
   if(chat.remote&&profile?.background_tasks&&(backgroundAgent||!agentMode&&background.wants(selected))){
     const owner=profile.account;setBusy(true);render();save();
     try{

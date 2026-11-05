@@ -18,6 +18,7 @@ ERRORS = {"conversation_not_found", "generation_in_progress", "flash_busy", "fla
     "velia_chat_disabled", "pro_tokens_required", "token_balance_unavailable",
     "idempotency_mode_mismatch", "user_daily_limit_exceeded", "global_daily_limit_exceeded"}
 ERRORS |= QUANTUM_ERRORS
+ERRORS |= {'autoloop_unavailable','autoloop_round_limit','autoloop_invalid_receipt','autoloop_execution_uncertain','autoloop_project_required','developer_superagent_unavailable'}
 ERRORS |= {'background_agent_unavailable','background_agent_context_too_long','background_agent_failed',
     'background_agent_interrupted','background_agent_invalid_plan','background_agent_review_failed'}
 ERRORS |= {free_models.error_code(code, mode) for code in QUANTUM_ERRORS for mode in ("flash", "pro")}
@@ -115,7 +116,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
 
     @web.middleware
     async def boundary(request, handler):
-        if not request.path.startswith(("/web-api/v1/conversations", "/web-api/v1/background-tasks")):
+        if not request.path.startswith(("/web-api/v1/conversations", "/web-api/v1/background-tasks", "/web-api/v1/autoloop")):
             return await handler(request)
         if request.method != "GET" and not same_origin(request):
             return error("invalid_origin", 403)
@@ -328,7 +329,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
         if request.method == "POST":
             data = await read_body(request)
             if job_id:
-                if action == "cancel" and data or action == "revise" and (set(data)!={"note","idempotency_key"} or not isinstance(data.get("note"),str) or not 1<=len(data["note"].strip())<=2000 or not REQUEST_ID.fullmatch(str(data.get("idempotency_key","")))) or action not in {"cancel","revise"}:
+                if action == "cancel" and data or action in {"revise", "answer"} and (set(data)!={"note" if action == "revise" else "answer","idempotency_key"} or not isinstance(data.get("note" if action == "revise" else "answer"),str) or not 1<=len(data["note" if action == "revise" else "answer"].strip())<=2000 or not REQUEST_ID.fullmatch(str(data.get("idempotency_key","")))) or action not in {"cancel","revise","answer"}:
                     return error("invalid_request",400)
             else:
                 if (set(data)-{"web_search","voice_turn","attachment_ids","agent","resume_job_id"}!={"content","model","idempotency_key"}
@@ -355,11 +356,16 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
             return error(code if code in safe else "account_service_unavailable",status)
         def public(value):
             if (not isinstance(value,dict) or not ID.fullmatch(str(value.get("id",""))) or not ID.fullmatch(str(value.get("conversation_id","")))
-                    or value.get("model") not in {"quantum","pro"} or value.get("status") not in {"queued","running","completed","error","cancelled"}):
+                    or value.get("model") not in {"flash","quantum","pro"} or value.get("status") not in {"queued","running","waiting_user","scheduled","completed","error","cancelled"}):
                 raise ValueError("invalid_background_response")
             return {k:value.get(k) for k in ("id","conversation_id","model","status","revision","created_at","updated_at","assistant_message_id")} | {
                 "title":str(value.get("title", ""))[:160],"result":str(value.get("result", ""))[:64000],
                 "agent":value.get('agent') is True,
+                "autoloop": value.get('autoloop') is True,
+                "available_at": value.get('available_at') if type(value.get('available_at')) in {int,float} else 0,
+                "question": {"text": str(value['question'].get('text', ''))[:12000],
+                    "options": [x[:200] for x in value['question'].get('options', [])[:4] if isinstance(x,str)]}
+                    if isinstance(value.get('question'),dict) and value.get('autoloop') is True else None,
                 "resumed":value.get('resumed') is True,
                 "agent_state":value.get('agent_state') if value.get('agent_state') in {'planning','browser','checking','waiting_user'} else None,
                 "user_action_required":value.get('user_action_required') if value.get('user_action_required') in {'credentials','otp','passkey','captcha','device_approval'} else None,
@@ -371,6 +377,50 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
     app.router.add_get("/web-api/v1/background-tasks/{job_id}",background)
     app.router.add_post("/web-api/v1/background-tasks/{job_id}/{action}",background)
     app.router.add_post("/web-api/v1/conversations/{conversation_id}/tasks",background)
+    async def autoloop(request):
+        session = request[ACCOUNT_SESSION]
+        if not session.free_api or not session.background_tasks:
+            return error('autoloop_unavailable', 503)
+        rid, action = request.match_info.get('rule_id'), request.match_info.get('action')
+        if rid and not ID.fullmatch(rid):
+            return error('autoloop_rule_not_found', 404)
+        data = await read_body(request) if request.method == 'POST' else None
+        if rid and action not in {'enable','disable','events'}:
+            return error('invalid_request',400)
+        if data is not None and not rid:
+            if data.get('model') not in {FLASH_ID, MODEL_ID, QUANTUM_ID}:
+                return error('invalid_request',400)
+            permission = await authorize_model(session.access, data['model'])
+            if permission:
+                return error(*permission)
+            data = {**data,'model':data['model'].removeprefix('velia-')}
+        suffix = ('/'+rid+'/'+action) if rid else ''
+        status, result = await upstream(request.method, '/mobile-api/v1/autoloop/rules'+suffix, token=session.access, data=data)
+        if not result.get('ok'):
+            code = result.get('error')
+            safe = {'autoloop_unavailable','autoloop_rule_not_found','autoloop_rule_paused','autoloop_rule_limit',
+                'autoloop_event_limit','autoloop_event_denied','autoloop_project_required','invalid_request'} | ERRORS
+            return error(code if code in safe else 'autoloop_unavailable', status)
+        def public_rule(value):
+            if (not isinstance(value,dict) or not ID.fullmatch(str(value.get('id','')))
+                    or not ID.fullmatch(str(value.get('conversation_id','')))
+                    or value.get('model') not in {'flash','quantum','pro'}):
+                raise ValueError('invalid_autoloop_response')
+            return {k:value.get(k) for k in ('id','conversation_id','enabled','next_at','created_at','model','interval_minutes','event_types','kind','max_runs_per_day')} | {
+                'instruction':str(value.get('instruction',''))[:4000]}
+        if 'rules' in result:
+            return json_response({'ok':True,'rules':[public_rule(x) for x in result['rules'][:20]]},status)
+        if 'rule' in result:
+            return json_response({'ok':True,'rule':public_rule(result['rule'])},status)
+        # Secrets are never forwarded to the browser; configure GitHub via the
+        # authenticated account API, not through chat or notification cards.
+        if action == 'github-secret':
+            return error('invalid_request',400)
+        return json_response({'ok':True},status)
+
+    app.router.add_get('/web-api/v1/autoloop/rules',autoloop)
+    app.router.add_post('/web-api/v1/autoloop/rules',autoloop)
+    app.router.add_post('/web-api/v1/autoloop/rules/{rule_id}/{action}',autoloop)
     app.router.add_get("/web-api/v1/conversations", listing)
     app.router.add_post("/web-api/v1/conversations", create)
     app.router.add_get("/web-api/v1/conversations/{conversation_id}/messages", messages)
