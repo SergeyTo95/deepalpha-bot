@@ -9,7 +9,8 @@ export function setupBackgroundTasks({request, profile, busy, currentId, open, r
   let selectedModel=null;
   toggle.onchange=()=>{if(selectedModel)preferences.set(selectedModel,toggle.checked);};
   const active=j=>['queued','running'].includes(j.status);
-  const labels={queued:'В очереди',running:'Готовлю результат',completed:'Готово',error:'Задача не выполнена',cancelled:'Отменена'};
+  const labels={queued:'В очереди',running:'Готовлю результат',waiting_user:'Жду твой ответ',scheduled:'Ожидаю следующей проверки',completed:'Готово',error:'Задача не выполнена',cancelled:'Отменена'};
+  const tier=job=>({flash:'Flash',quantum:'Quantum',pro:'PRO'})[job.model]||'VELIA';
   function reset(){generation++;owner=null;jobs=[];loaded=false;failed=false;notified.clear();restored.clear();dismissed.clear();preferences.clear();selectedModel=null;clearTimeout(timer);timer=null;loading=false;panel.replaceChildren();panel.hidden=true;option.hidden=true;toggle.checked=false;changed();}
   const dismissalKey=account=>'velia-background-dismissed-v1:'+account;
   function setOwner(account){
@@ -38,7 +39,7 @@ export function setupBackgroundTasks({request, profile, busy, currentId, open, r
       const header=document.createElement('div');header.className='background-heading';
       const stages={planning:'Обдумываю задачу',browser:'Agent работает в браузере',checking:'Проверяю результат'};
       const status=job.user_action_required?'Нужно действие в браузере':active(job)&&job.agent?stages[job.agent_state]:labels[job.status];
-      const heading=document.createElement('strong');heading.textContent=`${job.model==='pro'?'PRO':'Quantum'}${job.agent?' + Agent':''} · ${status||'Проверяю состояние'}`;
+      const heading=document.createElement('strong');heading.textContent=`${tier(job)}${job.agent?' + Agent':''} · ${status||'Проверяю состояние'}`;
       header.append(heading);
       if(!active(job)){
         const close=document.createElement('button');close.type='button';close.className='background-close';close.textContent='×';
@@ -51,13 +52,23 @@ export function setupBackgroundTasks({request, profile, busy, currentId, open, r
       const actions=document.createElement('div');actions.className='background-actions';
       const button=(text,fn)=>{const b=document.createElement('button');b.type='button';b.textContent=text;b.onclick=fn;actions.append(b);return b;};
       button(job.status==='completed'?'Открыть результат':'Открыть диалог',()=>open(job.conversation_id));
+      if(job.status==='waiting_user'&&job.question){
+        const question=document.createElement('p');question.textContent=job.question.text;card.append(question);
+        const input=document.createElement('textarea');input.rows=2;input.maxLength=2000;input.placeholder='Твой ответ';input.setAttribute('aria-label','Ответ на вопрос Велии');card.append(input);
+        let key=crypto.randomUUID(),previous='';
+        async function answer(text){if(!text.trim())return;if(text!==previous){key=crypto.randomUUID();previous=text;}await request(`background-tasks/${job.id}/answer`,{answer:text.trim(),idempotency_key:key});input.blur();await poll();}
+        button('Продолжить с ответом',async()=>{try{await answer(input.value);}catch(e){toast(e.message);}});
+        for(const choice of job.question.options||[])button(choice,async()=>{try{await answer(choice);}catch(e){toast(e.message);}});
+      }
+      if(['waiting_user','scheduled'].includes(job.status))button('Отменить задачу',async()=>{try{await cancel(job);}catch(e){toast(e.message);}});
+      if(job.status==='scheduled'&&job.available_at){const due=document.createElement('small');due.textContent='Следующая проверка: '+new Date(job.available_at*1000).toLocaleString();card.append(due);}
       if(job.user_action_required){
         const manual=button('Открыть браузер',()=>takeover(job));manual.disabled=busy();
         const proceed=button('Продолжить после ручного шага',()=>resume(job));proceed.disabled=busy();
       }
       if(active(job)){
         const hint=document.createElement('p');hint.className='background-hint';
-        hint.textContent=`Пока ждёшь результат ${job.model==='pro'?'PRO':'Quantum'}, можно пообщаться с Flash. Задача продолжится в фоне, а ответ появится в исходном диалоге.`;
+        hint.textContent=`Пока ждёшь результат ${tier(job)}, можно пообщаться с Flash. Задача продолжится в фоне, а ответ появится в исходном диалоге.`;
         card.append(hint);
         const chat=button('Поговорить с Flash',()=>{if(!busy())chatWithFlash();});
         chat.disabled=busy();
@@ -88,19 +99,20 @@ export function setupBackgroundTasks({request, profile, busy, currentId, open, r
       jobs=data.jobs||[];loaded=true;failed=false;render();changed();
       for(const job of jobs){
         if(job.resumed)continue;
-        if(job.status==='error'&&!notified.has(job.id)){notified.add(job.id);toast(`${job.model==='pro'?'PRO':'Quantum'}: ${apiError(job.error)}`);}
-        if(job.status==='completed'){
-          if(!notified.has(job.id)){notified.add(job.id);toast(`${job.model==='pro'?'PRO':'Quantum'}: ${job.user_action_required?'нужно действие в браузере.':'результат готов.'}`);}
-          if(!restored.has(job.id)&&job.conversation_id===currentId()&&!busy()){
+        if(job.status==='error'&&!notified.has(job.id)){notified.add(job.id);toast(`${tier(job)}: ${apiError(job.error)}`);}
+        if(['completed','waiting_user'].includes(job.status)){
+          if(!notified.has(job.id+':'+job.status)){notified.add(job.id+':'+job.status);toast(`${tier(job)}: ${job.status==='waiting_user'?'нужен твой ответ.':job.user_action_required?'нужно действие в браузере.':'результат готов.'}`);}
+          const restoreKey=job.id+':'+job.status+':'+job.revision+':'+(job.question?.text||'');
+          if(!restored.has(restoreKey)&&job.conversation_id===currentId()&&!busy()){
             await refresh(job.conversation_id);
             if(generation!==token||profile()?.account!==account)return;
-            restored.add(job.id);render();
+            restored.add(restoreKey);render();
           }
         }
       }
     }catch{if(token===generation){failed=true;changed();}/* Keep the last known durable state. */}
     finally{
-      if(token===generation){loading=false;timer=setTimeout(poll,jobs.some(active)||jobs.some(j=>j.status==='completed'&&j.conversation_id===currentId()&&!restored.has(j.id))?3000:20000);}
+      if(token===generation){loading=false;timer=setTimeout(poll,jobs.some(active)||jobs.some(j=>['completed','waiting_user'].includes(j.status)&&j.conversation_id===currentId()&&!restored.has(j.id+':'+j.status+':'+j.revision+':'+(j.question?.text||'')))?3000:20000);}
     }
   }
   async function submit(cid,payload){
