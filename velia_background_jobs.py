@@ -19,9 +19,10 @@ def digest(value):
 
 
 class JobStore:
-    def __init__(self, connect, *, sqlite=False, prepare=None, publish=None):
+    def __init__(self, connect, *, sqlite=False, prepare=None, publish=None, question=None):
         self.connect, self.sqlite = connect, sqlite
         self.prepare, self.publish = prepare, publish
+        self.question = question
 
     def execute(self, cur, sql, args=()):
         return cur.execute(sql if self.sqlite else sql.replace('?', '%s'), args)
@@ -58,6 +59,9 @@ class JobStore:
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS velia_background_one_active ON velia_background_chat(user_id) WHERE status IN ('queued','running')")
             cur.execute('CREATE INDEX IF NOT EXISTS velia_background_owner_created ON velia_background_chat(user_id,created_at DESC)')
             cur.execute('CREATE INDEX IF NOT EXISTS velia_background_status_created ON velia_background_chat(status,created_at)')
+            cur.execute('SELECT * FROM velia_background_chat WHERE 1=0')
+            if 'available_at' not in {d[0] for d in cur.description}:
+                cur.execute('ALTER TABLE velia_background_chat ADD COLUMN available_at DOUBLE PRECISION NOT NULL DEFAULT 0')
 
     @staticmethod
     def row(cur, row):
@@ -82,27 +86,31 @@ class JobStore:
             return [self.row(cur, row) for row in cur.fetchall()]
 
     def create(self, user, cid, model, key, data):
-        fingerprint = digest({'conversation_id':cid, 'model':model, **data})
         with self.transaction() as cur:
-            self.execute(cur, 'SELECT * FROM velia_background_chat WHERE user_id=? AND request_key=?', (int(user), key))
-            old = self.row(cur, cur.fetchone())
-            if old:
-                if old['request_hash'] != fingerprint:
-                    raise JobError('idempotency_mode_mismatch', 409)
-                return old
-            self.execute(cur, "SELECT id FROM velia_background_chat WHERE user_id=? AND status IN ('queued','running')", (int(user),))
-            if cur.fetchone():
-                raise JobError('background_task_active', 409)
-            now = time.time()
-            job = dict(id=str(uuid.uuid4()), user_id=int(user), conversation_id=cid, model=model,
-                status='queued', payload=dict(data), request_key=key, request_hash=fingerprint,
-                revision=1, attempts=0, lease=None, lease_until=0, created_at=now, updated_at=now, result='', error='')
-            if self.prepare:
-                job['payload'] = self.prepare(cur, job)
-            columns = list(job)
-            self.execute(cur, 'INSERT INTO velia_background_chat ('+','.join(columns)+') VALUES ('+','.join('?' for _ in columns)+')',
-                tuple(json.dumps(job[k], ensure_ascii=False) if k == 'payload' else job[k] for k in columns))
-            return job
+            return self.create_in_transaction(cur, user, cid, model, key, data)
+
+    def create_in_transaction(self, cur, user, cid, model, key, data):
+        """Admit an event and its existing queue job in the same transaction."""
+        fingerprint = digest({'conversation_id':cid, 'model':model, **data})
+        self.execute(cur, 'SELECT * FROM velia_background_chat WHERE user_id=? AND request_key=?', (int(user), key))
+        old = self.row(cur, cur.fetchone())
+        if old:
+            if old['request_hash'] != fingerprint:
+                raise JobError('idempotency_mode_mismatch', 409)
+            return old
+        self.execute(cur, "SELECT id FROM velia_background_chat WHERE user_id=? AND status IN ('queued','running')", (int(user),))
+        if cur.fetchone():
+            raise JobError('background_task_active', 409)
+        now = time.time()
+        job = dict(id=str(uuid.uuid4()), user_id=int(user), conversation_id=cid, model=model,
+            status='queued', payload=dict(data), request_key=key, request_hash=fingerprint,
+            revision=1, attempts=0, lease=None, lease_until=0, created_at=now, updated_at=now, result='', error='')
+        if self.prepare:
+            job['payload'] = self.prepare(cur, job)
+        columns = list(job)
+        self.execute(cur, 'INSERT INTO velia_background_chat ('+','.join(columns)+') VALUES ('+','.join('?' for _ in columns)+')',
+            tuple(json.dumps(job[k], ensure_ascii=False) if k == 'payload' else job[k] for k in columns))
+        return job
 
     def claim(self):
         with self.transaction() as cur:
@@ -116,7 +124,10 @@ class JobStore:
                 if status == 'error' and self.publish:
                     job.update(status=status, error='background_task_interrupted')
                     self.publish(cur, job)
-            self.execute(cur, "SELECT * FROM velia_background_chat WHERE status='queued' ORDER BY created_at LIMIT 1")
+            self.execute(cur, """SELECT * FROM velia_background_chat j WHERE
+                (status='queued' OR (status='scheduled' AND available_at<=? AND NOT EXISTS (
+                    SELECT 1 FROM velia_background_chat a WHERE a.user_id=j.user_id AND a.status IN ('queued','running'))))
+                ORDER BY created_at LIMIT 1""", (now,))
             job = self.row(cur, cur.fetchone())
             if job is None:
                 return None
@@ -181,7 +192,7 @@ class JobStore:
                         if old['text'] != note:
                             raise JobError('idempotency_mode_mismatch', 409)
                         return job
-            if job['status'] not in ACTIVE:
+            if job['status'] not in ACTIVE and not (note is None and job['status'] in {'waiting_user', 'scheduled'}):
                 if note is None and job['status'] == 'cancelled':
                     return job
                 raise JobError('background_task_finished', 409)
@@ -201,6 +212,61 @@ class JobStore:
                 (job['status'], json.dumps(job['payload'], ensure_ascii=False), job['revision'], job['error'], time.time(), job_id, int(user)))
             return job
 
+    def wait(self, job, text, *, options=(), later_minutes=0):
+        """End this round. Waiting owns no inference process or active-user slot."""
+        from velia_autoloop import MAX_HOPS
+        with self.transaction() as cur:
+            self.execute(cur, 'SELECT * FROM velia_background_chat WHERE id=? AND user_id=?', (job['id'], job['user_id']))
+            current = self.row(cur, cur.fetchone())
+            if not current or current['status'] != 'running' or current['lease'] != job['lease']:
+                return False
+            if current['revision'] != job['revision']:
+                self.execute(cur, "UPDATE velia_background_chat SET status='queued',lease=NULL,updated_at=? WHERE id=? AND user_id=?",
+                    (time.time(), job['id'], job['user_id']))
+                return False
+            loop = current['payload'].get('autoloop')
+            if not loop or loop.get('hops', 0) >= MAX_HOPS:
+                raise JobError('autoloop_round_limit', 409)
+            loop['hops'] += 1
+            current['payload'].update(question={'text': text, 'options': list(options)}, coding_inflight=False)
+            current['payload']['messages'].append({'role': 'assistant', 'content': text})
+            if later_minutes:
+                current['payload']['messages'].append({'role': 'user', 'content': 'Recheck the original task now; do not repeat completed side effects.'})
+            if self.question:
+                self.question(cur, current, 'assistant', text)
+            status = 'scheduled' if later_minutes else 'waiting_user'
+            self.execute(cur, 'UPDATE velia_background_chat SET status=?,payload=?,lease=NULL,attempts=0,available_at=?,updated_at=? WHERE id=? AND user_id=?',
+                (status, json.dumps(current['payload'], ensure_ascii=False), time.time()+later_minutes*60 if later_minutes else 0,
+                 time.time(), job['id'], job['user_id']))
+            return True
+
+    def answer(self, user, job_id, text, key):
+        with self.transaction() as cur:
+            self.execute(cur, 'SELECT * FROM velia_background_chat WHERE id=? AND user_id=?', (job_id, int(user)))
+            job = self.row(cur, cur.fetchone())
+            if not job or not job['payload'].get('autoloop'):
+                raise JobError('background_task_not_found', 404)
+            answers = job['payload'].setdefault('autoloop_answers', {})
+            if key in answers:
+                if answers[key] != text:
+                    raise JobError('idempotency_mode_mismatch', 409)
+                return job
+            if job['status'] != 'waiting_user':
+                raise JobError('background_task_finished', 409)
+            self.execute(cur, "SELECT id FROM velia_background_chat WHERE user_id=? AND status IN ('queued','running')", (int(user),))
+            if cur.fetchone():
+                raise JobError('background_task_active', 409)
+            answers[key] = text
+            job['payload']['messages'].append({'role': 'user', 'content': text})
+            job['payload']['autoloop_answer'] = text
+            job['payload'].pop('question', None)
+            if self.question:
+                self.question(cur, job, 'user', text)
+            self.execute(cur, "UPDATE velia_background_chat SET status='queued',payload=?,available_at=0,updated_at=? WHERE id=? AND user_id=?",
+                (json.dumps(job['payload'], ensure_ascii=False), time.time(), job_id, int(user)))
+            job['status'] = 'queued'
+            return job
+
 
 def public_job(job):
     return {k:job[k] for k in ('id','conversation_id','model','status','revision','created_at','updated_at','error')} | {
@@ -210,4 +276,7 @@ def public_job(job):
         'resumed':bool(job['payload'].get('resumed_by')),
         'agent_state':job['payload'].get('agent_state'),
         'user_action_required':job['payload'].get('user_action_required'),
+        'autoloop': bool(job['payload'].get('autoloop')),
+        'question': job['payload'].get('question') if job['status'] == 'waiting_user' else None,
+        'available_at': job.get('available_at', 0),
         'notes':[n['text'] for n in job['payload'].get('notes', [])]}
