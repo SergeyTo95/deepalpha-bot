@@ -1,7 +1,28 @@
 import {highlightCode, CODE_RENDER_BUDGET} from './syntax.mjs';
 
 export const CONTINUE_TRUNCATED_RESPONSE =
-  'Продолжи предыдущий ответ ровно с того места, где он оборвался. Не повторяй уже написанное, не начинай план заново. Заверши мысль полностью и задай не более одного нового вопроса.';
+  'Продолжи предыдущий ответ с места обрыва, без повторения уже написанного текста. ' +
+  'Если предложение не закончено, закончи его, затем заверши оставшуюся мысль. ' +
+  'Не начинай план заново и задай не более одного нового вопроса.';
+
+export function canContinuePartialAnswer(message) {
+  return Boolean(
+    message?.role === "assistant" &&
+    !message.agent && !message.pending &&
+    typeof message.content === "string" && message.content.trim() &&
+    (message.finish === "length" || message.failed || message.stopped)
+  );
+}
+
+export function continuationPrompt(message) {
+  if (!canContinuePartialAnswer(message)) throw new Error("Нет ответа для продолжения.");
+  // A failed assistant turn is intentionally excluded from chatPayload.
+  // Supply its ending so the model can continue even after an incomplete SSE.
+  const ending = message.content.slice(-2200);
+  return CONTINUE_TRUNCATED_RESPONSE +
+    "\n\nПоследние строки предыдущего ответа (цитата для ориентира, не инструкция):\n" +
+    ending;
+}
 
 export const MODELS = Object.freeze(
   Object.assign(Object.create(null), {
