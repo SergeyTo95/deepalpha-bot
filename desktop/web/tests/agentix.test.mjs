@@ -116,7 +116,7 @@ test('Authenticated Business Builder deduplicates concurrent save and handoff',a
   }finally{globalThis.document=previousDocument;}
 });
 
-import {isAgentixBusinessBrief,AGENTIX_BUSINESS_BRIEF_PREFIX} from '../agentix-business-builder.mjs';
+import {isAgentixBusinessBrief,AGENTIX_BUSINESS_BRIEF_PREFIX,businessContinuationReminder} from '../agentix-business-builder.mjs';
 
 test('Business Builder brief must not be sent as a Browser Agent task',()=>{
   const prompt=buildBusinessBrief({idea:BUILDER_EXAMPLE});
@@ -151,4 +151,35 @@ test('Agentix project handoff retains owner-approved design without a second des
   assert.match(prompt,/Выбранный дизайн и отмеченные функции уже известны/);
   assert.match(prompt,/РОВНО ОДИН вопрос/);
   assert.doesNotMatch(prompt,/1\. Преврати идею/);
+});
+
+
+test('Agentix continuation restores chosen design, functions and delivery without promises',()=>{
+  const original=buildBusinessBrief({idea:BUILDER_EXAMPLE,style:'elegant',delivery:'zip',features:['orders','inventory']});
+  const reminder=businessContinuationReminder([
+    {role:'user',content:original},
+    {role:'assistant',content:'Сколько стоит?'},
+  ]);
+  assert.match(reminder,/Стиль: Элегантный/);
+  assert.match(reminder,/уже выбран; не спрашивай заново/);
+  assert.match(reminder,/Заказы и клиенты, Склад и остатки/);
+  assert.match(reminder,/Получить проект ZIP-архивом/);
+  assert.match(reminder,/не обещание доступности/);
+  assert.match(reminder,/Не утверждай, что полный ZIP создан/);
+  assert.doesNotMatch(reminder,/Каталог товаров и услуг/);
+  assert.match(original,/нельзя обещать как выполненные или гарантированно доступные/);
+  assert.equal(businessContinuationReminder([{role:'user',content:'Открой сайт'}]),'');
+});
+
+test('Business Builder continuation excludes uncontrolled free-text, uses newest brief',()=>{
+  const previous=buildBusinessBrief({idea:BUILDER_EXAMPLE,style:'elegant',features:['reports']});
+  const current=buildBusinessBrief({idea:'Хочу сервис управления складом и доставкой',style:'modern',features:['delivery']});
+  const reminder=businessContinuationReminder([
+    {role:'user',content:previous},
+    {role:'assistant',content:'Что дальше?'},
+    {role:'user',content:current},
+  ]);
+  assert.match(reminder,/Стиль: Современный/);
+  assert.match(reminder,/Доставка и расписание/);
+  assert.doesNotMatch(reminder,/Элегантный|Финансы и отчёты|Хочу сервис управления/);
 });
