@@ -1,15 +1,18 @@
+import asyncio
 from types import SimpleNamespace
 import uuid
 
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
-import pytest
 
 from desktop.account_routes import setup_account_routes
 
 
-@pytest.mark.asyncio
-async def test_autoloop_proxy_preserves_auth_csrf_model_and_filters_private_fields():
+def test_autoloop_proxy_preserves_auth_csrf_model_and_filters_private_fields():
+    asyncio.run(_check_autoloop_proxy())
+
+
+async def _check_autoloop_proxy():
     calls=[]
     cid,rid=str(uuid.uuid4()),str(uuid.uuid4())
     async def session_for(request):
