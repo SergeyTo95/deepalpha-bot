@@ -51,7 +51,7 @@ RUN /opt/tests/bin/python ci/railway-verified-ci.py backend --commit "$RAILWAY_G
 FROM validation-base AS flash-verified
 COPY --from=python:3.12-bookworm /usr/local /usr/local
 RUN /usr/local/bin/python3.12 -m venv /opt/tests \
-    && /opt/tests/bin/pip install --no-cache-dir pytest requests psycopg2-binary python-dotenv aiohttp tonsdk cryptography pillow pypdf python-multipart PyYAML==6.0.2
+    && /opt/tests/bin/pip install --no-cache-dir pytest pytest-asyncio requests psycopg2-binary python-dotenv aiohttp tonsdk cryptography pillow pypdf python-multipart PyYAML==6.0.2
 COPY --chown=postgres:postgres . /app
 RUN mkdir -p /opt/velia-ci && chown postgres:postgres /opt/velia-ci
 USER postgres
