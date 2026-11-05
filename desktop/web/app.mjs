@@ -12,7 +12,7 @@ import {
   continuationPrompt,
 } from "./core.mjs";
 import {setupFeatures, featureRequest} from "./features.mjs";
-import {isAgentixBusinessBrief} from "./agentix-business-builder.mjs";
+import {isAgentixBusinessBrief,businessContinuationReminder} from "./agentix-business-builder.mjs";
 import {prepareFile, fileSize, setupFileTools} from "./files.mjs";
 import {setupVoice} from "./voice.mjs";
 import {setupBackgroundTasks, taskAcknowledgement} from "./background-tasks.mjs";
@@ -976,7 +976,7 @@ function continueTruncatedResponse() {
   // The failed assistant message stays visible and its ending is quoted in
   // the prompt, even though chatPayload excludes failed messages.
   setAgentMode(false,true);
-  $("prompt").value = continuationPrompt(partial);
+  $("prompt").value = continuationPrompt(partial) + businessContinuationReminder(chat.messages);
   resizePrompt();
   void generate();
 }
