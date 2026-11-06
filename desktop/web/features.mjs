@@ -121,11 +121,22 @@ export function compareMedicalValues(data){
   if(!Number.isFinite(change) || (percent!==null&&!Number.isFinite(percent)))throw new Error('Изменение слишком большое для расчёта.');
   return {indicator:String(data.indicator || '').trim(),first_date:firstDate,second_date:secondDate,first,second,unit:unit1,change,percent};
 }
-export function mountMedicalNavigation(parent){
+export function mountMedicalNavigation(parent, initial){
  const ru=(document.documentElement.lang || navigator.language || '').startsWith('ru'),labels=ru?['Заключения','Дневник и приём','Динамика анализов','КТ']:['Documents','Diary & visit','Lab trends','CT'];
  const keys=['documents','journal','lab','ct'],bar=node('div',undefined,'medical-tabs'),panels={},buttons=[];bar.setAttribute('role','tablist');bar.setAttribute('aria-label',ru?'Инструменты медицинского центра':'Medical center tools');parent.append(bar);
  const select=index=>{keys.forEach((key,i)=>{panels[key].hidden=i!==index;buttons[i].setAttribute('aria-selected',String(i===index));buttons[i].tabIndex=i===index?0:-1;});};
- keys.forEach((key,index)=>{const panel=node('section',undefined,'medical-panel'),tab=button(labels[index],()=>select(index));panel.id='medical-panel-'+key;tab.id='medical-tab-'+key;panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',tab.id);tab.setAttribute('role','tab');tab.setAttribute('aria-controls',panel.id);tab.onkeydown=event=>{const target=event.key==='ArrowRight'?(index+1)%keys.length:event.key==='ArrowLeft'?(index+keys.length-1)%keys.length:event.key==='Home'?0:event.key==='End'?keys.length-1:null;if(target!==null){event.preventDefault();select(target);buttons[target].focus();}};panels[key]=panel;buttons.push(tab);bar.append(tab);parent.append(panel);});select(0);return panels;
+ keys.forEach((key,index)=>{const panel=node('section',undefined,'medical-panel'),tab=button(labels[index],()=>select(index));panel.id='medical-panel-'+key;tab.id='medical-tab-'+key;panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',tab.id);tab.setAttribute('role','tab');tab.setAttribute('aria-controls',panel.id);tab.onkeydown=event=>{const target=event.key==='ArrowRight'?(index+1)%keys.length:event.key==='ArrowLeft'?(index+keys.length-1)%keys.length:event.key==='Home'?0:event.key==='End'?keys.length-1:null;if(target!==null){event.preventDefault();select(target);buttons[target].focus();}};panels[key]=panel;buttons.push(tab);bar.append(tab);parent.append(panel);});select(Math.max(0,keys.indexOf(initial)));return panels;
+}
+export function chatSpecialty(text, files = []) {
+  const value = String(text || '').toLowerCase().trim();
+  const attachment = files.map(file=>String(file.name || '').toLowerCase()).join(' ');
+  if (!files.length && /^(?:открой|покажи|веди|начни|добавь запись в|хочу вести)\s+(?:мой\s+)?дневник\s+симптом|^(?:open|start|show) (?:my |the )?symptom diary/.test(value)) return 'journal';
+  if (!files.length && /^(?:сравни|покажи|посчитай|рассчитай)\s+(?:динамику\s+|два\s+|изменение\s+)?(?:лабораторн[а-я]+\s+показател|показатели\s+анализ)|^(?:compare|calculate) (?:my |the )?(?:lab values|lab results|lab trends)/.test(value)) return 'lab';
+  if (!files.length && /^(?:загруз[а-я]+|проанализируй|разбери|проверь|открой)\s+(?:мой\s+|мое\s+|мои\s+)?(?:кт(?:\s|$)|dicom|nifti)|^(?:upload|analy[sz]e|open) (?:my |the |a )?(?:ct scan|dicom|nifti)/.test(value)) return 'medical_scan';
+  if (/(?:медицинск[а-я]*\s+(?:заключен|документ|отч[её]т)|заключени[ея]\s+(?:врача|кт|мрт|узи)|выписк[ауи]\s+из\s+(?:больницы|клиники)|мои\s+анализы|результат[а-я]*\s+(?:моих\s+)?(?:анализов\s+крови|анализов|обследования)|medical (?:report|document|records?)|(?:my|attached) (?:lab results|blood test|medical report))/.test(value)
+      || (files.length && /(?:медицинск|выписка|анализы крови|medical|blood[_ -]?test|lab[_ -]?result)/.test(attachment))) return 'medical_document';
+  if (/^(?:пожалуйста[, ]+)?(?:(?:проведи|сделай|начни|запусти|подготовь)\s+(?:подробное\s+|углубл[её]нное\s+|глубокое\s+|новое\s+)?исследовани|исследуй\s|(?:найди и )?сравни\s+.{0,40}(?:стать[ие]|исследовани|публикаци)|(?:start|run|conduct|do) (?:a |an )?(?:deep |detailed )?research\b|research\s|compare\s+.{0,50}(?:papers|studies|publications)\b)/.test(value)) return files.length?'research_document':'research';
+  return null;
 }
 export function medicalDocumentPrompt(mode){
  const tasks={summary:'Объясни содержание медицинского заключения простым языком. Отдели написанное врачом от своих пояснений.',compare:'Сравни прикреплённые медицинские заключения по датам. Не сравнивай показатели с разными единицами или условиями как одинаковые. Если даты, единицы или референсные диапазоны отсутствуют, укажи это.',visit:'Подготовь краткое резюме прикреплённых заключений и вопросы для обсуждения с врачом.'};
@@ -186,7 +197,7 @@ const node = (tag, text, cls) => {const n = document.createElement(tag); if (tex
 const button = (text, action) => {const b = node('button', text); b.type = 'button'; b.onclick = action; return b;};
 const labels = {claim:'Утверждение',confidence:'Уверенность',limitations:'Ограничения',open_questions:'Открытые вопросы',source_ids:'Источники',sources:'Источники',recommendations:'Рекомендации',reason:'Причина',message:'Сообщение',results:'Результаты',amount:'Сумма',balance:'Баланс',next_run_at:'Следующий запуск',last_run_at:'Последний запуск',timezone:'Часовой пояс',items:'Результаты',notes:'Описание',completed:'Выполнено',start:'Начало',end:'Окончание',goal:'Цель', title:'Название', name:'Имя', description:'Описание', instructions:'Инструкции', audience:'Аудитория', style:'Стиль', constraints:'Ограничения', status:'Статус', domain:'Направление', content:'Содержание', summary:'Результат', conclusion:'Вывод', text:'Текст', created_at:'Создано', updated_at:'Обновлено', preferred_name:'Как обращаться', about_me:'О себе', credits:'Токены', user_messages:'Сообщения сегодня', user_cost_usd:'Расход сегодня, $', enabled:'Включено', available:'Доступно', revision:'Версия', query:'Поисковый запрос', kind:'Тип', prompt:'Описание', duration_seconds:'Длительность, сек.', error_code:'Ошибка', rationale:'Обоснование',spec_mode_enabled:'Работать по плану',workflow_version:'Версия процесса'};
 const statuses={draft:'Черновик',planned:'Запланировано',paused:'Приостановлено',active:'Активно',completed:'Завершено',failed:'Ошибка',pending:'Ожидает',running:'Выполняется',queued:'В очереди',ready:'Готово',awaiting_approval:'Ожидает подтверждения',cancelled:'Отменено',planning:'Планирую',executing:'Выполняется',claimed:'Готовится к выполнению',blocked:'Нужно уточнение',ready_for_review:'Готово к проверке'};
-const descriptions = {work:'Команда агентов, задания и управление рабочим бюджетом.',studio:'Создавай изображения, видео и музыку в одном месте.',projects:'Собирай идеи, материалы и разработку вокруг своих проектов.',research:'От вопроса к источникам, выводам и отчёту.',medical:'Загружай исследования и следи за результатами анализа.',agents:'Настраивай помощников под свои задачи.',agentix:'Интеллектуальная инфраструктура для SaaS, приложений и цифровых продуктов.',autopilot:'Следи за выполнением поручений, открывай результаты и настраивай расписания.',profile:'Помоги Велии лучше понимать тебя.',plugins:'Выбирай инструменты, которые нужны в работе.',balance:'Следи за доступными токенами и использованием.',voice:'Настрой язык и голос для разговора с Велией.'};
+const descriptions = {work:'Команда агентов, задания и управление рабочим бюджетом.',studio:'Создавай изображения, видео и музыку в одном месте.',projects:'Собирай идеи, материалы и разработку вокруг своих проектов.',research:'История исследований из твоих диалогов.',medical:'История медицинских диалогов и сохранённых исследований.',agents:'Настраивай помощников под свои задачи.',agentix:'Интеллектуальная инфраструктура для SaaS, приложений и цифровых продуктов.',autopilot:'Следи за выполнением поручений, открывай результаты и настраивай расписания.',profile:'Помоги Велии лучше понимать тебя.',plugins:'Выбирай инструменты, которые нужны в работе.',balance:'Следи за доступными токенами и использованием.',voice:'Настрой язык и голос для разговора с Велией.'};
 const hiddenKeys = new Set(['id','user_id','project_id','session_id','generation_id','client_request_id','signature','provider','model','input_sha256','worker_status','workflow_version']);
 function display(value, depth = 0) {
   const box = node('div', undefined, 'feature-detail');
@@ -204,10 +215,10 @@ function display(value, depth = 0) {
   return box;
 }
 
-export function setupFeatures({signedIn, openAuth, openIncomePlanner, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, prepareAgentixChat=()=>{}, taskState=()=>null, prepareTask=()=>{}, onUnauthorized = () => {}}) {
+export function setupFeatures({signedIn, openAuth, openIncomePlanner, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, openTopic, prepareAgentixChat=()=>{}, taskState=()=>null, prepareTask=()=>{}, onUnauthorized = () => {}}) {
   const root = document.getElementById('feature-view'), nav = document.getElementById('feature-nav');
-  let epoch = 0, section = null, controller = null, cleanup=()=>{};
-  const close = () => {epoch++; cleanup();cleanup=()=>{};controller?.abort(); root.replaceChildren(); root.hidden = true; section = null; nav.querySelectorAll('button').forEach(b=>b.removeAttribute('aria-current')); document.getElementById('conversation-scroll').hidden = false; document.querySelector('.composer-area').hidden = false;};
+  let epoch = 0, section = null, controller = null, inlineBody = null, cleanup=()=>{};
+  const close = () => {epoch++; cleanup();cleanup=()=>{};controller?.abort(); inlineBody?.remove(); inlineBody=null; root.replaceChildren(); root.hidden = true; section = null; nav.querySelectorAll('button').forEach(b=>b.removeAttribute('aria-current')); document.getElementById('conversation-scroll').hidden = false; document.querySelector('.composer-area').hidden = false;};
   const call = async (p, o = {}) => {
     try {return await featureRequest(p, {...o, signal: o.signal ?? controller?.signal});}
     catch(error) {if(error.status === 401) onUnauthorized(); throw error;}
@@ -319,41 +330,8 @@ export function setupFeatures({signedIn, openAuth, openIncomePlanner, toast, isB
       } else if (name === 'balance') {
         const results = await Promise.all([call('economy/me'),call('usage')]); if(ticket!==epoch)return; body.replaceChildren(...results.map((r,i)=>{const card=node('article',undefined,'feature-card');card.append(node('h3',i===0?'Твой баланс':'Использование'),display(r.account||r.usage||r));return card;}));
       } else if (name === 'studio') await studio(body);
-      else if (name === 'research') {
-        const capability=await call('research/status');if(ticket!==epoch)return;
-        const researchState=capability.research || {};
-        const intro=node('div',undefined,'research-intro');intro.append(node('small','VELIA RESEARCH'),node('h2','Разберись в теме. Опирайся на источники.'),node('p','Собери материалы, изучи противоречия и сохрани выводы в одном исследовании.'));
-        body.replaceChildren(intro,form([['goal','Что исследовать','textarea']], 'Создать исследование', async d=>{await call('research/missions',{method:'POST',data:d,key:crypto.randomUUID()}); await refresh();}));
-        body.classList.add('research-body');
-        const list=node('div',undefined,'research-list');body.append(node('h2','Мои исследования'),list);
-        const detail=async (m,card)=>{
-          const r=await call('research/missions/'+m.id);card.classList.add('research-mission');card.replaceChildren(node('h3',m.goal),node('span',statuses[r.mission.status] || r.mission.status,'research-badge'));const technical=node('details',undefined,'research-details');technical.append(node('summary','Параметры исследования'),display(r.mission));card.append(technical);
-          const out=node('div');card.append(out);
-          const progress=node('div',undefined,'feature-card');card.append(progress);
-          const refreshRuns=async()=>{
-            const data=await call(`research/missions/${m.id}/runs`);if(ticket!==epoch)return;
-            progress.replaceChildren(node('h3','Ход исследования'));
-            for(const run of data.runs || []){
-              const row=node('div',undefined,'research-run');const meter=node('progress');meter.max=Math.max(1,Number(run.max_iterations)||1);meter.value=Math.min(meter.max,Math.max(0,Number(run.completed_iterations)||0));meter.setAttribute('aria-label','Завершённые итерации исследования');row.append(meter);row.append(node('p',(statuses[run.status] || run.status)+' · '+(run.completed_iterations || 0)+' / '+run.max_iterations+' этапов'));
-              if(run.stop_reason){const reasons={user_cancelled:'Отменено пользователем',attempt_limit:'Исчерпан лимит повторных попыток',mission_not_active:'Исследование закрыто',evidence_sufficient:'Собрано достаточно доказательств',no_open_questions:'Открытых вопросов больше нет',no_new_evidence:'Новые доказательства не найдены',iteration_limit:'Достигнут лимит итераций',stage_failed:'Этап завершился ошибкой',internal_error:'Ошибка исполнения'};row.append(node('p','Причина остановки: '+(reasons[run.stop_reason] || 'Исполнение остановлено')));}
-              if(['queued','running'].includes(run.status))actions(row,[['Остановить исследование',async()=>{await call(`research/runs/${run.id}/cancel`,{method:'POST',data:{}});await refreshRuns();}]]);
-              progress.append(row);
-            }
-            start.disabled=researchState.director?.enabled!==true || ['blocked','cancelled','completed'].includes(r.mission.status) || (data.runs || []).some(item=>['queued','running'].includes(item.status));
-            if(!(data.runs || []).length)progress.append(node('p','Исследование ещё не запущено.'));
-          };
-          actions(card,[['Обновить прогресс',refreshRuns]]);
-          const depth=node('select');depth.setAttribute('aria-label','Глубина исследования');for(const [value,title] of [[1,'Краткое · 1 итерация'],[2,'Стандартное · 2 итерации'],[3,'Углублённое · 3 итерации']]){if(value>(researchState.director?.max_iterations || 2))continue;const option=node('option',title);option.value=String(value);depth.append(option);}depth.value=String(Math.min(2,researchState.director?.max_iterations || 2));card.append(depth);
-          const start=button('Начать исследование',async()=>{await run(start,async()=>{await call(`research/missions/${m.id}/runs`,{method:'POST',data:{max_iterations:Number(depth.value)}});});await refreshRuns().catch(e=>{progress.replaceChildren(node('p',e.message));start.disabled=true;});});
-          start.classList.add('feature-primary');start.disabled=researchState.director?.enabled!==true;card.append(start);
-          card.append(node('p','Запуск включает поиск источников и анализ с выбранным лимитом итераций. Больше итераций может увеличить время и стоимость, но не гарантирует качество. Настроенный внешний AI-провайдер может списать оплату. Автоматический отчёт зависит от конфигурации; сохранённые отчёты доступны ниже.'));
-          if(researchState.director?.enabled!==true)card.append(node('p','Автоматическое исследование отключено. Доступные ручные действия — ниже.'));
-          await refreshRuns().catch(e=>{progress.replaceChildren(node('p',e.message));start.disabled=true;});
-          const advanced=node('details',undefined,'research-details');advanced.append(node('summary','Источники и ручное управление'));card.append(advanced);
-          actions(advanced,[['Найти литературу',async()=>{const r=await call(`research/missions/${m.id}/literature`,{method:'POST',data:{query:m.goal,max_results:12}});out.replaceChildren(display(r.literature));}],['Синтез',async()=>{const r=await call(`research/missions/${m.id}/synthesize`,{method:'POST',data:{max_sources:12}});out.replaceChildren(display(r.synthesis));}],['Сформировать отчёт',async()=>{const r=await call(`research/missions/${m.id}/reports`,{method:'POST'});out.replaceChildren(renderResearchReport(r.report));}],...['sources','evidence-claims','claims','reports','scientific-alerts'].map((k,i)=>[['Источники','Доказательства','Утверждения','Отчёты','Уведомления'][i],async()=>{const r=await call(`research/missions/${m.id}/${k}`);if(k==='reports')out.replaceChildren(...(r.reports || []).map(renderResearchReport));else out.replaceChildren(display(r[k==='scientific-alerts'?'alerts':k.replaceAll('-','_')]));}])]);
-          const saved=await call(`research/missions/${m.id}/reports`).catch(()=>null);if(ticket!==epoch)return;if(saved?.reports?.length)out.replaceChildren(...saved.reports.map(renderResearchReport));else out.append(node('p','Готовый отчёт появится здесь. Сохранённые отчёты доступны при повторном открытии.','feature-help'));
-        };
-        const refresh=()=>collection('research/missions','missions',list,detail); await refresh();
+      else if (name === 'research' || name === 'medical') {
+        await topicHistory(name, body, ticket);
       } else if (name === 'projects') {
         const fields=['title','goal','audience','style','constraints'].map(k=>[k,labels[k],k==='title'?'text':'textarea']);
         body.replaceChildren(form(fields,'Создать проект',async d=>{await call('projects',{method:'POST',data:{passport:d},key:crypto.randomUUID()});await refresh();}));
@@ -388,37 +366,181 @@ export function setupFeatures({signedIn, openAuth, openIncomePlanner, toast, isB
         body.replaceChildren(form(agentFields, 'Создать агента',async d=>{await call('agents',{method:'POST',data:{...d,can_create_chats:true}});await refresh();}));
         const list=node('div');body.append(list);
         const refresh=()=>collection('agents','agents',list,async(a,card)=>{card.append(display(a));actions(card,[['Настроить',async()=>{const r=await call('agents/'+a.id);if(ticket!==epoch)return;const current=r.agent;card.replaceChildren(node('h3',current.name),form(agentFields,'Сохранить агента',async d=>{await call('agents/'+a.id,{method:'PATCH',data:d});await refresh();},{...current,capability_ids:(current.capabilities||[]).map(c=>c.id)}),button('Отмена',()=>refresh()));}],['Новый диалог',async()=>{const r=await call(`agents/${a.id}/conversations`,{method:'POST',data:{title:a.name}});close();await openConversation(r.conversation);}],['Удалить',async()=>{if(!confirm('Удалить этого агента?'))return;await call('agents/'+a.id,{method:'DELETE'});await refresh();}]]);});await refresh();
-      } else if (name === 'medical') {
-        const medicalCapability=await call('medical/status').catch(e=>{if(e.name==='AbortError')throw e;return {medical:{},availability_error:true};});if(ticket!==epoch)return;const medicalReady=medicalCapability.medical?.radar?.available===true;
-        body.classList.add('medical-body');const intro=node('section',undefined,'medical-intro');intro.append(node('small','VELIA MEDICAL'),node('h2','Исследования здоровья в одном месте'),node('p','Сейчас доступен анализ КТ брюшной полости с контрастом. МРТ, УЗИ, фотографии и анализы крови этим инструментом не поддерживаются.'),node('p',medicalReady?'Анализатор настроен. Готовность GPU проверяется при обращении.':'Анализатор сейчас недоступен. Загружать КТ пока нельзя.','feature-notice'));body.replaceChildren(intro);const medicalPanels=mountMedicalNavigation(body);
-        const documents=node('section',undefined,'feature-card');documents.append(node('h3','Заключения и подготовка к врачу'),node('p','Открой отдельный диалог VELIA Flash и прикрепи PDF или текст заключения. До 4 файлов, по 15 МБ. Для сканов извлечение текста может быть недоступно. Файлы отправляются только после твоего нажатия «Отправить». Для диалога, открытого здесь, веб-поиск отключён; используется VELIA Flash.'));
-        if(prepareMedicalChat)actions(documents,[['Объяснить заключение',async()=>{await prepareMedicalChat(medicalDocumentPrompt('summary'));close();}],['Сравнить по датам',async()=>{await prepareMedicalChat(medicalDocumentPrompt('compare'));close();}],['Подготовиться к врачу',async()=>{await prepareMedicalChat(medicalDocumentPrompt('visit'));close();}]]);medicalPanels.documents.append(documents);
-        const journal=node('section',undefined,'feature-card');journal.append(node('h3','Дневник симптомов'),node('p','Записи остаются только в памяти этой вкладки. Сохраняются при переходе между разделами, но исчезнут после обновления или закрытия страницы. Скачай дневник перед выходом. Ничего не отправляется AI или врачу.'));
-        const journalForm=node('form',undefined,'feature-form'),journalInputs={};for(const [key,title,type] of [['date','Дата','date'],['symptom','Что беспокоило','text'],['intensity','Выраженность · 0–10, необязательно','number'],['duration','Как долго длилось','text'],['context','Обстоятельства и наблюдения','textarea']]){const label=node('label',undefined,'feature-input'),input=node(type==='textarea'?'textarea':'input');if(type!=='textarea')input.type=type;input.maxLength=key==='context'?1000:500;input.required=['date','symptom'].includes(key);if(key==='intensity'){input.min='0';input.max='10';input.step='1';}label.append(node('span',title),input);journalInputs[key]=input;journalForm.append(label);}
-        const addEntry=node('button','Добавить запись','feature-primary');addEntry.type='submit';journalForm.append(addEntry);const journalList=node('div');journalList.setAttribute('aria-live','polite');
-        const showJournal=()=>{journalList.replaceChildren(node('p','Записей: '+symptomEntries.length));symptomEntries.forEach((entry,index)=>{const row=node('article',undefined,'medical-journal-entry');row.append(node('strong',entry.date+' · '+entry.symptom),node('p',(entry.intensity===null?'Выраженность не указана':entry.intensity+'/10')+(entry.duration?' · '+entry.duration:'')),node('p',entry.context),button('Удалить запись',()=>{symptomEntries.splice(index,1);showJournal();}));journalList.append(row);});};
-        journalForm.onsubmit=e=>{e.preventDefault();try{if(symptomEntries.length>=200)throw new Error('Лимит 200 записей. Скачай дневник перед очисткой.');symptomEntries.push(symptomEntry(Object.fromEntries(Object.entries(journalInputs).map(([key,input])=>[key,input.value]))));journalInputs.symptom.value='';journalInputs.context.value='';showJournal();}catch(error){toast(error.message);}};
-        journal.append(journalForm,journalList);showJournal();actions(journal,[['Скачать дневник · JSON',()=>downloadMedicalText(journal,JSON.stringify({version:1,entries:symptomEntries},null,2),'VELIA-symptom-diary.json','application/json;charset=utf-8')],['Очистить дневник',()=>{if(!confirm('Удалить все записи из памяти вкладки? Сначала скачай дневник, если он нужен.'))return;symptomEntries=[];showJournal();}]]);
-        const importFile=node('input');importFile.type='file';importFile.accept='.json,application/json';importFile.setAttribute('aria-label','Восстановить дневник JSON');importFile.onchange=async()=>{try{const file=importFile.files[0];if(!file)return;if(file.size>512000)throw new Error('Файл дневника слишком большой.');const parsed=JSON.parse(await file.text());if(parsed.version!==1 || !Array.isArray(parsed.entries)||parsed.entries.length+symptomEntries.length>200)throw new Error('Некорректный дневник или превышен лимит записей.');const restored=parsed.entries.map(symptomEntry);if(ticket!==epoch)return;symptomEntries.push(...restored);showJournal();}catch(error){toast(error.message);}finally{importFile.value='';}};journal.append(node('p','Восстановить скачанный дневник:'),importFile);medicalPanels.journal.append(journal);
-        const visitInputs={};
-        const vault=node('section',undefined,'feature-card');vault.append(node('h3','Сохранить дневник на этом устройстве'),node('p','Сохранение только по кнопке. Дневник и поля карточки к приёму шифруются паролем и остаются в браузере этого сайта. Одна сохранённая копия на браузер; следующий вход потребует пароль. Пароль не сохраняется и не восстанавливается. Очистка данных браузера удалит копию. При открытом дневнике данные доступны странице; шифрование не защищает от вредоносного кода или доступа к разблокированному устройству.'));
-        const passwordLabel=node('label',undefined,'feature-input'),password=node('input');password.type='password';password.minLength=12;password.maxLength=1024;password.autocomplete='off';passwordLabel.append(node('span','Пароль сохранённого дневника'),password);vault.append(passwordLabel);const vaultStatus=node('p');vaultStatus.setAttribute('role','status');vault.append(vaultStatus);
-        actions(vault,[['Сохранить с шифрованием',async()=>{try{if(localStorage.getItem(MEDICAL_VAULT_KEY)&&!confirm('Заменить сохранённую копию дневника текущими записями?'))return;const encrypted=await encryptMedicalDiary({version:1,entries:symptomEntries,notes:normalizeMedicalNotes(visitNotes)},password.value);if(ticket!==epoch)return;localStorage.setItem(MEDICAL_VAULT_KEY,encrypted);vaultStatus.textContent='Зашифрованная копия сохранена.';}finally{password.value='';}}],['Открыть сохранённый дневник',async()=>{try{const encrypted=localStorage.getItem(MEDICAL_VAULT_KEY);if(!encrypted)throw new Error('Сохранённой копии нет.');const restored=await decryptMedicalDiary(encrypted,password.value);if(ticket!==epoch)return;if((symptomEntries.length || Object.values(visitNotes).some(Boolean))&&!confirm('Заменить текущий дневник и карточку сохранёнными данными?'))return;symptomEntries=restored.entries;Object.assign(visitNotes,normalizeMedicalNotes(restored.notes || {}));for(const [key,input] of Object.entries(visitInputs))input.value=visitNotes[key];preview.textContent='';showJournal();vaultStatus.textContent='Дневник открыт в памяти вкладки.';}finally{password.value='';}}],['Удалить сохранённую копию',()=>{if(!confirm('Удалить зашифрованную копию из этого браузера? Текущие записи в памяти останутся.'))return;localStorage.removeItem(MEDICAL_VAULT_KEY);vaultStatus.textContent='Сохранённая копия удалена.'}]]);medicalPanels.journal.append(vault);
-        const visit=node('section',undefined,'feature-card');visit.append(node('h3','Карточка к приёму'),node('p','Собери наблюдения и вопросы. Принимаемые препараты записываются с твоих слов; это не назначение лечения.'));for(const [key,title] of [['goal','Цель визита'],['medications','Что принимаешь · название, дозировка, как часто'],['questions','Что хочешь спросить врача']]){const label=node('label',undefined,'feature-input'),input=node('textarea');input.maxLength=4000;input.value=visitNotes[key];visitInputs[key]=input;input.oninput=()=>{visitNotes[key]=input.value;};label.append(node('span',title),input);visit.append(label);}const preview=node('pre',undefined,'medical-visit-preview');actions(visit,[['Показать карточку',()=>{preview.textContent=medicalVisitCard(symptomEntries,visitNotes);} ],['Скачать карточку · TXT',()=>downloadMedicalText(visit,medicalVisitCard(symptomEntries,visitNotes),'VELIA-doctor-visit.txt')],['Очистить карточку',()=>{if(!confirm('Очистить цель визита, препараты и вопросы?'))return;for(const key of Object.keys(visitNotes))visitNotes[key]='';visit.querySelectorAll('textarea').forEach(input=>{input.value='';});preview.textContent='';}]]);visit.append(preview);medicalPanels.journal.append(visit);
-        const compare=node('section',undefined,'feature-card');compare.append(node('h3','Динамика лабораторного показателя'),node('p','Введи два результата одного показателя с одинаковыми единицами. Расчёт выполняется в браузере, данные не отправляются и не сохраняются автоматически. Условия сдачи и методы лабораторий могут различаться.'));
-        const compareForm=node('form',undefined,'feature-form'),inputs={};for(const [key,title,type] of [['indicator','Название показателя','text'],['date1','Первый анализ · дата','date'],['value1','Первое значение','text'],['unit1','Единицы первого анализа','text'],['date2','Второй анализ · дата','date'],['value2','Второе значение','text'],['unit2','Единицы второго анализа','text']]){const label=node('label',undefined,'feature-input'),input=node('input');label.append(node('span',title));input.type=type;input.required=true;input.maxLength=120;if(key.startsWith('value'))input.inputMode='decimal';label.append(input);inputs[key]=input;compareForm.append(label);}
-        const calculate=node('button','Сравнить значения','feature-primary');calculate.type='submit';const comparison=node('div');comparison.setAttribute('aria-live','polite');compareForm.append(calculate);compareForm.onsubmit=e=>{e.preventDefault();try{const result=compareMedicalValues(Object.fromEntries(Object.entries(inputs).map(([key,input])=>[key,input.value])));comparison.replaceChildren(node('h4',result.indicator),node('p',`${result.first_date}: ${result.first} ${result.unit} → ${result.second_date}: ${result.second} ${result.unit}`),node('p',`Изменение: ${Number(result.change.toPrecision(6))} ${result.unit}; ${result.percent===null?'процент не рассчитывается при исходном нуле':Number(result.percent.toPrecision(6))+'%'}`),node('p','Рост или снижение сами по себе не означают улучшение или ухудшение здоровья. Обсуди сравнение с врачом.'));comparison.append(button('Скачать сравнение · JSON',()=>{const url=URL.createObjectURL(new Blob([JSON.stringify({...result,interpretation:'Numerical change only; not a diagnosis'},null,2)],{type:'application/json;charset=utf-8'}));const link=node('a');link.href=url;link.download='VELIA-lab-comparison.json';comparison.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}));}catch(error){comparison.replaceChildren(node('p',error.message,'feature-notice'));}};compare.append(compareForm,comparison);medicalPanels.lab.append(compare);
-        medicalPanels.ct.append(form([['title','Название исследования'],['contrast_enhanced_confirmed','Подтверждаю наличие контраста','checkbox'],['abdomen_confirmed','Подтверждаю КТ брюшной полости','checkbox']], 'Создать исследование',async d=>{await call('medical/cases',{method:'POST',data:{...d,modality:'ct',study_kind:'contrast_abdomen'}});await refresh();}));
-        const list=node('div');medicalPanels.ct.append(node('h3','Мои КТ-исследования'),list);
-        const detail=async(c,card)=>{const r=await call('medical/cases/'+c.id);card.classList.add('medical-case');card.replaceChildren(node('h3',c.title));const stateNames={draft:'Ожидает загрузки',uploading:'Загрузка файла',queued:'В очереди на анализ',running:'Анализ выполняется',completed:'Анализ завершён',failed:'Обработка не удалась'};card.append(node('p',stateNames[r.case.status] || statuses[r.case.status] || 'Статус неизвестен','research-badge'),renderMedicalResult(r.case));if(r.case.error)card.append(node('p','Ошибка обработки. Обнови статус; если ошибка сохраняется, повторную загрузку согласуй после проверки доступности сервиса.','feature-notice'));
-          const uploadForm=form([['study','DICOM ZIP или NIfTI','file']],'Загрузить КТ',async d=>{const file=d.study;const format=medicalUploadFormat(file);const uploadSignal=controller.signal;const ensureUploadActive=()=>{if(ticket!==epoch || uploadSignal.aborted)throw new DOMException('Upload view closed','AbortError');};ensureUploadActive();const start=await call(`medical/cases/${c.id}/study/begin`,{method:'POST',data:{format,total_bytes:file.size},signal:uploadSignal});let offset=start.upload.received_bytes,index=start.upload.next_chunk;const progress=node('p');progress.setAttribute('role','status');card.append(progress);progress.textContent='Загрузка: '+Math.round(100*offset/file.size)+'%';while(offset<file.size){ensureUploadActive();const chunk=file.slice(offset,offset+8*1024*1024);const bytes=await chunk.arrayBuffer();const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(x=>x.toString(16).padStart(2,'0')).join('');ensureUploadActive();await call(`medical/cases/${c.id}/study/chunks/${index}`,{method:'PUT',file:chunk,digest:hash,signal:uploadSignal});offset+=chunk.size;index++;progress.textContent='Загрузка: '+Math.round(100*offset/file.size)+'%';}ensureUploadActive();await call(`medical/cases/${c.id}/study/complete`,{method:'POST',signal:uploadSignal});ensureUploadActive();await detail(c,card);});uploadForm.querySelector('button').disabled=!medicalReady || ['queued','running','completed'].includes(r.case.status);card.append(uploadForm);
-          actions(card,[['Обновить результат',()=>detail(c,card)],['Создать исследование по результату',async()=>{const v=await call(`medical/cases/${c.id}/research`,{method:'POST'});card.append(display(v.case));}]]);
-        };
-        const refresh=()=>collection('medical/cases','cases',list,detail).catch(e=>{if(e.name==='AbortError')return;list.replaceChildren(node('p','История КТ сейчас недоступна. Локальное сравнение показателей работает независимо.','feature-notice'),button('Повторить загрузку истории',refresh));});await refresh();
       } else if (name === 'autopilot') {
         await taskHub(body,draft);
       }
     } catch(e) {if(e.name!=='AbortError'&&ticket===epoch){const message=node('p',e.message,'feature-notice');message.setAttribute('role','alert');body.replaceChildren(message,button('Повторить',()=>open(name)));}}
+  }
+  async function topicHistory(name,body,ticket) {
+    const list=node('div',undefined,'research-list');
+    const archive=node('div');
+    body.replaceChildren(list,archive);
+    const linked=new Set();
+    async function page(offset=0) {
+      const data=await call(`chat-topics?kind=${name}&offset=${offset}`);
+      if(ticket!==epoch)return;
+      for(const entry of data.entries || []){
+        if(entry.resource_id)linked.add(entry.resource_id);
+        const title=entry.kind==='medical_document'?'Разбор медицинского документа':entry.kind==='medical_scan'?'КТ-исследование':entry.label || 'Исследование';
+        const label=String(entry.created_at || '').slice(0,10);
+        const row=node('article',undefined,'feature-card');
+        row.append(node('h3',title),node('small',label));
+        actions(row,[['Открыть в чате',()=>openTopic(entry)]]);
+        list.append(row);
+      }
+      if(data.next_offset!==null && data.next_offset!==undefined){
+        const more=button('Ещё диалоги',()=>run(more,async()=>{await page(data.next_offset);more.remove();}));
+        list.append(more);
+      }
+      if(!offset && !data.entries?.length)list.append(node('p','Здесь появятся тематические диалоги из общего чата.','feature-empty'));
+    }
+    await page().catch(error=>{
+      if(ticket===epoch)list.append(node('p',error.message,'feature-notice'));
+    });
+    if(ticket!==epoch)return;
+    const old=node('details',undefined,'feature-details');
+    const oldList=node('div');
+    old.append(node('summary','Ранее сохранённые материалы'),oldList);
+    archive.append(old);
+    let loaded=false;
+    old.ontoggle=async()=>{
+      if(!old.open || loaded)return;
+      loaded=true;
+      const research=name==='research';
+      const path=research?'research/missions':'medical/cases';
+      const key=research?'missions':'cases';
+      const append=async(offset=0)=>{
+        const data=await call(path+'?offset='+offset);
+        if(ticket!==epoch)return;
+        for(const item of data[key] || []){
+          const id=item.id || item.mission_id || item.case_id;
+          if(!id || linked.has(id))continue;
+          const row=node('article',undefined,'feature-card');
+          row.append(node('h3',research?(item.goal || 'Исследование'):'КТ-исследование'));
+          actions(row,[['Открыть в чате',()=>openTopic({kind:research?'research':'medical_scan',resource_id:id})]]);
+          oldList.append(row);
+        }
+        if(data.next_offset!=null){
+          const more=button('Ещё материалы',()=>run(more,async()=>{await append(data.next_offset);more.remove();}));
+          oldList.append(more);
+        }
+      };
+      try{
+        await append();
+        if(ticket===epoch && !oldList.childElementCount)oldList.append(node('p','Сохранённых материалов пока нет.','feature-empty'));
+      }catch(error){
+        loaded=false;
+        if(ticket===epoch)oldList.replaceChildren(node('p',error.message,'feature-notice'));
+      }
+    };
+  }
+  async function mountTopic(target, {kind,resource_id,initial,onCreated,startResearch}) {
+    close();
+    controller=new AbortController();
+    const ticket=epoch;
+    const body=node('section',undefined,'feature-body');
+    target.append(body);
+    inlineBody=body;
+    try{
+      if(kind==='research')await mountResearch(body,resource_id,ticket,startResearch);
+      else await mountMedical(body,resource_id,ticket,initial,onCreated);
+    }catch(error){
+      if(ticket===epoch && error.name!=='AbortError')body.replaceChildren(node('p',error.message,'feature-notice'));
+    }
+  }
+  async function mountResearch(body,resourceId,ticket,startResearch) {
+    body.classList.add('research-body');
+    const capability=await call('research/status');
+    if(ticket!==epoch)return;
+    const researchState=capability.research || {};
+    const detail=async (m,card)=>{
+      const r=await call('research/missions/'+m.id);if(ticket!==epoch)return;m.goal=r.mission.goal;card.classList.add('research-mission');card.replaceChildren(node('h3',m.goal),node('span',statuses[r.mission.status] || r.mission.status,'research-badge'));const technical=node('details',undefined,'research-details');technical.append(node('summary','Параметры исследования'),display(r.mission));card.append(technical);
+      const out=node('div');card.append(out);
+      const progress=node('div',undefined,'feature-card');card.append(progress);
+      const refreshRuns=async()=>{
+        const data=await call(`research/missions/${m.id}/runs`);if(ticket!==epoch)return;
+        progress.replaceChildren(node('h3','Ход исследования'));
+        for(const run of data.runs || []){
+          const row=node('div',undefined,'research-run');const meter=node('progress');meter.max=Math.max(1,Number(run.max_iterations)||1);meter.value=Math.min(meter.max,Math.max(0,Number(run.completed_iterations)||0));meter.setAttribute('aria-label','Завершённые итерации исследования');row.append(meter);row.append(node('p',(statuses[run.status] || run.status)+' · '+(run.completed_iterations || 0)+' / '+run.max_iterations+' этапов'));
+          if(run.stop_reason){const reasons={user_cancelled:'Отменено пользователем',attempt_limit:'Исчерпан лимит повторных попыток',mission_not_active:'Исследование закрыто',evidence_sufficient:'Собрано достаточно доказательств',no_open_questions:'Открытых вопросов больше нет',no_new_evidence:'Новые доказательства не найдены',iteration_limit:'Достигнут лимит итераций',stage_failed:'Этап завершился ошибкой',internal_error:'Ошибка исполнения'};row.append(node('p','Причина остановки: '+(reasons[run.stop_reason] || 'Исполнение остановлено')));}
+          if(['queued','running'].includes(run.status))actions(row,[['Остановить исследование',async()=>{await call(`research/runs/${run.id}/cancel`,{method:'POST',data:{}});await refreshRuns();}]]);
+          progress.append(row);
+        }
+        start.disabled=researchState.director?.enabled!==true || ['blocked','cancelled','completed'].includes(r.mission.status) || (data.runs || []).some(item=>['queued','running'].includes(item.status));
+        if(!(data.runs || []).length)progress.append(node('p','Исследование ещё не запущено.'));
+        return data.runs || [];
+      };
+      actions(card,[['Обновить прогресс',()=>update()]]);
+      const depth=node('select');depth.setAttribute('aria-label','Глубина исследования');for(const [value,title] of [[1,'Краткое · 1 итерация'],[2,'Стандартное · 2 итерации'],[3,'Углублённое · 3 итерации']]){if(value>(researchState.director?.max_iterations || 2))continue;const option=node('option',title);option.value=String(value);depth.append(option);}depth.value=String(Math.min(2,researchState.director?.max_iterations || 2));card.append(depth);
+      const start=button('Начать исследование',async()=>{await run(start,async()=>{await call(`research/missions/${m.id}/runs`,{method:'POST',data:{max_iterations:Number(depth.value)}});});await update().catch(e=>{progress.replaceChildren(node('p',e.message));start.disabled=true;});});
+      start.classList.add('feature-primary');start.disabled=true;card.append(start);
+      card.append(node('p','Запуск включает поиск источников и анализ с выбранным лимитом итераций. Больше итераций может увеличить время и стоимость, но не гарантирует качество. Настроенный внешний AI-провайдер может списать оплату. Автоматический отчёт зависит от конфигурации; сохранённые отчёты доступны ниже.'));
+      if(researchState.director?.enabled!==true)card.append(node('p','Автоматическое исследование отключено. Доступные ручные действия — ниже.'));
+      const advanced=node('details',undefined,'research-details');advanced.append(node('summary','Источники и ручное управление'));card.append(advanced);
+      actions(advanced,[['Найти литературу',async()=>{const r=await call(`research/missions/${m.id}/literature`,{method:'POST',data:{query:m.goal,max_results:12}});out.replaceChildren(display(r.literature));}],['Синтез',async()=>{const r=await call(`research/missions/${m.id}/synthesize`,{method:'POST',data:{max_sources:12}});out.replaceChildren(display(r.synthesis));}],['Сформировать отчёт',async()=>{const r=await call(`research/missions/${m.id}/reports`,{method:'POST'});out.replaceChildren(renderResearchReport(r.report));}],...['sources','evidence-claims','claims','reports','scientific-alerts'].map((k,i)=>[['Источники','Доказательства','Утверждения','Отчёты','Уведомления'][i],async()=>{const r=await call(`research/missions/${m.id}/${k}`);if(k==='reports')out.replaceChildren(...(r.reports || []).map(renderResearchReport));else out.replaceChildren(display(r[k==='scientific-alerts'?'alerts':k.replaceAll('-','_')]));}])]);
+      let timer, reportKey;
+      const update=async()=>{
+        clearTimeout(timer);
+        const active=await refreshRuns();
+        const saved=await call(`research/missions/${m.id}/reports`);
+        if(ticket!==epoch)return;
+        const reports=saved.reports || [];
+        const key=JSON.stringify(reports.map(report=>report.id || report.report_id || report));
+        if(key!==reportKey){
+          reportKey=key;
+          out.replaceChildren(...(reports.length?reports.map(renderResearchReport):[node('p','Готовый отчёт появится здесь.','feature-help')]));
+        }
+        if(active?.some(item=>['queued','running'].includes(item.status)))timer=setTimeout(()=>update().catch(error=>{
+          if(ticket===epoch)progress.append(node('p',error.message,'feature-notice'));
+        }),5000);
+        return active;
+      };
+      cleanup=()=>clearTimeout(timer);
+      const runs=await update();
+      if(startResearch && ticket===epoch && !start.disabled && runs?.length===0)await start.onclick();
+    };
+    await detail({id:resourceId},body);
+  }
+  async function mountMedical(body,resourceId,ticket,initial,onCreated) {
+    const medicalCapability=await call('medical/status').catch(e=>{if(e.name==='AbortError')throw e;return {medical:{},availability_error:true};});if(ticket!==epoch)return;const medicalReady=medicalCapability.medical?.radar?.available===true;
+    body.classList.add('medical-body');const intro=node('section',undefined,'medical-intro');intro.append(node('small','VELIA MEDICAL'),node('h2','Исследования здоровья в одном месте'),node('p','Сейчас доступен анализ КТ брюшной полости с контрастом. МРТ, УЗИ, фотографии и анализы крови этим инструментом не поддерживаются.'),node('p',medicalReady?'Анализатор настроен. Готовность GPU проверяется при обращении.':'Анализатор сейчас недоступен. Загружать КТ пока нельзя.','feature-notice'));body.replaceChildren(intro);const medicalPanels=mountMedicalNavigation(body, resourceId ? 'ct' : initial);
+    const documents=node('section',undefined,'feature-card');
+    documents.append(node('h3','Заключения и подготовка к врачу'),node('p','Прикрепи PDF или текст заключения к сообщению в этом чате. До 4 файлов, по 15 МБ. Для сканов извлечение текста может быть недоступно.'));
+    if(prepareMedicalChat)actions(documents,[['Объяснить заключение',()=>prepareMedicalChat(medicalDocumentPrompt('summary'))],['Сравнить по датам',()=>prepareMedicalChat(medicalDocumentPrompt('compare'))],['Подготовиться к врачу',()=>prepareMedicalChat(medicalDocumentPrompt('visit'))]]);
+    medicalPanels.documents.append(documents);
+    const journal=node('section',undefined,'feature-card');journal.append(node('h3','Дневник симптомов'),node('p','Записи остаются только в памяти этой вкладки. Сохраняются при переходе между разделами, но исчезнут после обновления или закрытия страницы. Скачай дневник перед выходом. Ничего не отправляется AI или врачу.'));
+    const journalForm=node('form',undefined,'feature-form'),journalInputs={};for(const [key,title,type] of [['date','Дата','date'],['symptom','Что беспокоило','text'],['intensity','Выраженность · 0–10, необязательно','number'],['duration','Как долго длилось','text'],['context','Обстоятельства и наблюдения','textarea']]){const label=node('label',undefined,'feature-input'),input=node(type==='textarea'?'textarea':'input');if(type!=='textarea')input.type=type;input.maxLength=key==='context'?1000:500;input.required=['date','symptom'].includes(key);if(key==='intensity'){input.min='0';input.max='10';input.step='1';}label.append(node('span',title),input);journalInputs[key]=input;journalForm.append(label);}
+    const addEntry=node('button','Добавить запись','feature-primary');addEntry.type='submit';journalForm.append(addEntry);const journalList=node('div');journalList.setAttribute('aria-live','polite');
+    const showJournal=()=>{journalList.replaceChildren(node('p','Записей: '+symptomEntries.length));symptomEntries.forEach((entry,index)=>{const row=node('article',undefined,'medical-journal-entry');row.append(node('strong',entry.date+' · '+entry.symptom),node('p',(entry.intensity===null?'Выраженность не указана':entry.intensity+'/10')+(entry.duration?' · '+entry.duration:'')),node('p',entry.context),button('Удалить запись',()=>{symptomEntries.splice(index,1);showJournal();}));journalList.append(row);});};
+    journalForm.onsubmit=e=>{e.preventDefault();try{if(symptomEntries.length>=200)throw new Error('Лимит 200 записей. Скачай дневник перед очисткой.');symptomEntries.push(symptomEntry(Object.fromEntries(Object.entries(journalInputs).map(([key,input])=>[key,input.value]))));journalInputs.symptom.value='';journalInputs.context.value='';showJournal();}catch(error){toast(error.message);}};
+    journal.append(journalForm,journalList);showJournal();actions(journal,[['Скачать дневник · JSON',()=>downloadMedicalText(journal,JSON.stringify({version:1,entries:symptomEntries},null,2),'VELIA-symptom-diary.json','application/json;charset=utf-8')],['Очистить дневник',()=>{if(!confirm('Удалить все записи из памяти вкладки? Сначала скачай дневник, если он нужен.'))return;symptomEntries=[];showJournal();}]]);
+    const importFile=node('input');importFile.type='file';importFile.accept='.json,application/json';importFile.setAttribute('aria-label','Восстановить дневник JSON');importFile.onchange=async()=>{try{const file=importFile.files[0];if(!file)return;if(file.size>512000)throw new Error('Файл дневника слишком большой.');const parsed=JSON.parse(await file.text());if(parsed.version!==1 || !Array.isArray(parsed.entries)||parsed.entries.length+symptomEntries.length>200)throw new Error('Некорректный дневник или превышен лимит записей.');const restored=parsed.entries.map(symptomEntry);if(ticket!==epoch)return;symptomEntries.push(...restored);showJournal();}catch(error){toast(error.message);}finally{importFile.value='';}};journal.append(node('p','Восстановить скачанный дневник:'),importFile);medicalPanels.journal.append(journal);
+    const visitInputs={};
+    const vault=node('section',undefined,'feature-card');vault.append(node('h3','Сохранить дневник на этом устройстве'),node('p','Сохранение только по кнопке. Дневник и поля карточки к приёму шифруются паролем и остаются в браузере этого сайта. Одна сохранённая копия на браузер; следующий вход потребует пароль. Пароль не сохраняется и не восстанавливается. Очистка данных браузера удалит копию. При открытом дневнике данные доступны странице; шифрование не защищает от вредоносного кода или доступа к разблокированному устройству.'));
+    const passwordLabel=node('label',undefined,'feature-input'),password=node('input');password.type='password';password.minLength=12;password.maxLength=1024;password.autocomplete='off';passwordLabel.append(node('span','Пароль сохранённого дневника'),password);vault.append(passwordLabel);const vaultStatus=node('p');vaultStatus.setAttribute('role','status');vault.append(vaultStatus);
+    actions(vault,[['Сохранить с шифрованием',async()=>{try{if(localStorage.getItem(MEDICAL_VAULT_KEY)&&!confirm('Заменить сохранённую копию дневника текущими записями?'))return;const encrypted=await encryptMedicalDiary({version:1,entries:symptomEntries,notes:normalizeMedicalNotes(visitNotes)},password.value);if(ticket!==epoch)return;localStorage.setItem(MEDICAL_VAULT_KEY,encrypted);vaultStatus.textContent='Зашифрованная копия сохранена.';}finally{password.value='';}}],['Открыть сохранённый дневник',async()=>{try{const encrypted=localStorage.getItem(MEDICAL_VAULT_KEY);if(!encrypted)throw new Error('Сохранённой копии нет.');const restored=await decryptMedicalDiary(encrypted,password.value);if(ticket!==epoch)return;if((symptomEntries.length || Object.values(visitNotes).some(Boolean))&&!confirm('Заменить текущий дневник и карточку сохранёнными данными?'))return;symptomEntries=restored.entries;Object.assign(visitNotes,normalizeMedicalNotes(restored.notes || {}));for(const [key,input] of Object.entries(visitInputs))input.value=visitNotes[key];preview.textContent='';showJournal();vaultStatus.textContent='Дневник открыт в памяти вкладки.';}finally{password.value='';}}],['Удалить сохранённую копию',()=>{if(!confirm('Удалить зашифрованную копию из этого браузера? Текущие записи в памяти останутся.'))return;localStorage.removeItem(MEDICAL_VAULT_KEY);vaultStatus.textContent='Сохранённая копия удалена.'}]]);medicalPanels.journal.append(vault);
+    const visit=node('section',undefined,'feature-card');visit.append(node('h3','Карточка к приёму'),node('p','Собери наблюдения и вопросы. Принимаемые препараты записываются с твоих слов; это не назначение лечения.'));for(const [key,title] of [['goal','Цель визита'],['medications','Что принимаешь · название, дозировка, как часто'],['questions','Что хочешь спросить врача']]){const label=node('label',undefined,'feature-input'),input=node('textarea');input.maxLength=4000;input.value=visitNotes[key];visitInputs[key]=input;input.oninput=()=>{visitNotes[key]=input.value;};label.append(node('span',title),input);visit.append(label);}const preview=node('pre',undefined,'medical-visit-preview');actions(visit,[['Показать карточку',()=>{preview.textContent=medicalVisitCard(symptomEntries,visitNotes);} ],['Скачать карточку · TXT',()=>downloadMedicalText(visit,medicalVisitCard(symptomEntries,visitNotes),'VELIA-doctor-visit.txt')],['Очистить карточку',()=>{if(!confirm('Очистить цель визита, препараты и вопросы?'))return;for(const key of Object.keys(visitNotes))visitNotes[key]='';visit.querySelectorAll('textarea').forEach(input=>{input.value='';});preview.textContent='';}]]);visit.append(preview);medicalPanels.journal.append(visit);
+    const compare=node('section',undefined,'feature-card');compare.append(node('h3','Динамика лабораторного показателя'),node('p','Введи два результата одного показателя с одинаковыми единицами. Расчёт выполняется в браузере, данные не отправляются и не сохраняются автоматически. Условия сдачи и методы лабораторий могут различаться.'));
+    const compareForm=node('form',undefined,'feature-form'),inputs={};for(const [key,title,type] of [['indicator','Название показателя','text'],['date1','Первый анализ · дата','date'],['value1','Первое значение','text'],['unit1','Единицы первого анализа','text'],['date2','Второй анализ · дата','date'],['value2','Второе значение','text'],['unit2','Единицы второго анализа','text']]){const label=node('label',undefined,'feature-input'),input=node('input');label.append(node('span',title));input.type=type;input.required=true;input.maxLength=120;if(key.startsWith('value'))input.inputMode='decimal';label.append(input);inputs[key]=input;compareForm.append(label);}
+    const calculate=node('button','Сравнить значения','feature-primary');calculate.type='submit';const comparison=node('div');comparison.setAttribute('aria-live','polite');compareForm.append(calculate);compareForm.onsubmit=e=>{e.preventDefault();try{const result=compareMedicalValues(Object.fromEntries(Object.entries(inputs).map(([key,input])=>[key,input.value])));comparison.replaceChildren(node('h4',result.indicator),node('p',`${result.first_date}: ${result.first} ${result.unit} → ${result.second_date}: ${result.second} ${result.unit}`),node('p',`Изменение: ${Number(result.change.toPrecision(6))} ${result.unit}; ${result.percent===null?'процент не рассчитывается при исходном нуле':Number(result.percent.toPrecision(6))+'%'}`),node('p','Рост или снижение сами по себе не означают улучшение или ухудшение здоровья. Обсуди сравнение с врачом.'));comparison.append(button('Скачать сравнение · JSON',()=>{const url=URL.createObjectURL(new Blob([JSON.stringify({...result,interpretation:'Numerical change only; not a diagnosis'},null,2)],{type:'application/json;charset=utf-8'}));const link=node('a');link.href=url;link.download='VELIA-lab-comparison.json';comparison.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}));}catch(error){comparison.replaceChildren(node('p',error.message,'feature-notice'));}};compare.append(compareForm,comparison);medicalPanels.lab.append(compare);
+    const list=node('div');
+    if(!resourceId){
+      const create=form([['title','Название исследования'],['contrast_enhanced_confirmed','Подтверждаю наличие контраста','checkbox'],['abdomen_confirmed','Подтверждаю КТ брюшной полости','checkbox']], 'Создать исследование',async data=>{
+        const {case:created}=await call('medical/cases',{method:'POST',data:{...data,modality:'ct',study_kind:'contrast_abdomen'}});
+        if(ticket!==epoch)return;
+        create.remove();
+        if(onCreated)await onCreated(created.id);
+        if(ticket===epoch)await detail(created,list);
+      });
+      create.querySelector('button').disabled=!medicalReady;
+      medicalPanels.ct.append(create);
+    }
+    medicalPanels.ct.append(list);
+    const detail=async(c,card)=>{const r=await call('medical/cases/'+c.id);if(ticket!==epoch)return;card.classList.add('medical-case');card.replaceChildren(node('h3',r.case.title || 'КТ-исследование'));const stateNames={created:'Ожидает загрузки',draft:'Ожидает загрузки',uploading:'Загрузка файла',queued:'В очереди на анализ',running:'Анализ выполняется',completed:'Анализ завершён',failed:'Обработка не удалась'};card.append(node('p',stateNames[r.case.status] || statuses[r.case.status] || 'Статус неизвестен','research-badge'),renderMedicalResult(r.case));if(r.case.error)card.append(node('p','Ошибка обработки. Обнови статус; если ошибка сохраняется, повторную загрузку согласуй после проверки доступности сервиса.','feature-notice'));
+      const uploadForm=form([['study','DICOM ZIP или NIfTI','file']],'Загрузить КТ',async d=>{const file=d.study;const format=medicalUploadFormat(file);const uploadSignal=controller.signal;const ensureUploadActive=()=>{if(ticket!==epoch || uploadSignal.aborted)throw new DOMException('Upload view closed','AbortError');};ensureUploadActive();const start=await call(`medical/cases/${c.id}/study/begin`,{method:'POST',data:{format,total_bytes:file.size},signal:uploadSignal});let offset=start.upload.received_bytes,index=start.upload.next_chunk;const progress=node('p');progress.setAttribute('role','status');card.append(progress);progress.textContent='Загрузка: '+Math.round(100*offset/file.size)+'%';while(offset<file.size){ensureUploadActive();const chunk=file.slice(offset,offset+8*1024*1024);const bytes=await chunk.arrayBuffer();const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(x=>x.toString(16).padStart(2,'0')).join('');ensureUploadActive();await call(`medical/cases/${c.id}/study/chunks/${index}`,{method:'PUT',file:chunk,digest:hash,signal:uploadSignal});offset+=chunk.size;index++;progress.textContent='Загрузка: '+Math.round(100*offset/file.size)+'%';}ensureUploadActive();await call(`medical/cases/${c.id}/study/complete`,{method:'POST',signal:uploadSignal});ensureUploadActive();await detail(c,card);});uploadForm.querySelector('button').disabled=!medicalReady || ['queued','running','completed'].includes(r.case.status);card.append(uploadForm);
+      actions(card,[['Обновить результат',()=>detail(c,card)],['Создать исследование по результату',async()=>{const v=await call(`medical/cases/${c.id}/research`,{method:'POST'});card.append(display(v.case));}]]);
+    };
+    if(resourceId)await detail({id:resourceId},list);
   }
   async function development(body, project) {
     const ticket=epoch;
@@ -594,5 +716,5 @@ export function setupFeatures({signedIn, openAuth, openIncomePlanner, toast, isB
   const symbols=['<path d="m12 3 9 9-9 9-9-9z"/>','<rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 10h18M8 5V3"/>','<circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/>','<path d="M12 4v16M4 12h16"/>','<rect x="4" y="7" width="16" height="14" rx="4"/><path d="M12 3v4M8 12h1m6 0h1M8 17h8"/>','<path d="m12 3 8 4v6c0 4-8 8-8 8s-8-4-8-8V7zM9 12l2 2 4-4"/>','<path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="6"/><path d="M12 9v3l2 2"/>','<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/>','<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12h8m-4-4v8"/>','<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>','<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11v1a7 7 0 0 0 14 0v-1M12 19v3"/>'];
   for (const [index,[key,title]] of SECTIONS.entries()) {if(index===0||key==='profile')nav.append(node('span',index===0?'РАБОЧЕЕ ПРОСТРАНСТВО':'НАСТРОЙКИ','feature-nav-heading')); const b=button(title,()=>open(key)); b.dataset.section=key;const icon=node('span',undefined,'feature-nav-icon');icon.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'+(key==='agentix' ? '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>' : symbols[index>5?index-1:index] || '<path d="M9 3h6v10a3 3 0 0 1-6 0zM5 11v2a7 7 0 0 0 14 0M12 20v2"/>')+'</svg>';icon.setAttribute('aria-hidden','true');b.prepend(icon);nav.append(b);}
   const clearMedicalData=()=>{symptomEntries=[];for(const key of Object.keys(visitNotes))visitNotes[key]='';};
-  return {close,open,clearMedicalData};
+  return {mountTopic,close,open,clearMedicalData};
 }

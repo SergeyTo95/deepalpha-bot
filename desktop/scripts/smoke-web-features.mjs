@@ -14,9 +14,12 @@ try{
   const context=await browser.newContext({viewport:{width:1440,height:960}}),page=await context.newPage(),errors=[],calls=[];
   page.on('pageerror',e=>errors.push(e.message));
   let scheduleItems=[],schedulerEnabled=true,jobStatus='completed';
+  const topics=[], sends=[];
+  let researchRuns=[];
   const id='11111111-1111-1111-1111-111111111111';
+  await context.route('**/web-api/v1/conversations/*/messages/stream',route=>{sends.push(route.request().postDataJSON());return route.continue();});
   await context.route('**/web-api/v1/features/**',async route=>{
-    const req=route.request(),p=new URL(req.url()).pathname.split('/features/')[1];calls.push({method:req.method(),path:p,body:req.headers()['content-type']?.includes('json')?req.postDataJSON():null});
+    const req=route.request(),url=new URL(req.url()),p=url.pathname.split('/features/')[1];calls.push({method:req.method(),path:p,body:req.headers()['content-type']?.includes('json')?req.postDataJSON():null});
     const map={
       profile:{profile:{preferred_name:'Сергей',about_me:'Проекты'}},
       plugins:{plugins:{weather:{enabled:true,available:true},web_search:{enabled:true,available:true}}},
@@ -25,6 +28,8 @@ try{
       ['projects/'+id]:{project:{id,revision:1,passport:{title:'Мой проект',goal:'Цель'}}},
       'project-resources':{resources:[]},'research/missions':{missions:[{id,goal:'Тема исследования'}]},
       ['research/missions/'+id]:{mission:{id,goal:'Тема исследования',status:'planned'}},
+      'research/status':{research:{director:{enabled:true,max_iterations:2}}},
+      'medical/status':{medical:{radar:{available:true}}},
       'medical/cases':{cases:[{id,title:'КТ',status:'draft'}]},['medical/cases/'+id]:{case:{id,title:'КТ',status:'draft'}},
       agents:{agents:[{id,name:'Мой агент'}]},'agents/capabilities':{capabilities:[{id:'research',name:'Исследования'}]},
       'agent/status':{enabled:true,tools:[{name:'velia.tasks.list',enabled:true},{name:'velia.tasks.create_draft',enabled:true}]},'agent/schedules/status':{enabled:true},'agent/schedules':{schedules:[]},'developer/autopilot/status':{worker_ready:true},
@@ -35,6 +40,25 @@ try{
       'studio/sessions':{sessions:[{id,title:'Моя Studio'}]},['studio/sessions/'+id+'/messages']:{messages:[{content:'Готово',generation:{type:'image',media:{id:'image1',content_url:'/api/mobile/images/image1/content?user_id=7&expires=123&signature=abc'}}}]},
     };
     let result=map[p]||{};
+    if(p==='chat-topics'){
+      if(req.method()==='POST'){
+        const {reference,...data}=req.postDataJSON();
+        const document=data.kind.endsWith('_document');
+        const entry={...data,created_at:new Date().toISOString(),message_id:document?reference:null,resource_id:document?null:reference};
+        if(!topics.some(item=>item.entry_id===entry.entry_id))topics.push(entry);
+        result={entry};
+      }else{
+        const conversation=url.searchParams.get('conversation_id'),kind=url.searchParams.get('kind');
+        result={entries:topics.filter(item=>(!conversation || item.conversation_id===conversation)
+          && (!kind || (kind==='research')===item.kind.startsWith('research'))),next_offset:null};
+      }
+    }
+    if(p==='research/missions'&&req.method()==='POST')result={mission:{id,goal:req.postDataJSON().goal,status:'planned'}};
+    if(p===`research/missions/${id}/runs`){
+      if(req.method()==='POST')researchRuns=[{id,status:'completed',max_iterations:2,completed_iterations:2}];
+      result={runs:researchRuns};
+    }
+    if(p===`research/missions/${id}/reports`)result={reports:researchRuns.length?[{id,report:{conclusion:{summary:'Проверочный отчёт в чате'}}}]:[]};
     if(p==='agent/schedules/status')result={enabled:schedulerEnabled};
     if(p==='agent/schedules'){
       if(req.method()==='POST'){const d=req.postDataJSON();scheduleItems.push({...d,schedule_id:'schedule1',enabled:false,last_job_id:'job1'});result={schedule:scheduleItems.at(-1)};}
@@ -49,15 +73,40 @@ try{
 
     if(req.method()==='POST'&&p==='studio/sessions')result={session:{id,title:'Новая Studio'}};
     if(req.method()==='POST'&&p.endsWith('/assets'))result={asset:{id:'ref1'}};
-    if(req.method()==='POST'&&p.endsWith('/attachments'))result={attachment:{id}};
+    if(req.method()==='POST'&&p.endsWith('/attachments'))return route.continue();
     if(p.startsWith('media/'))return route.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aPmQAAAAASUVORK5CYII=','base64')});
     await route.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,...result})});
   });
-  await context.route('**/web-api/v1/auth/exchange',async route=>{const response=await route.fetch(),data=await response.json();await route.fulfill({response,json:{...data,browser_agent:true}});});
+  const enableFixtureAgent=async route=>{const response=await route.fetch(),data=await response.json();await route.fulfill({response,json:{...data,browser_agent:true}});};
+  await context.route('**/web-api/v1/auth/exchange',enableFixtureAgent);
+  await context.route('**/web-api/v1/session',enableFixtureAgent);
   await page.goto('http://127.0.0.1:18180/');
-  await page.locator('#model-button').click();assert.equal(await page.locator('[data-model="velia-quantum"]').isDisabled(),true);assert.match(await page.locator('[data-model="velia-quantum"]').innerText(),/Скоро/);await page.locator('#model-button').click();
+  await page.locator('#model-button').click();assert.equal(await page.locator('[data-model="velia-quantum"]').isDisabled(),true);assert.match(await page.locator('[data-model="velia-quantum"]').innerText(),/Скоро|Войди в аккаунт/);await page.locator('#model-button').click();
   await page.locator('#account').click();await page.locator('#pairing-code').fill('ABCD-EFGH-2345-6789');await page.locator('#auth-submit').click();await page.locator('#auth-dialog').waitFor({state:'hidden'});
   const open=async name=>{await page.locator('#feature-nav').getByRole('button',{name,exact:true}).click();await page.locator('#feature-view h1').getByText(name,{exact:true}).waitFor();};
+  const send=async text=>{await page.locator('#prompt').fill(text);await page.locator('#send').click();};
+  await send('Проведи подробное исследование доступности транспорта');
+  await page.locator('#messages').getByText('Проверочный отчёт в чате',{exact:true}).waitFor();
+  assert.equal(calls.filter(call=>call.method==='POST'&&call.path===`research/missions/${id}/runs`).length,1);
+  assert.equal(await page.locator('#feature-view').isVisible(),false);
+  await send('Почему небо голубое?');
+  await page.locator('.message.assistant .message-content').filter({hasText:'Я Велия.'}).waitFor();
+  assert.equal(sends.at(-1).medical_no_search,undefined);
+  await page.locator('#attachment-input').setInputFiles({name:'medical-report.txt',mimeType:'text/plain',buffer:Buffer.from('Synthetic example')});
+  await send('Объясни медицинское заключение');
+  await page.waitForFunction(()=>!document.getElementById('send').hidden);
+  assert.equal(sends.at(-1).medical_no_search,true);
+  assert.equal(sends.at(-1).web_search,false);
+  await open('Медицинский центр');
+  await page.getByRole('button',{name:'Открыть в чате',exact:true}).click();
+  const medical=topics.find(item=>item.kind==='medical_document');
+  await page.locator('#turn-'+medical.message_id).waitFor();
+  assert.match(await page.locator('#turn-'+medical.message_id).innerText(),/Объясни медицинское заключение/);
+  await page.reload();
+  await open('Исследования');
+  await page.getByRole('button',{name:'Открыть в чате',exact:true}).click();
+  await page.locator('#messages').getByText('Проверочный отчёт в чате',{exact:true}).waitFor();
+  assert.equal(calls.filter(call=>call.method==='POST'&&call.path===`research/missions/${id}/runs`).length,1);
   await open('Персонализация');await page.locator('[name=preferred_name]').fill('Новое имя');await page.getByRole('button',{name:'Сохранить',exact:true}).click();await page.waitForTimeout(100);assert.equal(calls.at(-1).body.preferred_name,'Новое имя');
   await open('Studio');await page.locator('[name=image_provider]').selectOption('velia_image_2');await page.locator('[name=prompt]').fill('Прозрачный персонаж');await page.locator('[name=transparent_background]').check();await page.getByRole('button',{name:'Создать',exact:true}).click();await page.locator('.feature-card img').waitFor();await page.getByRole('button',{name:'Открыть изображение',exact:true}).click();await page.locator('.file-dialog img').waitFor();assert.match(await page.locator('.file-dialog img').getAttribute('src'),/features\/media\/images/);await page.locator('.file-dialog').getByRole('button',{name:'Закрыть',exact:true}).click();assert.equal(calls.findLast(c=>c.path.endsWith('/generate')).body.image_provider,'velia_image_2');await page.screenshot({path:output+'/studio-desktop.png'});
   await page.getByRole('button',{name:'Видео',exact:true}).click();await page.locator('[name=duration_seconds]').selectOption('15');await page.locator('[name=prompt]').fill('Видео');await page.getByRole('button',{name:'Создать',exact:true}).click();await page.waitForTimeout(100);assert.equal(calls.findLast(c=>c.path.endsWith('/generate')).body.duration_seconds,15);
@@ -78,8 +127,11 @@ try{
       assert.equal(await page.locator('#feature-nav button[aria-current=page]').count(),1);
       if(name==='Задачи'&&width===390)await page.screenshot({path:output+'/autopilot-mobile.png'});
       if(name==='Медицинский центр') {
-        await page.locator('#medical-tab-ct').click();
-        const label=page.locator('#medical-panel-ct .feature-check').first();const checkbox=label.locator('input');await label.click();assert.equal(await checkbox.isChecked(),true);
+        await page.getByText('Ранее сохранённые материалы',{exact:true}).click();
+        await page.locator('details[open]').getByRole('button',{name:'Открыть в чате',exact:true}).click();
+        await page.locator('#medical-panel-ct').getByText('Ожидает загрузки',{exact:true}).waitFor();
+        assert.equal(await page.locator('#feature-view').isVisible(),false);
+        assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
         await page.screenshot({path:output+`/medical-${width}.png`});
       }
     }
@@ -106,7 +158,7 @@ try{
     await page.waitForTimeout(250);await page.screenshot({path:output+`/navigation-short-${height}.png`});
     await page.locator('#scrim').click({position:{x:380,y:40}});
   }
-  await page.locator('#menu').click();await page.locator('#history .history-open').first().click();await page.locator('#chat-tools').click();await page.locator('#chat-schedule').click();await page.locator('[name=instruction]').waitFor();assert.equal(await page.locator('[name=instruction]').inputValue(),'Моя прежняя идея');assert.equal(await page.locator('[name=template]').inputValue(),'velia.tasks.create_draft');
+  await page.locator('#menu').click();await page.locator('#history .history-open').filter({hasText:'Старый диалог из приложения'}).click();await page.locator('#chat-tools').click();await page.locator('#chat-schedule').click();await page.locator('[name=instruction]').waitFor();assert.equal(await page.locator('[name=instruction]').inputValue(),'Моя прежняя идея');assert.equal(await page.locator('[name=template]').inputValue(),'velia.tasks.create_draft');
   await page.getByRole('button',{name:'К диалогу',exact:true}).click();
   await page.locator('#attachment-input').setInputFiles({name:'notes.csv',mimeType:'application/octet-stream',buffer:Buffer.from('<script>window.BAD=true</script>\nname,value\nVELIA,1')});
   await page.locator('.file-chip').getByRole('button',{name:/notes.csv/}).first().click();await page.locator('.file-dialog pre').waitFor();assert.match(await page.locator('.file-dialog pre').innerText(),/<script>/);assert.equal(await page.evaluate(()=>window.BAD),undefined);await page.locator('.file-dialog').getByRole('button',{name:'Закрыть',exact:true}).click();
@@ -120,7 +172,7 @@ try{
   await page.getByRole('button',{name:'Удалить notes.csv',exact:true}).click();assert.equal(await page.locator('.file-chip').count(),3);
   const download=page.waitForEvent('download');await page.getByRole('button',{name:'Сохранить .md',exact:true}).first().click();assert.equal((await download).suggestedFilename(),'VELIA-answer.md');
   await page.locator('#chat-tools').click();const exportDownload=page.waitForEvent('download');await page.locator('#chat-export').click();assert.equal((await exportDownload).suggestedFilename(),'VELIA-chat.md');
-  assert.equal(await page.locator('#feature-nav svg').count(),11);
+  assert.equal(await page.locator('#feature-nav svg').count(),12);
   assert.equal(await page.locator('#feature-nav').innerText().then(t=>t.includes('undefined')),false);
   assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,sections:10,quantumDisabled:true,image2:true,video15:true,autopilotId:true,mobile:true,featureCalls:calls.length}));
 }finally{await browser?.close();fixture.kill();}
