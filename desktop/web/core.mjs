@@ -411,6 +411,11 @@ export async function readCompletion(response, onText, onSearch = () => {}, onPr
     reader.releaseLock();
   }
 }
+export function cleanAssistantHistory(value) {
+  const text = typeof value === "string" ? value : "";
+  const cleaned = text.replace(/<tool_call>[\s\S]*?(?:<\/tool_call>|$)/gi, "");
+  return cleaned === text ? text : cleaned.trim() || "Ответ не сформировался. Повтори запрос.";
+}
 export function loadChats(storage, key) {
   try {
     const data = JSON.parse(storage.getItem(key) || "[]");
@@ -432,7 +437,9 @@ export function loadChats(storage, key) {
               m.content.length <= 64000,
           ),
       )
-      .slice(0, 100);
+      .slice(0, 100)
+      .map(chat => ({...chat, messages:chat.messages.map(message => message.role === "assistant"
+        ? {...message, content:cleanAssistantHistory(message.content)} : message)}));
   } catch {
     return [];
   }

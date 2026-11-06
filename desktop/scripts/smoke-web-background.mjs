@@ -7,6 +7,18 @@ const {window}=dom;
 Object.assign(globalThis,{window,document:window.document,localStorage:window.localStorage,sessionStorage:window.sessionStorage,location:window.location,matchMedia:()=>({matches:true}),requestAnimationFrame:window.requestAnimationFrame.bind(window),cancelAnimationFrame:window.cancelAnimationFrame.bind(window),BroadcastChannel:undefined});
 Object.defineProperty(globalThis,'navigator',{value:window.navigator,configurable:true});
 window.HTMLDialogElement.prototype.showModal=function(){this.open=true;};window.HTMLDialogElement.prototype.close=function(){this.open=false;};
+const recognizers=[],spoken=[];
+window.SpeechRecognition=class {
+ start(){recognizers.push(this);}
+ stop(){this.onend?.();}
+ abort(){}
+};
+globalThis.SpeechSynthesisUtterance=class {constructor(text){this.text=text;}};
+window.speechSynthesis={
+ getVoices:()=>[{name:'Fixture',voiceURI:'fixture-ru',lang:'ru-RU',localService:true}],
+ addEventListener(){}, cancel(){},
+ speak(utterance){if(utterance.volume!==0){spoken.push(utterance.text);setTimeout(()=>utterance.onend?.(),0);}},
+};
 const useAgent=process.env.VELIA_SMOKE_BACKGROUND_AGENT==='true',taskModel=process.env.VELIA_SMOKE_BACKGROUND_MODEL||'pro';
 const profile={ok:true,account:'a'.repeat(24),history_cache_key:'b'.repeat(64),name:'Owner',language:'ru',credits:10,free_api_tiers:true,background_tasks:true,browser_agent:useAgent,background_agent:useAgent,models:['velia-flash','velia-quantum','velia-pro']};
 const cid='00000000-0000-4000-8000-000000000001',jid='00000000-0000-4000-8000-000000000002';
@@ -26,6 +38,10 @@ globalThis.fetch=async(url,options={})=>{
  }
  if(path.endsWith('/messages'))return Response.json({ok:true,messages});
  if(path.endsWith('/messages/stream')){
+   if(data.voice_turn){
+     const event={choices:[{delta:{content:'Отвечаю голосом.'},finish_reason:'stop'}]};
+     return new Response(`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`,{headers:{'Content-Type':'text/event-stream'}});
+   }
    messages.push({id:'user-2',role:'user',content:data.content,status:'completed',chat_mode:'flash'},{id:'answer-2',role:'assistant',content:'Flash can keep talking.',status:'completed',chat_mode:'flash'});
    return new Response('data: {"choices":[{"delta":{"content":"Flash can keep talking."},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',{headers:{'Content-Type':'text/event-stream'}});
  }
@@ -92,5 +108,24 @@ try{
  assert.match(document.querySelector('#messages').textContent,/The finished PRO comparison/);
  assert.equal(document.querySelector('#prompt').value,'An unsent draft must stay here');
  assert.ok(!requests.some(r=>r.path.endsWith('/cancel')));
+ document.querySelector('[data-model="velia-pro"]').click();
+ assert.equal(document.querySelector('#background-enabled').checked,true);
+ const taskCount=requests.filter(r=>r.path.endsWith('/tasks')).length;
+ document.querySelector('#voice-open').click();
+ for(const [index,transcript] of ['Сколько сейчас времени на Марсе?', 'А почему так долго?'].entries()){
+   for(let attempt=0;recognizers.length<=index&&attempt<40;attempt++)await new Promise(r=>setTimeout(r,50));
+   assert.ok(recognizers.length>index,'Voice recognition should be ready');
+   const recognizer=recognizers[index];
+   recognizer.onresult({results:[Object.assign([{transcript}],{isFinal:true})]});
+   recognizer.stop();
+   for(let attempt=0;spoken.length<=index&&attempt<40;attempt++)await new Promise(r=>setTimeout(r,50));
+   assert.match(spoken[index],/Отвечаю голосом/);
+   assert.match(document.querySelector('#model-label').textContent,/PRO/);
+ }
+ const voiceCalls=requests.filter(r=>r.path.endsWith('/messages/stream')&&r.data.voice_turn);
+ assert.deepEqual(voiceCalls.map(r=>r.data.model),['velia-pro','velia-pro']);
+ assert.equal(voiceCalls[0].path,voiceCalls[1].path);
+ assert.equal(requests.filter(r=>r.path.endsWith('/tasks')).length,taskCount);
+ document.querySelector('.voice-close').click();
  console.log(JSON.stringify({ok:true,synthetic:true,agent:useAgent,taskModel,checks:['model benefits and access terms visible','background task accepted','composer stays available','Flash invitation preserves draft and task','Flash answers while task runs','result restored in original chat','invitation removed on completion','unsent draft preserved','closed card stays hidden after polling','closing preserves answer without cancellation',...(useAgent?['selected model and Agent submitted together','manual-step continuation keeps original task and browser']:[])]}));
 }catch(error){console.error(error);process.exitCode=1;}finally{dom.window.close();setTimeout(()=>process.exit(process.exitCode||0),10);}

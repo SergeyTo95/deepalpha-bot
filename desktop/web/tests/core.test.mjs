@@ -216,6 +216,20 @@ test("corrupt, oversized or unavailable history does not break the chat", () => 
   );
 });
 
+test("restored history hides old search envelopes in assistant replies only", () => {
+  const markup = '<tool_call>web_search<arg_value>query</arg_value></tool_call>';
+  const messages = [
+    {role: "user", content: markup},
+    {role: "assistant", content: markup + '\n\n[Источник](https://example.com)'},
+    {role: "assistant", content: '<tool_call>incomplete'},
+    {role: "assistant", content: 'Обычный ответ.'},
+  ];
+  const raw = JSON.stringify([{id: "a", title: "t", updated: 1, messages}]);
+  assert.deepEqual(loadChats({getItem: () => raw}, "fixture")[0].messages.map(message => message.content), [
+    markup, '[Источник](https://example.com)', 'Ответ не сформировался. Повтори запрос.', 'Обычный ответ.',
+  ]);
+});
+
 import {apiError as formatApiError} from '../core.mjs';
 test('Browser runtime failure is not mislabeled as an outage',()=>{
   assert.match(formatApiError('browser_agent_failed'),/не смог завершить/);

@@ -4,6 +4,7 @@ import {
   renderMarkdown,
   readCompletion,
   loadChats,
+  cleanAssistantHistory,
   chatPayload,
   apiError,
   normalizeNetworkError,
@@ -790,7 +791,7 @@ async function openChat(chat, background = false) {
       if (profile?.account !== account || currentId !== chat.id) return;
       const previous = chat.messages;
       chat.messages = data.messages.map((m, i) => ({
-        role: m.role, content: m.content || "", serverId:m.id, sentAt:Date.parse(m.created_at),
+        role: m.role, content: m.role === "assistant" ? cleanAssistantHistory(m.content) : m.content || "", serverId:m.id, sentAt:Date.parse(m.created_at),
         attachmentIds: m.attachments?.map(a=>a.id) || previous[i]?.attachmentIds || [], fileNames: m.attachments?.map(a=>a.name).filter(Boolean) || previous[i]?.fileNames || [],
         requestId: previous[i]?.role === m.role && previous[i]?.content === m.content ? previous[i]?.requestId : undefined,
         model: m.chat_mode === "quantum" ? "velia-quantum" : m.chat_mode === "flash" ? "velia-flash" : "velia-pro",
@@ -1061,7 +1062,8 @@ async function generate(retry = false, voiceTurn = false) {
     finally{setBusy(false);render();save();}
     return;
   }
-  if(chat.remote&&profile?.background_tasks&&(!privateTurn || backgroundAgent)&&!isDocumentTopic(user.specialty)&&(backgroundAgent||!agentMode&&background.wants(selected))){
+  const backgroundReply = !voiceTurn && !agentMode && background.wants(selected);
+  if(chat.remote&&profile?.background_tasks&&(!privateTurn || backgroundAgent)&&!isDocumentTopic(user.specialty)&&(backgroundAgent||backgroundReply)){
     const owner=profile.account;setBusy(true);render();save();
     try{
       const taskPayload={...payload};delete taskPayload.medical_no_search;
