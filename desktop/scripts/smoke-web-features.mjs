@@ -172,7 +172,7 @@ try{
   await page.getByRole('button',{name:'Удалить notes.csv',exact:true}).click();assert.equal(await page.locator('.file-chip').count(),3);
   const download=page.waitForEvent('download');await page.getByRole('button',{name:'Сохранить .md',exact:true}).first().click();assert.equal((await download).suggestedFilename(),'VELIA-answer.md');
   await page.locator('#chat-tools').click();const exportDownload=page.waitForEvent('download');await page.locator('#chat-export').click();assert.equal((await exportDownload).suggestedFilename(),'VELIA-chat.md');
-  assert.equal(await page.locator('#feature-nav svg').count(),11);
+  assert.equal(await page.locator('#feature-nav svg').count(),12);
   assert.equal(await page.locator('#feature-nav').innerText().then(t=>t.includes('undefined')),false);
   assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,sections:10,quantumDisabled:true,image2:true,video15:true,autopilotId:true,mobile:true,featureCalls:calls.length}));
 }finally{await browser?.close();fixture.kill();}
