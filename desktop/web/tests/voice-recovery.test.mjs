@@ -4,7 +4,7 @@ import {setupVoice} from '../voice.mjs';
 import {readCompletion} from '../core.mjs';
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 
-function fixture(t,{responder,speech=false,remote=false,recognition='standard',recording=false}={}) {
+function fixture(t,{responder,speech=false,remote=false,remoteProblem=()=>null,recognition='standard',recording=false,model='VELIA FLASH'}={}) {
  t.mock.timers.enable({apis:['setTimeout']});
  const recognizers=[],sent=[],events=[],spoken=[],preparations=[],media=[],sockets=[],httpSpeech=[],recorders=[],tracks=[],transcriptions=[];let completion;
  class Element {
@@ -49,6 +49,9 @@ function fixture(t,{responder,speech=false,remote=false,recognition='standard',r
    const data=JSON.parse(value);this.sent.push(data);if(data.type!=='speak')return;
    queueMicrotask(()=>{
     if(this.readyState!==1)return;
+    const problem=remoteProblem(data);
+    if(problem==='stall')return;
+    if(problem==='error'){this.onmessage({data:JSON.stringify({type:'error',id:data.id})});return;}
     this.onmessage({data:JSON.stringify({type:'start',id:data.id})});
     const audio=new Uint8Array(7);new DataView(audio.buffer).setUint32(0,data.id);audio.set([1,2,3],4);
     this.onmessage({data:audio.buffer});this.onmessage({data:JSON.stringify({type:'end',id:data.id})});
@@ -60,11 +63,11 @@ function fixture(t,{responder,speech=false,remote=false,recognition='standard',r
   ...(recording?{MediaRecorder:Recorder}:{}),
   ...(remote?{Audio,WebSocket:Socket,location:{href:'https://velia.example/'}}:{}),
   SpeechSynthesisUtterance:class {constructor(text){this.text=text;}},
-  navigator:{language:'ru-RU',...(recording?{mediaDevices:{getUserMedia:async()=>{const track={stopped:false,stop(){this.stopped=true;}};tracks.push(track);return {getTracks:()=>[track]};}}}:{})},localStorage:{getItem:()=>null},
+  navigator:{language:'ru-RU',...(recording?{mediaDevices:{getUserMedia:async()=>{const track={stopped:false,stop(){this.stopped=true;}};tracks.push(track);return {getTracks:()=>[track]};}}}:{})},localStorage:{getItem:key=>remote&&speech?({'velia-voice-mode':'manual','velia-voice-uri':'edge:ru-RU-SvetlanaNeural'}[key]||null):null},
   fetch:async(url,options)=>{if(url.includes('/transcribe?')){transcriptions.push(options);return {ok:true,json:async()=>({text:'Не отправляй 125 рублей'})};}if(url.endsWith('/events'))events.push(JSON.parse(options.body));if(url.endsWith('/prepare'))preparations.push(JSON.parse(options.body));if(url.includes('/speech')){httpSpeech.push(url);throw Error('unexpected HTTP speech');}return {ok:true,json:async()=>remote?{voices:[{voiceURI:'edge:ru-RU-SvetlanaNeural',lang:'ru-RU',name:'Светлана'}],channel:true}:{voices:[],transcription:recording}};}};
  const previous=new Map();
  for(const [key,value] of Object.entries(globals)){previous.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});}
- const voice=setupVoice({send:text=>{sent.push(text);return completion=responder?responder(voice):Promise.resolve(voice.complete(''));},busy:()=>false,toast(){},accountLanguage:()=> 'ru'});
+ const voice=setupVoice({send:text=>{sent.push(text);return completion=responder?responder(voice):Promise.resolve(voice.complete(''));},busy:()=>false,toast(){},accountLanguage:()=> 'ru',modelName:()=>model});
  t.after(()=>{voice.stop();for(const [key,descriptor] of previous){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];}});
  voice.open();
  return {voice,recognizers,sent,events,spoken,preparations,media,sockets,httpSpeech,recorders,tracks,transcriptions,
@@ -355,4 +358,50 @@ test('three remote phrases use one answer channel, preserve order and resume the
  assert.equal(s.sockets[0].readyState,3);assert.deepEqual(s.httpSpeech,[]);
  assert.equal(s.recognizers.length,2);assert.equal(s.status(),'Слушаю тебя…');
  assert.equal(s.events.filter(x=>x.event==='voice_latency'&&x.clock==='media').length,1);
+});
+
+test('PRO falls back to local speech on a cloud error and starts the next turn with its selected voice',async t=>{
+ let unavailable=true;
+ const text='Первая фраза. Вторая фраза.';
+ const s=fixture(t,{remote:true,speech:true,model:'VELIA PRO',
+  remoteProblem:()=>unavailable?'error':null,responder:async voice=>{voice.update(text);voice.complete(text);}});
+ await flush();submit(s);await s.completion;await flush();
+ assert.deepEqual(s.spoken.map(voice=>voice.text),['Первая фраза.']);
+ assert.equal(s.spoken[0].voice.voiceURI,'local-ru');
+ s.spoken[0].onend();
+ assert.deepEqual(s.spoken.map(voice=>voice.text),['Первая фраза.','Вторая фраза.']);
+ s.spoken[1].onend();s.tick(400);
+ assert.equal(s.recognizers.length,2);
+ assert.equal(s.sockets.length,1);
+ assert.deepEqual(s.sent,['Привет']);
+ assert.equal(s.events.find(event=>event.event==='voice_latency').clock,'device');
+ unavailable=false;submit(s);await s.completion;await flush();
+ assert.equal(s.sockets.length,2);assert.equal(s.media.length,1);assert.equal(s.spoken.length,2);
+});
+
+test('Flash switches only the unheard tail when the cloud stalls between phrases',async t=>{
+ const text='Первая фраза. Вторая фраза. Третья фраза.';
+ const s=fixture(t,{remote:true,speech:true,remoteProblem:data=>data.text.startsWith('Вторая')?'stall':null,
+  responder:async voice=>{voice.update(text);voice.complete(text);}});
+ await flush();submit(s);await s.completion;await flush();
+ assert.equal(s.media.length,1);s.media[0].ended();await flush();
+ s.tick(4499);assert.equal(s.spoken.length,0);
+ s.tick(1);assert.deepEqual(s.spoken.map(voice=>voice.text),['Вторая фраза.']);
+ s.media[0].ended();s.spoken[0].onend();
+ assert.deepEqual(s.spoken.map(voice=>voice.text),['Вторая фраза.','Третья фраза.']);
+ s.spoken[1].onend();s.tick(400);
+ assert.deepEqual(s.sent,['Привет']);
+ assert.equal(s.recognizers.length,2);
+ assert.equal(s.media.length,1);
+});
+
+test('cloud playback that already started is never replayed automatically on a device voice',async t=>{
+ const s=fixture(t,{remote:true,speech:true,responder:async voice=>{voice.complete('Первая фраза.');}});
+ await flush();submit(s);await s.completion;await flush();
+ assert.equal(s.media.length,1);
+ s.tick(4500);assert.equal(s.spoken.length,0);
+ s.media[0].player.onerror();
+ assert.equal(s.spoken.length,0);
+ assert.match(s.status(),/Продолжить озвучку/);
+ assert.deepEqual(s.sent,['Привет']);
 });
