@@ -444,6 +444,8 @@ def setup_velia_mobile_routes(
         handle_messages_send,
     )
     app.router.add_get("/mobile-api/v1/usage", handle_usage)
+    from services.velia_chat_topic_routes import setup_chat_topic_routes
+    setup_chat_topic_routes(app, _require_mobile_auth, _mobile_api_available)
     from velia_project_routes import setup_velia_project_routes
     setup_velia_project_routes(app)
     from services.velia_background_chat_service import setup_routes
