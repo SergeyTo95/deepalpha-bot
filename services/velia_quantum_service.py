@@ -256,6 +256,7 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False, web_sear
         if free_tier:
             LOG.info("VELIA_FREE_API_TURN mode=%s upstream=%s voice=%s thinking=%s model_calls=%d", chat_mode, config.model, bool(voice_turn), turn.config.thinking_enabled, turn.calls)
         return {**result, "ok": True, "text": text, "usage": turn.usage,
+            "estimated_cost_usd": turn.cost_usd,
             "finish_reason": turn.decoder.finish_reason}
     except QuantumError as exc:
         outcome = exc.code
@@ -351,7 +352,8 @@ def voice_budget_error(cursor,user_id):
 def dispatch_free(user_id, conversation_id, content, *, chat_mode, voice_turn=False, on_delta=None, on_reset=None, **kwargs):
     if chat_mode not in free_models.TIERS:
         return {"ok":False, "error":"invalid_chat_mode"}
-    config = free_models.configuration(chat_mode, voice=voice_turn)
+    pilot = free_models.minimax_pilot_configuration(user_id) if chat_mode == "pro" and not voice_turn else None
+    config = pilot or free_models.configuration(chat_mode, voice=voice_turn)
     if config is None:
         return {"ok":False, "error":chat_mode + "_unavailable"}
     from services import velia_chat_service as chat
@@ -380,8 +382,9 @@ def dispatch_free(user_id, conversation_id, content, *, chat_mode, voice_turn=Fa
         global_lock = bool(_first_value(cursor.fetchone()))
         if not global_lock:
             return {"ok":False, "error":chat_mode + "_busy"}
-        return core(user_id, conversation_id, content, chat_mode=chat_mode, voice_turn=voice_turn,
-            on_delta=on_delta, on_reset=on_reset, **kwargs)
+        with free_models.use_pro_pilot(pilot):
+            return core(user_id, conversation_id, content, chat_mode=chat_mode, voice_turn=voice_turn,
+                on_delta=on_delta, on_reset=on_reset, **kwargs)
     finally:
         conn.rollback()
         if global_lock:
