@@ -911,6 +911,21 @@ dialog::backdrop {
   width: 430px;
   padding: 35px;
 }
+.income-dialog {
+  width: 560px;
+  max-height: 90dvh;
+  padding: clamp(18px, 5vw, 30px);
+}
+.income-dialog h2 { margin: 0 36px 16px 0; }
+.income-dialog p, #income-calculation { color: var(--soft); line-height: 1.6; }
+.income-dialog .feature-form { padding: 0; margin: 0; border: 0; gap: 12px; }
+.income-dialog .feature-form p { margin: 0; }
+.income-goal { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
+.income-details label { margin-top: 10px; }
+.income-details summary { cursor: pointer; }
+.income-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+.income-actions button { min-height: 44px; }
+#income-error:empty, #income-status:empty { display: none; }
 .dialog-close {
   position: absolute;
   right: 15px;
@@ -981,12 +996,6 @@ dialog::backdrop {
   display: flex;
   justify-content: space-between;
   width: 100%;
-}
-.auth-dialog .auth-caption {
-  font-size: 10px;
-  color: var(--muted);
-  margin: 15px 0 0;
-  text-align: center;
 }
 .confirm-dialog {
   width: 380px;
