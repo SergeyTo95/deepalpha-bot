@@ -100,6 +100,10 @@
               Велия рядом.
             </p>
             <div class="suggestions">
+              <button class="suggestion" id="income-open" type="button">
+                <span data-icon="bolt"></span><strong>Найти способ заработать</strong>
+                <small>Подобрать услугу и посчитать цель</small><span class="suggestion-arrow">↗</span>
+              </button>
               <button
                 class="suggestion"
                 data-prompt="Помоги превратить мою идею в понятный план. Для начала задай несколько важных вопросов."
@@ -256,6 +260,61 @@
         </div>
       </main>
     </div>
+    <dialog class="income-dialog" id="income-dialog" aria-labelledby="income-title">
+      <button type="button" class="dialog-close icon-button" id="income-close" aria-label="Закрыть">
+        <span data-icon="close"></span>
+      </button>
+      <h2 id="income-title">Найти способ заработать</h2>
+      <form id="income-form" class="feature-form">
+        <p>Получи идею услуги, расчёт на 4 недели и черновик первого сообщения клиенту.</p>
+        <label>Что ты умеешь делать?
+          <input name="skill" type="text" maxlength="180" placeholder="Например, делать отчёты в Excel" required>
+        </label>
+        <label>Сколько часов в неделю есть?
+          <input name="hours" type="number" min="0.25" max="168" step="0.25" inputmode="decimal" placeholder="5" required>
+        </label>
+        <div class="income-goal">
+          <label>Цель за 4 недели
+            <input name="goal" type="number" min="0.01" max="10000000" step="0.01" inputmode="decimal" placeholder="20000" required>
+          </label>
+          <label>Валюта
+            <select name="currency">
+              <option value="RUB">₽ RUB</option><option value="USD">$ USD</option><option value="EUR">€ EUR</option>
+              <option value="TRY">₺ TRY</option><option value="BYN">BYN</option><option value="KZT">₸ KZT</option>
+            </select>
+          </label>
+        </div>
+        <details class="income-details">
+          <summary>Уточнить расчёт</summary>
+          <label>Поиск клиентов, минут в неделю
+            <input name="search" type="number" min="0" max="10079" step="1" inputmode="numeric" placeholder="По умолчанию 20% времени">
+          </label>
+          <label>Время на один заказ, минут
+            <input name="duration" type="number" min="1" max="40320" step="1" inputmode="numeric">
+          </label>
+          <label>Предполагаемая цена заказа
+            <input name="price" type="number" min="0" max="10000000" step="0.01" inputmode="decimal">
+          </label>
+          <label>Расходы за 4 недели
+            <input name="costs" type="number" min="0" max="10000000" step="0.01" inputmode="decimal" placeholder="0">
+          </label>
+        </details>
+        <div id="income-error" role="alert"></div>
+        <button class="primary-button" type="submit">Получить план</button>
+      </form>
+      <section id="income-result" hidden>
+        <h3>Расчёт на 4 недели</h3>
+        <ul id="income-calculation"></ul>
+        <h3>Услуга и сообщение клиенту</h3>
+        <p id="income-status" role="status"></p>
+        <div class="message-content" id="income-service"></div>
+        <div class="income-actions">
+          <button type="button" id="income-edit">Изменить данные</button>
+          <button type="button" id="income-copy" hidden>Скопировать план</button>
+          <button type="button" class="primary-button" id="income-save" hidden>Сохранить в этом браузере</button>
+        </div>
+      </section>
+    </dialog>
     <dialog class="auth-dialog" id="auth-dialog" aria-labelledby="auth-title">
       <button
         class="dialog-close icon-button"
@@ -293,9 +352,6 @@
           Войти в VELIA<span>→</span>
         </button>
       </form>
-      <p class="auth-caption">
-        На время Preview доступ открыт твоему аккаунту.
-      </p>
     </dialog>
     <dialog class="takeover-dialog" id="takeover-dialog" aria-labelledby="takeover-title">
       <div class="takeover-header">

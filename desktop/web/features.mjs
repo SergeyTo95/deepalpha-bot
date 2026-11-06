@@ -204,7 +204,7 @@ function display(value, depth = 0) {
   return box;
 }
 
-export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, prepareAgentixChat=()=>{}, taskState=()=>null, prepareTask=()=>{}, onUnauthorized = () => {}}) {
+export function setupFeatures({signedIn, openAuth, openIncomePlanner, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, prepareAgentixChat=()=>{}, taskState=()=>null, prepareTask=()=>{}, onUnauthorized = () => {}}) {
   const root = document.getElementById('feature-view'), nav = document.getElementById('feature-nav');
   let epoch = 0, section = null, controller = null, cleanup=()=>{};
   const close = () => {epoch++; cleanup();cleanup=()=>{};controller?.abort(); root.replaceChildren(); root.hidden = true; section = null; nav.querySelectorAll('button').forEach(b=>b.removeAttribute('aria-current')); document.getElementById('conversation-scroll').hidden = false; document.querySelector('.composer-area').hidden = false;};
@@ -260,6 +260,7 @@ export function setupFeatures({signedIn, openAuth, toast, isBusy, voiceSettings,
   window.addEventListener('beforeunload',event=>{if(symptomEntries.length || Object.values(visitNotes).some(Boolean)){event.preventDefault();event.returnValue='';}});
   async function open(name, draft = {}) {
     if (isBusy()) {toast('Дождись завершения ответа.'); return;}
+    if (!signedIn() && name === 'work' && openIncomePlanner) {openIncomePlanner(); return;}
     if (!signedIn() && name !== 'voice' && name !== 'agentix') {openAuth(); return;}
     close(); section = name; controller = new AbortController(); const ticket = epoch;
     root.hidden = false; root.scrollTop = 0; document.getElementById('conversation-scroll').hidden = true; document.querySelector('.composer-area').hidden = true;

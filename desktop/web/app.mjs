@@ -17,6 +17,7 @@ import {prepareFile, fileSize, setupFileTools} from "./files.mjs";
 import {setupVoice} from "./voice.mjs";
 import {setupBackgroundTasks, taskAcknowledgement} from "./background-tasks.mjs";
 import {setupAutoloop, parseAutoloop} from './autoloop.mjs';
+import {setupIncomePlanner} from './income-planner.mjs';
 const $ = (id) => document.getElementById(id);
 const icons = {
   attachment: "M21 11l-8 8a6 6 0 0 1-8-8l9-9a4 4 0 0 1 6 6l-9 9a2 2 0 0 1-3-3l8-8",
@@ -105,8 +106,60 @@ function addFiles(files) {
 }
 
 const current = () => chats.find((c) => c.id === currentId);
+const historyOrder = (a, b) => Number(!!b.isPinned) - Number(!!a.isPinned) || b.updated - a.updated;
+let incomeToSave = null;
+const incomePlanner = setupIncomePlanner({
+  renderMarkdown,
+  copyText,
+  async suggest(text, signal) {
+    const isGuest = !profile;
+    if (isGuest && !guest) await refreshGuest();
+    if (signal.aborted) throw signal.reason;
+    if (isGuest && guest?.remaining === 0) throw new Error('Гостевой лимит исчерпан. Войди для подбора услуги.');
+    const payload = chatPayload({messages: [{role: 'user', content: text}]}, 'velia-flash');
+    const response = await request(isGuest ? 'guest/chat/completions' : 'chat/completions', payload,
+      AbortSignal.any([signal, AbortSignal.timeout(90000)]));
+    const remaining = response.headers.get('X-Velia-Guest-Remaining');
+    if (isGuest && !profile && guest && remaining != null) {
+      guest.remaining = Number(remaining);
+      renderGuestCounter();
+    }
+    const result = await readCompletion(response, () => {});
+    return result.text;
+  },
+  async savePlan(plan) {
+    if (!profile) {
+      incomeToSave = plan;
+      openAuth();
+      return false;
+    }
+    await saveIncomePlan(plan);
+    return true;
+  },
+});
+function showIncomePlanner() {
+  if (busy) return;
+  sidebar(false);
+  incomePlanner.open(!!profile);
+}
+async function saveIncomePlan(plan) {
+  const owner = profile?.account;
+  if (!owner) return;
+  const chat = {
+    id: crypto.randomUUID(), title: ('План заработка · ' + plan.skill).slice(0, 70), updated: Date.now(),
+    messages: [
+      {role: 'user', content: 'Навык для плана заработка: ' + plan.skill},
+      {role: 'assistant', model: 'velia-flash', content: plan.content},
+    ],
+  };
+  chats = [chat, ...chats].slice(0, 100);
+  await openChat(chat);
+  const saved = await save();
+  if (profile?.account === owner) toast(saved ? 'План сохранён в истории этого браузера.' :
+    'План открыт. Сохранение на устройстве недоступно. Его можно скачать в меню диалога.');
+}
 const voice = setupVoice({accountLanguage:()=>profile?.language||'', busy:()=>busy, toast, modelName:()=>MODELS[model], send:text=>{if(agentMode&&model==='velia-flash')setAgentMode(false);$("prompt").value=text;return generate(false, true);}});
-const features = setupFeatures({prepareAgentixChat:brief=>{
+const features = setupFeatures({openIncomePlanner: showIncomePlanner, prepareAgentixChat:brief=>{
   if(busy)throw new Error('Дождись завершения текущего ответа.');
   if($('prompt').value.trim())throw new Error('В диалоге есть несохранённый текст. Сохрани или очисти его перед переходом.');
   setAgentMode(false,true);
@@ -137,6 +190,8 @@ const browserStorage = { getItem: (key) => localStorage.getItem(key) };
 const localHistory = new LocalHistory(browserHistoryStore());
 const authChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('velia-auth-v1') : null;
 function lockHistory() {
+  incomeToSave = null;
+  incomePlanner.reset();
   backgroundTakeover=null;
   background.reset();
   autoloop.reset();
@@ -258,7 +313,7 @@ function renderHistory() {
         (c) =>
           (c.remote || c.messages.length) && c.title.toLocaleLowerCase().includes(filter),
       )
-      .sort((a, b) => Number(!!b.isPinned) - Number(!!a.isPinned) || b.updated - a.updated);
+      .sort(historyOrder);
   if (!items.length) {
     const p = document.createElement("p");
     p.className = "history-empty";
@@ -632,7 +687,8 @@ async function syncHistory() {
       updated: Date.parse(c.updated_at || c.created_at) || Date.now(),
       messages: cached.get(c.id)?.messages || [], remote: true,
     }));
-    chats = [...remote, ...chats.filter((c) => !c.remote && !remote.some((r) => r.id === c.id))].slice(0, 100);
+    chats = [...remote, ...chats.filter((c) => !c.remote && !remote.some((r) => r.id === c.id))]
+      .sort(historyOrder).slice(0, 100);
     if (currentId && !current()) currentId = null;
     $("history-state").textContent = "История в твоём аккаунте";
     save(); render();
@@ -710,6 +766,9 @@ async function applyProfile(value) {
   render();
   syncHistory();
 }
+function renderGuestCounter() {
+  $("guest-counter").textContent = guest.remaining > 0 ? "Без регистрации · осталось " + guest.remaining + " из 30 сообщений" : "30 гостевых сообщений использованы. Войди, чтобы продолжить.";
+}
 function applyGuest(value) {
   if (profile) return;
   $("research-link").hidden = true;
@@ -733,7 +792,7 @@ function applyGuest(value) {
   $("pro-availability").textContent = "Войди в аккаунт с токенами для PRO";
   $("quantum-availability").textContent = "Войди в аккаунт для доступа";
   $("guest-notice").hidden = false;
-  $("guest-counter").textContent = value.remaining > 0 ? "Без регистрации · осталось " + value.remaining + " из 30 сообщений" : "30 гостевых сообщений использованы. Войди, чтобы продолжить.";
+  renderGuestCounter();
   save(); render();
 }
 async function refreshGuest() {
@@ -933,7 +992,7 @@ async function generate(retry = false, voiceTurn = false) {
     const response = await request(!profile ? "guest/chat/completions" : chat.remote ? "conversations/" + chat.id + "/messages/stream" : "chat/completions", payload, abort.signal);
     if (!profile && guest && response.headers.has("X-Velia-Guest-Remaining")) {
       guest.remaining = Number(response.headers.get("X-Velia-Guest-Remaining"));
-      $("guest-counter").textContent = guest.remaining > 0 ? "Без регистрации · осталось " + guest.remaining + " из 30 сообщений" : "30 гостевых сообщений использованы. Войди, чтобы продолжить.";
+      renderGuestCounter();
     }
     const result = await readCompletion(response, (content) => {
       answer.content = content;
@@ -1080,7 +1139,8 @@ document.addEventListener("keydown", (e) => {
     ].focus();
   }
 });
-for (const suggestion of document.querySelectorAll(".suggestion"))
+$("income-open").onclick = showIncomePlanner;
+for (const suggestion of document.querySelectorAll(".suggestion[data-prompt]"))
   suggestion.onclick = () => {
     $("prompt").value = suggestion.dataset.prompt;
     resizePrompt();
@@ -1114,6 +1174,7 @@ $("takeover-screen-button").onclick = (e) => {
 };
 $("takeover-continue").onclick = continueAfterTakeover;
 $("auth-close").onclick = () => $("auth-dialog").close();
+$("auth-dialog").addEventListener("close", () => { incomeToSave = null; });
 $("guest-login").onclick = openAuth;
 $("pairing-link").onclick = () => {
   try { sessionStorage.setItem("velia-auth-pending", "1"); } catch {}
@@ -1143,12 +1204,14 @@ $("auth-form").onsubmit = async (e) => {
       ),
       data = await response.json();
     if (!response.ok) throw new Error(apiError(data.error));
+    const plan = incomeToSave;
     notifyAuthChange();
     await applyProfile(data);
     try { sessionStorage.removeItem("velia-auth-pending"); } catch {}
     $("auth-dialog").close();
     $("pairing-code").value = "";
-    toast("Ты в VELIA. Можно начинать.");
+    if (plan) await saveIncomePlan(plan);
+    else toast("Ты в VELIA. Можно начинать.");
     $("prompt").focus();
   } catch (error) {
     $("auth-error").textContent =
