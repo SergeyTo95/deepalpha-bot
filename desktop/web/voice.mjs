@@ -192,7 +192,7 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH', 
   const record=node('button','Записать реплику','voice-record');record.hidden=true;
   const nativeInput=node('button','Автоматическое распознавание','voice-native');nativeInput.hidden=true;
   nativeInput.onclick=()=>{if(pending||currentUtterance)return;recordingMode=false;stop();if(dialog.open)begin();};
-  const recordNotice=node('p','Запись реплики отправляется в Groq для распознавания. Нажми ещё раз, когда закончишь говорить. До 45 секунд.','voice-record-notice');recordNotice.hidden=true;
+  const recordNotice=node('p','Запись отправляется на облачное распознавание речи. Нажми ещё раз, когда закончишь говорить. До 45 секунд.','voice-record-notice');recordNotice.hidden=true;
   const capture=createVoiceCapture({
     changed:recording=>{record.textContent=recording?'Отправить реплику':'Записать реплику';record.disabled=micMuted||pending||!!currentUtterance||captureBusy&&!recording;},
     ready:text=>{captureBusy=false;if(!active||micMuted)return;showTranscript({final:text});acceptTurn(text,epoch);},
