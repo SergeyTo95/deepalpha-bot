@@ -372,10 +372,28 @@ def test_free_pro_thinking_search_continuation_keeps_reasoning_private_and_turn_
     continuation = turn.body()
     assert continuation["messages"][-2]["reasoning_content"] == "PRIVATE-THINKING"
     assert continuation["thinking"] == {"type":"enabled"} and "tools" not in continuation
-    public.extend(turn.feed(wire("Verified answer")))
+    assert "The search is complete" in continuation["messages"][0]["content"]
+    public.extend(turn.feed(wire("<tool_call>web_search<arg_value>hidden</arg_value></tool_call>Verified answer")))
     assert turn.finish() is None and "".join(public) == "Verified answer"
     other = Turn(config, [{"role":"user","content":"Independent turn"}])
     assert "PRIVATE-THINKING" not in json.dumps(other.body())
+    assert other.feed(wire("<tool_call>web_search<arg_value>hidden</arg_value>")) == []
+    with pytest.raises(quantum.QuantumError, match="quantum_invalid_response"):
+        other.finish()
+
+
+def test_tool_markup_never_leaks_across_stream_chunks():
+    from velia_quantum_turn import ToolMarkupFilter
+
+    text = "İstanbul <TOOL_CALL>private</tool_call>ve Ankara <tool_call>private"
+    for boundary in range(len(text) + 1):
+        markup = ToolMarkupFilter()
+        assert markup.feed(text[:boundary]) + markup.feed(text[boundary:], final=True) == "İstanbul ve Ankara "
+
+    markup = ToolMarkupFilter()
+    assert "".join(markup.feed(letter) for letter in text) + markup.feed("", final=True) == "İstanbul ve Ankara "
+    assert ToolMarkupFilter().feed("x <", final=True) == "x <"
+    assert ToolMarkupFilter().feed("Answer<tool_ca", final=True) == "Answer"
 
 
 def test_private_reasoning_capture_is_bounded_and_never_public():

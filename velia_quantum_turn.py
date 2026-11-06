@@ -46,7 +46,7 @@ Preserve numbers, units, negation and the user's intended meaning. Silently reso
 ask one short question only for an essential ambiguity. Do not treat a question or an unexplained term as a personal diagnosis.
 Distinguish explicitly reported personal conditions from hypothetical, quoted or uncertain conditions. Do not add conditions from search results.
 Medical sources support general information, not a personal prescription. Do not invent numeric targets or promise outcomes.
-After a tool result, give a complete useful answer without calling another tool. Never expose tool arguments or private reasoning.
+After a tool result, give a complete useful answer without calling another tool. Never include tool markup such as <tool_call>, tool arguments or private reasoning in the answer.
 """
 
 
@@ -60,6 +60,41 @@ def source_suffix(result):
         url = row["url"].replace("(", "%28").replace(")", "%29")
         lines.append(f"[{i}] [{title}]({url})")
     return "\n\n" + " · ".join(lines)
+
+
+class ToolMarkupFilter:
+    """Keep only a possible tag boundary between chunks of public text."""
+    OPEN = "<tool_call>"
+    CLOSE = "</tool_call>"
+
+    def __init__(self):
+        self.pending = ""
+        self.inside = False
+
+    def feed(self, text, *, final=False):
+        remaining = self.pending + text
+        self.pending = ""
+        visible = []
+        while remaining:
+            tag = self.CLOSE if self.inside else self.OPEN
+            match = re.search(tag, remaining, re.IGNORECASE)
+            if match:
+                if not self.inside:
+                    visible.append(remaining[:match.start()])
+                self.inside = not self.inside
+                remaining = remaining[match.end():]
+                continue
+            overlap = next((n for n in range(min(len(remaining), len(tag) - 1), 0, -1)
+                            if remaining[-n:].lower() == tag[:n]), 0)
+            if not self.inside:
+                boundary = len(remaining) - overlap
+                if final and overlap < len("<tool"):
+                    boundary = len(remaining)
+                visible.append(remaining[:boundary])
+            if overlap and not final:
+                self.pending = remaining[-overlap:]
+            break
+        return "".join(visible)
 
 
 class Turn:
@@ -90,7 +125,13 @@ class Turn:
         self.decoder = StreamDecoder(capture_reasoning=self.config.provider == "zai" and self.config.thinking_enabled)
         self.tool = None
         self.text = ""
-        body = payload(self.config, list(self.messages), stream=True, max_tokens=self.max_tokens,
+        self.markup = ToolMarkupFilter()
+        messages = list(self.messages)
+        if self.searched:
+            messages[0] = {**messages[0], "content": messages[0]["content"]
+                + "\nThe search is complete. Answer the user now in natural language from the tool evidence. "
+                  "The final response must not contain another tool call or its serialization."}
+        body = payload(self.config, messages, stream=True, max_tokens=self.max_tokens,
             tools=[WEB_TOOL] if self.search_enabled and not self.searched else None,
             tool_choice="auto" if self.search_enabled and not self.searched else None)
         if body.get("tools") and self.config.provider == "zai":
@@ -100,8 +141,9 @@ class Turn:
     def feed(self, chunk):
         texts = []
         for event in self.decoder.feed(chunk):
-            delta = event["choices"][0]["delta"]
-            text = delta.get("content", "")
+            choice = event["choices"][0]
+            delta = choice["delta"]
+            text = self.markup.feed(delta.get("content", ""), final=choice["finish_reason"] is not None)
             if text:
                 self.text += text
                 texts.append(text)
