@@ -29,6 +29,10 @@ EXPERIENTIAL_MODELS = {
 EXPERIENTIAL_URL = "https://api.experientiallabs.ai/v1"
 ZAI_URL = "https://api.z.ai/api/paas/v4"
 ZAI_FREE_MODEL = "glm-4.7-flash"
+MINIMAX_URL = "https://openrouter.ai/api/v1"
+MINIMAX_MODEL = "minimax/minimax-m3.1-flash"
+MINIMAX_KEY_BUDGET_USD = 5
+MINIMAX_PRICE_PER_MILLION = {"prompt": 0.15, "completion": 0.60}
 GROQ_URL = "https://api.groq.com/openai/v1"
 GROQ_MODEL = "openai/gpt-oss-120b"
 KEY_INFO_URL = "https://api.experientiallabs.ai/api/v1/key"
@@ -242,6 +246,9 @@ def require_zero_spend_key(raw):
 
 
 async def verify_zero_spend_async(client, config):
+    if config.provider == "pro_minimax":
+        # The paid pilot is available only through the authenticated backend.
+        raise QuantumError("quantum_free_guard_required", 503)
     if config.provider.startswith('voice_'):
         from velia_free_models import verify_voice_key_async
         await verify_voice_key_async(client, config)
@@ -277,6 +284,8 @@ async def verify_zero_spend_async(client, config):
 
 
 def verify_zero_spend(client, config):
+    if config.provider == "pro_minimax":
+        raise QuantumError("quantum_free_guard_required", 503)
     if config.provider.startswith('voice_'):
         from velia_free_models import verify_voice_key
         verify_voice_key(client, config)
@@ -307,6 +316,42 @@ def verify_zero_spend(client, config):
         LOG.warning('VELIA_QUANTUM_FREE_GUARD ok=false status=%d', status)
         raise QuantumError('quantum_free_guard_required', 503) from None
     LOG.info('VELIA_QUANTUM_FREE_GUARD ok=true status=%d', status)
+
+
+def verify_minimax_budget(client, config):
+    require_minimax_route(config)
+    deadline = time.monotonic() + 7
+    try:
+        with client.get(MINIMAX_URL + "/key", headers={
+                "Authorization": "Bearer " + config.api_key, "Cache-Control": "no-store"},
+                timeout=(3, 4), stream=True, allow_redirects=False) as response:
+            if response.status_code != 200:
+                raise ValueError
+            raw = bytearray()
+            for chunk in response.iter_content(1):
+                raw.extend(chunk)
+                if len(raw) > KEY_INFO_MAX_BYTES or time.monotonic() > deadline:
+                    raise ValueError
+            data = json.loads(raw)["data"]
+            limit, remaining = data["limit"], data["limit_remaining"]
+            if (type(limit) not in (int, float) or type(remaining) not in (int, float)
+                    or not 0 < remaining <= limit <= MINIMAX_KEY_BUDGET_USD
+                    or data["limit_reset"] is not None):
+                raise ValueError
+    except (ValueError, TypeError, KeyError, OSError):
+        raise QuantumError("quantum_free_guard_required", 503) from None
+
+
+def require_minimax_route(config):
+    if config.base_url != MINIMAX_URL or config.model != MINIMAX_MODEL:
+        raise QuantumError("quantum_free_guard_required", 503)
+
+
+def minimax_cost(usage, reported_cost_usd):
+    if reported_cost_usd is not None:
+        return reported_cost_usd
+    return (usage.get("prompt_tokens", 0) * MINIMAX_PRICE_PER_MILLION["prompt"]
+            + usage.get("completion_tokens", 0) * MINIMAX_PRICE_PER_MILLION["completion"]) / 1_000_000
 
 
 def require_free_zai(config):
@@ -352,6 +397,16 @@ def payload(config, messages, *, stream=False, max_tokens=None, tools=None, tool
         result["reasoning_effort"] = "low"
         result["gateway"] = {"retry":{"max_attempts_per_route":1,"max_total_attempts":1},
             "routing":{"allow_fallbacks":False}}
+    if config.provider == "pro_minimax":
+        require_minimax_route(config)
+        if tools and any(t.get("type") != "function" for t in tools):
+            raise QuantumError("quantum_invalid_response")
+        result["reasoning"] = {"effort": "low", "exclude": True}
+        result["provider"] = {
+            "max_price": dict(MINIMAX_PRICE_PER_MILLION),
+            "require_parameters": True,
+            "allow_fallbacks": False,
+        }
     if config.provider == "zai":
         require_free_zai(config)
         # Server-selected PRO enables thinking; other routes keep fast replies.
@@ -407,6 +462,7 @@ class StreamDecoder:
         self.answer = False
         self.finish_reason = None
         self.usage = {}
+        self.reported_cost_usd = None
         # Private, bounded, turn-local tool continuation state. Never in events.
         self.capture_reasoning = capture_reasoning
         self.reasoning_content = ""
@@ -443,6 +499,9 @@ class StreamDecoder:
             if not isinstance(value, dict):
                 raise QuantumError("quantum_provider_error")
             if isinstance(value.get("usage"), dict):
+                cost = value["usage"].get("cost")
+                if type(cost) in (int, float) and 0 <= cost <= MINIMAX_KEY_BUDGET_USD:
+                    self.reported_cost_usd = cost
                 self.usage = {k: v for k, v in value["usage"].items()
                     if k in {"prompt_tokens", "completion_tokens", "total_tokens"} and type(v) is int and v >= 0}
             choices = value.get("choices", [])

@@ -37,7 +37,7 @@ def model_call(prompt, *, max_tokens, timeout, request_id):
     """One physical attempt on the selected tier; no tools, reserves or fallback."""
     import velia_free_models as free_models
     from services.velia_quantum_service import _provider_client
-    from velia_quantum_provider import QuantumError, StreamDecoder, payload
+    from velia_quantum_provider import QuantumError, StreamDecoder, minimax_cost, payload
     from velia_quantum_transport import completion
     context = _SELECTED.get()
     if context is None:
@@ -74,7 +74,8 @@ def model_call(prompt, *, max_tokens, timeout, request_id):
     text = "".join(parts).strip()
     if not text:
         raise SuperagentError()
-    return {"ok": True, "text": text, "usage": decoder.usage, "estimated_cost_usd": 0.0,
+    cost = minimax_cost(decoder.usage, decoder.reported_cost_usd) if config.provider == "pro_minimax" else 0.0
+    return {"ok": True, "text": text, "usage": decoder.usage, "estimated_cost_usd": cost,
         "request_id": request_id, "provider": "velia-" + context["mode"], "model": "velia-" + context["mode"]}
 
 

@@ -1257,6 +1257,7 @@ def test_postgres_voice_survives_text_limit_without_resetting_voice_quota_or_rep
 def test_account_only_voice_can_use_reserve_with_same_history_language_and_female_persona(free_tiers,monkeypatch,voice):
     from velia_quantum_transport import _VOICE_CIRCUITS
     _VOICE_CIRCUITS.clear()
+
     monkeypatch.setenv('VELIA_VOICE_RESERVES_ENABLED','true')
     monkeypatch.setenv('VELIA_VOICE_GROQ_FREE_ACCOUNT','true')
     class SequenceClient(Client):
@@ -1276,3 +1277,49 @@ def test_account_only_voice_can_use_reserve_with_same_history_language_and_femal
         assert body['messages'][1:]==history
         assert 'feminine' in body['messages'][0]['content'] and 'account settings: ru' in body['messages'][0]['content']
     _VOICE_CIRCUITS.clear()
+
+@pytest.mark.parametrize("key_info,expects_call", [
+    ({"limit": 5, "limit_remaining": 4, "limit_reset": None}, True),
+    ({"limit": None, "limit_remaining": None, "limit_reset": None}, False),
+    ({"limit": 6, "limit_remaining": 4, "limit_reset": None}, False),
+    ({"limit": 5, "limit_remaining": 4, "limit_reset": "monthly"}, False),
+    ({"limit": 5, "limit_remaining": 0, "limit_reset": None}, False),
+])
+def test_paid_pro_pilot_is_account_scoped_and_requires_bounded_key(free_tiers, monkeypatch, key_info, expects_call):
+    import velia_free_models as tiers
+    from services.velia_mobile_auth_service import QA_USER_ID
+    from velia_quantum_provider import MINIMAX_MODEL, MINIMAX_URL
+
+    monkeypatch.setenv("VELIA_PRO_MINIMAX_API_KEY", "test-minimax-secret")
+    monkeypatch.setenv("VELIA_PRO_MINIMAX_ENABLED", "false")
+    assert tiers.minimax_pilot_configuration(QA_USER_ID) is None
+    monkeypatch.setenv("VELIA_PRO_MINIMAX_ENABLED", "true")
+    assert tiers.minimax_pilot_configuration(77) is None
+    pilot = tiers.minimax_pilot_configuration(QA_USER_ID)
+    assert pilot.model == MINIMAX_MODEL and pilot.base_url == MINIMAX_URL
+    assert tiers.configuration("pro").model == "glm-4.7-flash"
+
+    stream = wire().replace(b'"total_tokens": 19', b'"total_tokens": 19, "cost": 0.000005')
+    client = Client(Response(body=stream), Response(body=json.dumps({"data": key_info}).encode()))
+    monkeypatch.setattr(quantum.requests, "Session", lambda: client)
+    with tiers.use_pro_pilot(pilot):
+        assert tiers.configuration("pro", voice=True).model == "glm-4.7-flash"
+        assert tiers.configuration("quantum").model == "glm-4.7-flash"
+        assert tiers.configuration("flash").model == "glm-4.5-flash"
+        result = quantum.generate("Тест маршрута PRO", chat_mode="pro")
+    assert tiers.configuration("pro").model == "glm-4.7-flash"
+    assert client.guard_calls[0][0] == MINIMAX_URL + "/key"
+    assert client.guard_calls[0][1]["allow_redirects"] is False
+    assert result["ok"] is expects_call
+    assert len(client.calls) == int(expects_call)
+    if expects_call:
+        url, call = client.calls[0]
+        assert url == MINIMAX_URL + "/chat/completions"
+        assert call["json"]["model"] == MINIMAX_MODEL
+        assert call["json"]["provider"] == {"max_price": {"prompt": 0.15, "completion": 0.60},
+            "require_parameters": True, "allow_fallbacks": False}
+        assert result["model"] == "velia-pro"
+        assert result["estimated_cost_usd"] == 0.000005
+        assert result["text"] == "Поняла"
+    else:
+        assert result["reason"] == "pro_free_guard_required"

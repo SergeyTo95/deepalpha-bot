@@ -9,7 +9,7 @@ import velia_free_models as free_models
 import logging
 import re
 from velia_code_quality import guidance as engineering_guidance
-from velia_quantum_provider import QuantumError, StreamDecoder, payload, groq_backup_configuration
+from velia_quantum_provider import QuantumError, StreamDecoder, payload, groq_backup_configuration, minimax_cost
 from velia_quantum_transport import completion_async
 LOG = logging.getLogger(__name__)
 
@@ -80,6 +80,7 @@ class Turn:
         self.searched = False
         self.sources = None
         self.usage = {}
+        self.cost_usd = 0.0
         self.calls = 0
 
     def body(self):
@@ -135,6 +136,8 @@ class Turn:
         self.decoder.finish()
         for key, value in self.decoder.usage.items():
             self.usage[key] = self.usage.get(key, 0) + value
+        if self.config.provider == "pro_minimax":
+            self.cost_usd += minimax_cost(self.decoder.usage, self.decoder.reported_cost_usd)
         if self.tool is None:
             if not self.text.strip() or self.decoder.finish_reason != "stop":
                 raise QuantumError("quantum_invalid_response")
