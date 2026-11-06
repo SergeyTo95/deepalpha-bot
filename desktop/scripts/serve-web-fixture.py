@@ -67,8 +67,8 @@ async def main():
         duplicate = data["idempotency_key"] in requests
         if not duplicate:
             calls.append(data["chat_mode"])
-            answer = {"role": "assistant", "content": text, "chat_mode": data["chat_mode"], "status": "completed"}
-            value["messages"].extend([{"role": "user", "content": data["content"], "status": "completed",
+            answer = {"id": str(uuid.uuid4()), "role": "assistant", "content": text, "chat_mode": data["chat_mode"], "status": "completed"}
+            value["messages"].extend([{"id": data["idempotency_key"], "role": "user", "content": data["content"], "status": "completed",
                 "attachments": [uploaded[key] for key in data.get("attachment_ids", [])]}, answer])
             requests[data["idempotency_key"]] = answer
         response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})

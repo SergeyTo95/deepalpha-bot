@@ -11,7 +11,7 @@ import {
   canContinuePartialAnswer,
   continuationPrompt,
 } from "./core.mjs";
-import {setupFeatures, featureRequest} from "./features.mjs";
+import {setupFeatures, featureRequest, chatSpecialty} from "./features.mjs";
 import {isAgentixBusinessBrief,businessContinuationReminder} from "./agentix-business-builder.mjs";
 import {prepareFile, fileSize, setupFileTools} from "./files.mjs";
 import {setupVoice} from "./voice.mjs";
@@ -88,6 +88,9 @@ const request = (path, data, signal) =>
     signal,
   }).catch(error => { throw normalizeNetworkError(error); });
 let selectedFiles = [];
+let legacyTopic = null;
+const topicViews = new Map();
+const isDocumentTopic=kind=>kind==='medical_document' || kind==='research_document';
 const fileTools=setupFileTools({toast});
 function clearFiles(){selectedFiles=[];$("attachment-input").value="";$("attachment-preview").replaceChildren();}
 function filePreview(){const target=$("attachment-preview");target.replaceChildren();selectedFiles.forEach((item,i)=>{const chip=document.createElement('div');chip.className='file-chip';const view=document.createElement('button');view.type='button';view.textContent=item.file.name+' · '+fileSize(item.file.size)+(item.file.type.startsWith('image/')&&(model!=="velia-pro"||profile?.free_api_tiers)?' · Распознавание текста':'');view.onclick=()=>fileTools.previewFile(item.file).catch(()=>toast('Не удалось открыть файл.'));const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label','Удалить '+item.file.name);remove.onclick=()=>{selectedFiles.splice(i,1);filePreview();resizePrompt();};chip.append(view,remove);target.append(chip);});if(selectedFiles.length){const bar=document.createElement('div');bar.className='file-shortcuts';for(const [title,prompt] of [['Пересказать','Кратко перескажи содержание прикреплённых файлов.'],['Извлечь текст','Извлеки текст из прикреплённых файлов. Отметь неразборчивые места.'],['Проверить ошибки','Проверь прикреплённые файлы на ошибки и несоответствия.']]){const b=document.createElement('button');b.type='button';b.textContent=title;b.onclick=()=>{$('prompt').value=prompt;resizePrompt();$('prompt').focus();};bar.append(b);}target.append(bar);}}
@@ -170,7 +173,7 @@ const features = setupFeatures({openIncomePlanner: showIncomePlanner, prepareAge
   toast('Черновик проекта открыт. Проверь и отправь его Велии.');
 },taskState:()=>profile?.background_tasks?background:null,
   prepareTask:()=>{const selected=['velia-quantum','velia-pro'].includes(model)?model:profile?.models?.find(id=>['velia-quantum','velia-pro'].includes(id));if(!selected){toast('Фоновые поручения сейчас недоступны.');return;}features.close();setAgentMode(false,true);setModel(selected);background.prepare(selected);$('prompt').focus();toast('Напиши задачу — результат появится в этом диалоге и в разделе «Задачи».');},
-  onUnauthorized:()=>{lockHistory();profile=null;guest=null;notifyAuthChange('lock');render();openAuth();},signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,prepareMedicalChat:async prompt=>{if(busy)throw new Error('Дождись завершения ответа.');if(!profile?.models?.includes(model))throw new Error('Выбранная модель сейчас недоступна.');setAgentMode(false);newChat();medicalDraftMode=true;$('prompt').value=prompt;resizePrompt();$('prompt').focus();toast('Прикрепи заключения и проверь текст перед отправкой.');},openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
+  onUnauthorized:()=>{lockHistory();profile=null;guest=null;notifyAuthChange('lock');render();openAuth();},signedIn:()=>!!profile,openAuth,toast,isBusy:()=>busy,voiceSettings:voice.settings,openImage:fileTools.openImage,prepareMedicalChat:async prompt=>{if(busy)throw new Error('Дождись завершения ответа.');if(!profile?.models?.includes(model))throw new Error('Выбранная модель сейчас недоступна.');setAgentMode(false);medicalDraftMode=true;$('prompt').value=prompt;resizePrompt();$('prompt').focus();toast('Прикрепи заключения и проверь текст перед отправкой.');},openTopic,openConversation:async c=>{await syncHistory();const chat=chats.find(x=>x.id===c.id);if(chat)await openChat(chat);}});
 const background = setupBackgroundTasks({request:jsonRequest,profile:()=>profile,busy:()=>busy,currentId:()=>currentId,toast,speak:text=>voice.speak(text),
   chatWithFlash:()=>{if(busy)return;setAgentMode(false,true);setModel('velia-flash');$('prompt').focus();},
   takeover:async job=>{if(busy)return;const account=profile?.account;await syncHistory();const chat=chats.find(c=>c.id===job.conversation_id);if(!chat)return;await openChat(chat);if(profile?.account!==account)return;await openTakeover(job.user_action_required,job);},
@@ -197,6 +200,7 @@ function lockHistory() {
   autoloop.reset();
   abort?.abort(); clearTimeout(saveTimer); saveTimer = null;
   localHistory.lock(); storageKey = null; chats = []; currentId = null;
+  topicViews.clear(); legacyTopic=null;
   features.close(); features.clearMedicalData(); voice.stop(); clearFiles(); fileTools.clear();
   $('prompt').value = ''; medicalDraftMode = false;
 }
@@ -363,6 +367,7 @@ function messageNode(message, index) {
   const article = document.createElement("article");
   article.className = "message " + message.role;
   article.dataset.index = index;
+  if(message.serverId)article.id='turn-'+message.serverId;
   if (message.role === "assistant") {
     const heading = document.createElement("div");
     heading.className = "message-heading";
@@ -468,16 +473,137 @@ function sourceNode(value) {
 }
 function render() {
   const chat = current(),
-    nonempty = !!chat?.messages.length;
+    topics = (chat?.topics || []).filter(entry=>!isDocumentTopic(entry.kind)),
+    nonempty = !!(chat?.messages.length || topics.length || legacyTopic);
   $("welcome").hidden = nonempty;
   $("messages").hidden = !nonempty;
   $("messages").replaceChildren();
-  if (chat)
-    chat.messages.forEach((m, i) => $("messages").append(messageNode(m, i)));
+  topics.sort((a,b)=>Date.parse(a.created_at)-Date.parse(b.created_at));
+  let topicIndex=0;
+  if(chat)chat.messages.forEach((message,index)=>{
+    while(topicIndex<topics.length && (message.pending || Date.parse(topics[topicIndex].created_at)<=message.sentAt)){
+      $("messages").append(topicNode(topics[topicIndex++]));
+    }
+    $("messages").append(messageNode(message,index));
+  });
+  while(topicIndex<topics.length)$("messages").append(topicNode(topics[topicIndex++]));
+  if(legacyTopic && !busy)$("messages").append(topicNode(legacyTopic));
   renderHistory();
   background.render();
   autoloop.render();
   $('autoloop-create').hidden=!profile?.background_tasks;
+}
+function topicNode(entry) {
+  let view=topicViews.get(entry.entry_id);
+  if(view)return view;
+  view=document.createElement('article');
+  view.className='message assistant chat-topic';
+  view.id='topic-'+entry.entry_id;
+  const open=document.createElement('button');
+  open.type='button';
+  open.className='feature-primary';
+  open.textContent={research:'Открыть исследование',medical_scan:'Открыть КТ-исследование',journal:'Открыть дневник симптомов',lab:'Открыть сравнение анализов'}[entry.kind];
+  open.onclick=()=>mountTopic(entry,view);
+  view.append(open);
+  topicViews.set(entry.entry_id,view);
+  return view;
+}
+async function mountTopic(entry, view=topicNode(entry), startResearch=false) {
+  const chat=current();
+  const account=profile?.account;
+  view.scrollIntoView?.({block:'nearest'});
+  await features.mountTopic(view,{
+    ...entry, startResearch, initial:entry.kind==='medical_scan'?'ct':entry.kind,
+    onCreated:chat?.remote && entry.kind==='medical_scan' && !entry.resource_id
+      ? async resource_id=>{
+        if(profile?.account!==account || currentId!==chat.id)return;
+        entry.resource_id=resource_id;
+        await storeTopic(chat,entry,resource_id);
+      } : undefined,
+  });
+}
+async function storeTopic(chat, entry, reference) {
+  const account=profile?.account;
+  const data={conversation_id:chat.id,entry_id:entry.entry_id,kind:entry.kind,reference};
+  entry.pendingReference=reference;
+  chat.topics ||= [];
+  if(!chat.topics.some(item=>item.entry_id===entry.entry_id))chat.topics.push(entry);
+  save();
+  try {
+    const {entry:saved}=await featureRequest('chat-topics',{method:'POST',data,signal:abort?.signal});
+    if(profile?.account!==account)return;
+    Object.assign(entry,saved);
+    delete entry.pendingReference;
+    if(isDocumentTopic(entry.kind)) {
+      const message=chat.messages.find(item=>item.requestId===reference);
+      if(message)message.serverId=entry.message_id;
+    }
+    save();
+  }catch(error){
+    if(profile?.account===account && error.name!=='AbortError')toast('Не удалось обновить тематическую историю. Синхронизация повторится при открытии чата.');
+  }
+}
+async function openTopic(entry) {
+  if(busy)return;
+  if(!entry.conversation_id){
+    newChat();
+    legacyTopic={...entry,entry_id:crypto.randomUUID()};
+    render();
+    await mountTopic(legacyTopic);
+    return;
+  }
+  const account=profile?.account;
+  let chat=chats.find(item=>item.id===entry.conversation_id);
+  if(!chat){
+    const data=await featureRequest('conversations/'+entry.conversation_id);
+    if(profile?.account!==account)return;
+    chat={id:data.conversation.id,title:data.conversation.title,updated:Date.parse(data.conversation.updated_at)||Date.now(),messages:[],remote:true};
+    chats.push(chat);
+  }
+  await openChat(chat);
+  if(profile?.account!==account || currentId!==chat.id)return;
+  if(isDocumentTopic(entry.kind)){
+    document.getElementById('turn-'+entry.message_id)?.scrollIntoView?.({block:'center'});
+  }else{
+    chat.topics ||= [];
+    if(!chat.topics.some(item=>item.entry_id===entry.entry_id)){chat.topics.push(entry);render();}
+    await mountTopic(chat.topics.find(item=>item.entry_id===entry.entry_id));
+  }
+}
+async function launchTopic(chat, kind, text) {
+  const account=profile?.account;
+  const entry={entry_id:crypto.randomUUID(),kind,created_at:new Date().toISOString()};
+  abort=new AbortController();
+  setBusy(true);
+  try {
+    if(kind==='research'){
+      const draft=chat.pendingResearch?.goal===text?chat.pendingResearch:{goal:text,key:entry.entry_id};
+      chat.pendingResearch=draft;
+      entry.entry_id=draft.key;
+      save();
+      $("generation-status").textContent='Велия готовит исследование…';
+      const {mission}=await featureRequest('research/missions',{method:'POST',
+        data:{goal:text},key:entry.entry_id,signal:abort.signal});
+      if(profile?.account!==account)return;
+      entry.resource_id=mission.id || mission.mission_id;
+      delete chat.pendingResearch;
+      await storeTopic(chat,entry,entry.resource_id);
+    }else{
+      chat.topics ||= [];
+      chat.topics.push(entry);
+    }
+    if(profile?.account!==account)return;
+    $("prompt").value='';
+    resizePrompt();
+    render();
+    await mountTopic(entry,topicNode(entry),kind==='research');
+  }catch(error){
+    if(profile?.account===account && error.name!=='AbortError')toast(error.message);
+  }finally{
+    abort=null;
+    setBusy(false);
+    $("generation-status").textContent='';
+  }
 }
 function scrollDown(force = false) {
   const el = $("conversation-scroll");
@@ -502,6 +628,8 @@ function setBusy(value) {
 }
 function newChat() {
   medicalDraftMode=false;
+  legacyTopic=null;
+  topicViews.clear();
   voice.stop();
   features.close();
   clearFiles();
@@ -647,7 +775,7 @@ async function resumeBackgroundAgent(job){
 }
 
 async function openChat(chat, background = false) {
-  if (!background) { voice.stop(); features.close(); clearFiles(); }
+  if (!background) { voice.stop(); features.close(); clearFiles(); legacyTopic=null; medicalDraftMode=false; topicViews.clear(); }
   if (busy || (!profile && !guest)) return;
   const account = profile?.account;
   currentId = chat.id;
@@ -655,11 +783,14 @@ async function openChat(chat, background = false) {
   if (chat.remote) {
     $("generation-status").textContent = "Загружаю диалог…";
     try {
-      const data = await jsonRequest("conversations/" + chat.id + "/messages");
+      const [data, topicData] = await Promise.all([
+        jsonRequest("conversations/" + chat.id + "/messages"),
+        featureRequest("chat-topics?conversation_id=" + chat.id,{signal:AbortSignal.timeout(5000)}).catch(()=>null),
+      ]);
       if (profile?.account !== account || currentId !== chat.id) return;
       const previous = chat.messages;
       chat.messages = data.messages.map((m, i) => ({
-        role: m.role, content: m.content || "",
+        role: m.role, content: m.content || "", serverId:m.id, sentAt:Date.parse(m.created_at),
         attachmentIds: m.attachments?.map(a=>a.id) || previous[i]?.attachmentIds || [], fileNames: m.attachments?.map(a=>a.name).filter(Boolean) || previous[i]?.fileNames || [],
         requestId: previous[i]?.role === m.role && previous[i]?.content === m.content ? previous[i]?.requestId : undefined,
         model: m.chat_mode === "quantum" ? "velia-quantum" : m.chat_mode === "flash" ? "velia-flash" : "velia-pro",
@@ -668,6 +799,17 @@ async function openChat(chat, background = false) {
         internet: m.web_search === true,
         search: m.role === "assistant" && m.web_search ? safeSearch(m.web_search) : undefined,
       }));
+      chat.topicHistoryChecked=!!topicData;
+      if(topicData){
+        const local=(chat.topics || []).filter(entry=>entry.pendingReference || !entry.resource_id && !isDocumentTopic(entry.kind));
+        const remote=topicData.entries || [];
+        chat.topics=[...remote,...local.filter(entry=>!remote.some(item=>item.entry_id===entry.entry_id))];
+        if(chat.topics.some(entry=>entry.kind==='medical_document'))chat.medicalNoSearch=true;
+        for(const entry of chat.topics){
+          if(profile?.account!==account || currentId!==chat.id)return;
+          if(entry.pendingReference)await storeTopic(chat,entry,entry.pendingReference);
+        }
+      }
       chat.loaded = true;
     } catch (error) { toast(error.message); }
     finally { $("generation-status").textContent = ""; }
@@ -809,6 +951,7 @@ async function refreshGuest() {
 async function generate(retry = false, voiceTurn = false) {
   if (busy || !ready) return;
   if (agentMode && !profile) { openAuth(); return; }
+  if (agentMode && current()?.medicalNoSearch) {toast('Для действий в браузере открой новый чат.');return;}
   if (!profile) {
     if (!guest) await refreshGuest();
     if (busy) return;
@@ -822,6 +965,10 @@ async function generate(retry = false, voiceTurn = false) {
   // Project specification and code planning must use the normal Velia chat,
   // never a browser-only DSH execution with an isolated Chromium session.
   const candidate = retry ? current()?.messages?.filter(m=>m.role==='user').at(-1)?.content : text;
+  const detected=!retry && !agentMode && (medicalDraftMode?'medical_document':chatSpecialty(text,selectedFiles.map(item=>item.file)));
+  const specialty=detected==='research' && current()?.medicalNoSearch && /(?:по этим|по этому|по моим|по приложен|на основе этих|на основе моего|based on (?:my|this|these))/i.test(text)
+    ? 'medical_document' : detected;
+  if(specialty && !profile){openAuth();return;}
   if (agentMode && isAgentixBusinessBrief(candidate)) {
     setAgentMode(false,true);
     if (!retry) { currentId=null; render(); save(); }
@@ -832,6 +979,7 @@ async function generate(retry = false, voiceTurn = false) {
   if(backgroundAgent&&!profile?.background_agent){toast(apiError('background_agent_unavailable'));return;}
   if (!retry && !text) return;
   let chat = current();
+  if(specialty && chat && !chat.remote){currentId=null;chat=null;}
   if(backgroundAgent&&chat&&!chat.remote){currentId=null;chat=null;}
   if (retry) {
     if (!chat || chat.messages.at(-1)?.role !== "assistant") return;
@@ -844,8 +992,11 @@ async function generate(retry = false, voiceTurn = false) {
       } else {
       setBusy(true);
       try {
-        const result = await jsonRequest("conversations", {title: text.replace(/\s+/g, " ").slice(0, 70)});
-        chat = {id: result.conversation.id, title: result.conversation.title, updated: Date.now(), messages: [], remote: true, loaded: true};
+        const title=specialty==='medical_document'?'Медицинский диалог'
+          : {medical_scan:'КТ-исследование',journal:'Дневник симптомов',lab:'Сравнение анализов'}[specialty]
+            || text.replace(/\s+/g, " ").slice(0, 70);
+        const result = await jsonRequest("conversations", {title});
+        chat = {id: result.conversation.id, title: result.conversation.title, updated: Date.now(), messages: [], remote: true, loaded: true, topicHistoryChecked:true};
       } catch (error) {
         toast(error.message);
         return;
@@ -855,7 +1006,12 @@ async function generate(retry = false, voiceTurn = false) {
       chats = chats.slice(0, 100);
       currentId = chat.id;
     }
-    if(medicalDraftMode)chat.medicalNoSearch=true;
+    if(specialty && !isDocumentTopic(specialty)){
+      await launchTopic(chat,specialty,text);
+      return;
+    }
+    if(specialty==='medical_document')chat.medicalNoSearch=true;
+    medicalDraftMode=false;
     const attachments = [], filesForTurn = selectedFiles.slice();
     if (filesForTurn.length) {
       if (!profile || agentMode || !chat.remote) {toast("Для файлов открой обычный диалог после входа.");return;}
@@ -865,7 +1021,7 @@ async function generate(retry = false, voiceTurn = false) {
       catch(error){toast(error.name==="AbortError"?"Отправка остановлена.":error.message);return;}finally{abort=null;setBusy(false);$("generation-status").textContent="";}
     }
     chat.messages.push({ role: "user", content: text, attachmentIds:attachments, fileNames:filesForTurn.map(x=>x.file.name), requestId: crypto.randomUUID(),
-      internet: !agentMode && internetAvailable, agent: agentMode });
+      internet: !agentMode && internetAvailable && !chat.medicalNoSearch, agent: agentMode, sentAt:Date.now(), specialty });
     clearFiles();
     $("prompt").value = "";
     resizePrompt();
@@ -874,10 +1030,11 @@ async function generate(retry = false, voiceTurn = false) {
     user = chat.messages.at(-1),
     payload = agentMode&&!backgroundAgent ? {prompt: user.content, session_id: chat.id} : chat.remote ? {content: user.content, model: selected,
       idempotency_key: user.requestId || (user.requestId = crypto.randomUUID()), ...(user.attachmentIds?.length ? {attachment_ids:user.attachmentIds} : {})} : chatPayload(chat, selected),
-    answer = { role: "assistant", content: "", model: selected, pending: true, agent: agentMode };
-  if(chat.medicalNoSearch && !agentMode){payload.medical_no_search=true;payload.web_search=false;}
+    answer = { role: "assistant", content: "", model: selected, pending: true, agent: agentMode, sentAt:Date.now() };
+  const privateTurn=chat.medicalNoSearch || chat.remote && chat.topicHistoryChecked===false;
+  if(privateTurn && !agentMode){payload.medical_no_search=true;payload.web_search=false;}
   if (voiceTurn) payload.voice_turn=true;
-  if (!agentMode && internetAvailable && !chat.medicalNoSearch) payload.web_search = true;
+  if (!agentMode && internetAvailable && !privateTurn) payload.web_search = true;
   if(backgroundAgent)payload.agent=true;
   let loopSpec;
   try{loopSpec=parseAutoloop(user.content);}catch(error){toast(error.message);return;}
@@ -904,7 +1061,7 @@ async function generate(retry = false, voiceTurn = false) {
     finally{setBusy(false);render();save();}
     return;
   }
-  if(chat.remote&&profile?.background_tasks&&(backgroundAgent||!agentMode&&background.wants(selected))){
+  if(chat.remote&&profile?.background_tasks&&(!privateTurn || backgroundAgent)&&!isDocumentTopic(user.specialty)&&(backgroundAgent||!agentMode&&background.wants(selected))){
     const owner=profile.account;setBusy(true);render();save();
     try{
       const taskPayload={...payload};delete taskPayload.medical_no_search;
@@ -1015,6 +1172,10 @@ async function generate(retry = false, voiceTurn = false) {
         ? "Велия разбирает вопрос…" : "Велия готовит ответ…";
     });
     answer.finish = result.finish;
+    }
+    if(isDocumentTopic(user.specialty) && chat.remote && answer.content){
+      const entry={entry_id:user.requestId,kind:user.specialty,created_at:new Date(user.sentAt || Date.now()).toISOString()};
+      await storeTopic(chat,entry,user.requestId);
     }
     voice.complete(answer.content);
   } catch (error) {

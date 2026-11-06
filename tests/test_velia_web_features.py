@@ -6,6 +6,9 @@ from desktop.feature_routes import setup_feature_routes, route_allowed, safe_res
 
 def test_feature_paths_are_exact_and_do_not_expose_auth_or_admin():
     assert route_allowed('GET', 'profile')
+    assert route_allowed('GET', 'chat-topics')
+    assert route_allowed('POST', 'chat-topics')
+    assert not route_allowed('PATCH', 'chat-topics')
     assert route_allowed('GET', 'developer/factory/status')
     assert not route_allowed('POST', 'developer/factory/status')
     assert not route_allowed('GET', 'developer/factory/runs/x')
