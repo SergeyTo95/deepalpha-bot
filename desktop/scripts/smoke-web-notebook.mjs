@@ -33,11 +33,12 @@ globalThis.fetch=async(url,options={})=>{
     assert.equal(data.model,process.env.VELIA_TEST_CHAT_MODEL||'velia-pro');
     let plan;
     if(mapPlans===0)plan={tool:'search_places',arguments:{query:'Анталия'}};
-    if(mapPlans===1){mapRefs=JSON.parse(data.messages.at(-1).content.split('): ')[1]).map(p=>p.ref);plan={answer:'Нашла места на карте.'};}
-    if(mapPlans===2)plan={tool:'save_place',arguments:{place_id:mapRefs[1],comment:'Встреча после 15'}};
-    if(mapPlans===3)plan={answer:'Сохранила второе место.'};
-    if(mapPlans===4)plan={tool:'prepare_route',arguments:{place_ids:mapRefs,mode:'walking'}};
-    if(mapPlans===5)plan={answer:'Подготовила ссылку на пеший маршрут.'};
+    if(mapPlans===1){mapRefs=JSON.parse(data.messages.at(-1).content.split('): ')[1]).map(p=>p.ref);plan={tool:'show_places',arguments:{place_ids:mapRefs}};}
+    if(mapPlans===2)plan={answer:'Нашла места на карте.'};
+    if(mapPlans===3)plan={tool:'save_place',arguments:{place_id:mapRefs[1],comment:'Встреча после 15'}};
+    if(mapPlans===4)plan={answer:'Сохранила второе место.'};
+    if(mapPlans===5)plan={tool:'prepare_route',arguments:{place_ids:mapRefs,mode:'walking'}};
+    if(mapPlans===6)plan={answer:'Подготовила ссылку на пеший маршрут.'};
     assert.ok(plan);mapPlans++;
     return new Response('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify(plan)},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n',{headers:{'Content-Type':'text/event-stream'}});
   }
@@ -71,7 +72,7 @@ try{
   await send('Проложи маршрут между ними пешком','Подготовила ссылку');
   const nav=[...document.querySelectorAll('.chat-map-result a')].find(a=>a.textContent==='Открыть маршрут в навигаторе');assert.equal(new URL(nav.href).searchParams.get('travelmode'),'walking');
   assert.ok(new URL(nav.href).searchParams.get('destination').includes('30.8'));
-  await send('Сколько будет два плюс два?','Обычный ответ: четыре');assert.equal(mapPlans,6);assert.ok(document.querySelector('#messages').textContent.includes('Исходный ответ до карты'));const normal=calls.find(call=>call.path==='chat/completions');assert.ok(normal.data.messages.some(m=>m.content.includes('Исходный ответ до карты')));assert.ok(normal.data.messages.some(m=>m.content.includes('Аэропорт Анталии')));
+  await send('Сколько будет два плюс два?','Обычный ответ: четыре');assert.equal(mapPlans,7);assert.ok(document.querySelector('#messages').textContent.includes('Исходный ответ до карты'));const normal=calls.find(call=>call.path==='chat/completions');assert.ok(normal.data.messages.some(m=>m.content.includes('Исходный ответ до карты')));assert.ok(normal.data.messages.some(m=>m.content.includes('Аэропорт Анталии')));
   buttons(document.querySelector('.chat-map-result'),'Мои места')[0].click();await wait(()=>document.querySelector('.map-toolbar'));
   document.querySelector('[aria-label="Найти на карте"]').value='Анталия';document.querySelector('.map-toolbar').dispatchEvent(new window.Event('submit',{cancelable:true}));await wait(()=>document.querySelector('.map-results')?.textContent.includes('Анталия'));
   buttons(document.querySelector('.map-toolbar'),'Выбрать точку')[0].click();mapClick({latlng:{lat:36.9,lng:30.7}});

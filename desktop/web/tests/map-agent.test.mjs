@@ -71,3 +71,15 @@ test('normal follow-up gets only displayed map locations, never the full noteboo
   assert.ok(payload.messages[0].content.includes('Клиент Б'));assert.ok(!payload.messages[0].content.includes('Клиент А'));
   assert.ok(!JSON.stringify(payload).includes('internal-ref'));assert.equal(payload.messages[1].content,chat.messages[1].content);
 });
+
+test('failed or irrelevant searches do not automatically put candidates on the map',async()=>{
+  const f=fixture();await f.book.unlock('a'.repeat(24));const user={role:'user',content:'Найди аэропорт Анталии и покажи на карте',requestId:crypto.randomUUID()};
+  const wrong=await f.run({user,lookup:async(query,signal,filters)=>{assert.equal(filters.category,'airport');return [{title:'Анталья Донер',address:'Беларусь',lat:53.6,lon:23.8,country_code:'BY',category:'restaurant'}];},plans:[{tool:'search_places',arguments:{query:'Анталья'}},{answer:'Повторю поиск по точному названию.'}]});
+  assert.equal(wrong.data.places.length,0);assert.equal(wrong.data.display.length,0);
+});
+
+test('country/type-constrained retry finds an airport and displays only selected matching results',async()=>{
+  const f=fixture();await f.book.unlock('a'.repeat(24));const user={role:'user',content:'Найди аэропорт Анталии и покажи на карте',requestId:crypto.randomUUID()};let calls=0;
+  const result=await f.run({user,lookup:async(query,signal,filters)=>{calls++;assert.equal(filters.category,'airport');assert.equal(filters.country_code,'TR');return query==='Antalya Airport'?[{title:'Antalya Airport',address:'Antalya, Türkiye',lat:36.8999425,lon:30.7981914,category:'airport',country_code:'TR'}]:[];},plans:[{tool:'search_places',arguments:{query:'аэропорт Анталии',country_code:'TR'}},messages=>{assert.deepEqual(output(messages),[]);return {tool:'search_places',arguments:{query:'Antalya Airport',country_code:'TR'}};},messages=>({tool:'show_places',arguments:{place_ids:[output(messages)[0].ref]}}),{answer:'Нашла аэропорт Анталии.'}]});
+  assert.equal(calls,2);assert.equal(result.data.display.length,1);assert.equal(result.data.places[0].category,'airport');assert.ok(!result.data.places.some(p=>p.country_code!=='TR'));
+});

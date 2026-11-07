@@ -66,6 +66,14 @@ Leaflet 1.9.4 is vendored locally with its license. Map tiles use
 normal browser caching. No offline tile download or bulk prefetch is implemented.
 See https://operations.osmfoundation.org/policies/tiles/.
 
+Search accepts optional ISO country and place-category constraints. The gateway
+passes them to Photon and independently checks the returned country and OSM
+object type. This excludes, for example, car rentals and restaurants when an
+airport is requested. The planner uses English or local names and retries
+unsuitable or empty searches without changing the requested object type.
+Search candidates are not displayed automatically: the planner must explicitly
+select relevant points with `show_places`.
+
 Only an explicit submitted address search contacts the Photon demo API. There is
 no autocomplete. The gateway serializes upstream lookup at one request per
 second, caps it at 1,000 requests/day per process and 30 submissions/user/hour,

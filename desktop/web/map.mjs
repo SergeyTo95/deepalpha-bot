@@ -5,8 +5,8 @@ export function navigationUrl(place,from){
   if(from)target.searchParams.set('origin',from.lat+','+from.lon);
   return target.href;
 }
-export async function searchPlaces(query,signal){
-  const response=await fetch('/web-api/v1/map/search',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Velia-Request':'1'},body:JSON.stringify({query}),signal});
+export async function searchPlaces(query,signal,filters={}){
+  const response=await fetch('/web-api/v1/map/search',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Velia-Request':'1'},body:JSON.stringify({query,...filters}),signal});
   const result=await response.json();
   if(!response.ok)throw Error(response.status===429?'Поиск занят. Попробуй через минуту.':'Не удалось найти место. Попробуй уточнить адрес.');
   return result.places;
