@@ -243,6 +243,19 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
             except web.HTTPFound:
                 raise
 
+    async def disconnect_github(request: web.Request) -> web.Response:
+        if not routes_module._mobile_api_available():
+            return routes_module._disabled_response()
+        auth = _auth(routes_module, request)
+        if not auth:
+            return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        try:
+            await asyncio.to_thread(project_service.disconnect_github, int(auth["user_id"]))
+            _clear_connection_error(int(auth["user_id"]))
+            return routes_module._json_response({"ok": True, "connected": False})
+        except Exception as exc:
+            return _error_response(routes_module, exc)
+
     async def installations(request: web.Request) -> web.Response:
         blocked = _require_feature(routes_module, request)
         if blocked:
@@ -528,6 +541,7 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
         return await install_url(request, web_return=True)
     app.router.add_post(f"{_PREFIX}/github/web-install-url", web_install_url)
     app.router.add_get(f"{_PREFIX}/github/callback", github_callback)
+    app.router.add_post(f"{_PREFIX}/github/disconnect", disconnect_github)
     app.router.add_get(f"{_PREFIX}/installations", installations)
     app.router.add_get(f"{_PREFIX}/repositories", repositories)
     app.router.add_get(

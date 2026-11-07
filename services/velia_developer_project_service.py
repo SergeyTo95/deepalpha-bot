@@ -302,6 +302,26 @@ def record_installation(user_id: int, details: Dict[str, Any]) -> Dict[str, Any]
         conn.close()
 
 
+def disconnect_github(user_id: int) -> None:
+    """Disable this user's GitHub access while retaining projects and run history."""
+    ensure_developer_tables()
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "UPDATE velia_developer_installations SET deleted_at=%s, updated_at=%s "
+            "WHERE user_id=%s AND deleted_at IS NULL",
+            (_utcnow(), _utcnow(), int(user_id)),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+
+
 def list_installations(user_id: int) -> List[Dict[str, Any]]:
     ensure_developer_tables()
     conn = get_connection()
@@ -431,6 +451,9 @@ def list_projects(user_id: int) -> List[Dict[str, Any]]:
                    is_private, is_archived, created_at, updated_at
             FROM velia_developer_projects
             WHERE user_id=%s AND deleted_at IS NULL
+              AND EXISTS (SELECT 1 FROM velia_developer_installations i
+                          WHERE i.installation_id=velia_developer_projects.installation_id
+                            AND i.user_id=velia_developer_projects.user_id AND i.deleted_at IS NULL)
             ORDER BY updated_at DESC
             """,
             (int(user_id),),
@@ -453,6 +476,9 @@ def get_project(user_id: int, project_id: str) -> Dict[str, Any]:
                    is_private, is_archived, created_at, updated_at
             FROM velia_developer_projects
             WHERE project_id=%s AND user_id=%s AND deleted_at IS NULL
+              AND EXISTS (SELECT 1 FROM velia_developer_installations i
+                          WHERE i.installation_id=velia_developer_projects.installation_id
+                            AND i.user_id=velia_developer_projects.user_id AND i.deleted_at IS NULL)
             """,
             (str(project_id), int(user_id)),
         )
