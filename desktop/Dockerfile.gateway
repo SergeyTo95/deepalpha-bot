@@ -14,7 +14,7 @@ FROM python:3.12-slim-bookworm AS checked
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
 COPY desktop/requirements-gateway.txt /app/desktop/requirements-gateway.txt
-RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core && rm -rf /var/lib/apt/lists/* && pip install --no-cache-dir -r desktop/requirements-gateway.txt pytest==8.4.2
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core && rm -rf /var/lib/apt/lists/* && pip install --no-cache-dir -r desktop/requirements-gateway.txt pytest==8.4.2 pypdf==6.16.1
 COPY velia_free_models.py velia_desktop_routes.py velia_quantum_provider.py velia_quantum_turn.py velia_quantum_transport.py velia_quantum_groq_probe.py /app/
 COPY velia_request_understanding.py /app/velia_request_understanding.py
 COPY velia_code_quality.py /app/velia_code_quality.py
