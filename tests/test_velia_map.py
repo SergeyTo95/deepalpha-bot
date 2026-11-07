@@ -27,6 +27,23 @@ def test_lookup_requires_origin_and_auth_and_caches_user_triggered_search():
     asyncio.run(scenario())
 
 
+def test_map_planner_uses_authenticated_selected_model_without_web_search(monkeypatch,tmp_path):
+    from test_velia_web_chat import fixture,headers,login
+    from desktop.guest_store import GuestStore
+    async def scenario():
+        async with fixture(monkeypatch,quantum_api=True,features={'chat_quantum':True},with_search=True,guest_store=GuestStore(sqlite_path=tmp_path/'map-quota.db')) as (server,client,state):
+            body={'model':'velia-pro','messages':[{'role':'user','content':'Верни JSON для карты'}],'stream':True,'web_search':False}
+            url=server.make_url('/web-api/v1/map/plan')
+            assert (await client.post(url,headers=headers(),json=body)).status==401
+            cookie,_,_=await login(server,client)
+            assert (await client.post(url,headers=headers(cookie,Origin='https://evil.example'),json=body)).status==403
+            for model in ['velia-flash','velia-quantum','velia-pro']:
+                response=await client.post(url,headers=headers(cookie),json={**body,'model':model})
+                value=await response.text();assert response.status==200 and '[DONE]' in value,(model,response.status,value)
+            assert len(state['payloads'])==3 and not state['search_queries'] and not state['intent_payloads']
+    asyncio.run(scenario())
+
+
 def test_notebook_gateway_binds_snapshot_to_current_account():
     async def scenario():
         calls=[];origin='https://velia.example';account=hashlib.sha256((origin+':7').encode()).hexdigest()[:24]

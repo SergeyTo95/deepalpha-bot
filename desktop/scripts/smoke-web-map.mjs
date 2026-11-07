@@ -23,5 +23,13 @@ try{
   [...document.querySelectorAll('button')].find(button=>button.textContent==='Выбрать точку').click();map.fire('click',{latlng:window.L.latLng(36.8,30.6)});
   assert.ok(document.querySelector('.notebook-editor'));assert.equal(document.querySelector('input[type="number"]').value,'36.8');
   controller.abort();assert.ok(!document.querySelector('.leaflet-pane'));
+  const {mapResultNode}=await import('../web/map-result.mjs');
+  const previewController=new AbortController();
+  const data={version:1,places:entries.map((p,index)=>({ref:'p'+index,title:p.title,address:p.content,lat:p.lat,lon:p.lon})),display:['p0','p1'],route:{ids:['p0','p1'],mode:'walking'}};
+  const preview=mapResultNode(data,{signal:previewController.signal,autoOpen:true});document.body.append(preview);
+  for(let i=0;i<50&&!preview.querySelector('.leaflet-marker-icon');i++)await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(preview.querySelectorAll('.leaflet-marker-icon').length,2);assert.ok(!preview.querySelector('.chat-map-preview').hidden);
+  assert.equal(new URL(preview.querySelector('a').href).searchParams.get('travelmode'),'walking');
+  previewController.abort();assert.ok(!preview.querySelector('.leaflet-pane'));
   console.log(JSON.stringify({ok:true,synthetic:true,checks:['real Leaflet 1.9.4 initializes','OSM attribution and per-tile referrer','saved point markers and straight-line comparison','map click opens place editor','no implicit geolocation','abort removes map']}));
 }finally{controller.abort();dom.window.close();}

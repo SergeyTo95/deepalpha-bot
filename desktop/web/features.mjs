@@ -9,7 +9,7 @@ import {mountConnections,mountGithubRepositories} from './connections.mjs';
 export const SECTIONS = Object.freeze([
   ['studio', 'Studio'], ['projects', 'Проекты'], ['research', 'Исследования'],
   ['medical', 'Медицинский центр'], ['agents', 'Мои агенты'], ['agentix', 'Agentix'],
-  ['work', 'Работа и заработок'], ['autopilot', 'Задачи'], ['notes','Заметки'], ['map','Карта'], ['profile', 'Персонализация'],
+  ['work', 'Работа и заработок'], ['autopilot', 'Задачи'], ['notes','Заметки'], ['map','Мои места'], ['profile', 'Персонализация'],
   ['plugins', 'Подключения и плагины'], ['balance', 'Баланс и использование'], ['voice', 'Голос'],
 ]);
 export function mediaPath(value) {

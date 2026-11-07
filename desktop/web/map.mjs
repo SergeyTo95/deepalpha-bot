@@ -26,13 +26,14 @@ export async function mountMap(parent,{notebook,toast,signal,draft={},loadLibrar
   const toolbar=node('form',null,'map-toolbar'),query=node('input');query.type='search';query.placeholder='Место или адрес';query.required=true;query.minLength=2;query.maxLength=200;query.setAttribute('aria-label','Найти на карте');query.value=draft.query||'';
   const submit=node('button','Найти');submit.type='submit';toolbar.append(query,submit);
   const status=node('p','Найди место или выбери точку на карте.','notebook-hint'),canvas=node('div',null,'velia-map');canvas.setAttribute('aria-label','Карта мест');canvas.setAttribute('role','region');
+  canvas.hidden=true;
   const results=node('div',null,'map-results'),saved=node('div'),editor=node('div');
   parent.append(toolbar,status,canvas,results,node('h2','Мои места'),saved,editor);
-  let map,markers,savedMarkers,L,position=null,adding=false;
+  let map,markers,savedMarkers,L,position=null,adding=false,focused=false;
   const navigate=(place,from)=>{const link=node('a','Маршрут в навигаторе');link.href=navigationUrl(place,from);link.target='_blank';link.rel='noopener noreferrer';return link;};
   function edit(place){editEntry(editor,{kind:'place',title:place.title||'Моё место',content:place.address||'',tags:[],...place},{notebook,toast,signal,onDone:()=>{editor.replaceChildren();drawSaved();}});}
   function show(place){
-    if(!map)return;map.setView([place.lat,place.lon],15);
+    if(!map)return;canvas.hidden=false;map.invalidateSize();focused=true;map.setView([place.lat,place.lon],15);
     markers.clearLayers();
     const marker=L.marker([place.lat,place.lon],{icon:L.divIcon({className:'map-pin',html:'<span></span>',iconSize:[22,22],iconAnchor:[11,22]})}).addTo(markers);
     const popup=node('div');popup.append(node('strong',place.title),node('p',place.address||place.content||''),button('Сохранить место',()=>edit(place)),navigate(place,position));marker.bindPopup(popup).openPopup();
@@ -40,7 +41,8 @@ export async function mountMap(parent,{notebook,toast,signal,draft={},loadLibrar
   async function drawSaved(){
     try{
       const places=(await notebook.load()).filter(entry=>entry.kind==='place');if(signal.aborted)return;saved.replaceChildren();
-      if(!places.length)saved.append(node('p','Сохраняй адреса клиентов, доставки и места для поездок.','feature-empty'));
+      if(!places.length)saved.append(node('p','Попроси Велию в общем чате: «Найди адрес на карте» или «Покажи мои сохранённые места». Здесь появятся сохранённые точки.','feature-empty'));
+      if(map&&places.length&&!focused&&!draft.query&&draft.lat===undefined){canvas.hidden=false;map.invalidateSize();if(places.length===1)map.setView([places[0].lat,places[0].lon],14);else map.fitBounds(places.map(p=>[p.lat,p.lon]),{padding:[24,24],maxZoom:15});focused=true;}
       if(savedMarkers)savedMarkers.clearLayers();
       for(const place of places){
         if(savedMarkers){
@@ -70,7 +72,7 @@ export async function mountMap(parent,{notebook,toast,signal,draft={},loadLibrar
     locate.disabled=true;
     navigator.geolocation.getCurrentPosition(value=>{locate.disabled=false;if(signal.aborted)return;position={lat:value.coords.latitude,lon:value.coords.longitude,title:'Моё местоположение'};show(position);drawSaved();},()=>{locate.disabled=false;if(!signal.aborted)toast('Не удалось определить место. Можно выбрать его на карте.');},{timeout:10000,maximumAge:60000});
   });
-  const add=button('Выбрать точку',()=>{adding=!adding;add.textContent=adding?'Отмена выбора':'Выбрать точку';status.textContent=adding?'Нажми на нужное место на карте.':'Найди место или выбери точку на карте.';});toolbar.append(locate,add);
+  const add=button('Выбрать точку',()=>{adding=!adding;if(adding&&map){canvas.hidden=false;map.invalidateSize();}add.textContent=adding?'Отмена выбора':'Выбрать точку';status.textContent=adding?'Нажми на нужное место на карте.':'Найди место или выбери точку на карте.';});toolbar.append(locate,add);
   try{
     L=await loadLibrary();if(signal.aborted)return;
     map=L.map(canvas,{scrollWheelZoom:false}).setView([20,0],2);map.attributionControl.setPrefix(false);

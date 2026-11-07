@@ -1,3 +1,5 @@
+import {wantsMap,runMapAgent,mapMessageContext} from './map-agent.mjs';
+import {mapResultNode} from './map-result.mjs';
 import {Notebook,notebookCommand} from './notebook.mjs';
 import {LocalHistory, browserHistoryStore} from "./local-history.mjs";
 import {
@@ -98,6 +100,7 @@ const topicViews = new Map();
 const isDocumentTopic=kind=>kind==='medical_document' || kind==='research_document';
 const fileTools=setupFileTools({toast});
 const notebook=new Notebook(featureRequest);
+let mapViews=[];
 function clearFiles(){selectedFiles=[];$("attachment-input").value="";$("attachment-preview").replaceChildren();}
 function filePreview(){const target=$("attachment-preview");target.replaceChildren();selectedFiles.forEach((item,i)=>{const chip=document.createElement('div');chip.className='file-chip';const view=document.createElement('button');view.type='button';view.textContent=item.file.name+' · '+fileSize(item.file.size)+(item.file.type.startsWith('image/')&&(model!=="velia-pro"||profile?.free_api_tiers)?' · Распознавание текста':'');view.onclick=()=>fileTools.previewFile(item.file).catch(()=>toast('Не удалось открыть файл.'));const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label','Удалить '+item.file.name);remove.onclick=()=>{selectedFiles.splice(i,1);filePreview();resizePrompt();};chip.append(view,remove);target.append(chip);});if(selectedFiles.length){const bar=document.createElement('div');bar.className='file-shortcuts';for(const [title,prompt] of [['Пересказать','Кратко перескажи содержание прикреплённых файлов.'],['Извлечь текст','Извлеки текст из прикреплённых файлов. Отметь неразборчивые места.'],['Проверить ошибки','Проверь прикреплённые файлы на ошибки и несоответствия.']]){const b=document.createElement('button');b.type='button';b.textContent=title;b.onclick=()=>{$('prompt').value=prompt;resizePrompt();$('prompt').focus();};bar.append(b);}target.append(bar);}}
 function addFiles(files) {
@@ -414,6 +417,7 @@ function messageNode(message, index) {
         ? '<div class="thinking" aria-label="Велия готовит ответ"><span></span><span></span><span></span></div>'
         : "";
   article.append(content);
+  if(message.mapData){const controller=new AbortController();mapViews.push(controller);const view=mapResultNode(message.mapData,{signal:controller.signal,autoOpen:!busy&&!message.pending&&index===current().messages.length-1,toast,openPlaces:()=>features.open('map')});if(view)article.append(view);}
   if(message.fileNames?.length){const files=document.createElement('div');files.className='message-files';message.fileNames.forEach((name,i)=>{const id=message.attachmentIds?.[i],available=!!fileTools.get(id),item=document.createElement(available?'button':'span');item.textContent=name;if(available){item.type='button';item.onclick=()=>{const original=fileTools.get(id);if(original)fileTools.previewFile(original).catch(()=>toast('Не удалось открыть файл.'));else toast('Оригинал больше не доступен в этой сессии. Прикрепи файл заново.');};}else item.title='Оригинал недоступен для просмотра в этой сессии.';files.append(item);});article.append(files);}
   if (message.role === "assistant" && message.search) {
     const sources = sourceNode(message.search);
@@ -501,6 +505,7 @@ function sourceNode(value) {
   return section;
 }
 function render() {
+  mapViews.forEach(controller=>controller.abort());mapViews=[];
   const chat = current(),
     topics = (chat?.topics || []).filter(entry=>!isDocumentTopic(entry.kind)),
     nonempty = !!(chat?.messages.length || topics.length || legacyTopic);
@@ -1012,7 +1017,7 @@ async function generate(retry = false, voiceTurn = false) {
   }
   const text = $("prompt").value.trim() || (selectedFiles.length ? "Проанализируй прикреплённые файлы." : "");
   const noteCommand=!retry&&!selectedFiles.length&&notebookCommand(text);
-  if(noteCommand){if(!profile){openAuth();return;}await runNotebookCommand(noteCommand,text,voiceTurn);return;}
+  if(noteCommand&&(noteCommand.kind!=='map'||!noteCommand.query)){if(!profile){openAuth();return;}await runNotebookCommand(noteCommand,text,voiceTurn);return;}
   if (profile && !profile.models.includes(model)) {
     toast(apiError(profile.pro_locked_reason || "pro_tokens_required"));
     return;
@@ -1020,9 +1025,11 @@ async function generate(retry = false, voiceTurn = false) {
   // Project specification and code planning must use the normal Velia chat,
   // never a browser-only DSH execution with an isolated Chromium session.
   const candidate = retry ? current()?.messages?.filter(m=>m.role==='user').at(-1)?.content : text;
-  const connectionProvider=cloudProvider(candidate||'') || !wantsFigma(candidate||'') && !agentMode && current()?.connectionProvider;
-  const figmaTurn = !connectionProvider && (wantsFigma(candidate || '') || !agentMode && current()?.figma);
-  const connectedTurn=figmaTurn||connectionProvider;
+  const explicitProvider=cloudProvider(candidate||''),explicitFigma=wantsFigma(candidate||'');
+  const mapTurn=!explicitFigma&&(!explicitProvider||explicitProvider==='google'&&/карт|маршрут|адрес|maps|directions/iu.test(candidate||''))&&wantsMap(candidate||'',current()?.messages||[]);
+  const connectionProvider=mapTurn?null:explicitProvider || !explicitFigma && !agentMode && current()?.connectionProvider;
+  const figmaTurn = !mapTurn&&!connectionProvider && (explicitFigma || !agentMode && current()?.figma);
+  const connectedTurn=figmaTurn||connectionProvider||mapTurn;
   if(connectedTurn && !profile){openAuth();return;}
   if(connectedTurn && selectedFiles.length){toast('Для задания подключённому сервису опиши изменения текстом.');return;}
   if(connectedTurn && agentMode)setAgentMode(false,true);
@@ -1040,8 +1047,10 @@ async function generate(retry = false, voiceTurn = false) {
   if(backgroundAgent&&!profile?.background_agent){toast(apiError('background_agent_unavailable'));return;}
   if (!retry && !text) return;
   let chat = current();
+  if(mapTurn&&chat?.remote){chat={...chat,id:crypto.randomUUID(),remote:false,updated:Date.now(),messages:chat.messages.slice(-100),mapChat:true};chats.unshift(chat);currentId=chat.id;}
   if(connectedTurn && chat && (chat.remote || figmaTurn && chat.connectionProvider
       || connectionProvider && (chat.figma || chat.connectionProvider && chat.connectionProvider!==connectionProvider))){currentId=null;chat=null;}
+  if(mapTurn&&chat){delete chat.connectionProvider;chat.figma=false;chat.agent=false;}
   if(figmaTurn && chat)chat.figma=true;
   if(connectionProvider && chat)chat.connectionProvider=connectionProvider;
   if(specialty && chat && !chat.remote){currentId=null;chat=null;}
@@ -1094,10 +1103,10 @@ async function generate(retry = false, voiceTurn = false) {
   const selected = agentMode&&!backgroundAgent ? "velia-flash" : model,
     user = chat.messages.at(-1),
     payload = agentMode&&!backgroundAgent ? {prompt: user.content, session_id: chat.id} : chat.remote ? {content: user.content, model: selected,
-      idempotency_key: user.requestId || (user.requestId = crypto.randomUUID()), ...(user.attachmentIds?.length ? {attachment_ids:user.attachmentIds} : {})} : chatPayload(chat, selected),
+      idempotency_key: user.requestId || (user.requestId = crypto.randomUUID()), ...(user.attachmentIds?.length ? {attachment_ids:user.attachmentIds} : {})} : chatPayload(chat, selected,{messageContext:mapMessageContext}),
     answer = { role: "assistant", content: "", model: selected, pending: true, agent: agentMode, sentAt:Date.now() };
   const privateTurn=chat.medicalNoSearch || chat.remote && chat.topicHistoryChecked===false;
-  if(privateTurn && !agentMode){payload.medical_no_search=true;payload.web_search=false;}
+  if(privateTurn && !agentMode){if(chat.remote)payload.medical_no_search=true;payload.web_search=false;}
   if (voiceTurn) payload.voice_turn=true;
   if (!agentMode && internetAvailable && !privateTurn) payload.web_search = true;
   if(backgroundAgent)payload.agent=true;
@@ -1197,7 +1206,10 @@ async function generate(retry = false, voiceTurn = false) {
     else if (paintFrame === null) paintFrame = requestAnimationFrame(paint);
   };
   try {
-    if (connectionProvider) {
+    if(mapTurn){
+      const result=await runMapAgent({model:selected,user,history:chat.messages.filter(message=>message!==answer),notebook,signal:abort.signal,request,persist:()=>save(),progress:text=>{$('generation-status').textContent=text;},onData:data=>{answer.mapData=data;scheduleSave();}});
+      answer.content=result.text;answer.mapData=result.data;answer.finish='stop';if(voiceTurn)voice.update(answer.content);queuePaint();scheduleSave();
+    } else if (connectionProvider) {
       answer.content=await runCloudAgent({provider:connectionProvider,model:selected,user,
         history:chat.messages.filter(message=>message!==answer),signal:abort.signal,request,persist:()=>save(),
         progress:text=>{$('generation-status').textContent=text;}});
@@ -1225,7 +1237,7 @@ async function generate(retry = false, voiceTurn = false) {
       queuePaint();
       scheduleSave();
     } else {
-    const response = await request(!profile ? "guest/chat/completions" : chat.remote ? "conversations/" + chat.id + "/messages/stream" : "chat/completions", payload, abort.signal);
+    const response = await request(!profile ? "guest/chat/completions" : chat.remote ? "conversations/" + chat.id + "/messages/stream" : privateTurn ? "map/plan" : "chat/completions", payload, abort.signal);
     if (!profile && guest && response.headers.has("X-Velia-Guest-Remaining")) {
       guest.remaining = Number(response.headers.get("X-Velia-Guest-Remaining"));
       renderGuestCounter();
