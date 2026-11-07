@@ -1768,6 +1768,14 @@ def _google_user_id(provider_sub):
 
 
 async def handle_google_callback(request):
+    from services.velia_workspace_oauth_routes import google_callback_target
+    if len(request.query.getall('state', [])) == 1:
+        try:
+            target = google_callback_target(request.query)
+        except ValueError:
+            return _json_response({"ok": False, "error": "workspace_return_not_configured"}, status=503)
+        if target:
+            raise web.HTTPSeeOther(target, headers={"Cache-Control":"no-store", "Referrer-Policy":"no-referrer"})
     cid = os.getenv("GOOGLE_CLIENT_ID", "")
     secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
     redir = os.getenv("GOOGLE_REDIRECT_URI", "")
