@@ -1,3 +1,5 @@
+import {mountNotebook} from './notebook-ui.mjs';
+import {mountMap} from './map.mjs';
 import {renderMarkdown, apiError} from './core.mjs';
 import {mountWork} from './work.mjs';
 import {mountAgentix} from './agentix.mjs';
@@ -7,7 +9,7 @@ import {mountConnections,mountGithubRepositories} from './connections.mjs';
 export const SECTIONS = Object.freeze([
   ['studio', 'Studio'], ['projects', 'Проекты'], ['research', 'Исследования'],
   ['medical', 'Медицинский центр'], ['agents', 'Мои агенты'], ['agentix', 'Agentix'],
-  ['work', 'Работа и заработок'], ['autopilot', 'Задачи'], ['profile', 'Персонализация'],
+  ['work', 'Работа и заработок'], ['autopilot', 'Задачи'], ['notes','Заметки'], ['map','Карта'], ['profile', 'Персонализация'],
   ['plugins', 'Подключения и плагины'], ['balance', 'Баланс и использование'], ['voice', 'Голос'],
 ]);
 export function mediaPath(value) {
@@ -199,7 +201,7 @@ const node = (tag, text, cls) => {const n = document.createElement(tag); if (tex
 const button = (text, action) => {const b = node('button', text); b.type = 'button'; b.onclick = action; return b;};
 const labels = {claim:'Утверждение',confidence:'Уверенность',limitations:'Ограничения',open_questions:'Открытые вопросы',source_ids:'Источники',sources:'Источники',recommendations:'Рекомендации',reason:'Причина',message:'Сообщение',results:'Результаты',amount:'Сумма',balance:'Баланс',next_run_at:'Следующий запуск',last_run_at:'Последний запуск',timezone:'Часовой пояс',items:'Результаты',notes:'Описание',completed:'Выполнено',start:'Начало',end:'Окончание',goal:'Цель', title:'Название', name:'Имя', description:'Описание', instructions:'Инструкции', audience:'Аудитория', style:'Стиль', constraints:'Ограничения', status:'Статус', domain:'Направление', content:'Содержание', summary:'Результат', conclusion:'Вывод', text:'Текст', created_at:'Создано', updated_at:'Обновлено', preferred_name:'Как обращаться', about_me:'О себе', credits:'Токены', user_messages:'Сообщения сегодня', user_cost_usd:'Расход сегодня, $', enabled:'Включено', available:'Доступно', revision:'Версия', query:'Поисковый запрос', kind:'Тип', prompt:'Описание', duration_seconds:'Длительность, сек.', error_code:'Ошибка', rationale:'Обоснование',spec_mode_enabled:'Работать по плану',workflow_version:'Версия процесса'};
 const statuses={draft:'Черновик',planned:'Запланировано',paused:'Приостановлено',active:'Активно',completed:'Завершено',failed:'Ошибка',pending:'Ожидает',running:'Выполняется',queued:'В очереди',ready:'Готово',awaiting_approval:'Ожидает подтверждения',cancelled:'Отменено',planning:'Планирую',executing:'Выполняется',claimed:'Готовится к выполнению',blocked:'Нужно уточнение',ready_for_review:'Готово к проверке'};
-const descriptions = {work:'Команда агентов, задания и управление рабочим бюджетом.',studio:'Создавай изображения, видео и музыку в одном месте.',projects:'Собирай идеи, материалы и разработку вокруг своих проектов.',research:'История исследований из твоих диалогов.',medical:'История медицинских диалогов и сохранённых исследований.',agents:'Настраивай помощников под свои задачи.',agentix:'Интеллектуальная инфраструктура для SaaS, приложений и цифровых продуктов.',autopilot:'Следи за выполнением поручений, открывай результаты и настраивай расписания.',profile:'Помоги Велии лучше понимать тебя.',plugins:'Выбирай инструменты, которые нужны в работе.',balance:'Следи за доступными токенами и использованием.',voice:'Настрой язык и голос для разговора с Велией.'};
+const descriptions = {notes:'Идеи, списки, избранное и сохранённые места.',map:'Места, адреса и маршруты для работы и поездок.',work:'Команда агентов, задания и управление рабочим бюджетом.',studio:'Создавай изображения, видео и музыку в одном месте.',projects:'Собирай идеи, материалы и разработку вокруг своих проектов.',research:'История исследований из твоих диалогов.',medical:'История медицинских диалогов и сохранённых исследований.',agents:'Настраивай помощников под свои задачи.',agentix:'Интеллектуальная инфраструктура для SaaS, приложений и цифровых продуктов.',autopilot:'Следи за выполнением поручений, открывай результаты и настраивай расписания.',profile:'Помоги Велии лучше понимать тебя.',plugins:'Выбирай инструменты, которые нужны в работе.',balance:'Следи за доступными токенами и использованием.',voice:'Настрой язык и голос для разговора с Велией.'};
 const hiddenKeys = new Set(['id','user_id','project_id','session_id','generation_id','client_request_id','signature','provider','model','input_sha256','worker_status','workflow_version']);
 function display(value, depth = 0) {
   const box = node('div', undefined, 'feature-detail');
@@ -217,7 +219,7 @@ function display(value, depth = 0) {
   return box;
 }
 
-export function setupFeatures({signedIn, openAuth, openIncomePlanner, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, openTopic, prepareAgentixChat=()=>{}, prepareFigmaChat=()=>{}, prepareConnectionChat=()=>{}, taskState=()=>null, prepareTask=()=>{}, onUnauthorized = () => {}}) {
+export function setupFeatures({notebook,discussNote=()=>{},signedIn, openAuth, openIncomePlanner, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, openTopic, prepareAgentixChat=()=>{}, prepareFigmaChat=()=>{}, prepareConnectionChat=()=>{}, taskState=()=>null, prepareTask=()=>{}, onUnauthorized = () => {}}) {
   const root = document.getElementById('feature-view'), nav = document.getElementById('feature-nav');
   let epoch = 0, section = null, controller = null, inlineBody = null, cleanup=()=>{};
   const close = () => {epoch++; cleanup();cleanup=()=>{};controller?.abort(); inlineBody?.remove(); inlineBody=null; root.replaceChildren(); root.hidden = true; section = null; nav.querySelectorAll('button').forEach(b=>b.removeAttribute('aria-current')); document.getElementById('conversation-scroll').hidden = false; document.querySelector('.composer-area').hidden = false;};
@@ -281,6 +283,8 @@ export function setupFeatures({signedIn, openAuth, openIncomePlanner, toast, isB
     const head = node('div', undefined, 'feature-header'), heading=node('div'); heading.append(node('span','ВОЗМОЖНОСТИ VELIA','feature-eyebrow'),node('h1', SECTIONS.find(s=>s[0]===name)?.[1] || 'VELIA'),node('p',descriptions[name])); head.append(heading, button('К диалогу', close)); heading.querySelector('h1').tabIndex=-1; root.append(head); heading.querySelector('h1').focus({preventScroll:true});
     const body = node('div',undefined,'feature-body'); root.append(body); const loading=node('p','Загрузка…','feature-empty'); loading.setAttribute('role','status'); body.append(loading);
     try {
+      if (name === 'notes') {body.replaceChildren();await mountNotebook(body,{notebook,toast,signal:controller.signal,discuss:discussNote,openMap:entry=>open('map',entry)});return;}
+      if (name === 'map') {body.replaceChildren();await mountMap(body,{notebook,toast,signal:controller.signal,draft});return;}
       if (name === 'voice') {body.replaceChildren(); voiceSettings(body); return;}
       if (name === 'agentix') {
         mountAgentix(body,{
@@ -709,7 +713,7 @@ export function setupFeatures({signedIn, openAuth, openIncomePlanner, toast, isB
     configure();await refresh();
   }
   const symbols=['<path d="m12 3 9 9-9 9-9-9z"/>','<rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 10h18M8 5V3"/>','<circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/>','<path d="M12 4v16M4 12h16"/>','<rect x="4" y="7" width="16" height="14" rx="4"/><path d="M12 3v4M8 12h1m6 0h1M8 17h8"/>','<path d="m12 3 8 4v6c0 4-8 8-8 8s-8-4-8-8V7zM9 12l2 2 4-4"/>','<path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="6"/><path d="M12 9v3l2 2"/>','<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/>','<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 12h8m-4-4v8"/>','<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>','<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11v1a7 7 0 0 0 14 0v-1M12 19v3"/>'];
-  for (const [index,[key,title]] of SECTIONS.entries()) {if(index===0||key==='profile')nav.append(node('span',index===0?'РАБОЧЕЕ ПРОСТРАНСТВО':'НАСТРОЙКИ','feature-nav-heading')); const b=button(title,()=>open(key)); b.dataset.section=key;const icon=node('span',undefined,'feature-nav-icon');icon.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'+(key==='agentix' ? '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>' : symbols[index>5?index-1:index] || '<path d="M9 3h6v10a3 3 0 0 1-6 0zM5 11v2a7 7 0 0 0 14 0M12 20v2"/>')+'</svg>';icon.setAttribute('aria-hidden','true');b.prepend(icon);nav.append(b);}
+  for (const [index,[key,title]] of SECTIONS.entries()) {if(index===0||key==='profile')nav.append(node('span',index===0?'РАБОЧЕЕ ПРОСТРАНСТВО':'НАСТРОЙКИ','feature-nav-heading')); const b=button(title,()=>open(key)); b.dataset.section=key;const originalIndex=SECTIONS.filter(([id])=>!['notes','map'].includes(id)).findIndex(([id])=>id===key);const icon=node('span',undefined,'feature-nav-icon');icon.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'+(key==='notes' ? '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/>' : key==='map' ? '<path d="m3 5 6-2 6 2 6-2v16l-6 2-6-2-6 2zM9 3v16M15 5v16"/>' : key==='agentix' ? '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>' : symbols[originalIndex>5?originalIndex-1:originalIndex] || '<path d="M9 3h6v10a3 3 0 0 1-6 0zM5 11v2a7 7 0 0 0 14 0M12 20v2"/>')+'</svg>';icon.setAttribute('aria-hidden','true');b.prepend(icon);nav.append(b);}
   const clearMedicalData=()=>{symptomEntries=[];for(const key of Object.keys(visitNotes))visitNotes[key]='';};
   return {mountTopic,close,open,clearMedicalData};
 }

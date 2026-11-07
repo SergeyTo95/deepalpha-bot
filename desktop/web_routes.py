@@ -474,15 +474,15 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
 
     async def asset(request):
         name = request.match_info.get("name", "index.html")
-        if name not in {"index.html", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "features.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "service-icons.mjs", "document-exports.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
+        if name not in {"index.html", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "notebook.mjs", "notebook-ui.mjs", "map.mjs", "leaflet-vendor.js", "leaflet-vendor.css", "leaflet-LICENSE.txt", "features.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "service-icons.mjs", "document-exports.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
             raise web.HTTPNotFound()
         response = web.FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
         response.headers.update({"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
             "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; "
-                "img-src 'self' data: blob:; media-src 'self' blob: data:; "
+                "img-src 'self' data: blob: https://tile.openstreetmap.org; media-src 'self' blob: data:; "
                 f"connect-src 'self' {origin.replace('https://', 'wss://', 1)}; font-src 'self'; object-src 'none'; "
                 "base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
-            "Permissions-Policy": "camera=(), microphone=(self), geolocation=()"})
+            "Permissions-Policy": "camera=(), microphone=(self), geolocation=(self)"})
         return response
     app.router.add_get("/", asset)
     app.router.add_get("/web/{name}", asset)
@@ -499,6 +499,8 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     setup_work_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response,
         upstream=upstream, upstream_stream=upstream_stream, authenticate=authenticate, allowed=allowed,
         handlers=handlers, web_search=web_search, origin=origin)
+    from desktop.map_routes import setup_map_routes
+    setup_map_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response, origin=origin)
     from desktop.document_exports import setup_document_exports
     setup_document_exports(app, session_for=session_for, same_origin=same_origin, json_response=json_response)
     from desktop.voice_routes import setup_voice_routes

@@ -1,3 +1,4 @@
+import {Notebook,notebookCommand} from './notebook.mjs';
 import {LocalHistory, browserHistoryStore} from "./local-history.mjs";
 import {
   MODELS,
@@ -96,6 +97,7 @@ let legacyTopic = null;
 const topicViews = new Map();
 const isDocumentTopic=kind=>kind==='medical_document' || kind==='research_document';
 const fileTools=setupFileTools({toast});
+const notebook=new Notebook(featureRequest);
 function clearFiles(){selectedFiles=[];$("attachment-input").value="";$("attachment-preview").replaceChildren();}
 function filePreview(){const target=$("attachment-preview");target.replaceChildren();selectedFiles.forEach((item,i)=>{const chip=document.createElement('div');chip.className='file-chip';const view=document.createElement('button');view.type='button';view.textContent=item.file.name+' · '+fileSize(item.file.size)+(item.file.type.startsWith('image/')&&(model!=="velia-pro"||profile?.free_api_tiers)?' · Распознавание текста':'');view.onclick=()=>fileTools.previewFile(item.file).catch(()=>toast('Не удалось открыть файл.'));const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label','Удалить '+item.file.name);remove.onclick=()=>{selectedFiles.splice(i,1);filePreview();resizePrompt();};chip.append(view,remove);target.append(chip);});if(selectedFiles.length){const bar=document.createElement('div');bar.className='file-shortcuts';for(const [title,prompt] of [['Пересказать','Кратко перескажи содержание прикреплённых файлов.'],['Извлечь текст','Извлеки текст из прикреплённых файлов. Отметь неразборчивые места.'],['Проверить ошибки','Проверь прикреплённые файлы на ошибки и несоответствия.']]){const b=document.createElement('button');b.type='button';b.textContent=title;b.onclick=()=>{$('prompt').value=prompt;resizePrompt();$('prompt').focus();};bar.append(b);}target.append(bar);}}
 function addFiles(files) {
@@ -166,7 +168,12 @@ async function saveIncomePlan(plan) {
     'План открыт. Сохранение на устройстве недоступно. Его можно скачать в меню диалога.');
 }
 const voice = setupVoice({accountLanguage:()=>profile?.language||'', busy:()=>busy, toast, modelName:()=>MODELS[model], send:text=>{if(agentMode&&model==='velia-flash')setAgentMode(false);$("prompt").value=text;return generate(false, true);}});
-const features = setupFeatures({openIncomePlanner: showIncomePlanner, prepareConnectionChat:provider=>{
+const features = setupFeatures({notebook,discussNote:entry=>{
+  if(busy)return;
+  if($('prompt').value.trim()){toast('В чате есть черновик. Сохрани или очисти его перед переходом.');return;}
+  features.close();setAgentMode(false,true);newChat();
+  $('prompt').value='Помоги с записью «'+entry.title+'»:\n'+(entry.kind==='list'?entry.items.map(item=>(item.done?'[x] ':'[ ] ')+item.text).join('\n'):entry.content);resizePrompt();$('prompt').focus();
+},openIncomePlanner: showIncomePlanner, prepareConnectionChat:provider=>{
   if(busy)throw new Error('Дождись завершения текущего ответа.');
   if($('prompt').value.trim())throw new Error('В диалоге есть несохранённый текст. Сохрани или очисти его перед переходом.');
   setAgentMode(false,true);newChat();
@@ -218,7 +225,7 @@ function lockHistory() {
   background.reset();
   autoloop.reset();
   abort?.abort(); clearTimeout(saveTimer); saveTimer = null;
-  localHistory.lock(); storageKey = null; chats = []; currentId = null;
+  notebook.lock();localHistory.lock(); storageKey = null; chats = []; currentId = null;
   topicViews.clear(); legacyTopic=null;
   features.close(); features.clearMedicalData(); voice.stop(); clearFiles(); fileTools.clear();
   $('prompt').value = ''; medicalDraftMode = false;
@@ -394,7 +401,7 @@ function messageNode(message, index) {
     const badge = document.createElement("span");
     badge.className = "message-model";
     badge.textContent = message.agent ? "AGENT" : message.model === "velia-flash" ? "FLASH" : message.model === "velia-quantum" ? "QUANTUM" : "PRO";
-    heading.append(badge);
+    if(!message.local)heading.append(badge);
     article.append(heading);
   }
   const content = document.createElement("div");
@@ -441,8 +448,11 @@ function messageNode(message, index) {
       actions.append(copy);
       const speak = document.createElement("button"); speak.textContent = "Озвучить"; speak.onclick = () => voice.speak(message.content); actions.append(speak);
       actions.append(documentExportControl(message.content,toast));
+      const favoriteId='favorite:'+current().id+':'+index;
+      const favorite=document.createElement('button');favorite.textContent='☆';favorite.title='В избранное';favorite.setAttribute('aria-label','Сохранить ответ в избранное');
+      favorite.onclick=async()=>{if(!profile){openAuth();return;}favorite.disabled=true;try{await notebook.save({id:favoriteId,kind:'favorite',title:message.content.replace(/[#*`]/g,'').slice(0,100).trim()||'Ответ Велии',content:message.content,tags:['Из чата']},{ifAbsent:true});favorite.textContent='★';toast('Ответ сохранён в избранном.');}catch(error){toast(error.message);}finally{favorite.disabled=false;}};actions.append(favorite);
     }
-    if (index === current().messages.length - 1) {
+    if (index === current().messages.length - 1 && !message.local) {
       if (canContinuePartialAnswer(message)) {
         const resume = document.createElement("button");
         resume.className = "message-continue";
@@ -884,6 +894,7 @@ async function applyProfile(value) {
   storageKey = "velia-web-chats-v1:" + value.account;
   if (changed) {
     const owner = value.account;
+    await notebook.unlock(owner);
     try {
       await localHistory.unlock(owner, cacheKey);
       const cached = await localHistory.read();
@@ -941,7 +952,7 @@ function applyGuest(value) {
   $("agent-toggle").hidden = true;
   storageKey = "velia-web-guest-v1:" + value.account;
   if (changed) {
-    localHistory.lock(); chats = []; currentId = null;
+    notebook.lock();localHistory.lock(); chats = []; currentId = null;
     try { localStorage.removeItem(storageKey); localStorage.removeItem(storageKey + ':active'); } catch {}
     if (!current()) currentId = null;
     for (const c of chats) for (const m of c.messages) if (m.pending) { m.pending = false; m.stopped = true; }
@@ -967,6 +978,29 @@ async function refreshGuest() {
   })();
   try { await guestLoading; } finally { guestLoading = null; }
 }
+async function runNotebookCommand(command,text,voiceTurn){
+  const owner=profile.account;setBusy(true);let reply='',destination=null;
+  try{
+    if(command.kind==='note'){await notebook.save({kind:'note',title:command.content.split('\n')[0].slice(0,100),content:command.content,tags:[]});reply='Сохранила заметку. Её можно открыть в разделе «Заметки».';}
+    if(command.kind==='list'){await notebook.save({kind:'list',title:command.title,content:'',tags:[],items:command.items});reply='Сохранила список. Отмечай выполненные пункты в разделе «Заметки».';}
+    if(command.kind==='favorite'){
+      const answer=current()?.messages.filter(message=>message.role==='assistant'&&message.content).at(-1);
+      if(!answer)throw Error('Сначала выбери диалог с ответом, который нужно сохранить.');
+      await notebook.save({kind:'favorite',title:answer.content.replace(/[#*`]/g,'').slice(0,100).trim()||'Ответ Велии',content:answer.content,tags:['Из чата']});reply='Сохранила ответ в избранном.';
+    }
+    if(command.kind==='find'){const entries=await notebook.find(command.query);reply=entries.length?'Нашла записей: '+entries.length+'.\n\n'+entries.slice(0,10).map(entry=>'• '+entry.title+' — '+(entry.content||entry.items?.map(item=>item.text).join(', ')||'Место на карте').slice(0,160)).join('\n'):'Подходящих записей пока нет.';}
+    if(command.kind==='open'){reply='Открыла твои заметки.';destination=['notes',{}];}
+    if(command.kind==='map'){reply=command.query?'Открыла поиск места на карте.':'Открыла карту.';destination=['map',{query:command.query||''}];}
+    if(profile?.account!==owner)return;
+    let chat=current();
+    if(!chat||chat.remote||chat.agent||chat.figma||chat.connectionProvider){chat={id:crypto.randomUUID(),title:'Заметки и места',updated:Date.now(),messages:[]};chats.unshift(chat);currentId=chat.id;}
+    chat.messages.push({role:'user',content:text,sentAt:Date.now(),requestId:crypto.randomUUID()},{role:'assistant',content:reply,local:true,sentAt:Date.now()});chat.updated=Date.now();
+    setAgentMode(false,true);$('prompt').value='';resizePrompt();render();save();
+  }catch(error){if(profile?.account===owner&&error.name!=='AbortError'){toast(error.message);if(voiceTurn)voice.failure(false,error.message);}}
+  finally{setBusy(false);if(profile?.account===owner)render();}
+  if(profile?.account===owner&&destination)await features.open(...destination);
+  if(profile?.account===owner&&reply&&voiceTurn){voice.update(reply);voice.complete(reply);}
+}
 async function generate(retry = false, voiceTurn = false) {
   if (busy || !ready) return;
   if (agentMode && !profile) { openAuth(); return; }
@@ -976,11 +1010,13 @@ async function generate(retry = false, voiceTurn = false) {
     if (busy) return;
     if (!guest || guest.remaining <= 0) { openAuth(); return; }
   }
+  const text = $("prompt").value.trim() || (selectedFiles.length ? "Проанализируй прикреплённые файлы." : "");
+  const noteCommand=!retry&&!selectedFiles.length&&notebookCommand(text);
+  if(noteCommand){if(!profile){openAuth();return;}await runNotebookCommand(noteCommand,text,voiceTurn);return;}
   if (profile && !profile.models.includes(model)) {
     toast(apiError(profile.pro_locked_reason || "pro_tokens_required"));
     return;
   }
-  const text = $("prompt").value.trim() || (selectedFiles.length ? "Проанализируй прикреплённые файлы." : "");
   // Project specification and code planning must use the normal Velia chat,
   // never a browser-only DSH execution with an isolated Chromium session.
   const candidate = retry ? current()?.messages?.filter(m=>m.role==='user').at(-1)?.content : text;

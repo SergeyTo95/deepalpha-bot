@@ -1,0 +1,27 @@
+/** Real vendored Leaflet SDK in a synthetic DOM; no network or location access. */
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+const {JSDOM}=await import(process.env.VELIA_JSDOM_MODULE||'jsdom');
+const dom=new JSDOM('<main></main>',{url:'https://velia.example/',pretendToBeVisual:true,runScripts:'outside-only'});
+const {window}=dom;
+Object.assign(globalThis,{window,document:window.document,Event:window.Event});
+Object.defineProperty(globalThis,'navigator',{value:window.navigator,configurable:true});
+window.eval(await fs.readFile(new URL('../web/leaflet-vendor.js',import.meta.url),'utf8'));
+Object.defineProperty(window.HTMLElement.prototype,'clientWidth',{get:()=>600});
+Object.defineProperty(window.HTMLElement.prototype,'clientHeight',{get:()=>350});
+const controller=new AbortController(),entries=[{id:'one',kind:'place',title:'Анталия',content:'Клиент',tags:[],lat:36.9,lon:30.7},{id:'two',kind:'place',title:'Стамбул',content:'Офис',tags:[],lat:41,lon:29}];
+let map,locations=0;
+Object.defineProperty(window.navigator,'geolocation',{value:{getCurrentPosition(){locations++;}},configurable:true});
+const factory=window.L.map;window.L.map=(...args)=>(map=factory(...args));
+const {mountMap}=await import('../web/map.mjs');
+try{
+  await mountMap(document.querySelector('main'),{notebook:{load:async()=>entries,save:async value=>entries.push(value)},toast:()=>{},signal:controller.signal});
+  assert.equal(window.L.version,'1.9.4');assert.equal(locations,0);
+  assert.ok(document.querySelector('.leaflet-control-attribution').textContent.includes('OpenStreetMap'));
+  const tile=document.querySelector('img.leaflet-tile');assert.ok(tile.src.startsWith('https://tile.openstreetmap.org/'));assert.equal(tile.referrerPolicy,'strict-origin-when-cross-origin');
+  assert.equal(document.querySelectorAll('.map-route select').length,2);assert.ok(document.querySelector('.map-route').textContent.includes('По прямой:'));
+  [...document.querySelectorAll('button')].find(button=>button.textContent==='Выбрать точку').click();map.fire('click',{latlng:window.L.latLng(36.8,30.6)});
+  assert.ok(document.querySelector('.notebook-editor'));assert.equal(document.querySelector('input[type="number"]').value,'36.8');
+  controller.abort();assert.ok(!document.querySelector('.leaflet-pane'));
+  console.log(JSON.stringify({ok:true,synthetic:true,checks:['real Leaflet 1.9.4 initializes','OSM attribution and per-tile referrer','saved point markers and straight-line comparison','map click opens place editor','no implicit geolocation','abort removes map']}));
+}finally{controller.abort();dom.window.close();}
