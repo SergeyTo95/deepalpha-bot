@@ -1,7 +1,9 @@
 # Notes and geographic map
 
-The existing gateway and backend serve this feature. No new service, GPU or model
-call is required. Deploy the backend notebook endpoint before the gateway UI.
+The existing gateway and backend serve this feature. No new service or GPU is
+required. Manual notebook/map actions need no model call. Map tasks in chat use
+the selected model and its normal token accounting. Deploy the backend notebook
+endpoint before the gateway UI.
 
 ## Account notebook
 
@@ -26,11 +28,36 @@ device's changes. A snapshot holds at most 500 records and 512 KiB of plaintext.
 No notebook content is automatically supplied to an LLM. “Обсудить с Велией”
 prepares a chat draft for the user to send.
 
-Explicit Russian commands work before model availability checks: “Сохрани
+Explicit notebook commands work before model availability checks: “Сохрани
 заметку: …”, “Создай список покупок: хлеб, молоко”, “Найди мои заметки про …”,
-“Добавь это в избранное”, “Открой карту”, “Найди на карте Анталию”. Other prompts
-continue through the normal selected-model flow. Checklists are stored lists,
+“Добавь это в избранное”, “Открой карту”. Geographic tasks such as “Найди на карте
+Анталию” run the map tools through the selected model. Checklists are stored lists,
 not scheduled reminders.
+
+## Map actions in the main chat
+
+Geographic action requests and concrete follow-ups use `map/plan`, authenticated
+through the normal model authorization path for Flash, Quantum and PRO. The
+bounded client tool loop can search addresses, read saved places, show selected
+points in an inline map, save places, edit their comments and prepare navigation
+links. Search results get opaque references; the model cannot invent a coordinate
+or a saved-record ID to execute a write. Writes require an explicit request and
+are guarded against account changes, stale revisions and repeated mutation
+attempts. Other notebook entries and encryption keys are never passed to the
+planner. Only relevant place results enter the conversation context.
+
+At most four searches and ten planner steps run per turn. Routes support two to
+five points in the requested order and a travel mode. They are navigation links,
+not computed road paths, traffic estimates or route optimization. The UI labels
+this distinction and generates the navigation URL from validated coordinates.
+
+Map results and continuations use the encrypted browser chat cache, as other
+client-side integration tasks do. When starting a map task from a server chat,
+the visible context is retained in a browser continuation; map tool turns are
+not yet synchronized as server conversation messages across devices. Saved
+places themselves remain in the account notebook and are available on other
+devices. The “Мои места” sidebar opens saved locations instead of displaying an
+empty world map by default.
 
 ## Map providers and privacy
 

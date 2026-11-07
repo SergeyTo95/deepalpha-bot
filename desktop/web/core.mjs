@@ -444,13 +444,13 @@ export function loadChats(storage, key) {
     return [];
   }
 }
-export function chatPayload(chat, model) {
+export function chatPayload(chat, model, {messageContext=message=>message.content}={}) {
   if (!MODELS[model]) throw new Error("Выбери режим Велии.");
   return {
     model,
     stream: true,
     messages: chat.messages
       .filter((m) => m.role === "user" || (!m.failed && m.content.trim()))
-      .map(({ role, content }) => ({ role, content })),
+      .map(message => ({role:message.role,content:messageContext(message)})),
   };
 }
