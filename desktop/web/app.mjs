@@ -20,6 +20,7 @@ import {setupBackgroundTasks, taskAcknowledgement} from "./background-tasks.mjs"
 import {setupAutoloop, parseAutoloop} from './autoloop.mjs';
 import {setupIncomePlanner} from './income-planner.mjs';
 import {runFigmaAgent, wantsFigma} from './figma.mjs';
+import {cloudProvider, runCloudAgent, CONNECTION_NAMES} from './connections.mjs';
 const $ = (id) => document.getElementById(id);
 const icons = {
   attachment: "M21 11l-8 8a6 6 0 0 1-8-8l9-9a4 4 0 0 1 6 6l-9 9a2 2 0 0 1-3-3l8-8",
@@ -164,7 +165,13 @@ async function saveIncomePlan(plan) {
     'План открыт. Сохранение на устройстве недоступно. Его можно скачать в меню диалога.');
 }
 const voice = setupVoice({accountLanguage:()=>profile?.language||'', busy:()=>busy, toast, modelName:()=>MODELS[model], send:text=>{if(agentMode&&model==='velia-flash')setAgentMode(false);$("prompt").value=text;return generate(false, true);}});
-const features = setupFeatures({openIncomePlanner: showIncomePlanner, prepareFigmaChat:()=>{
+const features = setupFeatures({openIncomePlanner: showIncomePlanner, prepareConnectionChat:provider=>{
+  if(busy)throw new Error('Дождись завершения текущего ответа.');
+  if($('prompt').value.trim())throw new Error('В диалоге есть несохранённый текст. Сохрани или очисти его перед переходом.');
+  setAgentMode(false,true);newChat();
+  const chat={id:crypto.randomUUID(),title:'Проекты в '+CONNECTION_NAMES[provider],updated:Date.now(),messages:[],connectionProvider:provider};
+  chats.unshift(chat);currentId=chat.id;render();save();$('prompt').focus();
+}, prepareFigmaChat:()=>{
   if(busy)throw new Error('Дождись завершения текущего ответа.');
   if($('prompt').value.trim())throw new Error('В диалоге есть несохранённый текст. Сохрани или очисти его перед переходом.');
   setAgentMode(false,true);
@@ -976,11 +983,13 @@ async function generate(retry = false, voiceTurn = false) {
   // Project specification and code planning must use the normal Velia chat,
   // never a browser-only DSH execution with an isolated Chromium session.
   const candidate = retry ? current()?.messages?.filter(m=>m.role==='user').at(-1)?.content : text;
-  const figmaTurn = wantsFigma(candidate || '') || !agentMode && current()?.figma;
-  if(figmaTurn && !profile){openAuth();return;}
-  if(figmaTurn && selectedFiles.length){toast('Для задания Figma опиши изменения текстом.');return;}
-  if(figmaTurn && agentMode)setAgentMode(false,true);
-  const detected=!retry && !agentMode && !figmaTurn && (medicalDraftMode?'medical_document':chatSpecialty(text,selectedFiles.map(item=>item.file)));
+  const connectionProvider=cloudProvider(candidate||'') || !wantsFigma(candidate||'') && !agentMode && current()?.connectionProvider;
+  const figmaTurn = !connectionProvider && (wantsFigma(candidate || '') || !agentMode && current()?.figma);
+  const connectedTurn=figmaTurn||connectionProvider;
+  if(connectedTurn && !profile){openAuth();return;}
+  if(connectedTurn && selectedFiles.length){toast('Для задания подключённому сервису опиши изменения текстом.');return;}
+  if(connectedTurn && agentMode)setAgentMode(false,true);
+  const detected=!retry && !agentMode && !connectedTurn && (medicalDraftMode?'medical_document':chatSpecialty(text,selectedFiles.map(item=>item.file)));
   const specialty=detected==='research' && current()?.medicalNoSearch && /(?:по этим|по этому|по моим|по приложен|на основе этих|на основе моего|based on (?:my|this|these))/i.test(text)
     ? 'medical_document' : detected;
   if(specialty && !profile){openAuth();return;}
@@ -994,8 +1003,10 @@ async function generate(retry = false, voiceTurn = false) {
   if(backgroundAgent&&!profile?.background_agent){toast(apiError('background_agent_unavailable'));return;}
   if (!retry && !text) return;
   let chat = current();
-  if(figmaTurn && chat?.remote){currentId=null;chat=null;}
+  if(connectedTurn && chat && (chat.remote || figmaTurn && chat.connectionProvider
+      || connectionProvider && (chat.figma || chat.connectionProvider && chat.connectionProvider!==connectionProvider))){currentId=null;chat=null;}
   if(figmaTurn && chat)chat.figma=true;
+  if(connectionProvider && chat)chat.connectionProvider=connectionProvider;
   if(specialty && chat && !chat.remote){currentId=null;chat=null;}
   if(backgroundAgent&&chat&&!chat.remote){currentId=null;chat=null;}
   if (retry) {
@@ -1003,9 +1014,9 @@ async function generate(retry = false, voiceTurn = false) {
     chat.messages.pop();
   } else {
     if (!chat) {
-      if (!profile || agentMode&&!backgroundAgent || figmaTurn) {
+      if (!profile || agentMode&&!backgroundAgent || connectedTurn) {
         chat = {id: crypto.randomUUID(), title: text.replace(/\s+/g, " ").slice(0, 70),
-          updated: Date.now(), messages: [], agent: agentMode, ...(figmaTurn ? {figma:true} : {})};
+          updated: Date.now(), messages: [], agent: agentMode, ...(figmaTurn ? {figma:true} : {}), ...(connectionProvider?{connectionProvider}:{})};
       } else {
       setBusy(true);
       try {
@@ -1149,7 +1160,12 @@ async function generate(retry = false, voiceTurn = false) {
     else if (paintFrame === null) paintFrame = requestAnimationFrame(paint);
   };
   try {
-    if (figmaTurn) {
+    if (connectionProvider) {
+      answer.content=await runCloudAgent({provider:connectionProvider,model:selected,user,
+        history:chat.messages.filter(message=>message!==answer),signal:abort.signal,request,persist:()=>save(),
+        progress:text=>{$('generation-status').textContent=text;}});
+      answer.finish='stop';if(voiceTurn)voice.update(answer.content);queuePaint();scheduleSave();
+    } else if (figmaTurn) {
       answer.content = await runFigmaAgent({model:selected,user,
         history:chat.messages.filter(message=>message!==answer),signal:abort.signal,request,
         persist:()=>save(),
@@ -1497,6 +1513,14 @@ if (figmaReturn.searchParams.has('figma')) {
   window.history.replaceState(null, '', figmaReturn.pathname + figmaReturn.search + figmaReturn.hash);
   if (profile) features.open('plugins');
   if (outcome === 'error') toast('Подключение Figma не завершилось. Попробуй войти ещё раз.');
+}
+const connectionReturn=new URL(location.href);
+if(connectionReturn.searchParams.has('connection')){
+  const outcome=connectionReturn.searchParams.get('result') || (connectionReturn.searchParams.get('connected')==='false'?'error':'connected');
+  for(const key of ['connection','result','connected','installation_id','installation_count','error'])connectionReturn.searchParams.delete(key);
+  window.history.replaceState(null,'',connectionReturn.pathname+connectionReturn.search+connectionReturn.hash);
+  if(profile)features.open('plugins');
+  if(outcome==='error')toast('Подключение не завершилось. Попробуй войти ещё раз.');
 }
 
 $("voice-open").onclick=()=>voice.open();

@@ -317,7 +317,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             session.selected_model_inputs = identity.get("selected_model_inputs") is True
             previous = decode(request)
             if previous:
-                figma_bridge.disconnect((str(previous.user_id), previous.id))
+                disconnect_connections(previous)
                 sessions.pop(previous.id, None)
                 revoked[previous.id] = previous.expires
             sessions[session.id] = session
@@ -332,7 +332,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
         incoming = decode(request)
         session = sessions.get(incoming.id, incoming) if incoming else None
         if session:
-            figma_bridge.disconnect((str(session.user_id), session.id))
+            disconnect_connections(session)
             async with session.lock:
                 sessions.pop(session.id, None)
                 revoked[session.id] = session.expires
@@ -358,6 +358,11 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             if request.path == "/web-api/v1/figma/plan":
                 if not figma_bridge.status((str(session.user_id), session.id))["connected"]:
                     return error("figma_connect_required", 409)
+                forwarded[WEB_FIGMA] = True
+            elif request.path.startswith("/web-api/v1/connections/"):
+                bridge = cloud_connections[request.match_info["provider"]]
+                if not bridge.status((str(session.user_id), session.id))["connected"]:
+                    return error("connection_connect_required", 409)
                 forwarded[WEB_FIGMA] = True
             return await handlers["complete"](forwarded)
         except AuthenticationUnavailable:
@@ -469,7 +474,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
 
     async def asset(request):
         name = request.match_info.get("name", "index.html")
-        if name not in {"index.html", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "features.mjs", "figma.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
+        if name not in {"index.html", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "features.mjs", "figma.mjs", "connections.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
             raise web.HTTPNotFound()
         response = web.FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
         response.headers.update({"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
@@ -486,6 +491,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     app.router.add_post("/web-api/v1/auth/logout", logout)
     app.router.add_post("/web-api/v1/chat/completions", chat)
     app.router.add_post("/web-api/v1/figma/plan", chat)
+    app.router.add_post("/web-api/v1/connections/{provider:railway|vercel}/plan", chat)
     app.router.add_post("/web-api/v1/agent/browser", browser_agent)
     app.router.add_post("/web-api/v1/agent/browser/takeover", browser_takeover_state)
     app.router.add_post("/web-api/v1/agent/browser/takeover/action", browser_takeover_action)
@@ -497,6 +503,23 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     setup_voice_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response, origin=origin)
     from desktop.figma_routes import setup_figma_routes
     figma_bridge = setup_figma_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response, origin=origin)
+    from desktop.cloud_connections import create_cloud_connections
+    cloud_connections = create_cloud_connections(origin)
+    for provider, bridge in cloud_connections.items():
+        setup_figma_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response,
+            connector=bridge, oauth=bridge.oauth, provider=provider, prefix="/web-api/v1/connections/" + provider)
+
+    def disconnect_connections(session):
+        owner = (str(session.user_id), session.id)
+        figma_bridge.disconnect(owner)
+        for bridge in cloud_connections.values():
+            bridge.disconnect(owner)
+
+    async def client_metadata(request):
+        response = json_response(cloud_connections["vercel"].oauth.metadata())
+        response.headers["Cache-Control"] = "public, max-age=600"
+        return response
+    app.router.add_get("/.well-known/velia/vercel.json", client_metadata)
     from desktop.account_routes import setup_account_routes
     from desktop.feature_routes import setup_feature_routes
     setup_feature_routes(app, session_for=session_for, same_origin=same_origin, upstream=upstream,

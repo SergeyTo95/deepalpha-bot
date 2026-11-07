@@ -48,6 +48,8 @@ class FigmaOAuth:
             raise ValueError("Trusted HTTPS origin required")
         self.bridge = bridge
         self.callback = origin.rstrip("/") + "/web-api/v1/figma/callback"
+        self.authorization_endpoint = ORIGIN + "/authorize"
+        self.resource = None
         self.request = request or oauth_http
         self.pending = {}
         self.registration = None
@@ -112,10 +114,11 @@ class FigmaOAuth:
             flow["client_id"] = registration["client_id"]
             flow["status"] = "pending"
             challenge = base64.urlsafe_b64encode(hashlib.sha256(flow["verifier"].encode()).digest()).decode().rstrip("=")
-            return {"authorization_url": ORIGIN + "/authorize?" + urlencode({
+            return {"authorization_url": self.authorization_endpoint + "?" + urlencode({
                 "client_id": flow["client_id"], "redirect_uri": self.callback,
                 "response_type": "code", "state": flow["state"], "code_challenge": challenge,
-                "code_challenge_method": "S256", "scope": registration["scope"]})}
+                "code_challenge_method": "S256", "scope": registration["scope"],
+                **({"resource": self.resource} if self.resource else {})})}
         except BaseException:
             if self.pending.get(owner) is flow:
                 self.pending.pop(owner, None)
@@ -132,7 +135,8 @@ class FigmaOAuth:
         try:
             result = await self.request("POST", "/token", data={
                 "grant_type": "authorization_code", "client_id": flow["client_id"],
-                "redirect_uri": self.callback, "code": code, "code_verifier": flow["verifier"]})
+                "redirect_uri": self.callback, "code": code, "code_verifier": flow["verifier"],
+                **({"resource": self.resource} if self.resource else {})})
             if self.pending.get(owner) is not flow:
                 raise FigmaError("figma_authorization_cancelled", 409)
             token, lifetime = result.get("access_token"), result.get("expires_in")

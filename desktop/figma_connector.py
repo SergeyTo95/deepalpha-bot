@@ -21,10 +21,24 @@ class FigmaError(Exception):
         self.code, self.status = code, status
 
 
-def public_result(result, token):
+def redact_credentials(value):
+    sensitive = re.compile(r"(?:^|_)(?:access_token|refresh_token|api_key|client_secret|private_key|password|authorization|token)(?:$|_)", re.I)
+    if isinstance(value, dict):
+        credential_record = sensitive.search(str(value.get("key", value.get("name", ""))))
+        return {key: "[скрыто]" if sensitive.search(key) or credential_record and key == "value"
+                else redact_credentials(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact_credentials(item) for item in value]
+    return value
+
+
+def public_result(result, token, *, redact=False):
     """Send text evidence, never credential-bearing errors or binary payloads."""
     content = []
     failed = result.get("isError") is True
+    if isinstance(result.get("structuredContent"), (dict, list)):
+        structured = redact_credentials(result["structuredContent"])
+        content.append(json.dumps(structured, ensure_ascii=False).replace(token, "[скрыто]")[:24000])
     for item in result.get("content", []):
         if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
             text = re.sub(r"figd_[A-Za-z0-9_-]+", "[скрыто]", item["text"].replace(token, "[скрыто]"))
@@ -33,21 +47,25 @@ def public_result(result, token):
                 value = strict_json_loads(text)
                 if isinstance(value, dict) and (value.get("success") is False or value.get("error")):
                     failed = True
+                if redact:
+                    content[-1] = json.dumps(redact_credentials(value), ensure_ascii=False)[:16000]
             except (ValueError, TypeError):
                 pass
     return {"isError": failed, "text": "\n".join(content)[:24000]}
 
 
 class FigmaConnector:
-    def __init__(self, request=None):
+    def __init__(self, request=None, *, endpoint=ENDPOINT, pair_required=True):
         self.connections = {}
         self.request = request or self.http
         self.oauth = None
+        self.endpoint = endpoint
+        self.pair_required = pair_required
 
     async def http(self, headers, payload):
         try:
             async with ClientSession(timeout=ClientTimeout(total=45), trust_env=False) as client:
-                async with client.post(ENDPOINT, headers=headers, json=payload, allow_redirects=False) as response:
+                async with client.post(self.endpoint, headers=headers, json=payload, allow_redirects=False) as response:
                     if response.status in {401, 403}:
                         raise FigmaError("figma_access_denied", 403)
                     if response.status not in {200, 202, 204}:
@@ -143,7 +161,8 @@ class FigmaConnector:
                     result = await self.rpc(connection, "tools/list", {"cursor": cursor} if cursor else {})
                     for tool in result.get("tools", []):
                         name = tool.get("name") if isinstance(tool, dict) else None
-                        if isinstance(name, str) and re.fullmatch(r"figma_[a-z0-9_]{1,90}", name) and isinstance(tool.get("inputSchema"), dict):
+                        pattern = r"figma_[a-z0-9_]{1,90}" if self.pair_required else r"[A-Za-z0-9_-]{1,100}"
+                        if isinstance(name, str) and re.fullmatch(pattern, name) and isinstance(tool.get("inputSchema"), dict):
                             tools[name] = {"name": name, "description": str(tool.get("description", ""))[:4000], "inputSchema": tool["inputSchema"]}
                     if len(tools) > 200 or len(json.dumps(tools)) > 700000:
                         raise FigmaError("figma_protocol_error", 502)
@@ -154,9 +173,12 @@ class FigmaConnector:
                         raise FigmaError("figma_protocol_error", 502)
                 else:
                     raise FigmaError("figma_protocol_error", 502)
-                if not {"figma_pair_plugin", "figma_execute"} <= tools.keys():
+                if not tools or self.pair_required and not {"figma_pair_plugin", "figma_execute"} <= tools.keys():
                     raise FigmaError("figma_protocol_error", 502)
                 connection["tools"] = tools
+                if not self.pair_required:
+                    connection["ready"] = True
+                    return {"connection_id": connection["id"], "connected": True}
                 paired = await self.rpc(connection, "tools/call", {"name": "figma_pair_plugin", "arguments": {}})
                 public = public_result(paired, token)
                 data = strict_json_loads(public["text"])
@@ -171,6 +193,9 @@ class FigmaConnector:
                 raise
 
     async def canvas(self, connection):
+        if not self.pair_required:
+            await self.rpc(connection, "ping")
+            return {}
         result = await self.rpc(connection, "tools/call", {"name": "figma_execute", "arguments": {"code": CANVAS, "timeout": 5000}})
         public = public_result(result, connection["token"])
         try:
@@ -248,7 +273,7 @@ class FigmaConnector:
                 result = await self.rpc(connection, "tools/call", {"name": data["name"], "arguments": data["arguments"]})
             except FigmaError:
                 raise FigmaError("figma_execution_uncertain", 409) from None
-            receipt["result"] = public_result(result, connection["token"])
+            receipt["result"] = public_result(result, connection["token"], redact=not self.pair_required)
             return receipt["result"]
 
     def disconnect(self, owner):

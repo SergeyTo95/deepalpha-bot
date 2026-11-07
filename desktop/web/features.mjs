@@ -2,12 +2,13 @@ import {renderMarkdown, apiError} from './core.mjs';
 import {mountWork} from './work.mjs';
 import {mountAgentix} from './agentix.mjs';
 import {mountFigma} from './figma.mjs';
+import {mountConnections} from './connections.mjs';
 
 export const SECTIONS = Object.freeze([
   ['studio', 'Studio'], ['projects', 'Проекты'], ['research', 'Исследования'],
   ['medical', 'Медицинский центр'], ['agents', 'Мои агенты'], ['agentix', 'Agentix'],
   ['work', 'Работа и заработок'], ['autopilot', 'Задачи'], ['profile', 'Персонализация'],
-  ['plugins', 'Плагины'], ['balance', 'Баланс и использование'], ['voice', 'Голос'],
+  ['plugins', 'Подключения и плагины'], ['balance', 'Баланс и использование'], ['voice', 'Голос'],
 ]);
 export function mediaPath(value) {
   try {
@@ -216,7 +217,7 @@ function display(value, depth = 0) {
   return box;
 }
 
-export function setupFeatures({signedIn, openAuth, openIncomePlanner, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, openTopic, prepareAgentixChat=()=>{}, prepareFigmaChat=()=>{}, taskState=()=>null, prepareTask=()=>{}, onUnauthorized = () => {}}) {
+export function setupFeatures({signedIn, openAuth, openIncomePlanner, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, openTopic, prepareAgentixChat=()=>{}, prepareFigmaChat=()=>{}, prepareConnectionChat=()=>{}, taskState=()=>null, prepareTask=()=>{}, onUnauthorized = () => {}}) {
   const root = document.getElementById('feature-view'), nav = document.getElementById('feature-nav');
   let epoch = 0, section = null, controller = null, inlineBody = null, cleanup=()=>{};
   const close = () => {epoch++; cleanup();cleanup=()=>{};controller?.abort(); inlineBody?.remove(); inlineBody=null; root.replaceChildren(); root.hidden = true; section = null; nav.querySelectorAll('button').forEach(b=>b.removeAttribute('aria-current')); document.getElementById('conversation-scroll').hidden = false; document.querySelector('.composer-area').hidden = false;};
@@ -304,6 +305,7 @@ export function setupFeatures({signedIn, openAuth, openIncomePlanner, toast, isB
         const r = await call('profile'); if (ticket !== epoch) return; body.replaceChildren(form([['preferred_name','Как обращаться'],['about_me','О себе','textarea']], 'Сохранить', d=>call('profile',{method:'PATCH',data:d}), r.profile));
       } else if (name === 'plugins') {
         body.replaceChildren();
+        mountConnections(body,{call,toast,signal:controller.signal,prepareChat:prepareConnectionChat,openProjects:()=>open('projects')});
         mountFigma(body,{prepareChat:prepareFigmaChat,toast,signal:controller.signal});
         const r = await call('plugins'); if (ticket !== epoch) return;
         const names = {weather:'Погода',web_search:'Поиск в интернете',research:'Исследования',image_generation:'Изображения',file_analyst:'Анализ файлов',deepalpha_markets:'DeepAlpha'};
