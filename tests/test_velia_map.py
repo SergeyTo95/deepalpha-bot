@@ -4,13 +4,14 @@ from types import SimpleNamespace
 from aiohttp import web, ClientSession
 from aiohttp.test_utils import TestServer
 from desktop.map_routes import setup_map_routes
+from desktop.map_routes import search_filters,photon_params,extract_places
 from desktop.feature_routes import setup_feature_routes
 
 
 def test_lookup_requires_origin_and_auth_and_caches_user_triggered_search():
     async def scenario():
         calls=[]
-        async def lookup(query):
+        async def lookup(query,filters):
             calls.append(query)
             return {'features':[{'geometry':{'coordinates':[30.7133,36.8969]},'properties':{'name':'Antalya','country':'Türkiye'}}]}
         async def session(request):return SimpleNamespace(user_id=7) if request.headers.get('X-Account') else None
@@ -24,6 +25,35 @@ def test_lookup_requires_origin_and_auth_and_caches_user_triggered_search():
             assert (await client.post(url,json={'query':'ANTALYA'},headers=headers)).status==200
             assert calls==['Antalya']
             assert (await client.post(url,json={'query':[]},headers=headers)).status==400
+    asyncio.run(scenario())
+
+
+def test_country_and_category_filters_exclude_namesakes_and_survive_missing_provider_filters():
+    import pytest
+    filters=search_filters({'category':'airport','country_code':'tr'})
+    params=photon_params('Antalya Airport',filters)
+    assert ('countrycode','TR') in params and ('osm_tag','aeroway:aerodrome') in params
+    def feature(name,country,key,value):
+        return {'geometry':{'coordinates':[30.7981914,36.8999425]},'properties':{'name':name,'countrycode':country,'country':country,'osm_key':key,'osm_value':value}}
+    result=extract_places({'features':[feature('Antalya','RU','amenity','restaurant'),feature('Antalya Airport Rent a car','TR','amenity','car_rental'),feature('Antalya Airport','TR','aeroway','aerodrome'),feature('Antalya','TR','place','city')]},filters)
+    assert len(result)==1 and result[0]['title']=='Antalya Airport' and result[0]['category']=='airport' and result[0]['country_code']=='TR'
+    for value in [{'country_code':'Turkey'},{'category':'invented'},{'country_code':[]},{'category':False}]:
+        with pytest.raises(ValueError):search_filters(value)
+
+
+def test_cache_separates_country_and_category_constrained_queries():
+    async def scenario():
+        calls=[]
+        async def lookup(query,filters):
+            calls.append(filters.copy())
+            return {'features':[{'geometry':{'coordinates':[30.8,36.9]},'properties':{'name':'Antalya Airport','countrycode':'TR','osm_key':'aeroway','osm_value':'aerodrome'}}]}
+        async def session(request):return SimpleNamespace(user_id=7)
+        app=web.Application();setup_map_routes(app,session_for=session,same_origin=lambda request:True,json_response=lambda result,status=200:web.json_response(result,status=status),origin='https://velia.example',lookup=lookup)
+        async with TestServer(app) as server,ClientSession() as client:
+            url=server.make_url('/web-api/v1/map/search')
+            for body in [{'query':'Antalya'},{'query':'Antalya','category':'airport','country_code':'TR'},{'query':'ANTALYA','category':'airport','country_code':'tr'}]:
+                response=await client.post(url,json=body);assert response.status==200
+            assert len(calls)==2 and calls[0]!=calls[1]
     asyncio.run(scenario())
 
 
