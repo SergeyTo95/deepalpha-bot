@@ -1,5 +1,6 @@
 """Authenticated Figma connection and execution for the Velia web client."""
 import asyncio
+from contextlib import nullcontext
 
 from aiohttp import web
 
@@ -41,7 +42,12 @@ def setup_figma_routes(app, *, session_for, same_origin, json_response, connecto
             owner = (str(session.user_id), session.id)
             action = request.match_info["action"]
             if action == "status":
-                return json_response({"ok": True, **bridge.status(owner), "oauth_available": oauth is not None})
+                value = bridge.status(owner)
+                if hasattr(oauth, "backend"):
+                    with oauth.authentication(getattr(session, "access", None)):
+                        settings = await oauth.backend("config")
+                    value["available"] = settings.get("configured") is True
+                return json_response({"ok": True, **value, "oauth_available": oauth is not None})
             if action == "tools":
                 return json_response({"ok": True, "tools": bridge.catalog(owner)})
             if slots.locked():
@@ -55,7 +61,8 @@ def setup_figma_routes(app, *, session_for, same_origin, json_response, connecto
                 if action == "authorize":
                     if oauth is None:
                         raise FigmaError("figma_authorization_unavailable", 503)
-                    result = await oauth.start(owner)
+                    with oauth.authentication(getattr(session, "access", None)) if hasattr(oauth, "authentication") else nullcontext():
+                        result = await oauth.start(owner, options=data)
                 elif action == "connect":
                     if oauth:
                         oauth.cancel(owner)
@@ -86,7 +93,8 @@ def setup_figma_routes(app, *, session_for, same_origin, json_response, connecto
                     and len(states) == len(codes) == 1 and request.query.get("iss") in {None, oauth.settings["issuer"] if provider else OAUTH_ORIGIN}
                     and not slots.locked()):
                 async with slots:
-                    await oauth.complete((str(session.user_id), session.id), states[0], codes[0])
+                    with oauth.authentication(getattr(session, "access", None)) if hasattr(oauth, "authentication") else nullcontext():
+                        await oauth.complete((str(session.user_id), session.id), states[0], codes[0], callback_query=list(request.query.items()))
                 outcome = "connected"
         except (FigmaError, AuthenticationUnavailable, OSError, TimeoutError, ValueError, TypeError):
             pass

@@ -1,3 +1,4 @@
+import {serviceIcon} from './service-icons.mjs';
 export function connectionRow(parent, title, description) {
   const row = document.createElement("section");
   row.className = "connection-row";
@@ -5,7 +6,7 @@ export function connectionRow(parent, title, description) {
   const icon = document.createElement("span");
   icon.className = "connection-icon";
   icon.setAttribute("aria-hidden", "true");
-  icon.textContent = title[0];
+  icon.append(serviceIcon(title));
   const copy = document.createElement("div");
   copy.className = "connection-copy";
   const name = document.createElement("h3");

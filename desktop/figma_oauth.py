@@ -97,7 +97,7 @@ class FigmaOAuth:
                                  "expires": time.monotonic() + 86400}
             return self.registration
 
-    async def start(self, owner):
+    async def start(self, owner, *, options=None):
         self.prune()
         old = self.pending.get(owner)
         if old and old["started"] > time.monotonic() - 10:
@@ -124,7 +124,7 @@ class FigmaOAuth:
                 self.pending.pop(owner, None)
             raise
 
-    async def complete(self, owner, state, code):
+    async def complete(self, owner, state, code, *, callback_query=None):
         self.prune()
         flow = self.pending.get(owner)
         if (not flow or flow["status"] != "pending" or not isinstance(state, str)

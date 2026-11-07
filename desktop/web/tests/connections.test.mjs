@@ -6,10 +6,13 @@ test('cloud requests distinguish provider actions from general questions',()=>{
   assert.equal(cloudProvider('Проверь деплой на Railway'),'railway');
   assert.equal(cloudProvider('Покажи мои проекты в Vercel'),'vercel');
   assert.equal(cloudProvider('Что такое Vercel?'),null);
+  assert.equal(cloudProvider('Найди письма в Gmail'),'google');
+  assert.equal(cloudProvider('Сохрани план в Notion'),'notion');
+  assert.equal(cloudProvider('Обнови описание товара в Shopify'),'shopify');
   assert.equal(cloudProvider('Сравни Railway и Vercel'),null);
 });
 
-for(const provider of ['railway','vercel'])for(const model of ['velia-flash','velia-quantum','velia-pro']){
+for(const provider of ['railway','vercel','google','notion','shopify'])for(const model of ['velia-flash','velia-quantum','velia-pro']){
   test(provider+' tasks use '+model+' and authoritative tool results',async()=>{
     const original=globalThis.fetch,calls=[];
     try{

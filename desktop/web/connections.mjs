@@ -2,11 +2,17 @@ import { connectionRow } from "./connection-ui.mjs";
 import { readCompletion } from "./core.mjs";
 import { parseFigmaPlan } from "./figma.mjs";
 
-export const CONNECTION_NAMES = { railway: "Railway", vercel: "Vercel" };
+export const CONNECTION_NAMES = {
+  railway: "Railway",
+  vercel: "Vercel",
+  google: "Google",
+  notion: "Notion",
+  shopify: "Shopify",
+};
 
 export function cloudProvider(text) {
   if (
-    !/проверь|покажи|найди|депло|развер|запуст|исправ|перезапуст|созда|измени|deploy|check|inspect|restart|create|update|list|show|find/iu.test(
+    !/прочитай|сохрани|запиши|добавь|подготов|составь|обнови|проверь|покажи|найди|депло|развер|запуст|исправ|перезапуст|созда|измени|deploy|check|inspect|restart|create|update|list|show|find/iu.test(
       text,
     )
   )
@@ -15,7 +21,10 @@ export function cloudProvider(text) {
   if (/railway|рэилвей|рейлве[йе]|рэйлве[йе]/iu.test(text))
     found.push("railway");
   if (/vercel|версел|верцел|версель/iu.test(text)) found.push("vercel");
-  return found.length === 1 ? found[0] : null;
+  if (/google|гугл|gmail|джимейл/iu.test(text)) found.push("google");
+  if (/notion|ноуш[еэ]н|нотион/iu.test(text)) found.push("notion");
+  if (/shopify|шопиф[а-я]*/iu.test(text)) found.push("shopify");
+  return [...new Set(found)].length === 1 ? found[0] : null;
 }
 
 export async function connectionRequest(provider, action, data, signal) {
@@ -35,6 +44,10 @@ export async function connectionRequest(provider, action, data, signal) {
   const result = await response.json();
   if (!response.ok || result.ok !== true) {
     const messages = {
+      connection_app_not_configured:
+        "Подключение ещё настраивается. Попробуй позже.",
+      connection_access_denied:
+        "Доступ отклонён. Подключи аккаунт заново и разреши доступ к нужным данным.",
       connection_connect_required:
         "Подключи " + CONNECTION_NAMES[provider] + " в разделе подключений.",
       connection_task_already_attempted:
@@ -223,7 +236,15 @@ export function mountConnections(parent, { call, toast, signal }) {
     });
 
   for (const [provider, title] of Object.entries(CONNECTION_NAMES)) {
-    const item = connectionRow(parent, title, "Проекты, деплои и журналы");
+    const item = connectionRow(
+      parent,
+      title,
+      {
+        google: "Диск, документы, таблицы и почта",
+        notion: "Заметки, задачи и базы знаний",
+        shopify: "Товары, заказы и остатки",
+      }[provider] || "Проекты, деплои и журналы",
+    );
     item.toggle.onclick = () =>
       item.run(
         async () => {
@@ -240,21 +261,25 @@ export function mountConnections(parent, { call, toast, signal }) {
           const result = await connectionRequest(
               provider,
               "authorize",
-              {},
+              provider === "shopify" ? { shop: await requestShop() } : {},
               signal,
             ),
             target = new URL(result.authorization_url);
-          const expected =
-            provider === "railway"
-              ? ["https://backboard.railway.com", "/oauth/auth"]
-              : ["https://vercel.com", "/oauth/authorize"];
-          if (
-            target.origin !== expected[0] ||
-            target.pathname !== expected[1] ||
-            target.username ||
-            target.password ||
-            target.hash
-          )
+          const allowed = {
+            railway: ["https://backboard.railway.com", "/oauth/auth"],
+            vercel: ["https://vercel.com", "/oauth/authorize"],
+            notion: ["https://mcp.notion.com", "/authorize"],
+            google: ["https://accounts.google.com", "/o/oauth2/v2/auth"],
+          };
+          const expected = allowed[provider];
+          const valid =
+            provider === "shopify"
+              ? /^https:\/\/[a-z0-9][a-z0-9-]{0,61}\.myshopify\.com$/.test(
+                  target.origin,
+                ) && target.pathname === "/admin/oauth/authorize"
+              : target.origin === expected[0] &&
+                target.pathname === expected[1];
+          if (!valid || target.username || target.password || target.hash)
             throw new Error("Некорректная ссылка подключения.");
           if (!signal.aborted) window.location.assign(target.href);
         },
@@ -262,7 +287,14 @@ export function mountConnections(parent, { call, toast, signal }) {
       );
     connectionRequest(provider, "status", undefined, signal)
       .then((result) => {
-        if (!signal.aborted) item.show(result.connected);
+        if (!signal.aborted) {
+          item.show(
+            result.connected,
+            result.available === false ? "Подключение готовится" : undefined,
+          );
+          if (result.available === false && !result.connected)
+            item.toggle.disabled = true;
+        }
       })
       .catch((error) => {
         if (!signal.aborted) item.show(false, error.message);
@@ -341,4 +373,58 @@ export function mountGithubRepositories(
       }
     }
   };
+}
+
+async function requestShop() {
+  return new Promise((resolve, reject) => {
+    const dialog = document.createElement("dialog");
+    dialog.className = "voice-dialog";
+    const form = document.createElement("form"),
+      label = document.createElement("label"),
+      input = document.createElement("input");
+    label.textContent = "Адрес магазина Shopify";
+    input.type = "text";
+    input.placeholder = "my-store.myshopify.com";
+    input.required = true;
+    input.autocomplete = "url";
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.textContent = "Продолжить";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Отмена";
+    label.append(input);
+    form.append(label, submit, cancel);
+    dialog.append(form);
+    document.body.append(dialog);
+    const dismiss = () => {
+      dialog.close();
+      dialog.remove();
+      reject(new Error("Подключение отменено."));
+    };
+    cancel.onclick = dismiss;
+    dialog.oncancel = (event) => {
+      event.preventDefault();
+      dismiss();
+    };
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      const shop = input.value
+        .trim()
+        .toLowerCase()
+        .replace(/^https:\/\//, "")
+        .replace(/\/$/, "");
+      if (!/^[a-z0-9][a-z0-9-]{0,61}\.myshopify\.com$/.test(shop)) {
+        input.setCustomValidity("Укажи адрес вида my-store.myshopify.com");
+        input.reportValidity();
+        return;
+      }
+      dialog.close();
+      dialog.remove();
+      resolve(shop);
+    };
+    input.oninput = () => input.setCustomValidity("");
+    dialog.showModal();
+    input.focus();
+  });
 }

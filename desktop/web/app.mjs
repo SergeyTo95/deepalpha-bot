@@ -21,6 +21,7 @@ import {setupAutoloop, parseAutoloop} from './autoloop.mjs';
 import {setupIncomePlanner} from './income-planner.mjs';
 import {runFigmaAgent, wantsFigma} from './figma.mjs';
 import {cloudProvider, runCloudAgent, CONNECTION_NAMES} from './connections.mjs';
+import {documentExportControl} from "./document-exports.mjs";
 const $ = (id) => document.getElementById(id);
 const icons = {
   attachment: "M21 11l-8 8a6 6 0 0 1-8-8l9-9a4 4 0 0 1 6 6l-9 9a2 2 0 0 1-3-3l8-8",
@@ -439,7 +440,7 @@ function messageNode(message, index) {
       copy.onclick = () => copyText(message.content);
       actions.append(copy);
       const speak = document.createElement("button"); speak.textContent = "Озвучить"; speak.onclick = () => voice.speak(message.content); actions.append(speak);
-      const save=document.createElement("button");save.textContent="Сохранить .md";save.onclick=()=>fileTools.downloadText(message.content,"VELIA-answer.md");actions.append(save);
+      actions.append(documentExportControl(message.content,toast));
     }
     if (index === current().messages.length - 1) {
       if (canContinuePartialAnswer(message)) {
