@@ -1,3 +1,4 @@
+import { connectionRow } from "./connection-ui.mjs";
 import { readCompletion } from "./core.mjs";
 import { parseFigmaPlan } from "./figma.mjs";
 
@@ -187,78 +188,126 @@ export async function runCloudAgent({
   );
 }
 
-export function mountConnections(
-  parent,
-  { call, toast, signal, prepareChat, openProjects },
-) {
-  const node = (tag, text) => {
-    const element = document.createElement(tag);
-    if (text) element.textContent = text;
-    return element;
-  };
-  const button = (text, action) => {
-    const element = node("button", text);
-    element.type = "button";
-    element.onclick = () => run(element, action);
-    return element;
-  };
-  async function run(element, action) {
-    element.disabled = true;
-    try {
-      await action();
-    } catch (error) {
-      if (!signal.aborted) toast(error.message);
-    } finally {
-      if (!signal.aborted) element.disabled = false;
-    }
-  }
-  function card(title, description) {
-    const root = node("section");
-    root.className = "feature-card";
-    root.append(node("h3", title), node("p", description));
-    parent.append(root);
-    return root;
-  }
-  const github = card(
-    "GitHub",
-    "Разреши доступ к выбранным репозиториям и подключи их к проектам Велии.",
-  );
-  const githubState = node("p", "Проверяю подключение…"),
-    repositories = node("div");
-  github.append(githubState);
-  github.append(
-    button("Подключить GitHub", async () => {
-      const result = await call("developer/github/web-install-url", {
-        method: "POST",
+export function mountConnections(parent, { call, toast, signal }) {
+  const github = connectionRow(parent, "GitHub", "Репозитории и код");
+  github.toggle.onclick = () =>
+    github.run(
+      async () => {
+        if (github.connected) {
+          await call("developer/github/disconnect", { method: "POST" });
+          if (!signal.aborted) github.show(false);
+          return;
+        }
+        const result = await call("developer/github/web-install-url", {
+          method: "POST",
+        });
+        const target = new URL(result.url);
+        if (
+          target.protocol !== "https:" ||
+          target.hostname !== "github.com" ||
+          target.username ||
+          target.password ||
+          target.pathname !== "/login/oauth/authorize"
+        )
+          throw new Error("Некорректная ссылка подключения GitHub.");
+        if (!signal.aborted) window.location.assign(target.href);
+      },
+      { signal, toast },
+    );
+  call("developer/status")
+    .then((result) => {
+      if (!signal.aborted) github.show(result.installation_count > 0);
+    })
+    .catch((error) => {
+      if (!signal.aborted) github.show(false, error.message);
+    });
+
+  for (const [provider, title] of Object.entries(CONNECTION_NAMES)) {
+    const item = connectionRow(parent, title, "Проекты, деплои и журналы");
+    item.toggle.onclick = () =>
+      item.run(
+        async () => {
+          if (item.connected) {
+            const result = await connectionRequest(
+              provider,
+              "disconnect",
+              {},
+              signal,
+            );
+            if (!signal.aborted) item.show(result.connected);
+            return;
+          }
+          const result = await connectionRequest(
+              provider,
+              "authorize",
+              {},
+              signal,
+            ),
+            target = new URL(result.authorization_url);
+          const expected =
+            provider === "railway"
+              ? ["https://backboard.railway.com", "/oauth/auth"]
+              : ["https://vercel.com", "/oauth/authorize"];
+          if (
+            target.origin !== expected[0] ||
+            target.pathname !== expected[1] ||
+            target.username ||
+            target.password ||
+            target.hash
+          )
+            throw new Error("Некорректная ссылка подключения.");
+          if (!signal.aborted) window.location.assign(target.href);
+        },
+        { signal, toast },
+      );
+    connectionRequest(provider, "status", undefined, signal)
+      .then((result) => {
+        if (!signal.aborted) item.show(result.connected);
+      })
+      .catch((error) => {
+        if (!signal.aborted) item.show(false, error.message);
       });
-      const target = new URL(result.url);
-      if (
-        target.protocol !== "https:" ||
-        target.hostname !== "github.com" ||
-        target.username ||
-        target.password ||
-        target.pathname !== "/login/oauth/authorize"
-      )
-        throw new Error("Некорректная ссылка подключения GitHub.");
-      if (!signal.aborted) window.location.assign(target.href);
-    }),
-  );
-  github.append(
-    button("Выбрать репозиторий", async () => {
+  }
+}
+
+export function mountGithubRepositories(
+  parent,
+  { call, toast, signal, onSelected },
+) {
+  const selector = document.createElement("details");
+  selector.className = "feature-advanced";
+  const summary = document.createElement("summary");
+  summary.textContent = "Добавить репозиторий из GitHub";
+  const list = document.createElement("div");
+  selector.append(summary, list);
+  parent.append(selector);
+  let loaded = false;
+  selector.ontoggle = async () => {
+    if (!selector.open || loaded || signal.aborted) return;
+    loaded = true;
+    list.textContent = "Загрузка репозиториев…";
+    try {
       const result = await call("developer/installations");
       if (signal.aborted) return;
-      repositories.replaceChildren();
+      list.replaceChildren();
       for (const installation of result.installations || []) {
-        const list = await call(
+        const data = await call(
           "developer/repositories?installation_id=" +
             encodeURIComponent(installation.installation_id),
         );
         if (signal.aborted) return;
-        for (const repository of list.repositories || []) {
-          const row = node("div");
-          row.append(node("p", repository.full_name));
-          row.append(
-            button("Использовать в Велии", async () => {
+        for (const repository of data.repositories || []) {
+          const row = document.createElement("div");
+          row.className = "feature-actions";
+          const name = document.createElement("span");
+          name.textContent = repository.full_name;
+          const choose = document.createElement("button");
+          choose.type = "button";
+          choose.textContent = "Добавить";
+          choose.setAttribute("aria-label", "Добавить " + repository.full_name);
+          choose.onclick = async () => {
+            choose.disabled = true;
+            try {
               await call("developer/projects", {
                 method: "POST",
                 data: {
@@ -267,93 +316,29 @@ export function mountConnections(
                   branch: repository.default_branch,
                 },
               });
-              toast("Репозиторий подключён. Его можно открыть в проектах.");
-            }),
-          );
-          repositories.append(row);
+              if (signal.aborted) return;
+              choose.textContent = "Добавлен";
+              toast("Репозиторий добавлен в проекты.");
+              await onSelected();
+            } catch (error) {
+              if (!signal.aborted) {
+                choose.disabled = false;
+                toast(error.message);
+              }
+            }
+          };
+          row.append(name, choose);
+          list.append(row);
         }
       }
-      if (!repositories.childNodes.length)
-        repositories.append(
-          node(
-            "p",
-            "Сначала разреши доступ в GitHub и выбери репозитории при установке приложения Велии.",
-          ),
-        );
-    }),
-    button("Открыть проекты", openProjects),
-    repositories,
-  );
-  const manage = node("a", "Управлять доступом GitHub");
-  manage.href = "https://github.com/settings/installations";
-  manage.target = "_blank";
-  manage.rel = "noopener noreferrer";
-  github.append(manage);
-  call("developer/status")
-    .then((result) => {
-      if (!signal.aborted)
-        githubState.textContent =
-          result.installation_count > 0
-            ? "GitHub подключён. Доступных установок — " +
-              result.installation_count +
-              "."
-            : "GitHub пока не подключён.";
-    })
-    .catch((error) => {
-      if (!signal.aborted) githubState.textContent = error.message;
-    });
-
-  for (const [provider, title] of Object.entries(CONNECTION_NAMES)) {
-    const root = card(
-      title,
-      "Разреши Велии доступ к твоим проектам, деплоям и журналам.",
-    );
-    root.dataset.connection = provider;
-    const state = node("p", "Проверяю подключение…");
-    root.append(state);
-    const show = (result) => {
+      if (!list.childNodes.length)
+        list.textContent =
+          "Подключи GitHub в разделе «Подключения и плагины». Репозитории выбираются при предоставлении доступа.";
+    } catch (error) {
       if (!signal.aborted) {
-        state.textContent = result.connected
-          ? "Аккаунт подключён. Доступно инструментов — " +
-            result.tool_count +
-            "."
-          : title + " пока не подключён.";
-        chat.disabled = !result.connected;
+        loaded = false;
+        list.textContent = error.message;
       }
-    };
-    const connect = button("Подключить " + title, async () => {
-      const result = await connectionRequest(provider, "authorize", {}, signal),
-        target = new URL(result.authorization_url);
-      const expected =
-        provider === "railway"
-          ? ["https://backboard.railway.com", "/oauth/auth"]
-          : ["https://vercel.com", "/oauth/authorize"];
-      if (
-        target.origin !== expected[0] ||
-        target.pathname !== expected[1] ||
-        target.username ||
-        target.password ||
-        target.hash
-      )
-        throw new Error("Некорректная ссылка подключения.");
-      if (!signal.aborted) window.location.assign(target.href);
-    });
-    const chat = button("Открыть чат с " + title, () => prepareChat(provider));
-    chat.disabled = true;
-    root.append(
-      connect,
-      button("Проверить подключение", async () =>
-        show(await connectionRequest(provider, "verify", {}, signal)),
-      ),
-      button("Отключить", async () =>
-        show(await connectionRequest(provider, "disconnect", {}, signal)),
-      ),
-      chat,
-    );
-    connectionRequest(provider, "status", undefined, signal)
-      .then(show)
-      .catch((error) => {
-        if (!signal.aborted) state.textContent = error.message;
-      });
-  }
+    }
+  };
 }
