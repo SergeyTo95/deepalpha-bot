@@ -496,7 +496,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     from desktop.voice_routes import setup_voice_routes
     setup_voice_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response, origin=origin)
     from desktop.figma_routes import setup_figma_routes
-    figma_bridge = setup_figma_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response)
+    figma_bridge = setup_figma_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response, origin=origin)
     from desktop.account_routes import setup_account_routes
     from desktop.feature_routes import setup_feature_routes
     setup_feature_routes(app, session_for=session_for, same_origin=same_origin, upstream=upstream,

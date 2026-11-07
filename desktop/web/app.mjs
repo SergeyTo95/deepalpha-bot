@@ -1490,6 +1490,14 @@ try {
 }
 ready = true;
 resizePrompt();
+const figmaReturn = new URL(location.href);
+if (figmaReturn.searchParams.has('figma')) {
+  const outcome = figmaReturn.searchParams.get('figma');
+  figmaReturn.searchParams.delete('figma');
+  window.history.replaceState(null, '', figmaReturn.pathname + figmaReturn.search + figmaReturn.hash);
+  if (profile) features.open('plugins');
+  if (outcome === 'error') toast('Подключение Figma не завершилось. Попробуй войти ещё раз.');
+}
 
 $("voice-open").onclick=()=>voice.open();
 $("attach").onclick=()=>{if(!profile){openAuth();return;}if(agentMode){toast("Файлы доступны в обычном диалоге.");return;}$("attachment-input").click();};

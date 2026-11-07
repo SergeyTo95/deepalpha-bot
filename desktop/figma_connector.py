@@ -42,6 +42,7 @@ class FigmaConnector:
     def __init__(self, request=None):
         self.connections = {}
         self.request = request or self.http
+        self.oauth = None
 
     async def http(self, headers, payload):
         try:
@@ -82,6 +83,7 @@ class FigmaConnector:
         if params is not None:
             payload["params"] = params
         headers = {"Authorization": "Bearer " + connection["token"],
+                   "User-Agent": "VELIA/1.0",
                    "Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
         if connection.get("session_id"):
             headers["Mcp-Session-Id"] = connection["session_id"]
@@ -103,7 +105,8 @@ class FigmaConnector:
     def prune(self):
         now = time.monotonic()
         for key, item in list(self.connections.items()):
-            if item["expires"] < now and not item["lock"].locked():
+            expired = item["expires"] < now or item.get("oauth_expires") is not None and item["oauth_expires"] <= time.time() + 30
+            if expired and not item["lock"].locked():
                 del self.connections[key]
 
     def get(self, owner, connection_id=None):
@@ -114,8 +117,9 @@ class FigmaConnector:
         item["expires"] = time.monotonic() + 3600
         return item
 
-    async def connect(self, owner, token):
-        if not isinstance(token, str) or not re.fullmatch(r"figd_[A-Za-z0-9_-]{10,250}", token):
+    async def connect(self, owner, token, *, oauth_expires=None):
+        pattern = r"[\x21-\x7e]{10,4096}" if oauth_expires is not None else r"figd_[A-Za-z0-9_-]{10,250}"
+        if not isinstance(token, str) or not re.fullmatch(pattern, token):
             raise FigmaError("figma_invalid_token")
         self.prune()
         if owner in self.connections and self.connections[owner]["lock"].locked():
@@ -123,7 +127,8 @@ class FigmaConnector:
         if len(self.connections) >= 256:
             raise FigmaError("figma_busy", 429)
         connection = {"id": secrets.token_hex(16), "token": token, "lock": asyncio.Lock(),
-                      "expires": time.monotonic() + 3600, "ready": False, "receipts": {}, "runs": {}}
+                      "expires": time.monotonic() + 3600, "ready": False, "receipts": {}, "runs": {},
+                      "oauth_expires": oauth_expires}
         self.connections[owner] = connection
         async with connection["lock"]:
             try:
@@ -157,9 +162,12 @@ class FigmaConnector:
                 data = strict_json_loads(public["text"])
                 if public["isError"] or not isinstance(data, dict) or not re.fullmatch(r"[A-Z0-9]{6}", str(data.get("pairingCode", ""))):
                     raise FigmaError("figma_pairing_failed", 502)
+                connection["pairing_code"] = data["pairingCode"]
+                connection["pairing_until"] = time.time() + 300
                 return {"connection_id": connection["id"], "pairing_code": data["pairingCode"], "expires_in": 300}
             except BaseException:
-                self.connections.pop(owner, None)
+                if self.connections.get(owner) is connection:
+                    self.connections.pop(owner, None)
                 raise
 
     async def canvas(self, connection):
@@ -195,6 +203,7 @@ class FigmaConnector:
         except FigmaError:
             return {"connected": False, "status": "disconnected"}
         return {"connected": connection["ready"], "status": "connected" if connection["ready"] else "pairing",
+                "pairing_code": connection.get("pairing_code") if not connection["ready"] and connection.get("pairing_until", 0) > time.time() else None,
                 "connection_id": connection["id"], "file_name": str(connection.get("canvas", {}).get("fileName", ""))[:200],
                 "tool_count": len(connection.get("tools", {}))}
 
@@ -243,4 +252,6 @@ class FigmaConnector:
             return receipt["result"]
 
     def disconnect(self, owner):
+        if self.oauth is not None:
+            self.oauth.cancel(owner)
         self.connections.pop(owner, None)

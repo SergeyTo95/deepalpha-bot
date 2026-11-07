@@ -4,11 +4,14 @@ import asyncio
 from aiohttp import web
 
 from desktop.figma_connector import FigmaConnector, FigmaError
+from desktop.figma_oauth import FigmaOAuth, ORIGIN as OAUTH_ORIGIN
 from velia_desktop_routes import AuthenticationUnavailable
 
 
-def setup_figma_routes(app, *, session_for, same_origin, json_response, connector=None):
+def setup_figma_routes(app, *, session_for, same_origin, json_response, connector=None, origin=None, oauth=None):
     bridge = connector or FigmaConnector()
+    oauth = oauth or (FigmaOAuth(bridge, origin) if origin else None)
+    bridge.oauth = oauth
     slots = asyncio.Semaphore(8)
 
     async def lifecycle(application):
@@ -16,11 +19,15 @@ def setup_figma_routes(app, *, session_for, same_origin, json_response, connecto
             while True:
                 await asyncio.sleep(60)
                 bridge.prune()
+                if oauth:
+                    oauth.prune()
         task = asyncio.create_task(prune())
         yield
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         bridge.connections.clear()
+        if oauth:
+            oauth.pending.clear()
     app.cleanup_ctx.append(lifecycle)
 
     async def handle(request):
@@ -33,7 +40,7 @@ def setup_figma_routes(app, *, session_for, same_origin, json_response, connecto
             owner = (str(session.user_id), session.id)
             action = request.match_info["action"]
             if action == "status":
-                return json_response({"ok": True, **bridge.status(owner)})
+                return json_response({"ok": True, **bridge.status(owner), "oauth_available": oauth is not None})
             if action == "tools":
                 return json_response({"ok": True, "tools": bridge.catalog(owner)})
             if slots.locked():
@@ -44,7 +51,13 @@ def setup_figma_routes(app, *, session_for, same_origin, json_response, connecto
                 data = await request.json()
                 if not isinstance(data, dict):
                     raise FigmaError("figma_invalid_call")
-                if action == "connect":
+                if action == "authorize":
+                    if oauth is None:
+                        raise FigmaError("figma_authorization_unavailable", 503)
+                    result = await oauth.start(owner)
+                elif action == "connect":
+                    if oauth:
+                        oauth.cancel(owner)
                     result = await bridge.connect(owner, data.get("token"))
                 elif action == "verify":
                     result = await bridge.verify(owner)
@@ -61,6 +74,24 @@ def setup_figma_routes(app, *, session_for, same_origin, json_response, connecto
         except (AuthenticationUnavailable, OSError, TimeoutError):
             return json_response({"ok": False, "error": "figma_unavailable"}, 503)
 
+    async def callback(request):
+        outcome = "error"
+        try:
+            session = await session_for(request)
+            states, codes = request.query.getall("state", []), request.query.getall("code", [])
+            if oauth is not None and session is not None and len(states) == 1 and request.query.get("error"):
+                oauth.reject((str(session.user_id), session.id), states[0])
+            if (oauth is not None and session is not None and not request.query.get("error")
+                    and len(states) == len(codes) == 1 and request.query.get("iss") in {None, OAUTH_ORIGIN}
+                    and not slots.locked()):
+                async with slots:
+                    await oauth.complete((str(session.user_id), session.id), states[0], codes[0])
+                outcome = "connected"
+        except (FigmaError, AuthenticationUnavailable, OSError, TimeoutError, ValueError, TypeError):
+            pass
+        raise web.HTTPSeeOther("/?figma=" + outcome, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+    app.router.add_get("/web-api/v1/figma/callback", callback)
     app.router.add_get("/web-api/v1/figma/{action:status|tools}", handle)
-    app.router.add_post("/web-api/v1/figma/{action:connect|verify|disconnect|call}", handle)
+    app.router.add_post("/web-api/v1/figma/{action:authorize|connect|verify|disconnect|call}", handle)
     return bridge

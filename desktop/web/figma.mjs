@@ -2,7 +2,8 @@ import {readCompletion} from './core.mjs';
 
 const errors = {
   figma_connect_required:'Подключи Figma в разделе «Плагины». После перезапуска Велии подключение нужно повторить.',
-  figma_access_denied:'Figma отклонила токен. Проверь его срок действия и разрешения.',
+  figma_access_denied:'Figma отклонила доступ. Подключи аккаунт заново.',
+  figma_authorization_unavailable:'Вход через Figma сейчас недоступен. Попробуй ещё раз позже.',
   figma_invalid_token:'Введи персональный токен Figma, начинающийся с figd_.',
   figma_plugin_required:'Открой Desktop Bridge в нужном макете, введи код в Cloud Mode и нажми «Проверить подключение».',
   figma_execution_uncertain:'Связь прервалась во время действия. Проверь макет перед новым заданием. Повтор этой операции заблокирован.',
@@ -106,6 +107,10 @@ export function mountFigma(parent, {prepareChat, toast, signal}) {
   help.rel = 'noopener noreferrer';
   card.append(help);
   const state = node('p','Проверяю подключение…');
+  const authorize = node('button','Подключить Figma');
+  authorize.type = 'button';
+  const advanced = node('details');
+  advanced.append(node('summary','Дополнительный способ подключения'));
   const form = node('form');
   form.className = 'feature-form';
   const label = node('label','Персональный токен Figma');
@@ -118,7 +123,8 @@ export function mountFigma(parent, {prepareChat, toast, signal}) {
   const connect = node('button','Получить код подключения');
   connect.type = 'submit';
   form.append(label,connect);
-  card.append(state,form,node('small','Токен хранится на сервере до отключения, выхода из аккаунта или часа бездействия. Данные макета передаются для выполнения твоих заданий.'));
+  advanced.append(form);
+  card.append(state,authorize,advanced,node('small','Доступ хранится на сервере до отключения, выхода из аккаунта или часа бездействия. Данные макета передаются для выполнения твоих заданий.'));
   const actions = node('div');
   actions.className = 'feature-actions';
   const verify = node('button','Проверить подключение');
@@ -135,10 +141,21 @@ export function mountFigma(parent, {prepareChat, toast, signal}) {
       state.textContent = 'Подключён макет «' + (result.file_name || 'Figma') + '». Можно давать задания в чате.';
     } else {
       state.textContent = result.status === 'pairing'
-        ? 'Введи код в Cloud Mode плагина и проверь подключение.' : 'Figma пока не подключена.';
+        ? result.pairing_code
+          ? 'Код ' + result.pairing_code + '. Открой Desktop Bridge в нужном макете, введи код в Cloud Mode и нажми «Проверить подключение». Код действует 5 минут.'
+          : 'Код подключения истёк. Нажми «Подключить Figma», чтобы получить новый.'
+        : 'Подключи аккаунт Figma, затем введи полученный код в плагине Desktop Bridge.';
     }
+    authorize.disabled = result.oauth_available === false;
     open.disabled = !result.connected;
   }
+  authorize.onclick = () => run(authorize, async () => {
+    const result = await figmaRequest('authorize',{},signal);
+    const target = new URL(result.authorization_url);
+    if (target.origin !== 'https://figma-console-mcp.southleft.com' || target.pathname !== '/authorize'
+        || target.username || target.password || target.hash) throw new Error('Некорректная ссылка подключения Figma.');
+    if (!signal?.aborted) window.location.assign(target.href);
+  });
   async function run(button, action) {
     button.disabled = true;
     try {
