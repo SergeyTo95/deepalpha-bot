@@ -1,0 +1,64 @@
+"""Bounded, user-triggered place lookup. No public Nominatim dependency."""
+import asyncio
+import hashlib
+import os
+import time
+from collections import OrderedDict
+from urllib.parse import urlsplit
+from aiohttp import web, ClientSession, ClientTimeout, ClientError
+from velia_desktop_routes import AuthenticationUnavailable
+
+
+def setup_map_routes(app,*,session_for,same_origin,json_response,origin,lookup=None):
+    cache=OrderedDict();users={};lock=asyncio.Lock();last=0;day=0;count=0
+    endpoint=os.getenv('VELIA_MAP_GEOCODER_URL','https://photon.komoot.io/api/')
+    parsed=urlsplit(endpoint)
+    available=parsed.scheme=='https' and parsed.hostname and not parsed.username and not parsed.password and not parsed.query and not parsed.fragment
+    async def remote(query):
+        if not available:raise ValueError()
+        async with ClientSession(timeout=ClientTimeout(total=8),trust_env=False) as client:
+            async with client.get(endpoint,params={'q':query,'limit':6},headers={'User-Agent':'VELIA/1.0 (+'+origin+')','Accept':'application/json'},allow_redirects=False) as response:
+                if response.status!=200:raise ValueError()
+                data=await response.content.read(250001)
+                if len(data)>250000:raise ValueError()
+                import json
+                return json.loads(data)
+    async def search(request):
+        nonlocal last,day,count
+        if not same_origin(request):return json_response({'ok':False,'error':'invalid_origin'},403)
+        try:session=await session_for(request)
+        except AuthenticationUnavailable:return json_response({'ok':False,'error':'authentication_unavailable'},503)
+        if not session:return json_response({'ok':False,'error':'unauthorized'},401)
+        try:
+            body=await request.json()
+            if not isinstance(body,dict) or not isinstance(body.get('query'),str):return json_response({'ok':False,'error':'invalid_map_query'},400)
+            query=body['query'].strip()
+            if not 2<=len(query)<=200:return json_response({'ok':False,'error':'invalid_map_query'},400)
+            owner=str(session.user_id);now=time.monotonic();recent=[t for t in users.get(owner,[]) if t>now-3600]
+            if len(recent)>=30:return json_response({'ok':False,'error':'map_rate_limited'},429)
+            if len(users)>512:users.clear()
+            users[owner]=recent+[now]
+            key=hashlib.sha256(query.casefold().encode()).hexdigest()
+            if key in cache and cache[key][0]>now:
+                cache.move_to_end(key);return json_response({'ok':True,'places':cache[key][1]})
+            today=int(time.time()//86400)
+            if day!=today:day=today;count=0
+            if lock.locked() or count>=1000:return json_response({'ok':False,'error':'map_rate_limited'},429)
+            async with lock:
+                if last>now-1:await asyncio.sleep(1-(now-last))
+                last=time.monotonic();count+=1
+                value=await (lookup or remote)(query)
+            places=[]
+            for feature in value.get('features',[])[:6]:
+                coordinates=feature.get('geometry',{}).get('coordinates',[]);p=feature.get('properties',{})
+                if len(coordinates)!=2:continue
+                lon,lat=coordinates
+                if not isinstance(lat,(float,int)) or not isinstance(lon,(float,int)) or not -90<=lat<=90 or not -180<=lon<=180:continue
+                title=str(p.get('name') or p.get('street') or p.get('city') or 'Место')[:200]
+                label=', '.join(str(p[key]) for key in ['street','housenumber','city','state','country'] if p.get(key))[:500]
+                places.append({'title':title,'address':label,'lat':lat,'lon':lon})
+            cache[key]=(time.monotonic()+86400,places)
+            while len(cache)>500:cache.popitem(last=False)
+            response=json_response({'ok':True,'places':places});response.headers['Cache-Control']='no-store';return response
+        except (ValueError,TypeError,AttributeError,ClientError,TimeoutError):return json_response({'ok':False,'error':'map_search_unavailable'},503)
+    app.router.add_post('/web-api/v1/map/search',search)
