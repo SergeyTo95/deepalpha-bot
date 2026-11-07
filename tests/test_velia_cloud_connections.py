@@ -12,7 +12,7 @@ from desktop.figma_connector import FigmaConnector, FigmaError
 from desktop.figma_routes import setup_figma_routes
 
 
-@pytest.mark.parametrize("provider", ["railway", "vercel"])
+@pytest.mark.parametrize("provider", ["railway", "vercel", "notion"])
 def test_cloud_oauth_resource_grant_tools_and_receipts(provider):
     async def scenario():
         calls = []
@@ -26,7 +26,7 @@ def test_cloud_oauth_resource_grant_tools_and_receipts(provider):
                     "token_endpoint": settings["token"], "registration_endpoint": settings.get("register"),
                     "code_challenge_methods_supported": ["S256"], "client_id_metadata_document_supported": True}
             if path == "/oauth/register":
-                assert provider == "railway"
+                assert provider in {"railway", "notion"}
                 return {"client_id": "public-client", "redirect_uris": data["redirect_uris"], "token_endpoint_auth_method": "none"}
             assert path == "/token" and data["resource"] == settings["endpoint"]
             return {"access_token": token, "token_type": "Bearer", "expires_in": 3600}

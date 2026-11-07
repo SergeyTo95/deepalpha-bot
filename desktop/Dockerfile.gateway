@@ -14,7 +14,7 @@ FROM python:3.12-slim-bookworm AS checked
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
 COPY desktop/requirements-gateway.txt /app/desktop/requirements-gateway.txt
-RUN pip install --no-cache-dir -r desktop/requirements-gateway.txt pytest==8.4.2
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core && rm -rf /var/lib/apt/lists/* && pip install --no-cache-dir -r desktop/requirements-gateway.txt pytest==8.4.2
 COPY velia_free_models.py velia_desktop_routes.py velia_quantum_provider.py velia_quantum_turn.py velia_quantum_transport.py velia_quantum_groq_probe.py /app/
 COPY velia_request_understanding.py /app/velia_request_understanding.py
 COPY velia_code_quality.py /app/velia_code_quality.py
@@ -25,8 +25,8 @@ COPY desktop/voice_transport.py /app/desktop/voice_transport.py
 COPY desktop/voice_channel.py /app/desktop/voice_channel.py
 COPY desktop/voice_transcription.py /app/desktop/voice_transcription.py
 COPY desktop/figma_connector.py desktop/figma_routes.py desktop/figma_oauth.py /app/desktop/
-COPY desktop/cloud_connections.py /app/desktop/cloud_connections.py
-COPY tests/test_velia_cloud_connections.py /app/tests/test_velia_cloud_connections.py
+COPY desktop/cloud_connections.py desktop/workspace_connections.py desktop/document_exports.py /app/desktop/
+COPY tests/test_velia_cloud_connections.py tests/test_velia_workspace_connections.py tests/test_velia_document_exports.py /app/tests/
 COPY tests/test_velia_figma.py tests/test_velia_figma_oauth.py /app/tests/
 COPY tests/test_velia_voice_transcription.py /app/tests/test_velia_voice_transcription.py
 RUN python -m pytest -q -p no:cacheprovider tests/test_velia_voice_transcription.py
@@ -43,14 +43,14 @@ COPY tests/test_velia_web_autoloop.py /app/tests/test_velia_web_autoloop.py
 RUN python -m pytest -q -p no:cacheprovider tests/test_velia_web_autoloop.py
 COPY tests/test_velia_quantum_provider.py tests/test_velia_quantum_transport.py tests/test_velia_quantum_gateway.py tests/test_velia_quantum_independence.py tests/test_velia_desktop_gateway.py tests/test_velia_desktop_relay.py tests/test_velia_desktop_flash.py tests/test_velia_web_chat.py tests/test_velia_web_guest.py tests/test_velia_web_search.py tests/test_velia_request_understanding.py tests/test_velia_request_intent.py tests/test_velia_intent_speed.py tests/test_velia_decision_router.py tests/test_velia_answer_review.py tests/test_velia_flash_worker_start.py tests/test_velia_desktop_flash_readiness.py tests/test_velia_admin_proxy.py tests/test_velia_web_features.py tests/test_velia_web_voice.py tests/test_velia_work.py tests/test_velia_upwork.py tests/test_velia_platform_status.py tests/test_velia_structured_output.py /app/tests/
 RUN python -m pytest -q -p no:cacheprovider tests/test_velia_figma.py tests/test_velia_figma_oauth.py
-RUN python -m pytest -q -p no:cacheprovider tests/test_velia_cloud_connections.py
+RUN python -m pytest -q -p no:cacheprovider tests/test_velia_cloud_connections.py tests/test_velia_workspace_connections.py tests/test_velia_document_exports.py
 RUN python -m pytest -q -p no:cacheprovider tests/test_velia_quantum_provider.py tests/test_velia_quantum_transport.py tests/test_velia_quantum_gateway.py tests/test_velia_quantum_independence.py tests/test_velia_desktop_gateway.py tests/test_velia_desktop_relay.py tests/test_velia_desktop_flash.py tests/test_velia_web_chat.py tests/test_velia_web_guest.py tests/test_velia_web_search.py tests/test_velia_request_understanding.py tests/test_velia_request_intent.py tests/test_velia_intent_speed.py tests/test_velia_decision_router.py tests/test_velia_answer_review.py tests/test_velia_flash_worker_start.py tests/test_velia_desktop_flash_readiness.py tests/test_velia_admin_proxy.py tests/test_velia_web_features.py tests/test_velia_web_voice.py tests/test_velia_work.py tests/test_velia_upwork.py tests/test_velia_platform_status.py tests/test_velia_structured_output.py
 
 FROM python:3.12-slim-bookworm
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
 COPY desktop/requirements-gateway.txt /app/desktop/requirements-gateway.txt
-RUN apt-get update && apt-get install -y --no-install-recommends libstdc++6 && rm -rf /var/lib/apt/lists/* && pip install --no-cache-dir -r desktop/requirements-gateway.txt && useradd --system --uid 10001 velia
+RUN apt-get update && apt-get install -y --no-install-recommends libstdc++6 fonts-dejavu-core && rm -rf /var/lib/apt/lists/* && pip install --no-cache-dir -r desktop/requirements-gateway.txt && useradd --system --uid 10001 velia
 COPY --from=qualification /usr/local/bin/node /usr/local/bin/node
 COPY --from=qualification /opt/velia-qualification /opt/velia-qualification
 COPY --from=checked /app/velia_free_models.py /app/velia_desktop_routes.py /app/velia_quantum_provider.py /app/velia_quantum_turn.py /app/velia_quantum_transport.py /app/velia_quantum_groq_probe.py /app/

@@ -3,3 +3,8 @@ cryptography==50.0.2
 psycopg2-binary==2.9.9
 wordfreq==3.1.1
 edge-tts==7.3.1
+
+openpyxl==3.1.5
+python-docx==1.2.0
+reportlab==5.1.0
+python-pptx==1.0.2

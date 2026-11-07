@@ -19,6 +19,7 @@ globalThis.fetch=async(url,options={})=>{
  if(path==='session')return Response.json(profile);
  if(path==='conversations')return Response.json({ok:true,conversations:[]});
  if(path==='background-tasks')return Response.json({ok:true,jobs:[]});
+ if(/^connections\/(?:railway|vercel|notion|google|shopify)\/status$/.test(path))return Response.json({ok:true,connected:false});
  if(path==='features/plugins')return Response.json({ok:true,plugins:{}});
  if(path==='figma/status')return Response.json({ok:true,connected:false,status:oauthReturn?'pairing':'disconnected',pairing_code:oauthReturn?'AB12CD':null,oauth_available:true});
  if(path==='figma/connect'){assert.equal(data.token,token);return Response.json({ok:true,pairing_code:'AB12CD',expires_in:300});}

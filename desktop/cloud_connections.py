@@ -8,6 +8,9 @@ from desktop.figma_oauth import FigmaOAuth
 from services.velia_structured_output import strict_json_loads
 
 PROVIDERS = {
+    "notion": {"name":"Notion", "endpoint":"https://mcp.notion.com/mcp",
+        "issuer":"https://mcp.notion.com", "metadata":"https://mcp.notion.com/.well-known/oauth-authorization-server",
+        "authorize":"https://mcp.notion.com/authorize", "token":"https://mcp.notion.com/token", "register":"https://mcp.notion.com/register", "scope":"default"},
     "railway": {"name": "Railway", "endpoint": "https://mcp.railway.com",
         "issuer": "https://backboard.railway.com", "metadata": "https://backboard.railway.com/.well-known/openid-configuration",
         "authorize": "https://backboard.railway.com/oauth/auth", "register": "https://backboard.railway.com/oauth/register",

@@ -474,7 +474,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
 
     async def asset(request):
         name = request.match_info.get("name", "index.html")
-        if name not in {"index.html", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "features.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
+        if name not in {"index.html", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "features.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "service-icons.mjs", "document-exports.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
             raise web.HTTPNotFound()
         response = web.FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
         response.headers.update({"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
@@ -491,7 +491,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     app.router.add_post("/web-api/v1/auth/logout", logout)
     app.router.add_post("/web-api/v1/chat/completions", chat)
     app.router.add_post("/web-api/v1/figma/plan", chat)
-    app.router.add_post("/web-api/v1/connections/{provider:railway|vercel}/plan", chat)
+    app.router.add_post("/web-api/v1/connections/{provider:railway|vercel|notion|google|shopify}/plan", chat)
     app.router.add_post("/web-api/v1/agent/browser", browser_agent)
     app.router.add_post("/web-api/v1/agent/browser/takeover", browser_takeover_state)
     app.router.add_post("/web-api/v1/agent/browser/takeover/action", browser_takeover_action)
@@ -499,12 +499,19 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     setup_work_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response,
         upstream=upstream, upstream_stream=upstream_stream, authenticate=authenticate, allowed=allowed,
         handlers=handlers, web_search=web_search, origin=origin)
+    from desktop.document_exports import setup_document_exports
+    setup_document_exports(app, session_for=session_for, same_origin=same_origin, json_response=json_response)
     from desktop.voice_routes import setup_voice_routes
     setup_voice_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response, origin=origin)
     from desktop.figma_routes import setup_figma_routes
     figma_bridge = setup_figma_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response, origin=origin)
     from desktop.cloud_connections import create_cloud_connections
     cloud_connections = create_cloud_connections(origin)
+    from desktop.workspace_connections import WorkspaceConnector, WorkspaceOAuth
+    for provider in ("google", "shopify"):
+        bridge = WorkspaceConnector(provider)
+        bridge.oauth = WorkspaceOAuth(bridge, origin, provider, upstream)
+        cloud_connections[provider] = bridge
     for provider, bridge in cloud_connections.items():
         setup_figma_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response,
             connector=bridge, oauth=bridge.oauth, provider=provider, prefix="/web-api/v1/connections/" + provider)

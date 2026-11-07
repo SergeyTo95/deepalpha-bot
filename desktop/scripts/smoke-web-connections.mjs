@@ -21,14 +21,15 @@ globalThis.fetch=async(url,options={})=>{
   if(path==='background-tasks')return Response.json({ok:true,jobs:[]});
   if(path==='features/projects')return Response.json({ok:true,projects:[]});
   if(path==='features/developer/projects'&&!data)return Response.json({ok:true,projects:selected?[{id:'p',repository_full_name:'owner/example',selected_branch:'main'}]:[]});
+  if(path==='figma/status')return Response.json({ok:true,connected:false,status:'disconnected',oauth_available:true});
   if(path==='features/plugins')return Response.json({ok:true,plugins:{}});
   if(path==='features/developer/github/disconnect')return Response.json({ok:true,connected:false});
-  if(/^connections\/(?:railway|vercel)\/disconnect$/.test(path))return Response.json({ok:true,connected:false});
+  if(/^connections\/(?:railway|vercel|google|notion|shopify)\/disconnect$/.test(path))return Response.json({ok:true,connected:false});
   if(path==='features/developer/status')return Response.json({ok:true,enabled:true,github_configured:true,web_connect_configured:true,installation_count:1});
   if(path==='features/developer/installations')return Response.json({ok:true,installations:[{installation_id:123}]});
   if(path==='features/developer/repositories?installation_id=123')return Response.json({ok:true,repositories:[{id:456,full_name:'owner/example',default_branch:'main'}]});
   if(path==='features/developer/projects'&&data){assert.deepEqual(data,{installation_id:123,repository_id:456,branch:'main'});selected=true;return Response.json({ok:true,project:{id:'p'}});}
-  if(/^connections\/(?:railway|vercel)\/(?:status|verify)$/.test(path))return Response.json({ok:true,connected:true,connection_id:'account-1',tool_count:2});
+  if(/^connections\/(?:railway|vercel|google|notion|shopify)\/(?:status|verify)$/.test(path))return Response.json({ok:true,connected:true,connection_id:'account-1',tool_count:2});
   if(path==='connections/'+provider+'/tools')return Response.json({ok:true,tools:['list_projects','list_deployments'].map(name=>({name,description:name,inputSchema:{type:'object'}}))});
   if(path==='connections/'+provider+'/call')return Response.json({ok:true,isError:false,text:JSON.stringify(data.name==='list_projects'?{projects:[{id:'project-1',name:'example'}]}:{deployments:[{status:'SUCCESS'}]})});
   if(path==='connections/'+provider+'/plan'){
@@ -47,8 +48,8 @@ try{
   document.querySelector('[data-model="'+model+'"]').click();
   await wait(()=>[...document.querySelectorAll('.connection-toggle')].every(button=>!button.disabled));
   const rows=[...document.querySelectorAll('.connection-row')];
-  assert.equal(rows.length,4);
-  for(const row of rows)assert.equal(row.querySelectorAll('button').length,1);
+  assert.equal(rows.length,7);
+  for(const row of rows){assert.equal(row.querySelectorAll('button').length,1);assert.ok(row.querySelector('.connection-icon svg path'));assert.equal(row.firstElementChild.className,'connection-icon');}
   assert.ok(!document.querySelector('.connections-list').textContent.includes('Проверить'));
   assert.equal(calls.filter(call=>call.path.endsWith('/verify')).length,0);
   document.querySelector('[data-section="projects"]').click();
@@ -73,7 +74,7 @@ try{
   assert.ok(document.querySelector('#model-label').textContent.includes(model.replace('velia-','').toUpperCase()));
   document.querySelector('[data-section="plugins"]').click();
   await wait(()=>[...document.querySelectorAll('.connection-toggle')].every(button=>!button.disabled));
-  for(const id of ['github','railway','vercel']){
+  for(const id of ['github','railway','vercel','google','notion','shopify']){
     const row=document.querySelector('[data-connection="'+id+'"]'),button=row.querySelector('button');
     assert.equal(button.textContent,'Отключить');
     button.click();button.click();
