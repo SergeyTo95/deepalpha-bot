@@ -1,14 +1,16 @@
+import {validateVisit} from './visits.mjs';
 /** Encrypted account notebook. The server stores ciphertext and a revision only. */
 const encode=bytes=>{let value='';for(const byte of new Uint8Array(bytes))value+=String.fromCharCode(byte);return btoa(value);};
 const decode=value=>Uint8Array.from(atob(value),char=>char.charCodeAt(0));
 const clone=value=>JSON.parse(JSON.stringify(value));
 const AAD=account=>new TextEncoder().encode('velia-notebook-v1:'+account);
 export function validateEntry(entry) {
-  if(!entry||!['note','list','favorite','place'].includes(entry.kind)||typeof entry.id!=='string'||entry.id.length>100
+  if(!entry||!['note','list','favorite','place','visit'].includes(entry.kind)||typeof entry.id!=='string'||entry.id.length>100
       ||typeof entry.title!=='string'||!entry.title.trim()||entry.title.length>200||typeof entry.content!=='string'||entry.content.length>50000
       ||!Array.isArray(entry.tags)||entry.tags.length>12||entry.tags.some(tag=>typeof tag!=='string'||tag.length>40))throw Error('Проверь название и текст заметки.');
   if(entry.kind==='list'&&(!Array.isArray(entry.items)||entry.items.length>200||entry.items.some(item=>!item||typeof item.text!=='string'||!item.text.trim()||item.text.length>500||typeof item.done!=='boolean')))throw Error('Проверь пункты списка.');
   if(entry.kind==='place'&&(!Number.isFinite(entry.lat)||!Number.isFinite(entry.lon)||Math.abs(entry.lat)>90||Math.abs(entry.lon)>180))throw Error('Проверь координаты места.');
+  if(entry.kind==='visit')validateVisit(entry);
   return entry;
 }
 export class Notebook {
@@ -72,7 +74,7 @@ export class Notebook {
   }
   setDone(id,index,done){return this.mutate(entries=>{const entry=entries.find(entry=>entry.id===id);if(entry?.kind==='list'&&entry.items[index]){entry.items[index].done=Boolean(done);entry.updated=Date.now();}});}
   remove(id){return this.mutate(entries=>{const index=entries.findIndex(entry=>entry.id===id);if(index>=0)entries.splice(index,1);});}
-  async find(query=''){const entries=await this.load();const terms=query.toLocaleLowerCase().split(/\s+/).filter(Boolean);return entries.filter(entry=>terms.every(term=>[entry.title,entry.content,...entry.tags,...(entry.items||[]).map(item=>item.text)].join(' ').toLocaleLowerCase().includes(term)));}
+  async find(query=''){const entries=await this.load();const terms=query.toLocaleLowerCase().split(/\s+/).filter(Boolean);return entries.filter(entry=>terms.every(term=>[entry.title,entry.content,entry.task||'',entry.result||'',entry.address||'',entry.date||'',...entry.tags,...(entry.items||[]).map(item=>item.text)].join(' ').toLocaleLowerCase().includes(term)));}
 }
 export function notebookCommand(text){
   let match=text.match(/^(?:сохрани|запиши|создай)\s+(?:заметку|идею)(?:\s*[:—-]\s*|\s+)([\s\S]+)$/iu);

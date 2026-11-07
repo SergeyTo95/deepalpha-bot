@@ -59,6 +59,38 @@ places themselves remain in the account notebook and are available on other
 devices. The “Мои места” sidebar opens saved locations instead of displaying an
 empty world map by default.
 
+## Daily visit plans
+
+The encrypted account notebook now stores `visit` records: a place snapshot with
+coordinates and address, task, calendar date, optional local time, IANA timezone,
+status (`planned`, `done`, `cancelled`) and result. Place addresses and comments
+are separate fields; legacy places without an address use their existing text.
+Deleting a saved place does not erase the location of past visits.
+
+“Мои места” has “Места” and “Выезды” tabs. Add/edit visits, filter by day/status,
+show their locations or discuss them in chat. The chat tools `schedule_visit`,
+`list_visits`, `update_visit` require real references and explicit write intent.
+They support “Запланируй визит к этому месту на завтра в 10:00”, “Собери мои
+выезды на завтра” and “Отметь первый визит выполненным; результат: заказ передан”.
+Identical place/date/time/timezone/task appointments do not create a duplicate.
+The existing notebook revision checks protect changes from concurrent tabs.
+
+Relative dates use the browser/device timezone, rather than server UTC. Each
+visit retains its own timezone. Untimed visits appear after timed appointments.
+Equal planned slots in the same timezone are flagged; travel time and conflicts
+across different timezones are not calculated. The chat shows up to 20 visits
+and 12 distinct map points with full counts; the “Выезды” tab shows the full day.
+No road optimization or automatic reminders are added. Simple Russian/English
+visit confirmations are generated from successful tool results without another
+model call; composite requests and other languages use the normal planner loop.
+Simple Russian/English day reads and explicit completion/cancellation of a
+uniquely referenced visit also bypass planning requests. Ambiguous place or visit
+references continue through the selected model instead of choosing a sole item.
+
+Visits sync through the notebook; chat plan cards remain in the encrypted
+browser cache. Open tabs should refresh after release to read the new entry
+kind. No backend ciphertext schema or encryption key migration is required.
+
 ## Map providers and privacy
 
 Leaflet 1.9.4 is vendored locally with its license. Map tiles use
