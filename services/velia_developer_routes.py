@@ -5,7 +5,7 @@ import os
 import threading
 import time
 from typing import Any, Dict, Optional
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
 from aiohttp import web
 
@@ -55,7 +55,20 @@ def _env_int(name: str, default: int, minimum: int = 1, maximum: int = 1000) -> 
     return min(maximum, max(minimum, value))
 
 
-def _safe_redirect_url() -> str:
+def _web_redirect_url() -> str:
+    value = str(os.getenv("VELIA_DEVELOPER_WEB_CALLBACK_REDIRECT", "") or "").strip()
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.password and not parsed.fragment:
+            return value
+    except ValueError:
+        pass
+    return ""
+
+
+def _safe_redirect_url(web_return: bool = False) -> str:
+    if web_return and _web_redirect_url():
+        return _web_redirect_url()
     value = str(
         os.getenv("VELIA_DEVELOPER_CALLBACK_REDIRECT", "velia://developer/github-connected")
         or "velia://developer/github-connected"
@@ -140,6 +153,7 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
                 "ok": True,
                 "enabled": project_service.developer_enabled(),
                 "github_configured": github_service.github_app_configured(),
+                "web_connect_configured": bool(_web_redirect_url()),
                 "github_app_slug": github_service.github_app_slug(),
                 "read_only": True,
                 "installation_count": len(installations),
@@ -148,18 +162,20 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
             }
         )
 
-    async def install_url(request: web.Request) -> web.Response:
+    async def install_url(request: web.Request, web_return: bool = False) -> web.Response:
         blocked = _require_feature(routes_module, request)
         if blocked:
             return blocked
         auth = _auth(routes_module, request)
         if not auth:
             return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        if web_return and not _web_redirect_url():
+            return routes_module._json_response({"ok": False, "error": "github_web_return_not_configured"}, status=503)
         try:
             await asyncio.to_thread(project_service.ensure_developer_tables)
             await asyncio.to_thread(github_service.validate_github_app_configuration)
             _clear_connection_error(int(auth["user_id"]))
-            state = project_service.create_install_state(int(auth["user_id"]))
+            state = project_service.create_install_state(int(auth["user_id"]), **({"web_return": True} if web_return else {}))
             return routes_module._json_response(
                 {
                     "ok": True,
@@ -176,6 +192,7 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
         installation_id = _int(request.query.get("installation_id"))
         code = str(request.query.get("code") or "")
         callback_user_id = 0
+        payload = {}
         try:
             payload = project_service.verify_install_state(state)
             callback_user_id = int(payload["user_id"])
@@ -192,8 +209,9 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
                 )
             _clear_connection_error(callback_user_id)
             primary_installation_id = int(details_list[0]["installation_id"])
-            separator = "&" if "?" in _safe_redirect_url() else "?"
-            location = _safe_redirect_url() + separator + urlencode(
+            redirect = _safe_redirect_url(bool(payload.get("web_return")))
+            separator = "&" if "?" in redirect else "?"
+            location = redirect + separator + urlencode(
                 {
                     "connected": "true",
                     "installation_id": primary_installation_id,
@@ -209,7 +227,7 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
             _remember_connection_error(callback_user_id, exc.code)
             logger.warning("VELIA_DEVELOPER_GITHUB_CALLBACK_FAILED user_id=%s code=%s detail=%s", callback_user_id, exc.code, exc.detail)
             code = exc.code
-            redirect = _safe_redirect_url()
+            redirect = _safe_redirect_url(bool(payload.get("web_return")))
             separator = "&" if "?" in redirect else "?"
             location = redirect + separator + urlencode({"connected": "false", "error": str(code)})
             raise web.HTTPFound(location=location)
@@ -217,7 +235,7 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
             code = getattr(exc, "code", "github_connection_failed")
             _remember_connection_error(callback_user_id, str(code))
             logger.exception("VELIA_DEVELOPER_GITHUB_CALLBACK_UNEXPECTED user_id=%s code=%s", callback_user_id, code)
-            redirect = _safe_redirect_url()
+            redirect = _safe_redirect_url(bool(payload.get("web_return")))
             separator = "&" if "?" in redirect else "?"
             location = redirect + separator + urlencode({"connected": "false", "error": str(code)})
             try:
@@ -506,6 +524,9 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
 
     app.router.add_get(f"{_PREFIX}/status", status)
     app.router.add_post(f"{_PREFIX}/github/install-url", install_url)
+    async def web_install_url(request):
+        return await install_url(request, web_return=True)
+    app.router.add_post(f"{_PREFIX}/github/web-install-url", web_install_url)
     app.router.add_get(f"{_PREFIX}/github/callback", github_callback)
     app.router.add_get(f"{_PREFIX}/installations", installations)
     app.router.add_get(f"{_PREFIX}/repositories", repositories)
