@@ -116,7 +116,8 @@ def test_disabled_quote_gate_preserves_existing_coding_flow(monkeypatch):
     assert "generate" in calls
 
 
-def test_approval_charges_before_inner_coding_execution_and_consumes_on_success(monkeypatch):
+@pytest.mark.parametrize("custom_generator", [False, True])
+def test_approval_charges_before_inner_coding_execution_and_consumes_on_success(monkeypatch, custom_generator):
     monkeypatch.setattr(runtime, "_quote_enabled", lambda: True)
     events = []
     active_values = iter([JOB, JOB, None])
@@ -169,9 +170,12 @@ def test_approval_charges_before_inner_coding_execution_and_consumes_on_success(
 
     module = SimpleNamespace(generate_velia_chat_result=original_generate)
     runtime.install(module)
-    result = module.generate_velia_chat_result(
-        "prompt", user_id=7, conversation_id="conversation-1", request_id="request-1"
-    )
+    if custom_generator:
+        result = module._superagent_quote_generate("prompt", user_id=7, conversation_id="conversation-1",
+            request_id="request-1", message="Выполни план", generator=original_generate)
+    else:
+        result = module.generate_velia_chat_result(
+            "prompt", user_id=7, conversation_id="conversation-1", request_id="request-1")
 
     assert result["reason"] == "developer_coding_completed"
     assert events[:2] == ["charge", "generate"]
@@ -179,7 +183,8 @@ def test_approval_charges_before_inner_coding_execution_and_consumes_on_success(
     assert "refund" not in events
 
 
-def test_insufficient_balance_cancels_before_inner_execution(monkeypatch):
+@pytest.mark.parametrize("custom_generator", [False, True])
+def test_insufficient_balance_cancels_before_inner_execution(monkeypatch, custom_generator):
     monkeypatch.setattr(runtime, "_quote_enabled", lambda: True)
     active_values = iter([JOB, JOB])
     _patch_router(
@@ -226,9 +231,12 @@ def test_insufficient_balance_cancels_before_inner_execution(monkeypatch):
         )
     )
     runtime.install(module)
-    result = module.generate_velia_chat_result(
-        "prompt", user_id=7, conversation_id="conversation-1", request_id="request-1"
-    )
+    if custom_generator:
+        result = module._superagent_quote_generate("prompt", user_id=7, conversation_id="conversation-1",
+            request_id="request-1", message="Выполни план", generator=lambda *args, **kwargs: pytest.fail("must not execute"))
+    else:
+        result = module.generate_velia_chat_result(
+            "prompt", user_id=7, conversation_id="conversation-1", request_id="request-1")
 
     assert result["reason"] == "developer_coding_insufficient_tokens"
     assert updates[-1][1]["status"] == "cancelled"

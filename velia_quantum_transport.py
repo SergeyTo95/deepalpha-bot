@@ -21,7 +21,8 @@ import time
 import requests
 
 from velia_quantum_provider import (QuantumError, provider_error_details,
-    read_provider_error, response_error, verify_zero_spend, verify_zero_spend_async, payload)
+    read_provider_error, response_error, verify_minimax_budget, verify_zero_spend,
+    verify_zero_spend_async, payload)
 
 LOG = logging.getLogger(__name__)
 HEADERS = {"Accept": "text/event-stream", "Accept-Encoding": "identity",
@@ -131,7 +132,10 @@ def sync_error_details(response):
 def _completion(client, config, body, *, timeout, retry_overload=False, voice_entry=False):
     for attempt in range(2):
         check_overload(config)
-        verify_zero_spend(client, config)
+        if config.provider == "pro_minimax":
+            verify_minimax_budget(client, config)
+        else:
+            verify_zero_spend(client, config)
         with client.post(config.base_url + "/chat/completions", json=body,
                 headers={**HEADERS, "Authorization": "Bearer " + config.api_key},
                 timeout=_header_timeout(timeout) if voice_entry else timeout, stream=True, allow_redirects=False) as response:

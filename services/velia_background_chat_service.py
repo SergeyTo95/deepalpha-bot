@@ -117,7 +117,8 @@ def publish(cur, job):
 
 
 def store():
-    return JobStore(chat.get_connection, prepare=prepare, publish=publish)
+    from services.velia_autoloop_service import question
+    return JobStore(chat.get_connection, prepare=prepare, publish=publish, question=question)
 
 
 def background_context(user, cid):
@@ -161,7 +162,29 @@ def run_one(jobs, shutdown):
                 checked=time.monotonic()
                 if not jobs.alive(job):
                     raise JobError('background_task_cancelled',409)
-        if job['payload'].get('agent'):
+        if job['payload'].get('autoloop'):
+            from velia_autoloop import GUIDANCE, receipt
+            from services import velia_autoloop_service as loop_service
+            if not loop_service.enabled():
+                raise JobError('autoloop_unavailable', 503)
+            loop = job['payload']['autoloop']
+            if loop['kind'] == 'coding':
+                result = loop_service.execute_coding(job, jobs)
+                if result is None:
+                    return True
+            else:
+                result = quantum.generate('', messages=[{'role':'system','content':GUIDANCE}, *messages],
+                    chat_mode=job['model'], voice_turn=False, web_search=job['payload']['web_search'],
+                    account_language=job['payload']['language'], on_delta=delta, request_id=job['id'])
+                if result.get('ok'):
+                    text, control = receipt(result.get('text', ''))
+                    if control:
+                        ask = control.get('ask')
+                        jobs.wait(job, ask['text'] if ask else text or 'Вернусь к проверке позже.',
+                            options=ask.get('options', []) if ask else (), later_minutes=control.get('later_minutes', 0))
+                        return True
+                    result = {**result, 'text': text}
+        elif job['payload'].get('agent'):
             result={'ok':True,'text':agent.execute(job,jobs,quantum.generate,delta)}
         else:
             result=quantum.generate('',messages=messages,chat_mode=job['model'],voice_turn=False,
@@ -183,13 +206,24 @@ def run_one(jobs, shutdown):
 def setup_routes(app, routes):
     from aiohttp import web
     jobs=store();shutdown=threading.Event();wake=asyncio.Event()
+    from services import velia_autoloop_service as loop_service
+    from velia_autoloop import LoopStore
+    loops = LoopStore(jobs)
+    loop_service.setup_routes(app, routes, jobs, loops, wake)
     async def lifecycle(application):
         task=None
         if enabled():
             await asyncio.to_thread(jobs.initialize)
+            await asyncio.to_thread(loops.initialize)
             async def loop():
                 while not shutdown.is_set():
-                    try:worked=await asyncio.to_thread(run_one,jobs,shutdown)
+                    try:
+                        if loop_service.enabled():
+                            try:
+                                await asyncio.to_thread(loops.tick, loop_service.authorize)
+                            except Exception:
+                                LOG.warning('VELIA_AUTOLOOP_DISPATCH_UNAVAILABLE')
+                        worked=await asyncio.to_thread(run_one,jobs,shutdown)
                     except Exception:
                         worked=False
                         LOG.warning('VELIA_BACKGROUND_WORKER_UNAVAILABLE')
@@ -241,6 +275,11 @@ def setup_routes(app, routes):
                     if job['payload'].get('agent'):
                         agent.validate_task(job['payload']['content'],[n['text'] for n in job['payload'].get('notes',[])]+[data['note'].strip()])
                     value=await asyncio.to_thread(jobs.change,user,job_id,note=data['note'].strip(),key=data['idempotency_key'])
+                elif action=='answer':
+                    if set(data)!={'answer','idempotency_key'} or not isinstance(data['answer'],str) or not 1<=len(data['answer'].strip())<=2000 or not KEY.fullmatch(str(data['idempotency_key'])):
+                        raise JobError('invalid_request')
+                    await asyncio.to_thread(allowed,user,job['model'])
+                    value=await asyncio.to_thread(jobs.answer,user,job_id,data['answer'].strip(),data['idempotency_key'])
                 else:raise JobError('invalid_request')
             else:
                 if set(data)-{'web_search','voice_turn','attachment_ids','agent','resume_job_id'}!={'conversation_id','model','content','idempotency_key'}:raise JobError('invalid_request')

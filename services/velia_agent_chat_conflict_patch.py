@@ -239,6 +239,7 @@ def install(chat_module: Any) -> None:
         conversation_id: str,
         request_id: Optional[str],
         message: str,
+        generator=None,
     ) -> Dict[str, Any]:
         stream_context = agent_patch.streaming_patch._STREAM_CONTEXT
         had_delta = hasattr(stream_context, "on_delta")
@@ -374,7 +375,7 @@ def install(chat_module: Any) -> None:
             stream_context.on_delta = compact_delta
 
         try:
-            result = original_generate(
+            result = (generator or original_generate)(
                 prompt,
                 user_id=user_id,
                 conversation_id=conversation_id,
@@ -642,5 +643,8 @@ def install(chat_module: Any) -> None:
             message=message,
         )
 
+    # Reuse the same quote/debit/refund boundary for an authenticated selected-
+    # model chat adapter, without invoking unrelated planners or paid fallback.
+    chat_module._superagent_quote_generate = call_inner_with_developer_presentation
     chat_module.generate_velia_chat_result = generate_without_plan_conflicts
     chat_module._velia_agent_chat_conflict_patch_installed = True

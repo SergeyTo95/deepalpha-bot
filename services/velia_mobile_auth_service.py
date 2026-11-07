@@ -2,6 +2,7 @@ import hashlib
 import os
 import secrets
 import uuid
+from contextlib import closing
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
@@ -14,6 +15,9 @@ from db.database import get_connection
 
 
 PERSISTENT_REFRESH_EXPIRES_AT = datetime(9999, 12, 31, 23, 59, 59)
+# This ID is outside the Telegram and Google ranges and fits in a JS integer.
+QA_USER_ID = 9_007_199_254_740_989
+QA_USERNAME = "velia_qa_codex"
 
 
 def _env_int(name: str, default: int, minimum: int = 1) -> int:
@@ -220,6 +224,26 @@ def create_pairing_code(
     finally:
         cursor.close()
         conn.close()
+
+
+def create_qa_pairing_code(*, user_agent: str, ip: str) -> Dict[str, Any]:
+    now = _utcnow().isoformat()
+    with closing(get_connection()) as conn, conn, conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO users (user_id, username, first_name, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (user_id) DO NOTHING
+            """,
+            (QA_USER_ID, QA_USERNAME, "VELIA QA", now, now),
+        )
+        cursor.execute(
+            "SELECT username, is_banned, is_vip FROM users WHERE user_id = %s",
+            (QA_USER_ID,),
+        )
+        if cursor.fetchone() != (QA_USERNAME, 0, 0):
+            return {"ok": False, "error": "qa_account_unavailable"}
+    return create_pairing_code(QA_USER_ID, user_agent=user_agent, ip=ip)
 
 
 def _session_payload(

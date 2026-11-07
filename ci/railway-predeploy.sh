@@ -6,3 +6,4 @@ python ci/probe-velia-flash.py
 python -c 'from services.velia_flash_service import public_capability; print(public_capability())'
 python ci/probe-selected-model-inputs.py
 python ci/probe-velia-quantum.py --config-only
+python -m services.velia_superagent_chat_service

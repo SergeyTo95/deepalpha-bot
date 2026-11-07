@@ -1,7 +1,11 @@
+import asyncio
+import hashlib
 import html
 import velia_free_models as free_models
 import json
 import os
+import re
+import secrets
 from typing import Any, Callable, Dict, Optional
 
 from aiohttp import web
@@ -27,6 +31,7 @@ from services.velia_chat_service import (
 from services.velia_mobile_auth_service import (
     authenticate_access_token,
     create_pairing_code,
+    create_qa_pairing_code,
     exchange_pairing_code,
     revoke_access_token,
     rotate_refresh_token,
@@ -173,6 +178,22 @@ def setup_velia_mobile_routes(
                 "version": "v1-beta",
             }
         )
+
+    async def handle_qa_pairing(request: web.Request) -> web.Response:
+        verifier = os.getenv("VELIA_QA_PASSWORD_SHA256", "")
+        if not _mobile_api_available() or not re.fullmatch(r"[a-f0-9]{64}", verifier):
+            raise web.HTTPNotFound()
+        password = _bearer_token(request)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{43}", password) or not secrets.compare_digest(
+            hashlib.sha256(password.encode("ascii")).hexdigest(), verifier
+        ):
+            return _json_response({"ok": False, "error": "unauthorized"}, status=401)
+        result = await asyncio.to_thread(
+            create_qa_pairing_code,
+            user_agent=request.headers.get("User-Agent", ""),
+            ip=_request_ip(request),
+        )
+        return _json_response(result, status=200 if result.get("ok") else 503)
 
     async def handle_auth_exchange(request: web.Request) -> web.Response:
         if not _mobile_api_available():
@@ -404,6 +425,7 @@ def setup_velia_mobile_routes(
 
     app.router.add_get("/mobile-connect", handle_mobile_connect)
     app.router.add_get("/mobile-api/v1/health", handle_health)
+    app.router.add_post("/mobile-api/v1/auth/qa-pairing", handle_qa_pairing)
     app.router.add_post("/mobile-api/v1/auth/exchange", handle_auth_exchange)
     app.router.add_post("/mobile-api/v1/auth/refresh", handle_auth_refresh)
     app.router.add_post("/mobile-api/v1/auth/logout", handle_auth_logout)
@@ -422,6 +444,8 @@ def setup_velia_mobile_routes(
         handle_messages_send,
     )
     app.router.add_get("/mobile-api/v1/usage", handle_usage)
+    from services.velia_chat_topic_routes import setup_chat_topic_routes
+    setup_chat_topic_routes(app, _require_mobile_auth, _mobile_api_available)
     from velia_project_routes import setup_velia_project_routes
     setup_velia_project_routes(app)
     from services.velia_background_chat_service import setup_routes
