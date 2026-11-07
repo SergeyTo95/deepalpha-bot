@@ -2,7 +2,7 @@ import {renderMarkdown, apiError} from './core.mjs';
 import {mountWork} from './work.mjs';
 import {mountAgentix} from './agentix.mjs';
 import {mountFigma} from './figma.mjs';
-import {mountConnections} from './connections.mjs';
+import {mountConnections,mountGithubRepositories} from './connections.mjs';
 
 export const SECTIONS = Object.freeze([
   ['studio', 'Studio'], ['projects', 'Проекты'], ['research', 'Исследования'],
@@ -305,9 +305,13 @@ export function setupFeatures({signedIn, openAuth, openIncomePlanner, toast, isB
         const r = await call('profile'); if (ticket !== epoch) return; body.replaceChildren(form([['preferred_name','Как обращаться'],['about_me','О себе','textarea']], 'Сохранить', d=>call('profile',{method:'PATCH',data:d}), r.profile));
       } else if (name === 'plugins') {
         body.replaceChildren();
-        mountConnections(body,{call,toast,signal:controller.signal,prepareChat:prepareConnectionChat,openProjects:()=>open('projects')});
-        mountFigma(body,{prepareChat:prepareFigmaChat,toast,signal:controller.signal});
+        const intro=node('p','Подключи сервисы и давай задания в общем чате. Доступ проверяется автоматически при работе.','connections-intro');
+        const connections=node('div',undefined,'connections-list');
+        body.append(intro,connections);
+        mountConnections(connections,{call,toast,signal:controller.signal});
+        mountFigma(connections,{toast,signal:controller.signal});
         const r = await call('plugins'); if (ticket !== epoch) return;
+        if(Object.keys(r.plugins || {}).length)body.append(node('h2','Инструменты чата'));
         const names = {weather:'Погода',web_search:'Поиск в интернете',research:'Исследования',image_generation:'Изображения',file_analyst:'Анализ файлов',deepalpha_markets:'DeepAlpha'};
         for (const [key,v] of Object.entries(r.plugins || {})) {const l=node('label',names[key] || key,'feature-toggle'), c=node('input'); c.type='checkbox'; c.checked=v.enabled; c.disabled=!v.available; c.onchange=()=>run(c,async()=>{try{await call('plugins',{method:'PATCH',data:{plugins:{[key]:c.checked}}});}catch(e){c.checked=!c.checked;throw e;}}); l.append(c); if(!v.available) l.append(node('small','Сейчас недоступно')); body.append(l);
           if(!v.available && ['research','image_generation'].includes(key)){
@@ -317,21 +321,6 @@ export function setupFeatures({signedIn, openAuth, openIncomePlanner, toast, isB
             body.append(button(ru?(destination==='research'?'Открыть исследования':'Открыть Studio'):(destination==='research'?'Open Research':'Open Studio'),()=>open(destination)));
           }
         }
-        const overview=node('div',undefined,'feature-card');
-        const ru=(document.documentElement.lang || navigator.language || '').startsWith('ru');
-        const check=button(ru?'Проверить доступность разделов':'Check service availability',()=>run(check,async()=>{
-          const response=await fetch('/web-api/v1/platform/status',{credentials:'same-origin',signal:controller.signal});
-          if(!response.ok)throw new Error(ru?'Не удалось проверить доступность':'Availability check failed');
-          const result=await response.json();if(ticket!==epoch)return;
-          overview.replaceChildren(node('p',ru?'Ответ сервиса не подтверждает выполнение задания.':'A service response does not verify task execution.'));
-          const domains=ru?{plugins:'Инструменты',research:'Исследования',media:'Медиа',tools:'Действия',specialists:'Помощники',software:'Разработка'}:{plugins:'Tools',research:'Research',media:'Media',tools:'Actions',specialists:'Assistants',software:'Software'};
-          const states=ru?{partial:'Работает частично',responding:'Сервис отвечает',disabled:'Отключено',unavailable:'Недоступно',timeout:'Нет ответа вовремя',access_denied:'Нет доступа',not_exposed:'Не подключено'}:{partial:'Partially available',responding:'Service responding',disabled:'Disabled',unavailable:'Unavailable',timeout:'Timed out',access_denied:'Access denied',not_exposed:'Not exposed'};
-          const missingNames=ru?{worker_enabled:'Исполнение фоновых задач отключено',coding_enabled:'Разработка кода отключена',write_enabled:'Изменение кода отключено',worker_ready:'Исполнитель не готов',weather_unavailable:'Погода недоступна',web_search_unavailable:'Поиск недоступен',research_unavailable:'Исследовательский плагин не подключён',image_generation_unavailable:'Плагин изображений не подключён',file_analyst_unavailable:'Анализ файлов недоступен',deepalpha_markets_unavailable:'DeepAlpha не подключён'}:{worker_enabled:'Background execution disabled',coding_enabled:'Coding disabled',write_enabled:'Code changes disabled',worker_ready:'Executor not ready',weather_unavailable:'Weather unavailable',web_search_unavailable:'Search unavailable',research_unavailable:'Research plugin not connected',image_generation_unavailable:'Image plugin not connected',file_analyst_unavailable:'File analysis unavailable',deepalpha_markets_unavailable:'DeepAlpha not connected'};
-          for(const item of result.observations || []){
-            overview.append(node('p',(domains[item.domain] || item.domain)+': '+(states[item.state] || item.state)));
-            for(const reason of item.missing_prerequisites || [])if(missingNames[reason])overview.append(node('small',missingNames[reason]));
-          }
-        }));body.append(check,overview);
       } else if (name === 'balance') {
         const results = await Promise.all([call('economy/me'),call('usage')]); if(ticket!==epoch)return; body.replaceChildren(...results.map((r,i)=>{const card=node('article',undefined,'feature-card');card.append(node('h3',i===0?'Твой баланс':'Использование'),display(r.account||r.usage||r));return card;}));
       } else if (name === 'studio') await studio(body);
@@ -348,6 +337,7 @@ export function setupFeatures({signedIn, openAuth, openIncomePlanner, toast, isB
         const repositories=node('details',undefined,'feature-advanced');
         repositories.append(node('summary','Репозитории и разработка'));
         const repositoryList=node('div');repositories.append(repositoryList);body.append(repositories);
+        mountGithubRepositories(repositories,{call,toast,signal:controller.signal,onSelected:async()=>{loaded=false;await repositories.ontoggle();}});
         let loaded=false;
         repositories.ontoggle=async()=>{
           if(!repositories.open||loaded)return;

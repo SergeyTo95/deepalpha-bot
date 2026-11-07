@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 const {JSDOM}=await import(process.env.VELIA_JSDOM_MODULE||'jsdom');
-const oauthReturn=process.env.VELIA_FIGMA_OAUTH_RETURN==='true';
+const oauthReturn=true;
 const dom=new JSDOM(await fs.readFile(new URL('../web/index.html',import.meta.url),'utf8'),{url:'https://velia.example'+(oauthReturn?'/?figma=connected':''),pretendToBeVisual:true});
 const {window}=dom;
 Object.assign(globalThis,{window,document:window.document,localStorage:window.localStorage,sessionStorage:window.sessionStorage,location:window.location,matchMedia:()=>({matches:true}),requestAnimationFrame:window.requestAnimationFrame.bind(window),cancelAnimationFrame:window.cancelAnimationFrame.bind(window),BroadcastChannel:undefined});
@@ -39,22 +39,15 @@ try {
  await import('../web/app.mjs');await new Promise(resolve=>setTimeout(resolve,40));
  document.querySelector('[data-model="'+model+'"]').click();
  if(!oauthReturn)document.querySelector('[data-section="plugins"]').click();
- await wait(()=>document.querySelector('[name="figma-token"]'));
+ await wait(()=>document.querySelector('[data-figma="connection"] button:not(:disabled)'));
  const card=document.querySelector('[data-figma="connection"]');
- assert.ok([...card.querySelectorAll('button')].some(button=>button.textContent==='Подключить Figma'));
- if(oauthReturn){
-   assert.equal(location.search,'');
-   assert.equal(card.querySelector('details').open,false);
-   assert.ok(!requests.some(item=>item.path==='figma/connect'));
- }else{
-   const field=card.querySelector('input');assert.equal(field.type,'password');field.value=token;
-   card.querySelector('form').dispatchEvent(new window.Event('submit',{cancelable:true}));
-   assert.equal(field.value,'');
- }
- await wait(()=>card.textContent.includes('AB12CD'));
- [...card.querySelectorAll('button')].find(button=>button.textContent==='Проверить подключение').click();
- await wait(()=>card.textContent.includes('Fixture design'));
- [...card.querySelectorAll('button')].find(button=>button.textContent==='Открыть чат с Figma').click();
+ assert.equal(card.querySelectorAll('button').length,1);
+ assert.equal(card.querySelector('button').textContent,'Отключить');
+ assert.equal(card.querySelector('input'),null);
+ assert.equal(location.search,'');
+ assert.ok(!requests.some(item=>item.path==='figma/connect'||item.path==='figma/verify'));
+ assert.ok(card.textContent.includes('AB12CD'));
+ [...document.querySelectorAll('.feature-header button')].find(button=>button.textContent==='К диалогу').click();
  document.querySelector('#agent-toggle').click();
  for(const [prompt,expected] of [['Создай фрейм в Figma','Создала фрейм'],['Добавь заголовок Привет','Добавила заголовок']]){
    document.querySelector('#prompt').value=prompt;
@@ -62,11 +55,12 @@ try {
    await wait(()=>!document.querySelector('#prompt').disabled&&document.querySelector('#messages').textContent.includes(expected));
  }
  assert.equal(plans.length,0);
+ assert.equal(requests.filter(item=>item.path==='figma/verify').length,2);
  assert.equal(document.querySelector('#agent-toggle').getAttribute('aria-pressed'),'false');
  assert.equal(requests.filter(item=>item.path==='figma/call').length,2);
  assert.equal(requests.filter(item=>item.path.endsWith('/tasks')||item.path.includes('/messages/stream')||item.path.includes('agent/browser')).length,0);
  assert.ok(!document.querySelector('#messages').textContent.includes('"tool"'));
  assert.ok(document.querySelector('#model-label').textContent.includes(model.replace('velia-','').toUpperCase()));
- console.log(JSON.stringify({ok:true,synthetic:true,model,oauthReturn,checks:[oauthReturn?'OAuth return restores pairing without token input':'password field cleared','plugin pairing and verification','main chat creates a frame','follow-up edits the same file','selected model preserved','credential absent from model context','internal plans hidden']}));
+ console.log(JSON.stringify({ok:true,synthetic:true,model,oauthReturn,checks:[oauthReturn?'OAuth return restores pairing without token input':'password field cleared','single connection button','verification occurs automatically in chat','main chat creates a frame','follow-up edits the same file','selected model preserved','credential absent from model context','internal plans hidden']}));
 } catch(error){console.error(error);process.exitCode=1;}
 finally{dom.window.close();setTimeout(()=>process.exit(process.exitCode||0),10);}
