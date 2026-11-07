@@ -95,3 +95,27 @@ def test_browser_install_and_callback_use_the_existing_github_authorization(monk
             assert response.headers["Location"].startswith("https://velia.example/?connection=github&connected=true")
             assert recorded == [(7, {"installation_id": 123})]
     asyncio.run(scenario())
+
+
+def test_github_disconnect_uses_authenticated_user_and_does_not_uninstall_app(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from aiohttp import ClientSession, web
+    from aiohttp.test_utils import TestServer
+    from services import velia_developer_project_service as projects
+
+    async def scenario():
+        recorded = []
+        monkeypatch.setattr(projects, 'disconnect_github', lambda user: recorded.append(user))
+        module = SimpleNamespace(_mobile_api_available=lambda: True,
+            _require_mobile_auth=lambda request: {'user_id':7} if request.headers.get('X-Test-Auth') else None,
+            _json_response=lambda data,status=200: web.json_response(data,status=status))
+        app = web.Application(); routes.setup_velia_developer_routes(app,module)
+        async with TestServer(app) as server, ClientSession() as client:
+            path = server.make_url('/mobile-api/v1/developer/github/disconnect')
+            response = await client.post(path,json={'user_id':8})
+            assert response.status == 401 and not recorded
+            response = await client.post(path,json={'user_id':8},headers={'X-Test-Auth':'yes'})
+            assert response.status == 200 and (await response.json())['connected'] is False
+            assert recorded == [7]
+    asyncio.run(scenario())
