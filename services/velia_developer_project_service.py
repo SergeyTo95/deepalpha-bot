@@ -92,7 +92,7 @@ def _b64url_decode(value: str) -> bytes:
     return base64.urlsafe_b64decode(raw + b"=" * (-len(raw) % 4))
 
 
-def create_install_state(user_id: int, *, now: Optional[int] = None) -> str:
+def create_install_state(user_id: int, *, now: Optional[int] = None, web_return: bool = False) -> str:
     current = int(now if now is not None else time.time())
     ttl = max(120, min(1800, int(os.getenv("VELIA_DEVELOPER_STATE_TTL_SECONDS", "600") or 600)))
     payload = {
@@ -102,6 +102,8 @@ def create_install_state(user_id: int, *, now: Optional[int] = None) -> str:
         "exp": current + ttl,
         "nonce": secrets.token_urlsafe(18),
     }
+    if web_return:
+        payload["web_return"] = True
     encoded = _b64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     signature = _b64url(hmac.new(_state_secret(), encoded.encode("ascii"), hashlib.sha256).digest())
     return f"{encoded}.{signature}"
