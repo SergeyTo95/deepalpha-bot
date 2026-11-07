@@ -1,6 +1,7 @@
 import {renderMarkdown, apiError} from './core.mjs';
 import {mountWork} from './work.mjs';
 import {mountAgentix} from './agentix.mjs';
+import {mountFigma} from './figma.mjs';
 
 export const SECTIONS = Object.freeze([
   ['studio', 'Studio'], ['projects', 'Проекты'], ['research', 'Исследования'],
@@ -215,7 +216,7 @@ function display(value, depth = 0) {
   return box;
 }
 
-export function setupFeatures({signedIn, openAuth, openIncomePlanner, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, openTopic, prepareAgentixChat=()=>{}, taskState=()=>null, prepareTask=()=>{}, onUnauthorized = () => {}}) {
+export function setupFeatures({signedIn, openAuth, openIncomePlanner, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, openTopic, prepareAgentixChat=()=>{}, prepareFigmaChat=()=>{}, taskState=()=>null, prepareTask=()=>{}, onUnauthorized = () => {}}) {
   const root = document.getElementById('feature-view'), nav = document.getElementById('feature-nav');
   let epoch = 0, section = null, controller = null, inlineBody = null, cleanup=()=>{};
   const close = () => {epoch++; cleanup();cleanup=()=>{};controller?.abort(); inlineBody?.remove(); inlineBody=null; root.replaceChildren(); root.hidden = true; section = null; nav.querySelectorAll('button').forEach(b=>b.removeAttribute('aria-current')); document.getElementById('conversation-scroll').hidden = false; document.querySelector('.composer-area').hidden = false;};
@@ -302,7 +303,9 @@ export function setupFeatures({signedIn, openAuth, openIncomePlanner, toast, isB
       if (name === 'profile') {
         const r = await call('profile'); if (ticket !== epoch) return; body.replaceChildren(form([['preferred_name','Как обращаться'],['about_me','О себе','textarea']], 'Сохранить', d=>call('profile',{method:'PATCH',data:d}), r.profile));
       } else if (name === 'plugins') {
-        const r = await call('plugins'); if (ticket !== epoch) return; body.replaceChildren();
+        body.replaceChildren();
+        mountFigma(body,{prepareChat:prepareFigmaChat,toast,signal:controller.signal});
+        const r = await call('plugins'); if (ticket !== epoch) return;
         const names = {weather:'Погода',web_search:'Поиск в интернете',research:'Исследования',image_generation:'Изображения',file_analyst:'Анализ файлов',deepalpha_markets:'DeepAlpha'};
         for (const [key,v] of Object.entries(r.plugins || {})) {const l=node('label',names[key] || key,'feature-toggle'), c=node('input'); c.type='checkbox'; c.checked=v.enabled; c.disabled=!v.available; c.onchange=()=>run(c,async()=>{try{await call('plugins',{method:'PATCH',data:{plugins:{[key]:c.checked}}});}catch(e){c.checked=!c.checked;throw e;}}); l.append(c); if(!v.available) l.append(node('small','Сейчас недоступно')); body.append(l);
           if(!v.available && ['research','image_generation'].includes(key)){
