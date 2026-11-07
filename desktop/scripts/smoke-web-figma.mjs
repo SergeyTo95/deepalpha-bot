@@ -2,7 +2,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 const {JSDOM}=await import(process.env.VELIA_JSDOM_MODULE||'jsdom');
-const dom=new JSDOM(await fs.readFile(new URL('../web/index.html',import.meta.url),'utf8'),{url:'https://velia.example',pretendToBeVisual:true});
+const oauthReturn=process.env.VELIA_FIGMA_OAUTH_RETURN==='true';
+const dom=new JSDOM(await fs.readFile(new URL('../web/index.html',import.meta.url),'utf8'),{url:'https://velia.example'+(oauthReturn?'/?figma=connected':''),pretendToBeVisual:true});
 const {window}=dom;
 Object.assign(globalThis,{window,document:window.document,localStorage:window.localStorage,sessionStorage:window.sessionStorage,location:window.location,matchMedia:()=>({matches:true}),requestAnimationFrame:window.requestAnimationFrame.bind(window),cancelAnimationFrame:window.cancelAnimationFrame.bind(window),BroadcastChannel:undefined});
 Object.defineProperty(globalThis,'navigator',{value:window.navigator,configurable:true});
@@ -19,7 +20,7 @@ globalThis.fetch=async(url,options={})=>{
  if(path==='conversations')return Response.json({ok:true,conversations:[]});
  if(path==='background-tasks')return Response.json({ok:true,jobs:[]});
  if(path==='features/plugins')return Response.json({ok:true,plugins:{}});
- if(path==='figma/status')return Response.json({ok:true,connected:false,status:'disconnected'});
+ if(path==='figma/status')return Response.json({ok:true,connected:false,status:oauthReturn?'pairing':'disconnected',pairing_code:oauthReturn?'AB12CD':null,oauth_available:true});
  if(path==='figma/connect'){assert.equal(data.token,token);return Response.json({ok:true,pairing_code:'AB12CD',expires_in:300});}
  if(path==='figma/verify')return Response.json({ok:true,connected:true,connection_id:'fixture-file',file_name:'Fixture design'});
  if(path==='figma/tools')return Response.json({ok:true,tools:[{name:'figma_create_child',description:'Create a child node',inputSchema:{type:'object'}}]});
@@ -37,12 +38,19 @@ const wait=async(check)=>{for(let attempt=0;attempt<100;attempt++){if(check())re
 try {
  await import('../web/app.mjs');await new Promise(resolve=>setTimeout(resolve,40));
  document.querySelector('[data-model="'+model+'"]').click();
- document.querySelector('[data-section="plugins"]').click();
+ if(!oauthReturn)document.querySelector('[data-section="plugins"]').click();
  await wait(()=>document.querySelector('[name="figma-token"]'));
  const card=document.querySelector('[data-figma="connection"]');
- const field=card.querySelector('input');assert.equal(field.type,'password');field.value=token;
- card.querySelector('form').dispatchEvent(new window.Event('submit',{cancelable:true}));
- assert.equal(field.value,'');
+ assert.ok([...card.querySelectorAll('button')].some(button=>button.textContent==='Подключить Figma'));
+ if(oauthReturn){
+   assert.equal(location.search,'');
+   assert.equal(card.querySelector('details').open,false);
+   assert.ok(!requests.some(item=>item.path==='figma/connect'));
+ }else{
+   const field=card.querySelector('input');assert.equal(field.type,'password');field.value=token;
+   card.querySelector('form').dispatchEvent(new window.Event('submit',{cancelable:true}));
+   assert.equal(field.value,'');
+ }
  await wait(()=>card.textContent.includes('AB12CD'));
  [...card.querySelectorAll('button')].find(button=>button.textContent==='Проверить подключение').click();
  await wait(()=>card.textContent.includes('Fixture design'));
@@ -59,6 +67,6 @@ try {
  assert.equal(requests.filter(item=>item.path.endsWith('/tasks')||item.path.includes('/messages/stream')||item.path.includes('agent/browser')).length,0);
  assert.ok(!document.querySelector('#messages').textContent.includes('"tool"'));
  assert.ok(document.querySelector('#model-label').textContent.includes(model.replace('velia-','').toUpperCase()));
- console.log(JSON.stringify({ok:true,synthetic:true,model,checks:['password field cleared','plugin pairing and verification','main chat creates a frame','follow-up edits the same file','selected model preserved','credential absent from model context','internal plans hidden']}));
+ console.log(JSON.stringify({ok:true,synthetic:true,model,oauthReturn,checks:[oauthReturn?'OAuth return restores pairing without token input':'password field cleared','plugin pairing and verification','main chat creates a frame','follow-up edits the same file','selected model preserved','credential absent from model context','internal plans hidden']}));
 } catch(error){console.error(error);process.exitCode=1;}
 finally{dom.window.close();setTimeout(()=>process.exit(process.exitCode||0),10);}
