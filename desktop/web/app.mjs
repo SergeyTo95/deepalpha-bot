@@ -19,6 +19,7 @@ import {setupVoice} from "./voice.mjs";
 import {setupBackgroundTasks, taskAcknowledgement} from "./background-tasks.mjs";
 import {setupAutoloop, parseAutoloop} from './autoloop.mjs';
 import {setupIncomePlanner} from './income-planner.mjs';
+import {runFigmaAgent, wantsFigma} from './figma.mjs';
 const $ = (id) => document.getElementById(id);
 const icons = {
   attachment: "M21 11l-8 8a6 6 0 0 1-8-8l9-9a4 4 0 0 1 6 6l-9 9a2 2 0 0 1-3-3l8-8",
@@ -163,7 +164,16 @@ async function saveIncomePlan(plan) {
     'План открыт. Сохранение на устройстве недоступно. Его можно скачать в меню диалога.');
 }
 const voice = setupVoice({accountLanguage:()=>profile?.language||'', busy:()=>busy, toast, modelName:()=>MODELS[model], send:text=>{if(agentMode&&model==='velia-flash')setAgentMode(false);$("prompt").value=text;return generate(false, true);}});
-const features = setupFeatures({openIncomePlanner: showIncomePlanner, prepareAgentixChat:brief=>{
+const features = setupFeatures({openIncomePlanner: showIncomePlanner, prepareFigmaChat:()=>{
+  if(busy)throw new Error('Дождись завершения текущего ответа.');
+  if($('prompt').value.trim())throw new Error('В диалоге есть несохранённый текст. Сохрани или очисти его перед переходом.');
+  setAgentMode(false,true);
+  newChat();
+  const chat={id:crypto.randomUUID(),title:'Дизайн в Figma',updated:Date.now(),messages:[],figma:true};
+  chats.unshift(chat);currentId=chat.id;render();save();
+  toast('Опиши, что создать или изменить в подключённом макете Figma.');
+  $('prompt').focus();
+}, prepareAgentixChat:brief=>{
   if(busy)throw new Error('Дождись завершения текущего ответа.');
   if($('prompt').value.trim())throw new Error('В диалоге есть несохранённый текст. Сохрани или очисти его перед переходом.');
   setAgentMode(false,true);
@@ -966,7 +976,11 @@ async function generate(retry = false, voiceTurn = false) {
   // Project specification and code planning must use the normal Velia chat,
   // never a browser-only DSH execution with an isolated Chromium session.
   const candidate = retry ? current()?.messages?.filter(m=>m.role==='user').at(-1)?.content : text;
-  const detected=!retry && !agentMode && (medicalDraftMode?'medical_document':chatSpecialty(text,selectedFiles.map(item=>item.file)));
+  const figmaTurn = wantsFigma(candidate || '') || !agentMode && current()?.figma;
+  if(figmaTurn && !profile){openAuth();return;}
+  if(figmaTurn && selectedFiles.length){toast('Для задания Figma опиши изменения текстом.');return;}
+  if(figmaTurn && agentMode)setAgentMode(false,true);
+  const detected=!retry && !agentMode && !figmaTurn && (medicalDraftMode?'medical_document':chatSpecialty(text,selectedFiles.map(item=>item.file)));
   const specialty=detected==='research' && current()?.medicalNoSearch && /(?:по этим|по этому|по моим|по приложен|на основе этих|на основе моего|based on (?:my|this|these))/i.test(text)
     ? 'medical_document' : detected;
   if(specialty && !profile){openAuth();return;}
@@ -980,6 +994,8 @@ async function generate(retry = false, voiceTurn = false) {
   if(backgroundAgent&&!profile?.background_agent){toast(apiError('background_agent_unavailable'));return;}
   if (!retry && !text) return;
   let chat = current();
+  if(figmaTurn && chat?.remote){currentId=null;chat=null;}
+  if(figmaTurn && chat)chat.figma=true;
   if(specialty && chat && !chat.remote){currentId=null;chat=null;}
   if(backgroundAgent&&chat&&!chat.remote){currentId=null;chat=null;}
   if (retry) {
@@ -987,9 +1003,9 @@ async function generate(retry = false, voiceTurn = false) {
     chat.messages.pop();
   } else {
     if (!chat) {
-      if (!profile || agentMode&&!backgroundAgent) {
+      if (!profile || agentMode&&!backgroundAgent || figmaTurn) {
         chat = {id: crypto.randomUUID(), title: text.replace(/\s+/g, " ").slice(0, 70),
-          updated: Date.now(), messages: [], agent: agentMode};
+          updated: Date.now(), messages: [], agent: agentMode, ...(figmaTurn ? {figma:true} : {})};
       } else {
       setBusy(true);
       try {
@@ -1133,7 +1149,15 @@ async function generate(retry = false, voiceTurn = false) {
     else if (paintFrame === null) paintFrame = requestAnimationFrame(paint);
   };
   try {
-    if (agentMode) {
+    if (figmaTurn) {
+      answer.content = await runFigmaAgent({model:selected,user,
+        history:chat.messages.filter(message=>message!==answer),signal:abort.signal,request,
+        persist:()=>save(),
+        progress:text=>{$('generation-status').textContent=text;}});
+      answer.finish='stop';
+      if(voiceTurn)voice.update(answer.content);
+      queuePaint();scheduleSave();
+    } else if (agentMode) {
       const response = await request("agent/browser", payload, abort.signal);
       const data = await response.json();
       if (!response.ok || data.ok !== true) {

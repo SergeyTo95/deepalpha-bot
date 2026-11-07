@@ -20,6 +20,7 @@ from desktop.web_search import SEARCH, SOURCES, source_event
 
 WEB_CHAT = web.RequestKey("velia_browser_chat", bool)
 WEB_VOICE = web.RequestKey("velia_browser_voice", bool)
+WEB_FIGMA = web.RequestKey("velia_browser_figma", bool)
 WEB_MODEL = web.RequestKey("velia_browser_model", str)
 WEB_SESSION = web.RequestKey("velia_browser_session", object)
 COOKIE = "__Host-velia-web"
@@ -55,7 +56,8 @@ def prepare_web_payload(request, data, *, search_enabled=False):
     request[WEB_MODEL] = data["model"]
     voice_turn = bool(data.get("voice_turn"))
     request[WEB_VOICE] = voice_turn
-    request[SEARCH] = (data.get("web_search", search_enabled) if data["model"] == QUANTUM_ID
+    request[SEARCH] = False if request.get(WEB_FIGMA) else (
+        data.get("web_search", search_enabled) if data["model"] == QUANTUM_ID
         else search_enabled or bool(data.get("web_search")))
     free_config = free_models.configuration(data["model"].removeprefix("velia-"), voice=voice_turn)
     output_limit = (1024 if free_models.enabled() or data["model"] == QUANTUM_ID else 128) if voice_turn else 1024 if data["model"] == FLASH_ID else 8192 if data["model"] == QUANTUM_ID else 4096
@@ -315,6 +317,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             session.selected_model_inputs = identity.get("selected_model_inputs") is True
             previous = decode(request)
             if previous:
+                figma_bridge.disconnect((str(previous.user_id), previous.id))
                 sessions.pop(previous.id, None)
                 revoked[previous.id] = previous.expires
             sessions[session.id] = session
@@ -329,6 +332,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
         incoming = decode(request)
         session = sessions.get(incoming.id, incoming) if incoming else None
         if session:
+            figma_bridge.disconnect((str(session.user_id), session.id))
             async with session.lock:
                 sessions.pop(session.id, None)
                 revoked[session.id] = session.expires
@@ -351,6 +355,10 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             forwarded = request.clone(headers=headers)
             forwarded[WEB_CHAT] = True
             forwarded[WEB_SESSION] = session
+            if request.path == "/web-api/v1/figma/plan":
+                if not figma_bridge.status((str(session.user_id), session.id))["connected"]:
+                    return error("figma_connect_required", 409)
+                forwarded[WEB_FIGMA] = True
             return await handlers["complete"](forwarded)
         except AuthenticationUnavailable:
             return error("authentication_unavailable", 503)
@@ -461,7 +469,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
 
     async def asset(request):
         name = request.match_info.get("name", "index.html")
-        if name not in {"index.html", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "features.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
+        if name not in {"index.html", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "features.mjs", "figma.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
             raise web.HTTPNotFound()
         response = web.FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
         response.headers.update({"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
@@ -477,6 +485,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     app.router.add_post("/web-api/v1/auth/exchange", login)
     app.router.add_post("/web-api/v1/auth/logout", logout)
     app.router.add_post("/web-api/v1/chat/completions", chat)
+    app.router.add_post("/web-api/v1/figma/plan", chat)
     app.router.add_post("/web-api/v1/agent/browser", browser_agent)
     app.router.add_post("/web-api/v1/agent/browser/takeover", browser_takeover_state)
     app.router.add_post("/web-api/v1/agent/browser/takeover/action", browser_takeover_action)
@@ -486,6 +495,8 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
         handlers=handlers, web_search=web_search, origin=origin)
     from desktop.voice_routes import setup_voice_routes
     setup_voice_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response, origin=origin)
+    from desktop.figma_routes import setup_figma_routes
+    figma_bridge = setup_figma_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response)
     from desktop.account_routes import setup_account_routes
     from desktop.feature_routes import setup_feature_routes
     setup_feature_routes(app, session_for=session_for, same_origin=same_origin, upstream=upstream,
