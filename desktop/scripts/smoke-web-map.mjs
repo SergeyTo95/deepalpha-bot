@@ -31,5 +31,11 @@ try{
   assert.equal(preview.querySelectorAll('.leaflet-marker-icon').length,2);assert.ok(!preview.querySelector('.chat-map-preview').hidden);
   assert.equal(new URL(preview.querySelector('a').href).searchParams.get('travelmode'),'walking');
   previewController.abort();assert.ok(!preview.querySelector('.leaflet-pane'));
+  const planController=new AbortController();let opened;
+  const planData={version:1,places:data.places,display:['p0'],route:null,visitPlan:{date:'2026-11-08',timezone:'Europe/Istanbul',status:'all',total:1,rows:[{ref:'visit-ref',visitId:'visit-id',placeRef:'p0',title:'Анталия',address:'Адрес клиента',date:'2026-11-08',time:'10:00',timezone:'Europe/Istanbul',status:'done',task:'Передать заказ',result:'Заказ принят'}]}};
+  const planView=mapResultNode(planData,{signal:planController.signal,autoOpen:true,openPlaces:value=>opened=value});document.body.append(planView);
+  for(let i=0;i<50&&!planView.querySelector('.leaflet-marker-icon');i++)await new Promise(resolve=>setTimeout(resolve,10));
+  assert.ok(planView.querySelector('.chat-visit-list').textContent.includes('Заказ принят'));assert.equal(planView.querySelectorAll('.leaflet-marker-icon').length,1);
+  [...planView.querySelectorAll('button')].find(b=>b.textContent==='Открыть план').click();assert.deepEqual(opened,{tab:'visits',date:'2026-11-08'});planController.abort();
   console.log(JSON.stringify({ok:true,synthetic:true,checks:['real Leaflet 1.9.4 initializes','OSM attribution and per-tile referrer','saved point markers and straight-line comparison','map click opens place editor','no implicit geolocation','abort removes map']}));
 }finally{controller.abort();dom.window.close();}

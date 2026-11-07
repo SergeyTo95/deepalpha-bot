@@ -1,3 +1,4 @@
+import {visitSummary} from './visits.mjs';
 import {wantsMap,runMapAgent,mapMessageContext} from './map-agent.mjs';
 import {mapResultNode} from './map-result.mjs';
 import {Notebook,notebookCommand} from './notebook.mjs';
@@ -175,7 +176,7 @@ const features = setupFeatures({notebook,discussNote:entry=>{
   if(busy)return;
   if($('prompt').value.trim()){toast('В чате есть черновик. Сохрани или очисти его перед переходом.');return;}
   features.close();setAgentMode(false,true);newChat();
-  $('prompt').value='Помоги с записью «'+entry.title+'»:\n'+(entry.kind==='list'?entry.items.map(item=>(item.done?'[x] ':'[ ] ')+item.text).join('\n'):entry.content);resizePrompt();$('prompt').focus();
+  $('prompt').value='Помоги с записью «'+entry.title+'»:\n'+(entry.kind==='visit'?visitSummary(entry)+'\n'+entry.address+'\nЧасовой пояс: '+entry.timezone:entry.kind==='list'?entry.items.map(item=>(item.done?'[x] ':'[ ] ')+item.text).join('\n'):entry.content);resizePrompt();$('prompt').focus();
 },openIncomePlanner: showIncomePlanner, prepareConnectionChat:provider=>{
   if(busy)throw new Error('Дождись завершения текущего ответа.');
   if($('prompt').value.trim())throw new Error('В диалоге есть несохранённый текст. Сохрани или очисти его перед переходом.');
@@ -417,7 +418,7 @@ function messageNode(message, index) {
         ? '<div class="thinking" aria-label="Велия готовит ответ"><span></span><span></span><span></span></div>'
         : "";
   article.append(content);
-  if(message.mapData){const controller=new AbortController();mapViews.push(controller);const view=mapResultNode(message.mapData,{signal:controller.signal,autoOpen:!busy&&!message.pending&&index===current().messages.length-1,toast,openPlaces:()=>features.open('map')});if(view)article.append(view);}
+  if(message.mapData){const controller=new AbortController();mapViews.push(controller);const view=mapResultNode(message.mapData,{signal:controller.signal,autoOpen:!busy&&!message.pending&&index===current().messages.length-1,toast,openPlaces:draft=>features.open('map',draft)});if(view)article.append(view);}
   if(message.fileNames?.length){const files=document.createElement('div');files.className='message-files';message.fileNames.forEach((name,i)=>{const id=message.attachmentIds?.[i],available=!!fileTools.get(id),item=document.createElement(available?'button':'span');item.textContent=name;if(available){item.type='button';item.onclick=()=>{const original=fileTools.get(id);if(original)fileTools.previewFile(original).catch(()=>toast('Не удалось открыть файл.'));else toast('Оригинал больше не доступен в этой сессии. Прикрепи файл заново.');};}else item.title='Оригинал недоступен для просмотра в этой сессии.';files.append(item);});article.append(files);}
   if (message.role === "assistant" && message.search) {
     const sources = sourceNode(message.search);
@@ -1207,7 +1208,7 @@ async function generate(retry = false, voiceTurn = false) {
   };
   try {
     if(mapTurn){
-      const result=await runMapAgent({model:selected,user,history:chat.messages.filter(message=>message!==answer),notebook,signal:abort.signal,request,persist:()=>save(),progress:text=>{$('generation-status').textContent=text;},onData:data=>{answer.mapData=data;scheduleSave();}});
+      const result=await runMapAgent({model:selected,language:profile?.language||navigator.language||'ru',user,history:chat.messages.filter(message=>message!==answer),notebook,signal:abort.signal,request,persist:()=>save(),progress:text=>{$('generation-status').textContent=text;},onData:data=>{answer.mapData=data;scheduleSave();}});
       answer.content=result.text;answer.mapData=result.data;answer.finish='stop';if(voiceTurn)voice.update(answer.content);queuePaint();scheduleSave();
     } else if (connectionProvider) {
       answer.content=await runCloudAgent({provider:connectionProvider,model:selected,user,

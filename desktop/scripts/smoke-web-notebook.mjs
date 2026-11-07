@@ -9,7 +9,7 @@ Object.defineProperty(globalThis,'navigator',{value:window.navigator,configurabl
 window.HTMLDialogElement.prototype.showModal=function(){this.open=true;};
 window.HTMLDialogElement.prototype.close=function(){this.open=false;};
 const account='a'.repeat(24),profile={ok:true,account,history_cache_key:'b'.repeat(64),language:'ru',credits:10,free_api_tiers:true,background_tasks:true,browser_agent:true,models:['velia-flash','velia-quantum','velia-pro']};
-const calls=[];let snapshot={revision:0,record:null},mapClick,mapRemoved=0,mapPlans=0,mapRefs;
+const calls=[];let snapshot={revision:0,record:null},mapClick,mapRemoved=0,mapPlans=0,mapRefs,visitRef;
 window.L={
   map:()=>({setView(){return this;},invalidateSize(){},fitBounds(){return this;},attributionControl:{setPrefix(){}},on(name,action){if(name==='click')mapClick=action;},remove(){mapRemoved++;}}),
   tileLayer:()=>({addTo(){return this;}}),layerGroup:()=>({addTo(){return this;},clearLayers(){}}),divIcon:value=>value,
@@ -39,6 +39,7 @@ globalThis.fetch=async(url,options={})=>{
     if(mapPlans===4)plan={answer:'Сохранила второе место.'};
     if(mapPlans===5)plan={tool:'prepare_route',arguments:{place_ids:mapRefs,mode:'walking'}};
     if(mapPlans===6)plan={answer:'Подготовила ссылку на пеший маршрут.'};
+    if(mapPlans===7)plan={tool:'schedule_visit',arguments:{place_id:mapRefs[1],date:'tomorrow',time:'10:00',task:'Передать заказ'}};
     assert.ok(plan);mapPlans++;
     return new Response('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify(plan)},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n',{headers:{'Content-Type':'text/event-stream'}});
   }
@@ -73,16 +74,25 @@ try{
   const nav=[...document.querySelectorAll('.chat-map-result a')].find(a=>a.textContent==='Открыть маршрут в навигаторе');assert.equal(new URL(nav.href).searchParams.get('travelmode'),'walking');
   assert.ok(new URL(nav.href).searchParams.get('destination').includes('30.8'));
   await send('Сколько будет два плюс два?','Обычный ответ: четыре');assert.equal(mapPlans,7);assert.ok(document.querySelector('#messages').textContent.includes('Исходный ответ до карты'));const normal=calls.find(call=>call.path==='chat/completions');assert.ok(normal.data.messages.some(m=>m.content.includes('Исходный ответ до карты')));assert.ok(normal.data.messages.some(m=>m.content.includes('Аэропорт Анталии')));
-  buttons(document.querySelector('.chat-map-result'),'Мои места')[0].click();await wait(()=>document.querySelector('.map-toolbar'));
+  await send('Запланируй визит к этому месту на завтра в 10:00: передать заказ','Запланировала визит');
+  await send('Собери мои выезды на завтра','Выездов на ');
+  assert.ok(document.querySelector('.chat-visit-list').textContent.includes('Передать заказ'));
+  await send('Отметь первый визит выполненным. Результат: заказ передан','Отметила визит выполненным');assert.equal(mapPlans,8);
+  await send('Составь сообщение клиенту об итогах','Обычный ответ: четыре');
+  assert.ok(calls.filter(call=>call.path==='chat/completions').at(-1).data.messages.some(m=>m.content.toLocaleLowerCase().includes('заказ передан')));
+  const lastPlan=[...document.querySelectorAll('.chat-map-result')].findLast(card=>buttons(card,'Открыть план').length);buttons(lastPlan,'Открыть план')[0].click();await wait(()=>document.querySelector('.visit-card'));
+  assert.ok(document.querySelector('.visit-card').textContent.includes('Выполнен'));assert.ok(document.querySelector('.visit-card').textContent.toLocaleLowerCase().includes('заказ передан'));
+  buttons(document.querySelector('.visit-card'),'Изменить')[0].click();const visitEditor=document.querySelector('.visit-editor');visitEditor.querySelector('input[type="time"]').value='11:30';visitEditor.dispatchEvent(new window.Event('submit',{cancelable:true}));await wait(()=>document.querySelector('.visit-card')?.textContent.includes('11:30'));
+  buttons(document,'Места')[0].click();await wait(()=>document.querySelector('.map-toolbar'));
   document.querySelector('[aria-label="Найти на карте"]').value='Анталия';document.querySelector('.map-toolbar').dispatchEvent(new window.Event('submit',{cancelable:true}));await wait(()=>document.querySelector('.map-results')?.textContent.includes('Анталия'));
   buttons(document.querySelector('.map-toolbar'),'Выбрать точку')[0].click();mapClick({latlng:{lat:36.9,lng:30.7}});
   await wait(()=>document.querySelector('.notebook-editor'));
   const editor=document.querySelector('.notebook-editor');editor.querySelector('input').value='Клиент Анталия';editor.dispatchEvent(new window.Event('submit',{cancelable:true}));
   await wait(()=>document.querySelector('.feature-body')?.textContent.includes('Клиент Анталия'));
   const route=[...document.querySelectorAll('a')].find(link=>link.textContent==='Маршрут в навигаторе');assert.equal(new URL(route.href).origin,'https://www.google.com');
-  document.querySelector('[data-section="notes"]').click();await wait(()=>document.querySelectorAll('.notebook-card').length===7);assert.ok(mapRemoved>0);
-  assert.ok(!calls.some(call=>call.path!=='map/plan'&&call.path!=='chat/completions'&&/\/plan$|agent\/browser/.test(call.path)));assert.equal(calls.filter(call=>call.path==='chat/completions').length,1);
+  document.querySelector('[data-section="notes"]').click();await wait(()=>document.querySelectorAll('.notebook-card').length===8);assert.ok(mapRemoved>0);
+  assert.ok(!calls.some(call=>call.path!=='map/plan'&&call.path!=='chat/completions'&&/\/plan$|agent\/browser/.test(call.path)));assert.equal(calls.filter(call=>call.path==='chat/completions').length,2);
   assert.equal(calls.filter(call=>call.path==='map/search').length,2);
-  console.log(JSON.stringify({ok:true,synthetic:true,checks:['notes saved from Flash, Quantum and PRO without model requests','ciphertext sent to storage','list and favorite in notebook','search own notes','map tools run through selected model from chat','follow-up saves second geocoder result with comment','requested walking route uses actual coordinates','server chat context retained in browser continuation','unrelated question returns to normal chat with actual map context','selected coordinate saved as a place','external navigation','map cleanup on section change']}));
-}catch(error){console.error(error);process.exitCode=1;}
+  console.log(JSON.stringify({ok:true,synthetic:true,checks:['notes saved from Flash, Quantum and PRO without model requests','ciphertext sent to storage','list and favorite in notebook','search own notes','map tools run through selected model from chat','follow-up saves second geocoder result with comment','requested walking route uses actual coordinates','server chat context retained in browser continuation','unrelated question returns to normal chat with actual map context','selected coordinate saved as a place','external navigation','visit scheduled and listed from chat','referenced visit completed with result','visit plan opens inline and from My places','manual visit time edit persists','map cleanup on section change']}));
+}catch(error){console.error(error);console.error(JSON.stringify({mapPlans,lastMessage:document.querySelector('#messages')?.lastElementChild?.textContent}));process.exitCode=1;}
 finally{dom.window.close();setTimeout(()=>process.exit(process.exitCode||0),10);}

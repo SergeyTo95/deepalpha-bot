@@ -1,3 +1,4 @@
+import {mountVisits} from './visit-ui.mjs';
 import {mountNotebook} from './notebook-ui.mjs';
 import {mountMap} from './map.mjs';
 import {renderMarkdown, apiError} from './core.mjs';
@@ -283,8 +284,8 @@ export function setupFeatures({notebook,discussNote=()=>{},signedIn, openAuth, o
     const head = node('div', undefined, 'feature-header'), heading=node('div'); heading.append(node('span','ВОЗМОЖНОСТИ VELIA','feature-eyebrow'),node('h1', SECTIONS.find(s=>s[0]===name)?.[1] || 'VELIA'),node('p',descriptions[name])); head.append(heading, button('К диалогу', close)); heading.querySelector('h1').tabIndex=-1; root.append(head); heading.querySelector('h1').focus({preventScroll:true});
     const body = node('div',undefined,'feature-body'); root.append(body); const loading=node('p','Загрузка…','feature-empty'); loading.setAttribute('role','status'); body.append(loading);
     try {
-      if (name === 'notes') {body.replaceChildren();await mountNotebook(body,{notebook,toast,signal:controller.signal,discuss:discussNote,openMap:entry=>open('map',entry)});return;}
-      if (name === 'map') {body.replaceChildren();await mountMap(body,{notebook,toast,signal:controller.signal,draft});return;}
+      if (name === 'notes') {body.replaceChildren();await mountNotebook(body,{notebook,toast,signal:controller.signal,discuss:discussNote,openMap:entry=>open('map',entry.kind==='visit'?{title:entry.title,address:entry.address,lat:entry.lat,lon:entry.lon}:entry)});return;}
+      if (name === 'map') {body.replaceChildren();const tabs=node('div',undefined,'feature-actions');tabs.append(button('Места',()=>open('map')),button('Выезды',()=>open('map',{tab:'visits'})));body.append(tabs);const content=node('div');body.append(content);if(draft.tab==='visits')await mountVisits(content,{notebook,toast,signal:controller.signal,draft,discuss:discussNote,openMap:entry=>open('map',entry.kind==='visit'?{title:entry.title,address:entry.address,lat:entry.lat,lon:entry.lon}:entry)});else await mountMap(content,{notebook,toast,signal:controller.signal,draft});return;}
       if (name === 'voice') {body.replaceChildren(); voiceSettings(body); return;}
       if (name === 'agentix') {
         mountAgentix(body,{
