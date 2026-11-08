@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {reminderDraft,readyDraft,wantsPulse,setupPulse,pulseDateReply} from '../pulse.mjs';
+import {reminderDraft,readyDraft,wantsPulse,setupPulse,pulseDateReply,pulseMessageContext} from '../pulse.mjs';
 import {runPulseCommand} from '../pulse-agent.mjs';
 const instant=Date.parse('2026-11-08T21:30:00Z'),timezone='Europe/Istanbul';
 function draft(text,pending){return reminderDraft(text,{now:instant,timezone,pending});}
@@ -44,4 +44,11 @@ test('late Pulse responses after logout cannot restore another account inbox',as
 test('a cookie account change cannot place another user inbox under the old profile',async()=>{
   const previousDocument=globalThis.document;globalThis.document={addEventListener(){},hidden:false};let changed=false;
   try{const api=setupPulse({profile:()=>({account:'a'.repeat(24)}),accountChanged:()=>changed=true,request:async()=>({account:'b'.repeat(24),items:[{title:'another-account-private'}],notifications:[]})});await assert.rejects(api.sync(),{name:'AbortError'});assert.equal(changed,true);assert.deepEqual(api.state().items,[]);}finally{globalThis.document=previousDocument;}
+});
+
+
+test('ordinary chat receives only already displayed reminders for follow-up planning',()=>{
+  const message={role:'assistant',content:'Нашла напоминание.',pulseIds:['own-selected']};
+  const rows=[{item_id:'own-selected',title:'Позвонить клиенту',state:'active',due_at:1794200000,timezone:'Europe/Istanbul',schedule:{kind:'once',date:'2026-11-09',time:'10:00'}},{item_id:'unrelated',title:'UNRELATED_PRIVATE_REMINDER',state:'active'}];
+  const context=pulseMessageContext(message,rows);assert.ok(context.includes('Позвонить клиенту'));assert.ok(!context.includes('UNRELATED_PRIVATE_REMINDER'));assert.equal(pulseMessageContext(message,[]),message.content);
 });
