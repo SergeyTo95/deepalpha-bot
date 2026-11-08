@@ -64,6 +64,8 @@ def write_notebook(user_id,revision,record):
 
 
 def setup_notebook_routes(app,routes_module):
+    from services.velia_notebook_materials import setup_material_routes
+    setup_material_routes(app,routes_module)
     slots=asyncio.Semaphore(8)
     async def handle(request):
         if not routes_module._mobile_api_available():return routes_module._disabled_response()
