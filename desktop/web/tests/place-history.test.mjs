@@ -64,3 +64,11 @@ test('a pending metadata write recovers the stored original, while logout blocks
   f.book.request=async(path,options)=>{if(path==='notebook/materials/'+id){started();return new Promise(resolve=>finish=resolve);}return original(path,options);};
   const pending=files.read(id);await waiting;f.book.lock();finish({owner:'7',record:f.materials.get(id)});await assert.rejects(pending,{name:'AbortError'});assert.equal(f.book.key,null);
 });
+
+
+test('opening the already selected saved place reads real history without a planner call',async()=>{
+  const f=fixture();await f.book.unlock(account);await f.book.save(point);await addPlaceNote(f.book,point.id,'Оплата по пятницам','agreement');
+  const user={role:'user',content:'Покажи историю этого места',requestId:crypto.randomUUID()},known={ref:'p-client',savedId:point.id,title:point.title,address:point.address,lat:point.lat,lon:point.lon};
+  const result=await runMapAgent({model:'velia-flash',user,history:[{role:'assistant',content:'Выбрано место',mapData:{version:1,places:[known],display:[known.ref],route:null}},user],notebook:f.book,signal:new AbortController().signal,request:async()=>{throw Error('Simple reads must not call a model');}});
+  assert.equal(result.text,'Показала историю места.');assert.equal(result.data.placeHistory.items[0].text,'Оплата по пятницам');
+});
