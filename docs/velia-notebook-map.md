@@ -135,3 +135,49 @@ This exercises the app with a stubbed map SDK and geocoder. Run
 `desktop/scripts/smoke-web-map.mjs` with the same environment variable for the
 real vendored Leaflet SDK in JSDOM. Neither replaces live mobile browser checks
 of tiles, geolocation permission and navigation.
+
+## Place history and original materials
+
+A saved place has a single card with its comment, linked notes/agreements,
+visits/results, and original photo/document files. Notes link by `placeId`;
+visits with an explicit place ID remain separate even if two places share
+coordinates. Legacy visits without an ID match the exact name and coordinates.
+Existing unlinked notes can be linked explicitly. Deleting a place preserves
+its records in Notes; delete individual materials there to reclaim their space.
+
+Main-chat tools `get_place_history`, `add_place_note`, `attach_place_materials`
+use actual place references. Only explicitly selected-place history goes to the
+selected model; file contents and unrelated notes do not. Public history is
+limited to 12 clipped items and total counts. The full card has the complete
+account data. This is saved work history, not an archive of every prior chat.
+Attachment commands work with Flash, Quantum and PRO independently of the model's
+file-analysis capability; analyzing a file remains a separate, authorized flow.
+
+The browser encrypts each original with AES-GCM using its existing account key,
+a fresh 96-bit nonce, and AAD bound to the user and material UUID. Filenames,
+MIME type, size and captions are stored inside the encrypted notebook snapshot.
+The backend stores only opaque immutable ciphertext in a separate table, keyed
+by authenticated user and UUID. Reads and deletion require the owner's session;
+mutations also check the web account fingerprint. There are no public file URLs.
+The existing encryption-at-rest/key-backup caveat above still applies.
+
+Supported originals: JPEG, PNG, WebP, PDF, DOCX, TXT/MD/CSV/JSON; at most 5 MiB per
+file, 100 files and 50 MiB of ciphertext per account, up to four files per action.
+The per-user PostgreSQL owner row is locked while checking quota and mutating.
+The gateway reads bounded authenticated JSON and permits larger upstream
+responses only for the exact material endpoint. Authentication body limits stay
+unchanged. Previews use temporary object URLs cleared on dialog close/logout.
+
+Upload metadata is saved as `pending` before transferring ciphertext and becomes
+`ready` only after both storage and final notebook write succeed. Interrupted
+uploads remain visible. Opening a pending material recovers it if the original
+arrived; otherwise delete the pending record and attach again. Deletion removes
+the ciphertext before deleting notebook metadata; retry is idempotent if a
+revision conflict/network failure interrupted the second step. No unreferenced
+file is intentionally uploaded before a persistent notebook record exists.
+
+Release the existing backend with `services/velia_notebook_materials.py` before
+the gateway. Its two tables initialize lazily through the same database helper
+as the notebook. The stable encryption secret is unchanged; no new service,
+bucket, model or GPU is needed. Refresh open browser tabs after the gateway
+release. Calendar reminders and road optimization are outside this release.

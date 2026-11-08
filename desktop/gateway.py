@@ -117,7 +117,7 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
                 body = bytearray()
                 async for chunk in response.content.iter_chunked(8192):
                     body.extend(chunk)
-                    limit = MAX_AUTH_RESPONSE if path.startswith('/mobile-api/v1/auth/') else 2 * 1024 * 1024
+                    limit = MAX_AUTH_RESPONSE if path.startswith('/mobile-api/v1/auth/') else (8 * 1024 * 1024 if re.fullmatch(r'/mobile-api/v1/notebook/materials/[a-f0-9-]{36}', path) else 2 * 1024 * 1024)
                     if len(body) > limit:
                         raise AuthenticationUnavailable()
                 result = json.loads(body)

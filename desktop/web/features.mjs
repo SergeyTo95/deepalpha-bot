@@ -1,3 +1,5 @@
+import {mountPlaceCard} from './place-card.mjs';
+import {NotebookMaterials} from './notebook-materials.mjs';
 import {mountVisits} from './visit-ui.mjs';
 import {mountNotebook} from './notebook-ui.mjs';
 import {mountMap} from './map.mjs';
@@ -55,6 +57,7 @@ export async function featureRequest(path, {method = 'GET', data, file, digest, 
         403:'Это действие недоступно для твоего аккаунта.',404:'Материал не найден. Обнови список.',
         409:'Данные уже изменились. Обнови раздел и повтори действие.',413:'Файл слишком большой. Выбери файл меньшего размера.',
         429:'Слишком много запросов. Подожди немного и повтори.',503:'Раздел временно недоступен. Попробуй позже.'};
+      if(result.error==='notebook_material_quota')throw Object.assign(new Error('Хранилище материалов заполнено: до 50 МБ и 100 файлов. Удали ненужные материалы.'),{status:413});
       const fileErrors = ['selected_model_files_unavailable','image_has_no_readable_text','document_has_no_readable_text','attachment_ocr_unavailable',
         'attachment_ocr_timeout','attachment_ocr_failed','document_ocr_too_many_pages'];
       const error = new Error(fileErrors.includes(result.error) ? apiError(result.error)
@@ -220,7 +223,7 @@ function display(value, depth = 0) {
   return box;
 }
 
-export function setupFeatures({notebook,discussNote=()=>{},signedIn, openAuth, openIncomePlanner, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, openTopic, prepareAgentixChat=()=>{}, prepareFigmaChat=()=>{}, prepareConnectionChat=()=>{}, taskState=()=>null, prepareTask=()=>{}, onUnauthorized = () => {}}) {
+export function setupFeatures({notebook,previewFile=async()=>{},discussNote=()=>{},signedIn, openAuth, openIncomePlanner, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, openTopic, prepareAgentixChat=()=>{}, prepareFigmaChat=()=>{}, prepareConnectionChat=()=>{}, taskState=()=>null, prepareTask=()=>{}, onUnauthorized = () => {}}) {
   const root = document.getElementById('feature-view'), nav = document.getElementById('feature-nav');
   let epoch = 0, section = null, controller = null, inlineBody = null, cleanup=()=>{};
   const close = () => {epoch++; cleanup();cleanup=()=>{};controller?.abort(); inlineBody?.remove(); inlineBody=null; root.replaceChildren(); root.hidden = true; section = null; nav.querySelectorAll('button').forEach(b=>b.removeAttribute('aria-current')); document.getElementById('conversation-scroll').hidden = false; document.querySelector('.composer-area').hidden = false;};
@@ -284,8 +287,8 @@ export function setupFeatures({notebook,discussNote=()=>{},signedIn, openAuth, o
     const head = node('div', undefined, 'feature-header'), heading=node('div'); heading.append(node('span','ВОЗМОЖНОСТИ VELIA','feature-eyebrow'),node('h1', SECTIONS.find(s=>s[0]===name)?.[1] || 'VELIA'),node('p',descriptions[name])); head.append(heading, button('К диалогу', close)); heading.querySelector('h1').tabIndex=-1; root.append(head); heading.querySelector('h1').focus({preventScroll:true});
     const body = node('div',undefined,'feature-body'); root.append(body); const loading=node('p','Загрузка…','feature-empty'); loading.setAttribute('role','status'); body.append(loading);
     try {
-      if (name === 'notes') {body.replaceChildren();await mountNotebook(body,{notebook,toast,signal:controller.signal,discuss:discussNote,openMap:entry=>open('map',entry.kind==='visit'?{title:entry.title,address:entry.address,lat:entry.lat,lon:entry.lon}:entry)});return;}
-      if (name === 'map') {body.replaceChildren();const tabs=node('div',undefined,'feature-actions');tabs.append(button('Места',()=>open('map')),button('Выезды',()=>open('map',{tab:'visits'})));body.append(tabs);const content=node('div');body.append(content);if(draft.tab==='visits')await mountVisits(content,{notebook,toast,signal:controller.signal,draft,discuss:discussNote,openMap:entry=>open('map',entry.kind==='visit'?{title:entry.title,address:entry.address,lat:entry.lat,lon:entry.lon}:entry)});else await mountMap(content,{notebook,toast,signal:controller.signal,draft});return;}
+      if (name === 'notes') {body.replaceChildren();await mountNotebook(body,{notebook,toast,signal:controller.signal,discuss:discussNote,openMaterial:async entry=>{try{const file=await new NotebookMaterials(notebook).read(entry.id);if(!controller.signal.aborted)await previewFile(file);}catch(error){if(!controller.signal.aborted)toast(error.message);}},openPlace:entry=>open('map',{placeId:entry.id}),openMap:entry=>open('map',entry.kind==='visit'?{title:entry.title,address:entry.address,lat:entry.lat,lon:entry.lon}:entry)});return;}
+      if (name === 'map') {body.replaceChildren();if(draft.placeId){await mountPlaceCard(body,{notebook,placeId:draft.placeId,signal:controller.signal,toast,previewFile,open,discuss:discussNote});return;}const tabs=node('div',undefined,'feature-actions');tabs.append(button('Места',()=>open('map')),button('Выезды',()=>open('map',{tab:'visits'})));body.append(tabs);const content=node('div');body.append(content);if(draft.tab==='visits')await mountVisits(content,{notebook,toast,signal:controller.signal,draft,discuss:discussNote,openMap:entry=>open('map',entry.kind==='visit'?{title:entry.title,address:entry.address,lat:entry.lat,lon:entry.lon}:entry)});else await mountMap(content,{notebook,toast,signal:controller.signal,draft,openPlace:place=>open('map',{placeId:place.id})});return;}
       if (name === 'voice') {body.replaceChildren(); voiceSettings(body); return;}
       if (name === 'agentix') {
         mountAgentix(body,{

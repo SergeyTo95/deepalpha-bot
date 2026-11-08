@@ -2,7 +2,7 @@ import {VISIT_STATUSES} from './visits.mjs';
 import {loadMapLibrary} from './map.mjs';
 import {validMapData,routeUrl} from './map-agent.mjs';
 export function mapResultNode(data,{signal,autoOpen=false,toast=()=>{},openPlaces=()=>{},loadLibrary=loadMapLibrary}){
-  if(!validMapData(data)||!data.display.length&&!data.visitPlan)return null;
+  if(!validMapData(data)||!data.display.length&&!data.visitPlan&&!data.placeHistory)return null;
   const node=(tag,text)=>{const e=document.createElement(tag);if(text)e.textContent=text;return e;};
   const root=node('section');root.className='chat-map-result';root.setAttribute('aria-label','Места из поручения');
   const places=data.display.map(id=>data.places.find(p=>p.ref===id));
@@ -14,7 +14,8 @@ export function mapResultNode(data,{signal,autoOpen=false,toast=()=>{},openPlace
     if(!plan.total)root.append(node('p','Выездов на эту дату с выбранным статусом нет.'));root.append(visits);
     if(plan.total>plan.rows.length)root.append(node('p','Показано '+plan.rows.length+' из '+plan.total+'. Полный список — в разделе «Выезды».'));
   }
-  const list=node('ol');for(const place of places){const item=node('li'),title=node('strong',place.title);item.append(title,node('p',place.address));if(place.savedId)item.append(node('small','Сохранено в моих местах'));list.append(item);}if(plan&&places.length){const details=node('details'),summary=node('summary','Места на карте · '+places.length);details.append(summary,list);root.append(details);}else if(!plan)root.append(list);
+  const list=node('ol');for(const place of places){const item=node('li'),title=node('strong',place.title);item.append(title,node('p',place.address));if(place.savedId){item.append(node('small','Сохранено в моих местах'));const history=node('button','История и материалы');history.type='button';history.onclick=()=>openPlaces({placeId:place.savedId});item.append(history);}list.append(item);}if(plan&&places.length){const details=node('details'),summary=node('summary','Места на карте · '+places.length);details.append(summary,list);root.append(details);}else if(!plan)root.append(list);
+  if(data.placeHistory){const details=node('div');details.className='chat-place-history';details.append(node('strong','История места · '+data.placeHistory.total));for(const entry of data.placeHistory.items){const row=node('p',entry.kind==='visit'?[entry.date,entry.time,entry.task,entry.status==='done'?'Выполнен':entry.status==='cancelled'?'Отменён':'Запланирован',entry.result].filter(Boolean).join(' · '):entry.kind==='material'?'Файл: '+entry.name+' · '+(entry.upload_status==='ready'?'Сохранён':'Загрузка не завершена')+(entry.caption?' · '+entry.caption:''):(entry.type==='agreement'?'Договорённость: ':'Заметка: ')+entry.text);details.append(row);}if(data.placeHistory.total>data.placeHistory.items.length)details.append(node('p','Полная история доступна в карточке места.'));root.append(details);}
   const actions=node('div');actions.className='feature-actions';const toggle=node('button','Показать карту');toggle.type='button';toggle.setAttribute('aria-expanded','false');
   const saved=node('button',plan?'Открыть план':'Мои места');saved.type='button';saved.onclick=()=>openPlaces(plan?{tab:'visits',date:plan.date}:{});if(places.length)actions.append(toggle);actions.append(saved);
   if(data.route){const route=node('a','Открыть маршрут в навигаторе');route.href=routeUrl(data.route.ids.map(id=>data.places.find(p=>p.ref===id)),data.route.mode);route.target='_blank';route.rel='noopener noreferrer';actions.append(route);root.append(node('p','Порядок точек задан в поручении. Дороги и время поездки рассчитает навигатор.'));}

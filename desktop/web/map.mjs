@@ -20,7 +20,7 @@ export async function loadMapLibrary(){
   });
   return leaflet;
 }
-export async function mountMap(parent,{notebook,toast,signal,draft={},loadLibrary=loadMapLibrary}){
+export async function mountMap(parent,{notebook,toast,signal,draft={},openPlace=()=>{},loadLibrary=loadMapLibrary}){
   const node=(tag,text,cl)=>{const e=document.createElement(tag);if(text)e.textContent=text;if(cl)e.className=cl;return e;};
   const button=(title,action)=>{const b=node('button',title);b.type='button';b.onclick=action;return b;};
   const toolbar=node('form',null,'map-toolbar'),query=node('input');query.type='search';query.placeholder='Место или адрес';query.required=true;query.minLength=2;query.maxLength=200;query.setAttribute('aria-label','Найти на карте');query.value=draft.query||'';
@@ -47,9 +47,9 @@ export async function mountMap(parent,{notebook,toast,signal,draft={},loadLibrar
       for(const place of places){
         if(savedMarkers){
           const pin=L.marker([place.lat,place.lon],{icon:L.divIcon({className:'map-pin',html:'<span></span>',iconSize:[22,22],iconAnchor:[11,22]})}).addTo(savedMarkers);
-          const popup=node('div');popup.append(node('strong',place.title),node('p',place.content||''),button('Изменить',()=>edit(place)),navigate(place,position));pin.bindPopup(popup);
+          const popup=node('div');popup.append(node('strong',place.title),node('p',place.content||''),button('История и материалы',()=>openPlace(place)),button('Изменить',()=>edit(place)),navigate(place,position));pin.bindPopup(popup);
         }
-        const row=node('div',null,'map-place');row.append(button(place.title,()=>show(place)),navigate(place,position),button('Изменить',()=>edit(place)));saved.append(row);
+        const row=node('div',null,'map-place');row.append(button(place.title,()=>show(place)),navigate(place,position),button('История и материалы',()=>openPlace(place)),button('Изменить',()=>edit(place)));saved.append(row);
       }
       if(places.length>=2){
         const route=node('div',null,'map-route'),from=node('select'),to=node('select');from.setAttribute('aria-label','Откуда');to.setAttribute('aria-label','Куда');

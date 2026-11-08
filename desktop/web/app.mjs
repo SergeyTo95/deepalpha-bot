@@ -1,5 +1,5 @@
 import {visitSummary} from './visits.mjs';
-import {wantsMap,runMapAgent,mapMessageContext} from './map-agent.mjs';
+import {wantsMap,wantsPlaceHistory,runMapAgent,mapMessageContext} from './map-agent.mjs';
 import {mapResultNode} from './map-result.mjs';
 import {Notebook,notebookCommand} from './notebook.mjs';
 import {LocalHistory, browserHistoryStore} from "./local-history.mjs";
@@ -107,8 +107,6 @@ function filePreview(){const target=$("attachment-preview");target.replaceChildr
 function addFiles(files) {
   if (busy) return;
   if (!profile) { openAuth(); return; }
-  if (model !== "velia-pro" && !profile.selected_model_inputs) { toast(apiError("selected_model_files_unavailable")); return; }
-  if (model === "velia-quantum" && !profile.quantum_attachments) { toast(apiError("quantum_attachments_unsupported")); return; }
   if (agentMode) { toast('Для файлов выключи Agent и открой обычный диалог.'); return; }
   try {
     const prepared = files.map(prepareFile);
@@ -172,7 +170,7 @@ async function saveIncomePlan(plan) {
     'План открыт. Сохранение на устройстве недоступно. Его можно скачать в меню диалога.');
 }
 const voice = setupVoice({accountLanguage:()=>profile?.language||'', busy:()=>busy, toast, modelName:()=>MODELS[model], send:text=>{if(agentMode&&model==='velia-flash')setAgentMode(false);$("prompt").value=text;return generate(false, true);}});
-const features = setupFeatures({notebook,discussNote:entry=>{
+const features = setupFeatures({notebook,previewFile:file=>fileTools.previewFile(file),discussNote:entry=>{
   if(busy)return;
   if($('prompt').value.trim()){toast('В чате есть черновик. Сохрани или очисти его перед переходом.');return;}
   features.close();setAgentMode(false,true);newChat();
@@ -1017,7 +1015,7 @@ async function generate(retry = false, voiceTurn = false) {
     if (!guest || guest.remaining <= 0) { openAuth(); return; }
   }
   const text = $("prompt").value.trim() || (selectedFiles.length ? "Проанализируй прикреплённые файлы." : "");
-  const noteCommand=!retry&&!selectedFiles.length&&notebookCommand(text);
+  const noteCommand=!retry&&!selectedFiles.length&&!wantsPlaceHistory(text,current()?.messages||[])&&notebookCommand(text);
   if(noteCommand&&(noteCommand.kind!=='map'||!noteCommand.query)){if(!profile){openAuth();return;}await runNotebookCommand(noteCommand,text,voiceTurn);return;}
   if (profile && !profile.models.includes(model)) {
     toast(apiError(profile.pro_locked_reason || "pro_tokens_required"));
@@ -1032,7 +1030,11 @@ async function generate(retry = false, voiceTurn = false) {
   const figmaTurn = !mapTurn&&!connectionProvider && (explicitFigma || !agentMode && current()?.figma);
   const connectedTurn=figmaTurn||connectionProvider||mapTurn;
   if(connectedTurn && !profile){openAuth();return;}
-  if(connectedTurn && selectedFiles.length){toast('Для задания подключённому сервису опиши изменения текстом.');return;}
+  if(connectedTurn && !mapTurn && selectedFiles.length){toast('Для задания подключённому сервису опиши изменения текстом.');return;}
+  if(mapTurn&&selectedFiles.length&&!/(?:прикрепи|сохрани|добавь|attach|save|add)/iu.test(text)){toast('Чтобы сохранить файлы у места, напиши: «Прикрепи эти файлы к этому месту».');return;}
+  if(selectedFiles.length&&!mapTurn&&model!=='velia-pro'&&!profile.selected_model_inputs){toast(apiError('selected_model_files_unavailable'));return;}
+  if(selectedFiles.length&&!mapTurn&&model==='velia-quantum'&&!profile.quantum_attachments){toast(apiError('quantum_attachments_unsupported'));return;}
+  const mapFiles=mapTurn?selectedFiles.map(item=>item.file):[];
   if(connectedTurn && agentMode)setAgentMode(false,true);
   const detected=!retry && !agentMode && !connectedTurn && (medicalDraftMode?'medical_document':chatSpecialty(text,selectedFiles.map(item=>item.file)));
   const specialty=detected==='research' && current()?.medicalNoSearch && /(?:по этим|по этому|по моим|по приложен|на основе этих|на основе моего|based on (?:my|this|these))/i.test(text)
@@ -1088,7 +1090,7 @@ async function generate(retry = false, voiceTurn = false) {
     if(specialty==='medical_document')chat.medicalNoSearch=true;
     medicalDraftMode=false;
     const attachments = [], filesForTurn = selectedFiles.slice();
-    if (filesForTurn.length) {
+    if (filesForTurn.length&&!mapTurn) {
       if (!profile || agentMode || !chat.remote) {toast("Для файлов открой обычный диалог после входа.");return;}
       abort = new AbortController();
       setBusy(true);
@@ -1208,7 +1210,7 @@ async function generate(retry = false, voiceTurn = false) {
   };
   try {
     if(mapTurn){
-      const result=await runMapAgent({model:selected,language:profile?.language||navigator.language||'ru',user,history:chat.messages.filter(message=>message!==answer),notebook,signal:abort.signal,request,persist:()=>save(),progress:text=>{$('generation-status').textContent=text;},onData:data=>{answer.mapData=data;scheduleSave();}});
+      const result=await runMapAgent({model:selected,language:profile?.language||navigator.language||'ru',user,history:chat.messages.filter(message=>message!==answer),notebook,signal:abort.signal,request,files:mapFiles,persist:()=>save(),progress:text=>{$('generation-status').textContent=text;},onData:data=>{answer.mapData=data;scheduleSave();}});
       answer.content=result.text;answer.mapData=result.data;answer.finish='stop';if(voiceTurn)voice.update(answer.content);queuePaint();scheduleSave();
     } else if (connectionProvider) {
       answer.content=await runCloudAgent({provider:connectionProvider,model:selected,user,
