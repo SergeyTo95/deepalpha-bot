@@ -1,3 +1,4 @@
+import {setupWebPush} from './web-push.mjs';
 import {setupPulse,wantsPulse,pulseWhen,pulseDateReply,pulseMessageContext} from './pulse.mjs';
 import {runPulseCommand} from './pulse-agent.mjs';
 import {visitSummary} from './visits.mjs';
@@ -173,6 +174,7 @@ async function saveIncomePlan(plan) {
 }
 const voice = setupVoice({accountLanguage:()=>profile?.language||'', busy:()=>busy, toast, modelName:()=>MODELS[model], send:text=>{if(agentMode&&model==='velia-flash')setAgentMode(false);$("prompt").value=text;return generate(false, true);}});
 const pulse=setupPulse({request:featureRequest,profile:()=>profile,toast,accountChanged:()=>resetOtherTab(),changed:()=>{const b=document.querySelector('[data-section="pulse"]');if(b){const count=pulse.state().notifications.filter(n=>n.status==='unread').length;b.setAttribute('aria-label','Пульс'+(count?' · непрочитанных '+count:''));b.dataset.unread=count||'';const bell=$('pulse-open');if(bell){bell.dataset.unread=count||'';bell.setAttribute('aria-label','Пульс'+(count?' · непрочитанных '+count:' — напоминания'));}}}});
+const webPush=setupWebPush({profile:()=>profile,pulse});
 async function openPulseResource(resource){
   if(busy){toast('Дождись завершения текущего ответа.');return;}
   try{if(resource.kind==='chat'){let chat=chats.find(p=>p.id===resource.id);if(!chat){await syncHistory();chat=chats.find(p=>p.id===resource.id);}if(!chat)throw Error('Диалог не найден в этом аккаунте.');features.close();await openChat(chat);return;}
@@ -180,7 +182,7 @@ async function openPulseResource(resource){
     if(entry.kind==='place')await features.open('map',{placeId:entry.id});else if(entry.kind==='visit')await features.open('map',{tab:'visits',date:entry.date});else await features.open('notes',{id:entry.id});
   }catch(error){toast(error.message);}
 }
-const features = setupFeatures({notebook,pulse,openPulseResource,previewFile:file=>fileTools.previewFile(file),discussNote:entry=>{
+const features = setupFeatures({notebook,pulse,webPush,openPulseResource,previewFile:file=>fileTools.previewFile(file),discussNote:entry=>{
   if(busy)return;
   if($('prompt').value.trim()){toast('В чате есть черновик. Сохрани или очисти его перед переходом.');return;}
   features.close();setAgentMode(false,true);newChat();
@@ -243,7 +245,8 @@ function lockHistory() {
   features.close(); features.clearMedicalData(); voice.stop(); clearFiles(); fileTools.clear();
   $('prompt').value = ''; medicalDraftMode = false;
 }
-function resetOtherTab(reload = true) {
+async function resetOtherTab(reload = true) {
+  await webPush.disable().catch(()=>{});
   lockHistory(); profile = null; guest = null; render();
   $('account-label').textContent = 'Войти в VELIA';
   if (reload) location.reload();
@@ -897,11 +900,11 @@ async function copyText(text) {
 async function applyProfile(value) {
   const cacheKey = value.history_cache_key; delete value.history_cache_key;
   const changed = profile?.account !== value.account;
-  if(changed){lockHistory(); guest = null;}
+  if(changed){if(profile?.account)await webPush.disable().catch(()=>{});lockHistory(); guest = null;}
   profile = value;
   background.poll();
   autoloop.poll();
-  $('pulse-open').hidden=false;pulse.poll();
+  $('pulse-open').hidden=false;pulse.poll();webPush.sync().catch(()=>{});
   voice.syncLanguage();
   internetAvailable = !!value.web_search;
   $("guest-notice").hidden = true;
@@ -955,13 +958,15 @@ async function applyProfile(value) {
   setModel(model);
   render();
   syncHistory();
-  if(new URL(location.href).searchParams.has('pulse'))features.open('pulse');
+  const notificationId=new URL(location.href).searchParams.get('pulse');
+  if(notificationId){features.open('pulse',{notification_id:notificationId});const target=new URL(location.href);target.searchParams.delete('pulse');history.replaceState(null,'',target);}
 }
 function renderGuestCounter() {
   $("guest-counter").textContent = guest.remaining > 0 ? "Без регистрации · осталось " + guest.remaining + " из 30 сообщений" : "30 гостевых сообщений использованы. Войди, чтобы продолжить.";
 }
 function applyGuest(value) {
   if (profile) return;
+  webPush.disable().catch(()=>{});
   $("research-link").hidden = true;
   const changed = guest?.account !== value.account || storageKey !== "velia-web-guest-v1:" + value.account;
   if(changed){features.close();features.clearMedicalData();medicalDraftMode=false;voice.stop();clearFiles();fileTools.clear();}
@@ -1521,6 +1526,7 @@ $('logout-confirm').onclick = async () => {
   const logoutAccount = profile.account;
   const clearLocal = $('logout-clear').checked;
   $('logout-dialog').close();
+  await webPush.disable().catch(()=>{});
   lockHistory(); notifyAuthChange('lock'); render();
   try {
     const response = await request(

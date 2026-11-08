@@ -159,3 +159,24 @@ def test_pulse_mutations_require_current_web_account_and_preserve_backend_owner_
             assert route_allowed('POST','pulse/notifications/11111111-1111-4111-8111-111111111111/read')
             assert not route_allowed('POST','pulse/send-to-anyone')
     asyncio.run(scenario())
+
+
+def test_push_routes_are_exact_and_bind_the_trusted_origin_and_current_account():
+    import hashlib
+    for method,path in [('GET','pulse/push/config'),('POST','pulse/push/devices'),('POST','pulse/push/receipt'),('DELETE','pulse/push/devices/11111111-1111-4111-8111-111111111111')]:
+        assert route_allowed(method,path)
+    for method,path in [('GET','pulse/push/devices'),('POST','pulse/push/config'),('GET','pulse/push/private'),('DELETE','pulse/push/devices/anything'),('POST','pulse/push/devices/a/b')]:
+        assert not route_allowed(method,path)
+    async def scenario():
+        origin='https://velia.example.com';seen=[];account=hashlib.sha256((origin+':7').encode()).hexdigest()[:24]
+        async def session_for(request):return SimpleNamespace(access='server-only',user_id=7)
+        async def upstream(method,path,**kwargs):seen.append(kwargs['data']);return 200,{'ok':True,'device_id':'device'}
+        app=web.Application();setup_feature_routes(app,origin=origin,session_for=session_for,same_origin=lambda r:r.headers.get('Origin')==origin,upstream=upstream,json_response=lambda data,status=200:web.json_response(data,status=status))
+        async with TestServer(app) as server,ClientSession() as client:
+            url=server.make_url('/web-api/v1/features/pulse/push/devices');headers={'Origin':origin}
+            assert (await client.post(url,headers=headers,json={'account':'another-owner'})).status==403
+            assert not seen
+            response=await client.post(url,headers=headers,json={'account':account,'origin':'https://attacker.example','subscription':{},'binding_id':'id'})
+            assert response.status==200 and (await response.json())['account']==account
+            assert seen[0]['origin']==origin
+    asyncio.run(scenario())

@@ -39,6 +39,8 @@ def safe_result(value):
     return value
 
 def route_allowed(method, path):
+    if path.startswith('pulse/push/'):
+        return (method,path) in {('GET','pulse/push/config'),('POST','pulse/push/devices'),('POST','pulse/push/receipt')} or bool(method=='DELETE' and re.fullmatch(r'pulse/push/devices/[a-f0-9-]{36}',path))
     if path.startswith('pulse/') and path!='pulse/settings':
         return bool((method in {'POST','DELETE'} and re.fullmatch(r'pulse/[a-f0-9-]{36}',path)) or (method=='POST' and re.fullmatch(r'pulse/notifications/[a-f0-9-]{36}/read',path)))
     return any(method == verb and pattern.fullmatch(path) for verb, pattern in PATTERNS)
@@ -99,6 +101,7 @@ def setup_feature_routes(app, *, session_for, same_origin, upstream, json_respon
             if (path == 'notebook' or path.startswith('notebook/materials/') or path == 'pulse' or path.startswith('pulse/')) and request.method != 'GET':
                 account = hashlib.sha256((origin + ':' + str(session.user_id)).encode()).hexdigest()[:24]
                 if data.get('account') != account:return error('notebook_owner_changed', 403)
+            if path=='pulse/push/devices' and request.method=='POST':data={**data,'origin':origin}
             key = request.headers.get('Idempotency-Key')
             if key and not re.fullmatch(r'[A-Za-z0-9:_-]{8,128}', key):
                 return error('invalid_request', 400)
