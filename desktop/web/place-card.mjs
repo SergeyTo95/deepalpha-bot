@@ -4,7 +4,7 @@ import {VISIT_STATUSES} from './visits.mjs';
 import {fileSize} from './files.mjs';
 const node=(tag,text,cls)=>{const e=document.createElement(tag);if(text)e.textContent=text;if(cls)e.className=cls;return e;};
 const button=(text,action)=>{const b=node('button',text);b.type='button';b.onclick=action;return b;};
-export async function mountPlaceCard(parent,{notebook,placeId,signal,toast,previewFile,open,discuss}){
+export async function mountPlaceCard(parent,{notebook,placeId,signal,toast,previewFile,open,discuss,remind=()=>{}}){
   const files=new NotebookMaterials(notebook),root=node('section',null,'place-card'),head=node('div'),form=node('form',null,'feature-form'),timeline=node('div',null,'place-timeline');let currentPlace,ticket=0;
   const text=node('textarea');text.maxLength=4000;text.rows=3;text.placeholder='Заметка или договорённость по этому месту';text.setAttribute('aria-label','Запись по месту');text.required=true;
   const type=node('select');type.setAttribute('aria-label','Тип записи по месту');for(const [value,label] of Object.entries(EVENT_LABELS)){const option=node('option',label);option.value=value;type.append(option);}
@@ -20,7 +20,7 @@ export async function mountPlaceCard(parent,{notebook,placeId,signal,toast,previ
   async function draw(refresh=false){const current=++ticket;try{
     const entries=await notebook.load(refresh);if(signal.aborted||ticket!==current)return;currentPlace=entries.find(p=>p.kind==='place'&&p.id===placeId);if(!currentPlace){root.replaceChildren(node('p','Место удалено. Связанные записи остаются в заметках.'));return;}
     head.replaceChildren(node('h2',currentPlace.title),node('p',currentPlace.address||'', 'notebook-hint'));if(currentPlace.content)head.append(node('p',currentPlace.content));
-    const actions=node('div',null,'feature-actions');actions.append(button('На карте',()=>open('map',currentPlace)),button('Обсудить с Велией',()=>discuss({...currentPlace,content:[currentPlace.content,...placeTimeline(entries,currentPlace).slice(0,12).map(p=>p.kind==='visit'?[p.date,p.time,p.task,VISIT_STATUSES[p.status],p.result].filter(Boolean).join(' · '):p.kind==='material'?'Файл: '+p.title+' · '+p.content:(EVENT_LABELS[p.eventType]||'Заметка')+': '+p.content)].filter(Boolean).join('\n').slice(0,12000)})));head.append(actions);
+    const actions=node('div',null,'feature-actions');actions.append(button('Напомнить',()=>remind(currentPlace)),button('На карте',()=>open('map',currentPlace)),button('Обсудить с Велией',()=>discuss({...currentPlace,content:[currentPlace.content,...placeTimeline(entries,currentPlace).slice(0,12).map(p=>p.kind==='visit'?[p.date,p.time,p.task,VISIT_STATUSES[p.status],p.result].filter(Boolean).join(' · '):p.kind==='material'?'Файл: '+p.title+' · '+p.content:(EVENT_LABELS[p.eventType]||'Заметка')+': '+p.content)].filter(Boolean).join('\n').slice(0,12000)})));head.append(actions);
     const notes=entries.filter(p=>p.kind==='note'&&!p.placeId);existing.replaceChildren();for(const value of notes){const option=node('option',value.title);option.value=value.id;existing.append(option);}links.hidden=!notes.length;
     timeline.replaceChildren();const rows=placeTimeline(entries,currentPlace);if(!rows.length)timeline.append(node('p','Здесь появятся заметки, договорённости, файлы и результаты визитов.','feature-empty'));
     for(const value of rows){const card=node('article',null,'feature-card place-history-item');card.dataset.entryId=value.id;

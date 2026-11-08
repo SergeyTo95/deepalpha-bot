@@ -23,7 +23,7 @@ export function editVisit(parent,value,{notebook,signal,toast,onDone}){
   };
   parent.replaceChildren(form);task.focus();return form;
 }
-export async function mountVisits(parent,{notebook,signal,toast,openMap,discuss,draft={}}){
+export async function mountVisits(parent,{notebook,signal,toast,openMap,discuss,remind=()=>{},draft={}}){
   const toolbar=node('div',null,'notebook-toolbar'),date=node('input');date.type='date';date.value=draft.date||localDate();date.setAttribute('aria-label','Дата выездов');
   const status=node('select');status.setAttribute('aria-label','Статус выездов');for(const [id,label] of [['all','Все статусы'],...Object.entries(VISIT_STATUSES)]){const option=node('option',label);option.value=id;status.append(option);}
   const cards=node('div',null,'visit-cards'),editor=node('div');let ticket=0,editing=false;
@@ -48,7 +48,7 @@ export async function mountVisits(parent,{notebook,signal,toast,openMap,discuss,
         card.append(node('small',(value.time||'Без времени')+' · '+VISIT_STATUSES[value.status]),node('h3',value.title),node('p',value.task),node('p',value.address,'notebook-hint'),node('small',value.timezone));
         if(value.result)card.append(node('p','Результат: '+value.result));
         if(visitConflicts(value,entries).length)card.append(node('p','На это же время назначен другой визит.','feature-notice'));
-        const actions=node('div',null,'feature-actions');actions.append(button('Изменить',()=>edit(value)),button('На карте',()=>openMap(value)),button('Обсудить с Велией',()=>discuss(value)));card.append(actions);cards.append(card);
+        const actions=node('div',null,'feature-actions');actions.append(button('Изменить',()=>edit(value)),button('На карте',()=>openMap(value)),button('Обсудить с Велией',()=>discuss(value)),button('Напомнить',()=>remind(value)));card.append(actions);cards.append(card);
       }
     }catch(error){if(!signal.aborted&&current===ticket)cards.replaceChildren(node('p',error.message,'feature-notice'));}
   }

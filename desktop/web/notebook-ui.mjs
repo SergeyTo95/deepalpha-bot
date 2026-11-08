@@ -29,7 +29,7 @@ export function editEntry(parent,value,{notebook,toast,signal,onDone}) {
   };
   parent.replaceChildren(form);title.focus();return form;
 }
-export async function mountNotebook(parent,{notebook,toast,signal,discuss,openMap,openMaterial=()=>{},openPlace=()=>{}}) {
+export async function mountNotebook(parent,{notebook,toast,signal,discuss,openMap,openMaterial=()=>{},openPlace=()=>{},remind=()=>{},draft={}}) {
   const toolbar=node('div',null,'notebook-toolbar'),search=node('input');search.type='search';search.placeholder='Поиск по своим записям';search.setAttribute('aria-label','Поиск заметок');
   const kind=node('select');kind.setAttribute('aria-label','Тип записи');
   for(const [value,title] of [['','Все записи'],['note','Заметки'],['list','Списки'],['favorite','Избранное'],['place','Места'],['visit','Выезды'],['material','Материалы']]){const option=node('option',title);option.value=value;kind.append(option);}
@@ -62,6 +62,7 @@ export async function mountNotebook(parent,{notebook,toast,signal,discuss,openMa
         const actions=node('div',null,'feature-actions');actions.append(button('Открыть',()=>entry.kind==='material'?openMaterial(entry):openEditor(entry)));
         if(entry.kind==='place')actions.append(button('История и материалы',()=>openPlace(entry)));
         if(['place','visit'].includes(entry.kind))actions.append(button('На карте',()=>openMap(entry)));
+        actions.append(button('Напомнить',()=>remind(entry)));
         actions.append(button('Обсудить с Велией',()=>discuss(entry)),button('Удалить',async()=>{
           if(!confirm('Удалить «'+entry.title+'»?'))return;
           try{await notebook.remove(entry.id);if(!signal.aborted)draw();}catch(error){if(!signal.aborted)toast(error.message);}
@@ -69,5 +70,5 @@ export async function mountNotebook(parent,{notebook,toast,signal,discuss,openMa
       }
     }catch(error){if(!signal.aborted&&ticket===epoch)cards.replaceChildren(node('p',error.status===409?'Записи изменились на другом устройстве. Нажми «Обновить».':error.message,'feature-notice'));}
   }
-  search.oninput=()=>draw();kind.onchange=()=>draw();await draw();
+  search.oninput=()=>draw();kind.onchange=()=>draw();await draw();if(draft.id&&!signal.aborted){const value=(await notebook.load()).find(p=>p.id===draft.id);if(value){if(value.kind==='material')openMaterial(value);else openEditor(value);}}
 }
