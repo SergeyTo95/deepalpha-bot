@@ -273,6 +273,8 @@ def main() -> None:
     setup_workspace_oauth_routes(deepalpha_web.app, velia_mobile_routes_module)
     from services.velia_notebook_routes import setup_notebook_routes
     setup_notebook_routes(deepalpha_web.app, velia_mobile_routes_module)
+    from services.velia_pulse_routes import setup_pulse_routes
+    setup_pulse_routes(deepalpha_web.app, velia_mobile_routes_module)
     install_velia_telegram_connect_page(
         deepalpha_web.app,
         web_user_resolver,
