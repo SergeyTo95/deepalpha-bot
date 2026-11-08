@@ -906,3 +906,35 @@ def test_account_language_reaches_profile_and_model_without_changing_user_text(m
             async with client.get(server.make_url("/web-api/v1/session"), headers=headers(cookie)) as response:
                 assert (await response.json())["language"] == "de-DE"
     asyncio.run(run())
+
+
+def test_web_push_assets_have_root_scope_and_installable_manifest(monkeypatch):
+    async def scenario():
+        async with fixture(monkeypatch) as (server,client,state):
+            worker=await client.get(server.make_url('/velia-sw.js'))
+            assert worker.status==200 and worker.headers['Service-Worker-Allowed']=='/'
+            assert 'javascript' in worker.headers['Content-Type']
+            assert worker.headers['Cache-Control']=='no-cache'
+            assert "addEventListener('push'" in await worker.text()
+            manifest=await client.get(server.make_url('/manifest.webmanifest'))
+            assert manifest.status==200 and manifest.headers['Content-Type'].startswith('application/manifest+json')
+            data=await manifest.json();assert data['scope']=='/' and data['display']=='standalone'
+            for icon in data['icons']:
+                response=await client.get(server.make_url(icon['src']));assert response.status==200 and response.headers['Content-Type']=='image/png'
+            assert (await client.get(server.make_url('/web/web-push.mjs'))).status==200
+            assert (await client.get(server.make_url('/web/private-key.pem'))).status==404
+    asyncio.run(scenario())
+
+
+def test_notification_session_exposes_only_an_authenticated_account_fingerprint(monkeypatch):
+    async def scenario():
+        async with fixture(monkeypatch) as (server,client,state):
+            url=server.make_url('/web-api/v1/notification-session')
+            assert (await client.get(url)).status==401
+            cookie,profile,_=await login(server,client)
+            response=await client.get(url,headers=headers(cookie))
+            assert response.status==200 and response.headers['Cache-Control']=='no-store'
+            assert await response.json()=={'ok':True,'account':profile['account']}
+            state['validity']=False
+            assert (await client.get(url,headers=headers(cookie))).status==401
+    asyncio.run(scenario())

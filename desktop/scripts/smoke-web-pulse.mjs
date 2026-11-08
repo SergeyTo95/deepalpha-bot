@@ -91,6 +91,11 @@ try{
   buttons(document,'К диалогу')[0].click();await send('Открой Пульс','Открыла Пульс');await wait(()=>!document.querySelector('#feature-view').hidden);
   assert.equal(mapPlans,0);assert.ok(!calls.some(call=>call.path==='chat/completions'));
   buttons(document,'К диалогу')[0].click();await send('Помоги расставить приоритеты','Обычный ответ: четыре');const ordinary=calls.find(call=>call.path==='chat/completions');assert.ok(JSON.stringify(ordinary.data.messages).includes('позвонить клиенту'));assert.ok(!JSON.stringify(ordinary.data.messages).includes('Проверить неделю'));
-  console.log(JSON.stringify({ok:true,synthetic:true,model:selected,checks:['chat creation without a model call','missing date/time clarified in same chat','completion targets referenced item','completion is separate from delivery','snooze uses actual revision','weekly creation form','Telegram off and private preview by default','completed result history','open Pulse from chat','ordinary follow-up uses displayed reminders only']}));
+  const {mountPulse}=await import('../web/pulse-ui.mjs');
+  const target=document.createElement('section'),controller=new AbortController();document.body.append(target);
+  await mountPulse(target,{pulse:{state:()=>({items:pulseItems,notifications:pulseNotices}),sync:async()=>{},subscribe:()=>()=>{}},notebook:{load:async()=>[]},toast:()=>{},signal:controller.signal,draft:{notification_id:pulseNotices[0].id}});
+  assert.equal(target.querySelector('[aria-label="Показать напоминания"]').value,'done');
+  assert.equal(document.activeElement.dataset.pulseId,pulseItems[0].item_id);controller.abort();target.remove();
+  console.log(JSON.stringify({ok:true,synthetic:true,model:selected,checks:['chat creation without a model call','missing date/time clarified in same chat','completion targets referenced item','completion is separate from delivery','snooze uses actual revision','weekly creation form','Telegram off and private preview by default','completed result history','open Pulse from chat','ordinary follow-up uses displayed reminders only','notification opens and focuses the matching completed card']}));
 }catch(error){console.error(error);console.error(JSON.stringify({lastMessage:document.querySelector('#messages')?.lastElementChild?.textContent,view:document.querySelector('#feature-view')?.textContent?.slice(-1500)}));process.exitCode=1;}
 finally{dom.window.close();setTimeout(()=>process.exit(process.exitCode||0),10);}

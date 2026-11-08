@@ -268,6 +268,14 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             return json_response(await profile(session)) if session else error("unauthorized", 401)
         except AuthenticationUnavailable:
             return error("authentication_unavailable", 503)
+    async def notification_session(request):
+        try:
+            session=await session_for(request)
+            if not session:return error("unauthorized",401)
+            response=json_response({"ok":True,"account":hashlib.sha256((origin+":"+str(session.user_id)).encode()).hexdigest()[:24]})
+            response.headers["Cache-Control"]="no-store"
+            return response
+        except AuthenticationUnavailable:return error("authentication_unavailable",503)
     async def login(request):
         if not same_origin(request):
             return error("invalid_origin", 403)
@@ -478,9 +486,11 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
 
     async def asset(request):
         name = request.match_info.get("name", "index.html")
-        if name not in {"index.html", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "notebook.mjs", "notebook-ui.mjs", "pulse.mjs", "pulse-ui.mjs", "pulse-agent.mjs", "place-history.mjs", "place-card.mjs", "notebook-materials.mjs", "place-agent.mjs", "map.mjs", "map-agent.mjs", "map-result.mjs", "visits.mjs", "visit-ui.mjs", "visit-agent.mjs", "leaflet-vendor.js", "leaflet-vendor.css", "leaflet-LICENSE.txt", "features.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "service-icons.mjs", "document-exports.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
+        if name not in {"index.html", "velia-sw.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "badge-96.png", "web-push.mjs", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "notebook.mjs", "notebook-ui.mjs", "pulse.mjs", "pulse-ui.mjs", "pulse-agent.mjs", "place-history.mjs", "place-card.mjs", "notebook-materials.mjs", "place-agent.mjs", "map.mjs", "map-agent.mjs", "map-result.mjs", "visits.mjs", "visit-ui.mjs", "visit-agent.mjs", "leaflet-vendor.js", "leaflet-vendor.css", "leaflet-LICENSE.txt", "features.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "service-icons.mjs", "document-exports.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
             raise web.HTTPNotFound()
         response = web.FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
+        if name=="velia-sw.js":response.headers["Service-Worker-Allowed"]="/"
+        if name=="manifest.webmanifest":response.content_type="application/manifest+json"
         response.headers.update({"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
             "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; "
                 "img-src 'self' data: blob: https://tile.openstreetmap.org; media-src 'self' blob: data:; "
@@ -490,7 +500,9 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
         return response
     app.router.add_get("/", asset)
     app.router.add_get("/web/{name}", asset)
+    app.router.add_get(r"/{name:velia-sw\.js|manifest\.webmanifest}", asset)
     app.router.add_get("/web-api/v1/session", current)
+    app.router.add_get("/web-api/v1/notification-session", notification_session)
     app.router.add_post("/web-api/v1/auth/exchange", login)
     app.router.add_post("/web-api/v1/auth/logout", logout)
     app.router.add_post("/web-api/v1/chat/completions", chat)

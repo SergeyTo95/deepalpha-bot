@@ -1,3 +1,4 @@
+import {mountWebPush} from './web-push.mjs';
 import {localParts,pulseWhen,pulseTimeZone} from './pulse.mjs';
 import {localDate} from './visits.mjs';
 const node=(tag,text,cls)=>{const e=document.createElement(tag);if(text)e.textContent=text;if(cls)e.className=cls;return e;};
@@ -24,11 +25,12 @@ export function reminderForm(parent,{pulse,toast,signal,draft={},onSaved=()=>{}}
     const item=await pulse.create(value,id);if(signal.aborted)return;toast('Напоминание сохранено.');onSaved(item);
   }catch(error){if(!signal.aborted)toast(error.message);}finally{if(!signal.aborted)save.disabled=false;}};parent.append(form);return form;
 }
-export async function mountPulse(parent,{pulse,notebook,toast,signal,draft={},openResource=()=>{},openVisits=()=>{}}){
+export async function mountPulse(parent,{pulse,webPush,notebook,toast,signal,draft={},openResource=()=>{},openVisits=()=>{}}){
   const toolbar=node('div',null,'feature-actions'),editor=node('div'),cards=node('div',null,'pulse-cards'),overview=node('section',null,'pulse-overview'),inbox=node('div'),settingsBox=node('details');
+  const deviceBox=node('section',null,'feature-card');mountWebPush(deviceBox,{webPush,signal});
   const settingsTitle=node('summary','Доставка и тихие часы');settingsBox.append(settingsTitle);
   const filter=node('select');filter.setAttribute('aria-label','Показать напоминания');for(const [v,t] of [['active','Предстоящие и незавершённые'],['done','Выполненные'],['cancelled','Отменённые']]){const o=node('option',t);o.value=v;filter.append(o);}
-  toolbar.append(button('Добавить напоминание',()=>edit()),button('Обновить',()=>load()),filter);parent.append(overview,toolbar,editor,node('h2','Напоминания'),cards,inbox,settingsBox);let editing=false,settingsDrawn=false;
+  toolbar.append(button('Добавить напоминание',()=>edit()),button('Обновить',()=>load()),filter);parent.append(overview,deviceBox,toolbar,editor,node('h2','Напоминания'),cards,inbox,settingsBox);let editing=false,settingsDrawn=false;
   function edit(value={}){editing=true;editor.replaceChildren();reminderForm(editor,{pulse,toast,signal,draft:value,onSaved:()=>{editing=false;editor.replaceChildren();load();}});editor.append(button('Закрыть форму',()=>{editing=false;editor.replaceChildren();}));}
   async function operation(fn){try{await fn();if(!signal.aborted)await load();}catch(error){if(!signal.aborted)toast(error.message);}}
   function draw(){if(signal.aborted||parent.contains(document.activeElement)&&['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName))return;const data=pulse.state(),items=data.items||[],notifications=data.notifications||[];
@@ -60,12 +62,18 @@ export async function mountPulse(parent,{pulse,notebook,toast,signal,draft={},op
   }
   function drawSettings(data){const prefs=data.settings,form=node('form',null,'feature-form'),inputs={};
     for(const [key,label,type] of [['timezone','Часовой пояс','text'],['quiet','Тихие часы','checkbox'],['quiet_start','Начало тихих часов','time'],['quiet_end','Конец тихих часов','time'],['digest','Утренний обзор напоминаний','checkbox'],['digest_time','Время обзора','time'],['telegram','Уведомления в Telegram','checkbox'],['preview','Показывать содержание в уведомлениях','checkbox']]){const l=node('label',label),input=node('input');input.type=type;if(type==='checkbox')input.checked=prefs[key];else input.value=prefs[key];if(key==='telegram'){input.dataset.pulseTelegram='1';input.disabled=!data.telegram_available;}l.append(input);form.append(l);inputs[key]=input;}
-    if(data.telegram_username){const link=node('a','Открыть бота Велии');link.href='https://t.me/'+encodeURIComponent(data.telegram_username);link.target='_blank';link.rel='noopener noreferrer';form.append(link);}form.append(node('p','В Велии напоминания видны в карточках. Для доставки с закрытым сайтом включи Telegram и начни разговор с ботом. Содержание скрыто по умолчанию.','notebook-hint'));
+    if(data.telegram_username){const link=node('a','Открыть бота Велии');link.href='https://t.me/'+encodeURIComponent(data.telegram_username);link.target='_blank';link.rel='noopener noreferrer';form.append(link);}form.append(node('p','В Велии напоминания видны в карточках. Для доставки с закрытым сайтом включи уведомления на этом устройстве или Telegram. Содержание скрыто по умолчанию.','notebook-hint'));
     const save=node('button','Сохранить настройки');save.type='submit';form.append(save);form.onsubmit=async event=>{event.preventDefault();save.disabled=true;await operation(()=>pulse.settings(Object.fromEntries(Object.entries(inputs).map(([key,input])=>[key,input.type==='checkbox'?input.checked:input.value]))));save.disabled=false;};settingsBox.append(form);
   }
   async function load(){try{await pulse.sync();if(signal.aborted)return;draw();}catch(error){if(!signal.aborted)cards.replaceChildren(node('p',error.message,'feature-notice'));}}
   const onBlur=()=>queueMicrotask(draw);parent.addEventListener('focusout',onBlur);signal.addEventListener('abort',()=>parent.removeEventListener('focusout',onBlur),{once:true});
   const unsubscribe=pulse.subscribe(draw);signal.addEventListener('abort',unsubscribe,{once:true});filter.onchange=draw;await load();if(signal.aborted)return;
+  if(draft.notification_id){
+    const notice=pulse.state().notifications.find(n=>n.id===draft.notification_id),item=pulse.state().items.find(p=>p.item_id===notice?.item_id);
+    if(item){filter.value=['done','cancelled'].includes(item.state)?item.state:'active';draw();
+      const card=[...cards.children].find(p=>p.dataset.pulseId===item.item_id);if(card){card.tabIndex=-1;card.focus({preventScroll:true});card.scrollIntoView?.({block:'center'});}}
+    else inbox.scrollIntoView?.({block:'start'});
+  }
   if(draft.title||draft.schedule||draft.resource)edit(draft);
   try{const entries=await notebook.load();if(signal.aborted)return;const today=localDate(),visits=entries.filter(p=>p.kind==='visit'&&p.date===today&&p.status==='planned');if(visits.length){const link=button('Выезды сегодня · '+visits.length,()=>openVisits(today));overview.append(link);}}catch{}
 }
