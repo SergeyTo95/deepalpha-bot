@@ -377,14 +377,18 @@ def install(chat_module: Any) -> None:
         try:
             if free_models.enabled():
                 prompt = chat_module._build_prompt(user_id, conversation_id)
-                messages = quantum.conversation_messages(chat_module, user_id, conversation_id, prompt=prompt, request_id=request_id)
-                from services.velia_background_chat_service import background_context
-                task_context = background_context(user_id, str(conversation_id))
-                if task_context:
-                    messages.insert(0, {'role':'user','content':task_context})
-                generation = quantum.generate(prompt, messages=messages, chat_mode=chat_mode,
-                    account_language=quantum.account_language(chat_module, user_id), request_id=request_id,
-                    on_delta=on_delta, voice_turn=voice_turn, web_search=web_search)
+                from services import velia_superagent_chat_service as superagent
+                generation = (superagent.route_free(chat_module, user_id=int(user_id), conversation_id=str(conversation_id),
+                    content=content, chat_mode=chat_mode, request_id=request_id) if not normalized_attachment_ids else None)
+                if generation is None:
+                    messages = quantum.conversation_messages(chat_module, user_id, conversation_id, prompt=prompt, request_id=request_id)
+                    from services.velia_background_chat_service import background_context
+                    task_context = background_context(user_id, str(conversation_id))
+                    if task_context:
+                        messages.insert(0, {'role':'user','content':task_context})
+                    generation = quantum.generate(prompt, messages=messages, chat_mode=chat_mode,
+                        account_language=quantum.account_language(chat_module, user_id), request_id=request_id,
+                        on_delta=on_delta, voice_turn=voice_turn, web_search=web_search)
             elif chat_mode == "flash":
                 generation = flash.generate(
                     flash.build_prompt(chat_module, user_id, conversation_id),

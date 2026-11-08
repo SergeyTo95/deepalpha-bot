@@ -1,11 +1,36 @@
 """Opt-in, pinned free API tiers. No model supplied by a client is an upstream ID."""
 import os
 import re
-from velia_quantum_provider import QuantumConfig, ZAI_URL
+from contextlib import contextmanager
+from contextvars import ContextVar
+from velia_quantum_provider import MINIMAX_MODEL, MINIMAX_URL, QuantumConfig, ZAI_URL
 
 TIERS = {"flash": ("zai", "glm-4.5-flash", 2048),
          "quantum": ("zai", "glm-4.7-flash", 4096),
          "pro": ("zai", "glm-4.7-flash", 8192)}
+_PRO_PILOT = ContextVar("velia_pro_minimax_pilot", default=None)
+
+
+def minimax_pilot_configuration(user_id):
+    if not enabled() or not _on("VELIA_PRO_MINIMAX_ENABLED"):
+        return None
+    from services.velia_mobile_auth_service import QA_USER_ID
+    if user_id != QA_USER_ID:
+        return None
+    key = _key("VELIA_PRO_MINIMAX_API_KEY")
+    if not key:
+        return None
+    return QuantumConfig("pro_minimax", MINIMAX_URL, MINIMAX_MODEL, key,
+                         max_tokens=8192, thinking_enabled=True)
+
+
+@contextmanager
+def use_pro_pilot(config):
+    token = _PRO_PILOT.set(config)
+    try:
+        yield
+    finally:
+        _PRO_PILOT.reset(token)
 
 # Only self-contained social greetings. Confirmations and continuations may
 # refer to a hard task in history and must keep PRO's reasoning enabled.
@@ -35,6 +60,8 @@ def enabled():
 def configuration(mode, *, voice=False):
     if not enabled() or mode not in TIERS:
         return None
+    if mode == "pro" and not voice and (pilot := _PRO_PILOT.get()) is not None:
+        return pilot
     provider, model, limit = TIERS[mode]
     if provider == "zai":
         key = os.getenv("VELIA_ZAI_API_KEY", "").strip()

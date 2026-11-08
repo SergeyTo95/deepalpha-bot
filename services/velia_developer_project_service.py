@@ -92,7 +92,7 @@ def _b64url_decode(value: str) -> bytes:
     return base64.urlsafe_b64decode(raw + b"=" * (-len(raw) % 4))
 
 
-def create_install_state(user_id: int, *, now: Optional[int] = None) -> str:
+def create_install_state(user_id: int, *, now: Optional[int] = None, web_return: bool = False) -> str:
     current = int(now if now is not None else time.time())
     ttl = max(120, min(1800, int(os.getenv("VELIA_DEVELOPER_STATE_TTL_SECONDS", "600") or 600)))
     payload = {
@@ -102,6 +102,8 @@ def create_install_state(user_id: int, *, now: Optional[int] = None) -> str:
         "exp": current + ttl,
         "nonce": secrets.token_urlsafe(18),
     }
+    if web_return:
+        payload["web_return"] = True
     encoded = _b64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     signature = _b64url(hmac.new(_state_secret(), encoded.encode("ascii"), hashlib.sha256).digest())
     return f"{encoded}.{signature}"
@@ -300,6 +302,26 @@ def record_installation(user_id: int, details: Dict[str, Any]) -> Dict[str, Any]
         conn.close()
 
 
+def disconnect_github(user_id: int) -> None:
+    """Disable this user's GitHub access while retaining projects and run history."""
+    ensure_developer_tables()
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "UPDATE velia_developer_installations SET deleted_at=%s, updated_at=%s "
+            "WHERE user_id=%s AND deleted_at IS NULL",
+            (_utcnow(), _utcnow(), int(user_id)),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+
+
 def list_installations(user_id: int) -> List[Dict[str, Any]]:
     ensure_developer_tables()
     conn = get_connection()
@@ -429,6 +451,9 @@ def list_projects(user_id: int) -> List[Dict[str, Any]]:
                    is_private, is_archived, created_at, updated_at
             FROM velia_developer_projects
             WHERE user_id=%s AND deleted_at IS NULL
+              AND EXISTS (SELECT 1 FROM velia_developer_installations i
+                          WHERE i.installation_id=velia_developer_projects.installation_id
+                            AND i.user_id=velia_developer_projects.user_id AND i.deleted_at IS NULL)
             ORDER BY updated_at DESC
             """,
             (int(user_id),),
@@ -451,6 +476,9 @@ def get_project(user_id: int, project_id: str) -> Dict[str, Any]:
                    is_private, is_archived, created_at, updated_at
             FROM velia_developer_projects
             WHERE project_id=%s AND user_id=%s AND deleted_at IS NULL
+              AND EXISTS (SELECT 1 FROM velia_developer_installations i
+                          WHERE i.installation_id=velia_developer_projects.installation_id
+                            AND i.user_id=velia_developer_projects.user_id AND i.deleted_at IS NULL)
             """,
             (str(project_id), int(user_id)),
         )

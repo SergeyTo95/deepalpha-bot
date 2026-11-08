@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import threading
@@ -22,6 +23,8 @@ from services import velia_developer_taste_skill_service as taste_skill
 
 from services.velia_repository_context_security import redact_source, sensitive_context_path
 from velia_code_quality import spec_guidance, guidance as engineering_guidance, inspect_changes, QualityError
+
+logger = logging.getLogger(__name__)
 
 
 class DeveloperCodingError(RuntimeError):
@@ -416,6 +419,9 @@ def _model_call(
     max_tokens: int,
     timeout: int,
 ) -> Dict[str, Any]:
+    from services import velia_superagent_chat_service as superagent
+    if superagent.selected_mode():
+        return superagent.model_call(prompt, max_tokens=max_tokens, timeout=timeout, request_id=request_id)
     return kimi_gateway.call_kimi(
         prompt=prompt,
         feature=feature,
@@ -691,6 +697,9 @@ def plan_job(
         _extract_json(str(result.get("text") or "")),
         design_profile=design_profile,
     )
+    from services import velia_superagent_chat_service as superagent
+    if superagent.selected_mode():
+        plan["executor_mode"] = superagent.selected_mode()
     cost = float(result.get("estimated_cost_usd") or 0.0)
     job = _insert_job(
         user_id=user_id,
@@ -1080,13 +1089,16 @@ def execute_job(
         raise DeveloperCodingError("developer_coding_plan_missing", status=404)
     if str(job.get("project_id") or "") != str(project.get("id") or ""):
         raise DeveloperCodingError("developer_coding_project_mismatch", status=409)
+    from services import velia_superagent_chat_service as superagent
+    if superagent.selected_mode() and (job.get("plan") or {}).get("executor_mode") != superagent.selected_mode():
+        raise DeveloperCodingError("developer_coding_model_mismatch", status=409)
     write_service.require_write_permissions(project)
     work_branch = _work_branch(job)
     _safe_progress(on_progress, "branch", message=f"Создаю рабочую ветку {work_branch}…")
-    write_service.create_work_branch(project, work_branch)
-    _update_job(str(job["job_id"]), status="running", work_branch=work_branch, error_code=None)
-    job["work_branch"] = work_branch
-    job["status"] = "running"
+    from services import velia_superagent_chat_service as superagent
+    superagent_state = None
+    if superagent.enabled():
+        superagent_state = superagent.claim(job, project)
     results: List[Dict[str, Any]] = []
     total_cost = float(job.get("estimated_cost_usd") or 0.0)
     total_usage = {
@@ -1098,6 +1110,10 @@ def execute_job(
     }
     maximum_total = _env_float("VELIA_DEVELOPER_CODING_MAX_JOB_COST_USD", 0.24, 0.05, 1.0)
     try:
+        write_service.create_work_branch(project, work_branch)
+        _update_job(str(job["job_id"]), status="running", work_branch=work_branch, error_code=None)
+        job["work_branch"] = work_branch
+        job["status"] = "running"
         steps = list((job.get("plan") or {}).get("steps") or [])
         for index, step in enumerate(steps, start=1):
             _update_job(str(job["job_id"]), current_step=index)
@@ -1123,6 +1139,9 @@ def execute_job(
                 raise DeveloperCodingError("developer_coding_job_cost_limit", status=402)
             _merge_usage(total_usage, result.get("usage") if isinstance(result.get("usage"), dict) else {})
             results.append(result)
+            if superagent_state is not None:
+                superagent_state = superagent.report("progress", job, project, superagent_state,
+                    f"Step {index}/{len(steps)} committed: {result.get('commit_sha', '')}")
             _update_job(
                 str(job["job_id"]),
                 step_results_json=json.dumps(results, ensure_ascii=False, separators=(",", ":"))[:120000],
@@ -1155,6 +1174,14 @@ def execute_job(
             estimated_cost_usd=total_cost,
             error_code=None,
         )
+        if superagent_state is not None:
+            try:
+                superagent_state = superagent.report("ready", job, project, superagent_state,
+                    f"Draft PR: {pr.get('url', '')}. CI is reported separately; project tests were not executed.")
+            except Exception:
+                # The external result and completed job are already durable.
+                # Preserve its URL; a report outage must not invite a second PR.
+                logger.exception("VELIA_SUPERAGENT_FINAL_REPORT_PENDING job_id=%s", job["job_id"])
         suggestions = list(plan.get("suggestions") or [])
         for item in results:
             suggestions.extend(item.get("suggestions") or [])
@@ -1171,6 +1198,11 @@ def execute_job(
         }
     except Exception as exc:
         code = str(getattr(exc, "code", "developer_coding_failed") or "developer_coding_failed")[:120]
+        if superagent_state is not None:
+            try:
+                superagent.report("failed", job, project, superagent_state, code)
+            except Exception:
+                logger.exception("VELIA_SUPERAGENT_REPORT_FAILED job_id=%s", job["job_id"])
         _update_job(
             str(job["job_id"]),
             status="error",

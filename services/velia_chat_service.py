@@ -174,6 +174,27 @@ def ensure_velia_chat_tables() -> None:
             WHERE role='user' AND idempotency_key IS NOT NULL
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS velia_chat_topics (
+                entry_id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL REFERENCES velia_conversations(conversation_id) ON DELETE CASCADE,
+                kind TEXT NOT NULL CHECK (kind IN ('research', 'research_document', 'medical_document', 'medical_scan')),
+                resource_id TEXT,
+                label TEXT,
+                message_id TEXT REFERENCES velia_messages(message_id) ON DELETE CASCADE,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_velia_chat_topics_conversation "
+            "ON velia_chat_topics(conversation_id, created_at DESC)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_velia_chat_topics_message "
+            "ON velia_chat_topics(message_id) WHERE message_id IS NOT NULL"
+        )
         conn.commit()
     except Exception:
         conn.rollback()

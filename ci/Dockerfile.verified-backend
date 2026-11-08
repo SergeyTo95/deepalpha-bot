@@ -51,7 +51,7 @@ RUN /opt/tests/bin/python ci/railway-verified-ci.py backend --commit "$RAILWAY_G
 FROM validation-base AS flash-verified
 COPY --from=python:3.12-bookworm /usr/local /usr/local
 RUN /usr/local/bin/python3.12 -m venv /opt/tests \
-    && /opt/tests/bin/pip install --no-cache-dir pytest requests psycopg2-binary python-dotenv aiohttp tonsdk cryptography pillow pypdf python-multipart PyYAML==6.0.2
+    && /opt/tests/bin/pip install --no-cache-dir pytest pytest-asyncio requests psycopg2-binary python-dotenv aiohttp tonsdk cryptography pillow pypdf python-multipart PyYAML==6.0.2
 COPY --chown=postgres:postgres . /app
 RUN mkdir -p /opt/velia-ci && chown postgres:postgres /opt/velia-ci
 USER postgres
@@ -62,12 +62,14 @@ FROM python:3.11 AS production
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr tesseract-ocr-eng tesseract-ocr-rus tesseract-ocr-tur poppler-utils fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=node:24.19.0-bookworm-slim /usr/local/bin/node /usr/local/bin/node
 WORKDIR /app
 COPY requirements.txt .
 COPY vendor/aiogram_compat ./vendor/aiogram_compat
 RUN python vendor/aiogram_compat/verify_upstream.py
 RUN pip install --upgrade pip setuptools && pip install -r requirements.txt && pip check
 COPY . .
+RUN node --test agent_core/superagent/chat/bridge.test.mjs
 RUN ls -la /app
 RUN ls -la /app/db || echo "NO DB FOLDER"
 RUN ls -la /app/bot/

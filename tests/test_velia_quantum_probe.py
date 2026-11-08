@@ -173,24 +173,28 @@ def test_offline_deploy_accepts_valid_owned_model_without_external_call(enabled,
 
 
 @pytest.mark.parametrize("verification_exit", [0, 42])
-def test_release_shell_preserves_required_checks_and_fails_before_later_checks(tmp_path, verification_exit):
+@pytest.mark.parametrize("superagent_exit", [0, 47])
+def test_release_shell_preserves_required_checks_and_fails_before_later_checks(tmp_path, verification_exit, superagent_exit):
     import os
     import subprocess
     binary = tmp_path / "python"
     log = tmp_path / "commands.log"
     binary.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$VELIA_CHECK_LOG"\n'
-                      'if [ "$1" = "ci/railway-verified-ci.py" ]; then exit "$VELIA_VERIFY_EXIT"; fi\n')
+                      'if [ "$1" = "ci/railway-verified-ci.py" ]; then exit "$VELIA_VERIFY_EXIT"; fi\n'
+                      'if [ "$1" = "-m" ] && [ "$2" = "services.velia_superagent_chat_service" ]; then exit "$VELIA_SUPERAGENT_EXIT"; fi\n')
     binary.chmod(0o755)
     result = subprocess.run(["sh", str(Path(__file__).resolve().parents[1] / "ci/railway-predeploy.sh")],
         env={**os.environ, "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
-             "VELIA_CHECK_LOG": str(log), "VELIA_VERIFY_EXIT": str(verification_exit)},
+             "VELIA_CHECK_LOG": str(log), "VELIA_VERIFY_EXIT": str(verification_exit),
+             "VELIA_SUPERAGENT_EXIT": str(superagent_exit)},
         capture_output=True, timeout=5)
     calls = log.read_text().splitlines()
-    assert result.returncode == verification_exit
+    assert result.returncode == (verification_exit or superagent_exit)
     assert calls[0] == "ci/railway-verified-ci.py verify"
     if verification_exit:
         assert len(calls) == 1
     else:
         assert calls[1] == "ci/probe-velia-flash.py"
         assert "public_capability" in calls[2]
-        assert calls[3:] == ["ci/probe-selected-model-inputs.py", "ci/probe-velia-quantum.py --config-only"]
+        assert calls[3:] == ["ci/probe-selected-model-inputs.py", "ci/probe-velia-quantum.py --config-only",
+            "-m services.velia_superagent_chat_service"]
