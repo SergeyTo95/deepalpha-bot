@@ -33,6 +33,16 @@ def test_stable_vapid_key_is_domain_separated(database,monkeypatch):
     first=push.config()['public_key'];assert push.config()['public_key']==first
     monkeypatch.setenv('MASTER_ENCRYPTION_KEY','another-stable-secret-for-vapid-test');assert push.config()['public_key']!=first
 
+def test_second_precise_reminder_reaches_push_without_an_open_page(database):
+    _,clock=database;clock[0]+=23
+    data,_,_=device();push.register(7,data)
+    item=pulse.create(7,draft(schedule={'kind':'once','date':'2026-11-08','time':'09:01','second':23}))
+    assert item['due_at']==clock[0]+60
+    clock[0]+=59;pulse.tick();assert push.claim() is None
+    clock[0]+=1;pulse.tick();notice=push.claim()
+    assert notice and notice['device_id'] and notice['subscription']==data['subscription']
+    assert push.wire(notice)[1]['Urgency']=='high'
+
 @pytest.mark.parametrize('endpoint',[
     'http://fcm.googleapis.com/x','https://localhost/x','https://127.0.0.1/x','https://169.254.169.254/x',
     'https://fcm.googleapis.com.attacker.org/x','https://web.push.apple.com.attacker.org/x',

@@ -41,6 +41,17 @@ def test_timezone_dst_recurrence_and_quiet_hours():
     assert pulse.quiet_time(at,prefs)==pulse.local_epoch('2026-11-09','08:00','Europe/Istanbul')
     assert pulse.quiet_time(at,prefs,False)==at
 
+@pytest.mark.parametrize('second',[-1,60,True,1.5,'23'])
+def test_invalid_seconds_are_rejected(second):
+    with pytest.raises(pulse.PulseError):pulse.local_epoch('2026-11-08','09:01','UTC',second)
+
+def test_second_precise_snooze_and_minute_only_compatibility(database):
+    _,clock=database;clock[0]+=23;item=pulse.create(7,draft())
+    moved=pulse.action(7,item['item_id'],{**complete(item),'action':'snooze','date':'2026-11-08','time':'09:01','second':23})
+    assert moved['due_at']==clock[0]+60 and moved['schedule']['second']==23
+    moved=pulse.action(7,item['item_id'],{**complete(moved),'action':'snooze','date':'2026-11-08','time':'09:02'})
+    assert moved['due_at']==BASE+120 and 'second' not in moved['schedule']
+
 def test_idempotent_creation_ownership_and_encrypted_storage(database):
     path,clock=database;data=draft();item=pulse.create(7,data);assert pulse.create(7,data)['item_id']==item['item_id'];assert not pulse.listing(8)['items']
     with pytest.raises(pulse.PulseError) as error:pulse.action(8,item['item_id'],complete(item))
