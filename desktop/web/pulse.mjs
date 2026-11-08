@@ -3,7 +3,7 @@ export const pulseTimeZone=deviceTimeZone;
 export function localParts(at=Date.now(),timezone=deviceTimeZone()){
   const fields=Object.fromEntries(new Intl.DateTimeFormat('en',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(at).map(p=>[p.type,p.value]));return {date:fields.year+'-'+fields.month+'-'+fields.day,time:fields.hour+':'+fields.minute};
 }
-export function pulseWhen(item){const at=item.action_at??item.due_at;if(at==null)return item.state==='waiting'?'После выполнения предыдущего шага':'Ожидает отметки выполнения';return new Intl.DateTimeFormat('ru',{timeZone:item.timezone,dateStyle:'medium',timeStyle:'short'}).format(at*1000)+' · '+item.timezone;}
+export function pulseWhen(item){const at=item.action_at??item.due_at;if(at==null)return item.state==='waiting'?'После выполнения предыдущего шага':'Ожидает отметки выполнения';return new Intl.DateTimeFormat('ru',{timeZone:item.timezone,dateStyle:'medium',timeStyle:at%60?'medium':'short'}).format(at*1000)+' · '+item.timezone;}
 export function wantsPulse(text){return /^(?:(?:велия|velia)[,\s]+)?(?:напомни(?:ть)?(?=\s|$)|пульс(?=$|[.!?])|remind\b|напоминани[ея]\s*[:—-]|(?:покажи|открой|собери|какие|что).{0,25}(?:напоминани|пульс)|(?:отложи|перенеси|отмени|заверши|отметь).{0,40}напоминани|show.{0,20}reminders|open pulse)/iu.test(text.trim());}
 const weekdays=['понедельник','вторник','среду','четверг','пятницу','субботу','воскресенье'];
 export function reminderDraft(input,{now=Date.now(),timezone=deviceTimeZone(),pending}={}){
@@ -14,7 +14,7 @@ export function reminderDraft(input,{now=Date.now(),timezone=deviceTimeZone(),pe
   if([...text.matchAll(/(?:^|\s)(?:в|at)\s*([01]?\d|2[0-3])(?::([0-5]\d))?(?=\s|$|[.,])/giu)].length>1)return null;
   let schedule,remaining=text;
   const relative=text.match(/(?:^|\s)через\s+(\d{1,4})\s*(минут[уы]?|мин\.?|час(?:а|ов)?|дн(?:я|ей|ь))(?=\s|$)/iu);
-  if(relative){const amount=Number(relative[1]),scale=/час/iu.test(relative[2])?60:/дн/iu.test(relative[2])?1440:1;if(amount<1||amount*scale>10080)return null;schedule={kind:'once',...localParts(Math.ceil((now+amount*scale*60000)/60000)*60000,timezone)};remaining=remaining.replace(relative[0],' ');}
+  if(relative){const amount=Number(relative[1]),scale=/час/iu.test(relative[2])?60:/дн/iu.test(relative[2])?1440:1;if(amount<1||amount*scale>10080)return null;const target=now+amount*scale*60000;schedule={kind:'once',...localParts(target,timezone),second:new Date(target).getUTCSeconds()};remaining=remaining.replace(relative[0],' ');}
   const clock=text.match(/(?:^|\s)(?:в|at)\s*([01]?\d|2[0-3])(?::([0-5]\d))?(?=\s|$|[.,])/iu)||(pending?text.match(/^([01]?\d|2[0-3])(?::([0-5]\d))?$/):null);
   const time=clock?clock[1].padStart(2,'0')+':'+(clock[2]||'00'):pending?.schedule?.time;
   if(clock)remaining=remaining.replace(clock[0],' ');

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {reminderDraft,readyDraft,wantsPulse,setupPulse,pulseDateReply,pulseMessageContext} from '../pulse.mjs';
+import {reminderDraft,readyDraft,wantsPulse,setupPulse,pulseDateReply,pulseMessageContext,pulseWhen} from '../pulse.mjs';
 import {runPulseCommand} from '../pulse-agent.mjs';
 const instant=Date.parse('2026-11-08T21:30:00Z'),timezone='Europe/Istanbul';
 function draft(text,pending){return reminderDraft(text,{now:instant,timezone,pending});}
@@ -17,6 +17,19 @@ test('missing dates/times remain drafts and unrelated questions do not create re
   assert.equal(draft('Расскажи про напоминания'),null);assert.equal(wantsPulse('Нужно бы напомнить об оплате'),false);
   assert.ok(wantsPulse('Напомнить мне завтра в 10 позвонить'));assert.equal(wantsPulse('Пульс 110 — это нормально?'),false);assert.equal(pulseDateReply('Сегодня пульс 110'),false);assert.ok(pulseDateReply('в пятницу в 10'));assert.ok(pulseDateReply('10:30'));
   assert.ok(wantsPulse('Напомни завтра в 10 позвонить'));assert.ok(wantsPulse('Покажи мои напоминания'));
+});
+test('relative minutes keep seconds instead of rounding to the next minute',()=>{
+  const now=Date.parse('2026-11-08T12:27:23Z');
+  const value=reminderDraft('Напомни через 1 минуту проверить уведомления',{now,timezone});
+  assert.deepEqual(value.schedule,{kind:'once',date:'2026-11-08',time:'15:28',second:23});
+  assert.ok(pulseWhen({due_at:(now+60000)/1000,timezone}).includes('15:28:23'));
+  const midnight=reminderDraft('Напомни через 1 минуту проверить уведомления',{now:Date.parse('2026-11-08T20:59:43Z'),timezone});
+  assert.deepEqual(midnight.schedule,{kind:'once',date:'2026-11-09',time:'00:00',second:43});
+});
+test('chat snooze carries the exact second to the server',async()=>{
+  const f=fixture();f.items.push({item_id:'selected',title:'Проверить',timezone,state:'active',revision:1,due_at:instant/1000+3600});
+  await runPulseCommand({text:'Перенеси это напоминание через 1 минуту',user:{},history:[{role:'assistant',pulseIds:['selected']}],pulse:f.pulse,model:'velia-flash',now:Date.parse('2026-11-08T12:27:23Z'),request:async()=>{throw Error('Unneeded model call');}});
+  assert.deepEqual(f.calls[0],{action:'snooze',extra:{date:'2026-11-08',time:'15:28',second:23,timezone}});
 });
 function fixture(){
   let items=[],calls=[];
