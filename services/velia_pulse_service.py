@@ -89,6 +89,8 @@ def ensure_schema():
             c.execute('CREATE INDEX IF NOT EXISTS velia_pulse_digest ON velia_pulse_users(digest_at)')
             c.execute('CREATE INDEX IF NOT EXISTS velia_pulse_notice_age ON velia_pulse_notifications(created_at)')
             c.execute('CREATE TABLE IF NOT EXISTS velia_pulse_meta (name TEXT PRIMARY KEY, value BIGINT NOT NULL)')
+            from services import velia_webpush_service as push
+            push.schema(c)
         _READY=True
 
 def _user(c,user,lock=False,tz='UTC'):
@@ -205,6 +207,8 @@ def _emit(c,user,item_id,occurrence,kind,payload,prefs,at,followup=None):
     if kind=='base':c.execute("UPDATE velia_pulse_notifications SET status='superseded',followup_at=NULL,delivery=CASE WHEN delivery='pending' THEN 'off' ELSE delivery END WHERE user_id=%s AND item_id=%s AND occurrence_at<%s AND status IN ('unread','read')",(int(user),item_id,occurrence))
     nid=str(uuid.uuid5(uuid.NAMESPACE_URL,f'velia:pulse:{user}:{item_id}:{occurrence}:{kind}'))
     c.execute('INSERT INTO velia_pulse_notifications(user_id,notification_id,item_id,occurrence_at,kind,status,payload,created_at,delivery,delivery_at,followup_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(user_id,item_id,occurrence_at,kind) DO NOTHING',(int(user),nid,item_id,occurrence,kind,'unread',pack(user,payload),at,'pending' if prefs['telegram'] else 'off',quiet_time(at,prefs,payload.get('respect_quiet',True)),followup))
+    from services import velia_webpush_service as push
+    push.enqueue(c,user,nid,at)
 
 def action(user,item_id,data):
     ensure_schema();at=now()
@@ -284,7 +288,17 @@ def tick(at=None):
         for user,payload in c.fetchall():
             prefs=unpack(user,payload);effective=quiet_time(at,prefs)
             if effective>at:c.execute('UPDATE velia_pulse_users SET digest_at=%s WHERE user_id=%s',(effective,int(user)));continue
-            day=datetime.fromtimestamp(at,zone(prefs['timezone'])).date().isoformat();occ=local_epoch(day,prefs['digest_time'],prefs['timezone'])
+            day=datetime.fromtimestamp(at,zone(prefs['timezone'])).date().isoformat()
+            # Recovery can land on a spring-forward date whose digest clock never
+            # existed. Use its first valid minute, so one user cannot roll back
+            # every other user's reminders on each scheduler tick.
+            requested=datetime.fromisoformat(day+'T'+prefs['digest_time'])
+            for extra in range(181):
+                candidate=requested+timedelta(minutes=extra)
+                try:occ=local_epoch(candidate.date().isoformat(),candidate.strftime('%H:%M'),prefs['timezone']);break
+                except PulseError as error:
+                    if error.code!='pulse_dst_gap':raise
+            else:raise PulseError('pulse_time_invalid')
             _emit(c,user,'digest',occ,'digest',{'title':'План на '+day,'timezone':prefs['timezone'],'resource':None},prefs,at)
             due=next_local({'kind':'daily','time':prefs['digest_time']},prefs['timezone'],at)
             c.execute('UPDATE velia_pulse_users SET digest_at=%s WHERE user_id=%s',(due,int(user)))

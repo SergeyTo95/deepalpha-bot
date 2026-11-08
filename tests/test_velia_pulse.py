@@ -148,3 +148,13 @@ def test_create_retry_after_due_time_returns_original_without_rescheduling(datab
     _,clock=database;data=draft();item=pulse.create(7,data);clock[0]+=3601;pulse.tick()
     same=pulse.create(7,data);assert same['item_id']==item['item_id'];assert same['due_at'] is None;assert len(pulse.listing(7)['notifications'])==1
     with pytest.raises(pulse.PulseError):pulse.create(7,draft())
+
+
+def test_overdue_digest_in_dst_gap_does_not_stall_other_users(database):
+    _,clock=database;clock[0]=pulse.local_epoch('2027-03-13','00:00','UTC')
+    pulse.settings(7,{'timezone':'America/New_York','quiet':False,'digest':True,'digest_time':'02:30'})
+    pulse.create(8,draft(schedule={'kind':'once','date':'2027-03-14','time':'11:00'}))
+    clock[0]=pulse.local_epoch('2027-03-14','16:00','UTC');pulse.tick();pulse.tick()
+    digest=pulse.listing(7)['notifications'];assert len(digest)==1
+    assert digest[0]['occurrence_at']==pulse.local_epoch('2027-03-14','03:00','America/New_York')
+    assert len(pulse.listing(8)['notifications'])==1

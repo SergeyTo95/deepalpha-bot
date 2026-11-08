@@ -3,6 +3,7 @@ import logging
 import os
 from aiohttp import web, ClientSession
 from services import velia_pulse_service as pulse
+from services import velia_webpush_service as push
 from services import velia_telegram_config as telegram
 
 logger=logging.getLogger(__name__)
@@ -50,10 +51,22 @@ async def lifecycle(app):
             except asyncio.CancelledError:raise
             except Exception:logger.warning('VELIA_PULSE_OUTBOX_UNAVAILABLE')
             await asyncio.sleep(2 if notices else 15)
+    async def pushes(session):
+        while True:
+            notices=[]
+            try:
+                for _ in range(4):
+                    notice=await asyncio.to_thread(push.claim)
+                    if not notice:break
+                    notices.append(notice)
+                await asyncio.gather(*(push.deliver(session,notice) for notice in notices))
+            except asyncio.CancelledError:raise
+            except Exception:logger.warning('VELIA_PUSH_OUTBOX_UNAVAILABLE')
+            await asyncio.sleep(2 if notices else 15)
     tasks=[]
     async with ClientSession(trust_env=False) as session:
         if pulse.enabled() and os.getenv('RAILWAY_ENVIRONMENT_NAME','production').lower() in ('production','prod'):
-            tasks=[asyncio.create_task(timers()),asyncio.create_task(deliveries(session))]
+            tasks=[asyncio.create_task(timers()),asyncio.create_task(deliveries(session)),asyncio.create_task(pushes(session))]
         try:yield
         finally:
             for task in tasks:task.cancel()
@@ -76,7 +89,13 @@ def setup_pulse_routes(app,module):
                     data=await request.json()
                     if not isinstance(data,dict):raise pulse.PulseError('pulse_invalid')
                     data.pop('account',None)
-                if path=='settings':
+                if path=='push/config':result=await asyncio.to_thread(push.config)
+                elif path=='push/devices' and request.method=='POST':result=await asyncio.to_thread(push.register,user,data)
+                elif path=='push/receipt':await asyncio.to_thread(push.receipt,user,data);result={}
+                elif path.startswith('push/devices/') and request.method=='DELETE':
+                    if set(data)!={'binding_id'}:raise pulse.PulseError('pulse_push_invalid')
+                    await asyncio.to_thread(push.remove,user,path.split('/')[-1],data['binding_id']);result={}
+                elif path=='settings':
                     if data.get('telegram') and not telegram_available():raise pulse.PulseError('pulse_telegram_unavailable',409)
                     value=await asyncio.to_thread(pulse.settings,user,data if request.method=='PATCH' else None);result={'settings':value}
                 elif path=='':
@@ -94,4 +113,7 @@ def setup_pulse_routes(app,module):
     for method in ('GET','PATCH'):app.router.add_route(method,'/mobile-api/v1/pulse/{tail:settings}',handle)
     app.router.add_post('/mobile-api/v1/pulse/{tail:notifications/[a-f0-9-]{36}/read}',handle)
     for method in ('POST','DELETE'):app.router.add_route(method,'/mobile-api/v1/pulse/{tail:[a-f0-9-]{36}}',handle)
+    app.router.add_get('/mobile-api/v1/pulse/{tail:push/config}',handle)
+    app.router.add_post('/mobile-api/v1/pulse/{tail:push/devices|push/receipt}',handle)
+    app.router.add_delete('/mobile-api/v1/pulse/{tail:push/devices/[a-f0-9-]{36}}',handle)
     app.cleanup_ctx.append(lifecycle)
