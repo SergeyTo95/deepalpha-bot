@@ -29,10 +29,10 @@ export function editEntry(parent,value,{notebook,toast,signal,onDone}) {
   };
   parent.replaceChildren(form);title.focus();return form;
 }
-export async function mountNotebook(parent,{notebook,toast,signal,discuss,openMap}) {
+export async function mountNotebook(parent,{notebook,toast,signal,discuss,openMap,openMaterial=()=>{},openPlace=()=>{}}) {
   const toolbar=node('div',null,'notebook-toolbar'),search=node('input');search.type='search';search.placeholder='Поиск по своим записям';search.setAttribute('aria-label','Поиск заметок');
   const kind=node('select');kind.setAttribute('aria-label','Тип записи');
-  for(const [value,title] of [['','Все записи'],['note','Заметки'],['list','Списки'],['favorite','Избранное'],['place','Места'],['visit','Выезды']]){const option=node('option',title);option.value=value;kind.append(option);}
+  for(const [value,title] of [['','Все записи'],['note','Заметки'],['list','Списки'],['favorite','Избранное'],['place','Места'],['visit','Выезды'],['material','Материалы']]){const option=node('option',title);option.value=value;kind.append(option);}
   const cards=node('div',null,'notebook-cards'),editor=node('div');editor.hidden=true;
   const openEditor=entry=>{editing=true;toolbar.hidden=cards.hidden=true;editor.hidden=false;editEntry(editor,entry,{notebook,toast,signal,onDone:()=>{editing=false;toolbar.hidden=cards.hidden=false;editor.hidden=true;draw();}});};
   toolbar.append(search,kind,button('Заметка',()=>openEditor({kind:'note',title:'',content:'',tags:[]})),button('Список',()=>openEditor({kind:'list',title:'Новый список',content:'',tags:[],items:[]})),button('Обновить',()=>draw(true)));
@@ -48,7 +48,7 @@ export async function mountNotebook(parent,{notebook,toast,signal,discuss,openMa
       if(!values.length)cards.append(node('p','Здесь пока пусто. Создай заметку или скажи в чате: «Сохрани заметку: …».','feature-empty'));
       for(const entry of values){
         const card=node('article',null,'feature-card notebook-card');card.dataset.noteId=entry.id;
-        const badge={note:'Заметка',list:'Список',favorite:'Избранное',place:'Место',visit:'Выезд'}[entry.kind];
+        const badge={note:'Заметка',list:'Список',favorite:'Избранное',place:'Место',visit:'Выезд',material:'Материал'}[entry.kind];
         card.append(node('small',badge),node('h3',entry.title));
         if(entry.kind==='list'){
           for(const [index,item] of (entry.items||[]).slice(0,8).entries()){
@@ -59,7 +59,8 @@ export async function mountNotebook(parent,{notebook,toast,signal,discuss,openMa
           if(entry.items.length>8)card.append(node('p','Ещё пунктов: '+(entry.items.length-8)));
         }else card.append(node('p',(entry.kind==='visit'?visitSummary(entry):entry.content).slice(0,240), 'notebook-preview'));
         if(entry.tags.length)card.append(node('p',entry.tags.map(tag=>'#'+tag).join(' '),'notebook-tags'));
-        const actions=node('div',null,'feature-actions');actions.append(button('Открыть',()=>openEditor(entry)));
+        const actions=node('div',null,'feature-actions');actions.append(button('Открыть',()=>entry.kind==='material'?openMaterial(entry):openEditor(entry)));
+        if(entry.kind==='place')actions.append(button('История и материалы',()=>openPlace(entry)));
         if(['place','visit'].includes(entry.kind))actions.append(button('На карте',()=>openMap(entry)));
         actions.append(button('Обсудить с Велией',()=>discuss(entry)),button('Удалить',async()=>{
           if(!confirm('Удалить «'+entry.title+'»?'))return;

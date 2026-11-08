@@ -9,6 +9,7 @@ Object.defineProperty(globalThis,'navigator',{value:window.navigator,configurabl
 window.HTMLDialogElement.prototype.showModal=function(){this.open=true;};
 window.HTMLDialogElement.prototype.close=function(){this.open=false;};
 const account='a'.repeat(24),profile={ok:true,account,history_cache_key:'b'.repeat(64),language:'ru',credits:10,free_api_tiers:true,background_tasks:true,browser_agent:true,models:['velia-flash','velia-quantum','velia-pro']};
+const materials=new Map();globalThis.confirm=()=>true;
 const calls=[];let snapshot={revision:0,record:null},mapClick,mapRemoved=0,mapPlans=0,mapRefs,visitRef;
 window.L={
   map:()=>({setView(){return this;},invalidateSize(){},fitBounds(){return this;},attributionControl:{setPrefix(){}},on(name,action){if(name==='click')mapClick=action;},remove(){mapRemoved++;}}),
@@ -22,6 +23,7 @@ globalThis.fetch=async(url,options={})=>{
   if(path==='conversations/server-chat/messages')return Response.json({ok:true,messages:[{id:'m1',role:'user',content:'Контекст до карты',status:'completed',created_at:new Date().toISOString()},{id:'m2',role:'assistant',content:'Исходный ответ до карты',status:'completed',created_at:new Date().toISOString()}]});
   if(path==='features/chat-topics?conversation_id=server-chat')return Response.json({ok:true,entries:[]});
   if(path==='background-tasks')return Response.json({ok:true,jobs:[]});
+  if(path.startsWith('features/notebook/materials/')){const id=path.split('/').at(-1);if(options.method==='PUT'){materials.set(id,data.record);return Response.json({ok:true,owner:'7',saved:true});}if(options.method==='DELETE'){materials.delete(id);return Response.json({ok:true,owner:'7',deleted:true});}return Response.json({ok:true,owner:'7',record:materials.get(id)});}
   if(path==='features/notebook'){
     if(options.method==='PUT'){
       assert.equal(data.account,account);assert.equal(data.owner,'7');assert.equal(data.revision,snapshot.revision);
@@ -40,6 +42,12 @@ globalThis.fetch=async(url,options={})=>{
     if(mapPlans===5)plan={tool:'prepare_route',arguments:{place_ids:mapRefs,mode:'walking'}};
     if(mapPlans===6)plan={answer:'Подготовила ссылку на пеший маршрут.'};
     if(mapPlans===7)plan={tool:'schedule_visit',arguments:{place_id:mapRefs[1],date:'tomorrow',time:'10:00',task:'Передать заказ'}};
+    if(mapPlans===8)plan={tool:'add_place_note',arguments:{place_id:mapRefs[1],text:'Оплата по пятницам',type:'agreement'}};
+    if(mapPlans===9)plan={answer:'Договорённость записана.'};
+    if(mapPlans===10)plan={tool:'attach_place_materials',arguments:{place_id:mapRefs[1],caption:'Акт передачи'}};
+    if(mapPlans===11)plan={answer:'Файл сохранён у места.'};
+    if(mapPlans===12)plan={tool:'get_place_history',arguments:{place_id:mapRefs[1]}};
+    if(mapPlans===13)plan={answer:'Оплата по пятницам, заказ передан.'};
     assert.ok(plan);mapPlans++;
     return new Response('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify(plan)},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n',{headers:{'Content-Type':'text/event-stream'}});
   }
@@ -93,6 +101,17 @@ try{
   document.querySelector('[data-section="notes"]').click();await wait(()=>document.querySelectorAll('.notebook-card').length===8);assert.ok(mapRemoved>0);
   assert.ok(!calls.some(call=>call.path!=='map/plan'&&call.path!=='chat/completions'&&/\/plan$|agent\/browser/.test(call.path)));assert.equal(calls.filter(call=>call.path==='chat/completions').length,2);
   assert.equal(calls.filter(call=>call.path==='map/search').length,2);
-  console.log(JSON.stringify({ok:true,synthetic:true,checks:['notes saved from Flash, Quantum and PRO without model requests','ciphertext sent to storage','list and favorite in notebook','search own notes','map tools run through selected model from chat','follow-up saves second geocoder result with comment','requested walking route uses actual coordinates','server chat context retained in browser continuation','unrelated question returns to normal chat with actual map context','selected coordinate saved as a place','external navigation','visit scheduled and listed from chat','referenced visit completed with result','visit plan opens inline and from My places','manual visit time edit persists','map cleanup on section change']}));
+
+  buttons(document,'К диалогу')[0].click();
+  await send('Запиши договорённость по этому месту: оплата по пятницам','Договорённость записана');
+  const input=document.querySelector('#attachment-input');Object.defineProperty(input,'files',{value:[new File(['original private act'],'act.txt',{type:'text/plain'})],configurable:true});input.dispatchEvent(new window.Event('change'));await wait(()=>document.querySelector('.file-chip'));
+  await send('Прикрепи эти файлы к этому месту','Файл сохранён у места');assert.equal(materials.size,1);assert.ok(!JSON.stringify([...materials]).includes('original private act'));
+  await send('Покажи историю этого места','Оплата по пятницам, заказ передан');assert.equal(mapPlans,14);
+  const historyCard=[...document.querySelectorAll('.chat-map-result')].at(-1);buttons(historyCard,'История и материалы')[0].click();await wait(()=>document.querySelector('.place-card'));
+  assert.ok(document.querySelector('.place-card').textContent.toLocaleLowerCase().includes('заказ передан'));assert.ok(document.querySelector('.place-card').textContent.includes('Оплата по пятницам'));
+  const entry=document.querySelector('[aria-label="Запись по месту"]');entry.value='Вход со двора';entry.closest('form').dispatchEvent(new window.Event('submit',{cancelable:true}));await wait(()=>document.querySelector('.place-timeline').textContent.includes('Вход со двора'));
+  const material=[...document.querySelectorAll('.place-history-item')].find(card=>card.textContent.includes('act.txt'));buttons(material,'Открыть')[0].click();await wait(()=>document.querySelector('.file-view-body').textContent.includes('original private act'));
+  buttons(document.querySelector('.file-dialog'),'Закрыть')[0].click();buttons(material,'Удалить')[0].click();await wait(()=>materials.size===0&&!document.querySelector('.place-timeline').textContent.includes('act.txt'));
+  console.log(JSON.stringify({ok:true,synthetic:true,checks:['notes saved from Flash, Quantum and PRO without model requests','ciphertext sent to storage','list and favorite in notebook','search own notes','map tools run through selected model from chat','follow-up saves second geocoder result with comment','requested walking route uses actual coordinates','server chat context retained in browser continuation','unrelated question returns to normal chat with actual map context','selected coordinate saved as a place','external navigation','visit scheduled and listed from chat','referenced visit completed with result','visit plan opens inline and from My places','manual visit time edit persists','map cleanup on section change','place agreements and history in main chat','original file encrypted, reopened and deleted from place card','visit results and place notes share one card']}));
 }catch(error){console.error(error);console.error(JSON.stringify({mapPlans,lastMessage:document.querySelector('#messages')?.lastElementChild?.textContent}));process.exitCode=1;}
 finally{dom.window.close();setTimeout(()=>process.exit(process.exitCode||0),10);}

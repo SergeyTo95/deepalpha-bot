@@ -7,6 +7,7 @@ from velia_desktop_routes import AuthenticationUnavailable
 
 ROUTES = [["GET","projects"],["GET","projects/{projectId}"],["POST","projects"],["PATCH","projects/{projectId}"],["GET","project-resources"],["POST","project-resources"],["PATCH","project-resources/{resourceId}"],["GET","medical/status"],["GET","medical/cases"],["POST","medical/cases"],["GET","medical/cases/{caseId}"],["POST","medical/cases/{caseId}/study/begin"],["POST","medical/cases/{caseId}/study/complete"],["POST","medical/cases/{caseId}/research"],["GET","research/status"],["GET","research/missions"],["POST","research/missions"],["GET","research/missions/{missionId}"],["GET","research/missions/{missionId}/sources"],["GET","research/missions/{missionId}/evidence-claims"],["GET","research/missions/{missionId}/claims"],["GET","research/missions/{missionId}/reports"],["GET","research/missions/{missionId}/scientific-alerts"],["GET","research/claims/{claimId}/timeline"],["POST","research/missions/{missionId}/literature"],["POST","research/missions/{missionId}/synthesize"],["POST","research/missions/{missionId}/reports"],["POST","research/missions/{missionId}/runs"],["POST","research/scientific-alerts/{alertId}/acknowledge"],["GET","profile"],["PATCH","profile"],["GET","plugins"],["PATCH","plugins"],["GET","studio/status"],["GET","studio/sessions"],["POST","studio/sessions"],["GET","studio/sessions/{sessionId}"],["GET","studio/sessions/{sessionId}/messages"],["POST","studio/sessions/{sessionId}/assets"],["POST","studio/sessions/{sessionId}/generate"],["GET","usage"],["GET","agent/status"],["GET","agent/tools"],["POST","agent/jobs"],["GET","agent/jobs/{jobId}"],["POST","agent/jobs/{jobId}/actions/{actionId}/approve"],["POST","agent/jobs/{jobId}/actions/{actionId}/reject"],["POST","agent/jobs/{jobId}/run"],["GET","agent/connectors/google-calendar/status"],["GET","agent/connectors/google-calendar/connect"],["DELETE","agent/connectors/google-calendar"],["GET","agents/status"],["GET","agents/capabilities"],["GET","agents"],["POST","agents"],["DELETE","agents/{agentId}"],["GET","agents/{agentId}/conversations"],["POST","agents/{agentId}/conversations"],["GET","developer/projects"],["GET","developer/factory/status"],["GET","developer/autopilot/status"],["GET","developer/autopilot/ci/status"],["GET","developer/autopilot/review/status"],["GET","developer/autopilot/merge-policy/status"],["GET","developer/autopilot/missions"],["POST","developer/autopilot/missions"],["POST","developer/autopilot/missions/{missionId}/activate"],["POST","developer/autopilot/missions/{missionId}/pause"],["GET","developer/autopilot/missions/{missionId}/tasks"],["POST","developer/autopilot/missions/{missionId}/tasks"],["POST","developer/autopilot/tasks/{taskId}/cancel"],["GET","developer/autopilot/missions/{missionId}/runs"],["GET","developer/autopilot/runs/{runId}/ci"],["GET","developer/autopilot/runs/{runId}/reviews"],["GET","developer/autopilot/runs/{runId}/merge-policy"]]
 ROUTES += [("GET", "notebook"), ("PUT", "notebook")]
+ROUTES += [(method, "notebook/materials/{material_id}") for method in ("GET", "PUT", "DELETE")]
 ROUTES += [("GET", "chat-topics"), ("POST", "chat-topics"), ("GET", "conversations/{conversation_id}")]
 ROUTES += [("GET", "developer/status"), ("POST", "developer/github/disconnect"), ("POST", "developer/github/web-install-url"),
            ("GET", "developer/installations"), ("GET", "developer/repositories"), ("POST", "developer/projects")]
@@ -81,10 +82,18 @@ def setup_feature_routes(app, *, session_for, same_origin, upstream, json_respon
                 return await binary_upstream(request, target, session.access)
             data = None
             if request.method != "GET":
-                data = await request.json()
+                if path == 'notebook' or path.startswith('notebook/materials/'):
+                    limit = 7 * 1024 * 1024 + 4096 if path.startswith('notebook/materials/') else 710000
+                    body = bytearray()
+                    async for chunk in request.content.iter_chunked(16384):
+                        body.extend(chunk)
+                        if len(body) > limit:return error('request_too_large', 413)
+                    data = json.loads(body)
+                else:
+                    data = await request.json()
                 if not isinstance(data, dict):
                     return error("invalid_request", 400)
-            if path == 'notebook' and request.method != 'GET':
+            if (path == 'notebook' or path.startswith('notebook/materials/')) and request.method != 'GET':
                 account = hashlib.sha256((origin + ':' + str(session.user_id)).encode()).hexdigest()[:24]
                 if data.get('account') != account:return error('notebook_owner_changed', 403)
             key = request.headers.get('Idempotency-Key')

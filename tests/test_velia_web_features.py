@@ -112,3 +112,28 @@ def test_agent_settings_relay_preserves_boolean_without_bypassing_owner_authoriz
             assert (await client.get(url,headers=h)).status==404
             assert not route_allowed('POST','agents/a-123/execute')
     asyncio.run(scenario())
+
+
+def test_material_relay_bounds_large_json_after_auth_and_checks_account():
+    import hashlib
+    async def scenario():
+        seen=[]
+        origin='https://velia.example'
+        account=hashlib.sha256((origin+':7').encode()).hexdigest()[:24]
+        async def session_for(request):return SimpleNamespace(access='owner-token',user_id=7) if request.headers.get('X-Test') else None
+        async def upstream(method,path,**kwargs):seen.append((method,path,kwargs));return 200,{'ok':True,'owner':'7'}
+        app=web.Application(client_max_size=16384)
+        setup_feature_routes(app,origin=origin,session_for=session_for,same_origin=lambda r:r.headers.get('Origin')==origin,upstream=upstream,json_response=lambda d,status=200:web.json_response(d,status=status))
+        async with TestServer(app) as server,ClientSession() as client:
+            url=server.make_url('/web-api/v1/features/notebook/materials/11111111-1111-4111-8111-111111111111')
+            headers={'Origin':origin,'X-Test':'yes'}
+            assert (await client.put(url,json={'account':account,'owner':'7'})).status==403
+            assert (await client.get(url)).status==401
+            assert (await client.put(url,headers=headers,json={'account':'b'*24,'owner':'7'})).status==403
+            payload={'account':account,'owner':'7','record':{'data':'A'*150000}}
+            assert (await client.put(url,headers=headers,json=payload)).status==200
+            assert seen[-1][2]['data']==payload and seen[-1][2]['token']=='owner-token'
+            assert (await client.delete(url,headers=headers,json={'account':account,'owner':'7'})).status==200
+            assert (await client.put(url,headers=headers,data=b'x'*(7*1024*1024+4097))).status==413
+            assert len(seen)==2
+    asyncio.run(scenario())
