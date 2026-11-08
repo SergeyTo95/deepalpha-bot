@@ -137,3 +137,25 @@ def test_material_relay_bounds_large_json_after_auth_and_checks_account():
             assert (await client.put(url,headers=headers,data=b'x'*(7*1024*1024+4097))).status==413
             assert len(seen)==2
     asyncio.run(scenario())
+
+
+def test_pulse_mutations_require_current_web_account_and_preserve_backend_owner_auth():
+    import hashlib
+    async def scenario():
+        origin='https://velia.example';account=hashlib.sha256((origin+':7').encode()).hexdigest()[:24];seen=[]
+        async def session_for(request):return SimpleNamespace(access='owner-token',user_id=7) if request.headers.get('X-Test') else None
+        async def upstream(method,path,**kwargs):seen.append((method,path,kwargs));return 200,{'ok':True,'items':[]}
+        app=web.Application();setup_feature_routes(app,origin=origin,session_for=session_for,same_origin=lambda r:r.headers.get('Origin')==origin,upstream=upstream,json_response=lambda d,status=200:web.json_response(d,status=status))
+        async with TestServer(app) as server,ClientSession() as client:
+            url=server.make_url('/web-api/v1/features/pulse');headers={'Origin':origin,'X-Test':'yes'}
+            assert (await client.get(url)).status==401
+            assert (await client.post(url,json={'account':account})).status==403
+            assert (await client.post(url,headers=headers,json={'account':'b'*24})).status==403
+            assert not seen
+            response=await client.get(url,headers=headers);assert (await response.json())['account']==account
+            assert (await client.post(url,headers=headers,json={'account':account,'title':'Напомнить'})).status==200
+            assert seen[-1][2]['token']=='owner-token'
+            assert (await client.patch(str(url)+'/settings',headers=headers,json={'account':account,'telegram':False})).status==200
+            assert route_allowed('POST','pulse/notifications/11111111-1111-4111-8111-111111111111/read')
+            assert not route_allowed('POST','pulse/send-to-anyone')
+    asyncio.run(scenario())

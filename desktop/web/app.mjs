@@ -1,3 +1,5 @@
+import {setupPulse,wantsPulse,pulseWhen,pulseDateReply} from './pulse.mjs';
+import {runPulseCommand} from './pulse-agent.mjs';
 import {visitSummary} from './visits.mjs';
 import {wantsMap,wantsPlaceHistory,runMapAgent,mapMessageContext} from './map-agent.mjs';
 import {mapResultNode} from './map-result.mjs';
@@ -170,7 +172,15 @@ async function saveIncomePlan(plan) {
     'План открыт. Сохранение на устройстве недоступно. Его можно скачать в меню диалога.');
 }
 const voice = setupVoice({accountLanguage:()=>profile?.language||'', busy:()=>busy, toast, modelName:()=>MODELS[model], send:text=>{if(agentMode&&model==='velia-flash')setAgentMode(false);$("prompt").value=text;return generate(false, true);}});
-const features = setupFeatures({notebook,previewFile:file=>fileTools.previewFile(file),discussNote:entry=>{
+const pulse=setupPulse({request:featureRequest,profile:()=>profile,toast,accountChanged:()=>resetOtherTab(),changed:()=>{const b=document.querySelector('[data-section="pulse"]');if(b){const count=pulse.state().notifications.filter(n=>n.status==='unread').length;b.setAttribute('aria-label','Пульс'+(count?' · непрочитанных '+count:''));b.dataset.unread=count||'';const bell=$('pulse-open');if(bell){bell.dataset.unread=count||'';bell.setAttribute('aria-label','Пульс'+(count?' · непрочитанных '+count:' — напоминания'));}}}});
+async function openPulseResource(resource){
+  if(busy){toast('Дождись завершения текущего ответа.');return;}
+  try{if(resource.kind==='chat'){let chat=chats.find(p=>p.id===resource.id);if(!chat){await syncHistory();chat=chats.find(p=>p.id===resource.id);}if(!chat)throw Error('Диалог не найден в этом аккаунте.');features.close();await openChat(chat);return;}
+    const entry=(await notebook.load()).find(p=>p.id===resource.id);if(!entry)throw Error('Связанная запись удалена. Само напоминание сохранено.');
+    if(entry.kind==='place')await features.open('map',{placeId:entry.id});else if(entry.kind==='visit')await features.open('map',{tab:'visits',date:entry.date});else await features.open('notes',{id:entry.id});
+  }catch(error){toast(error.message);}
+}
+const features = setupFeatures({notebook,pulse,openPulseResource,previewFile:file=>fileTools.previewFile(file),discussNote:entry=>{
   if(busy)return;
   if($('prompt').value.trim()){toast('В чате есть черновик. Сохрани или очисти его перед переходом.');return;}
   features.close();setAgentMode(false,true);newChat();
@@ -225,6 +235,7 @@ function lockHistory() {
   incomePlanner.reset();
   backgroundTakeover=null;
   background.reset();
+  pulse.reset();$('pulse-open').hidden=true;
   autoloop.reset();
   abort?.abort(); clearTimeout(saveTimer); saveTimer = null;
   notebook.lock();localHistory.lock(); storageKey = null; chats = []; currentId = null;
@@ -417,6 +428,8 @@ function messageNode(message, index) {
         : "";
   article.append(content);
   if(message.mapData){const controller=new AbortController();mapViews.push(controller);const view=mapResultNode(message.mapData,{signal:controller.signal,autoOpen:!busy&&!message.pending&&index===current().messages.length-1,toast,openPlaces:draft=>features.open('map',draft)});if(view)article.append(view);}
+  if(message.pulseIds?.length||message.pulseDraft){const box=document.createElement('section');box.className='chat-pulse-result';for(const id of (message.pulseIds||[]).slice(0,12)){const item=pulse.state().items.find(p=>p.item_id===id);if(item){const p=document.createElement('p');p.textContent=item.title+' · '+pulseWhen(item);box.append(p);}}const b=document.createElement('button');b.type='button';b.textContent=message.pulseDraft?'Уточнить напоминание':'Открыть Пульс';b.onclick=()=>features.open('pulse',message.pulseDraft||{});box.append(b);article.append(box);}
+  if(message.role==='user'&&!wantsPulse(message.content)&&/(?:надо бы|нужно будет|обещал[аи]?).{0,100}(?:завтра|сегодня|пятниц|понедельник|вторник|сред|четверг|суббот|воскрес)/iu.test(message.content)){const b=document.createElement('button');b.type='button';b.textContent='Напомнить об этом';b.onclick=()=>features.open('pulse',{title:message.content.slice(0,500),resource:{kind:'chat',id:current().id}});article.append(b);}
   if(message.fileNames?.length){const files=document.createElement('div');files.className='message-files';message.fileNames.forEach((name,i)=>{const id=message.attachmentIds?.[i],available=!!fileTools.get(id),item=document.createElement(available?'button':'span');item.textContent=name;if(available){item.type='button';item.onclick=()=>{const original=fileTools.get(id);if(original)fileTools.previewFile(original).catch(()=>toast('Не удалось открыть файл.'));else toast('Оригинал больше не доступен в этой сессии. Прикрепи файл заново.');};}else item.title='Оригинал недоступен для просмотра в этой сессии.';files.append(item);});article.append(files);}
   if (message.role === "assistant" && message.search) {
     const sources = sourceNode(message.search);
@@ -453,7 +466,7 @@ function messageNode(message, index) {
       actions.append(documentExportControl(message.content,toast));
       const favoriteId='favorite:'+current().id+':'+index;
       const favorite=document.createElement('button');favorite.textContent='☆';favorite.title='В избранное';favorite.setAttribute('aria-label','Сохранить ответ в избранное');
-      favorite.onclick=async()=>{if(!profile){openAuth();return;}favorite.disabled=true;try{await notebook.save({id:favoriteId,kind:'favorite',title:message.content.replace(/[#*`]/g,'').slice(0,100).trim()||'Ответ Велии',content:message.content,tags:['Из чата']},{ifAbsent:true});favorite.textContent='★';toast('Ответ сохранён в избранном.');}catch(error){toast(error.message);}finally{favorite.disabled=false;}};actions.append(favorite);
+      favorite.onclick=async()=>{if(!profile){openAuth();return;}favorite.disabled=true;try{await notebook.save({id:favoriteId,kind:'favorite',title:message.content.replace(/[#*`]/g,'').slice(0,100).trim()||'Ответ Велии',content:message.content,tags:['Из чата']},{ifAbsent:true});favorite.textContent='★';toast('Ответ сохранён в избранном.');}catch(error){toast(error.message);}finally{favorite.disabled=false;}};actions.append(favorite);const remind=document.createElement('button');remind.type='button';remind.textContent='Напомнить';remind.onclick=()=>{if(!profile){openAuth();return;}features.open('pulse',{title:message.content.slice(0,500),resource:{kind:'chat',id:current().id}});};actions.append(remind);
     }
     if (index === current().messages.length - 1 && !message.local) {
       if (canContinuePartialAnswer(message)) {
@@ -888,6 +901,7 @@ async function applyProfile(value) {
   profile = value;
   background.poll();
   autoloop.poll();
+  $('pulse-open').hidden=false;pulse.poll();
   voice.syncLanguage();
   internetAvailable = !!value.web_search;
   $("guest-notice").hidden = true;
@@ -941,6 +955,7 @@ async function applyProfile(value) {
   setModel(model);
   render();
   syncHistory();
+  if(new URL(location.href).searchParams.has('pulse'))features.open('pulse');
 }
 function renderGuestCounter() {
   $("guest-counter").textContent = guest.remaining > 0 ? "Без регистрации · осталось " + guest.remaining + " из 30 сообщений" : "30 гостевых сообщений использованы. Войди, чтобы продолжить.";
@@ -1005,6 +1020,22 @@ async function runNotebookCommand(command,text,voiceTurn){
   if(profile?.account===owner&&destination)await features.open(...destination);
   if(profile?.account===owner&&reply&&voiceTurn){voice.update(reply);voice.complete(reply);}
 }
+async function runPulseChat(text,voiceTurn){
+  const owner=profile.account;let chat=current();
+  if(!chat){chat={id:crypto.randomUUID(),title:'Пульс · напоминания',messages:[],updated:Date.now()};chats.unshift(chat);currentId=chat.id;}
+  else if(chat.remote){chat={...chat,id:crypto.randomUUID(),remote:false,messages:chat.messages.slice(-100)};chats.unshift(chat);currentId=chat.id;}
+  const user={role:'user',content:text,sentAt:Date.now(),requestId:crypto.randomUUID()},answer={role:'assistant',content:'',pending:true,model,sentAt:Date.now(),local:true};chat.messages.push(user,answer);setAgentMode(false,true);$('prompt').value='';resizePrompt();setBusy(true);abort=new AbortController();render();await save();
+  const guard=()=>{abort?.signal.throwIfAborted();if(profile?.account!==owner)throw new DOMException('Account changed','AbortError');};
+  try{let draftContext=chat.pulseDraft;
+    if(!draftContext&&/^(?:напомни|remind)/iu.test(text)&&/(?:этому|этого|этом|this).{0,20}(?:мест|объект|визит|place|visit)/iu.test(text)){
+      const previous=chat.messages.filter(m=>m.role==='assistant'&&m.mapData&&!m.failed).at(-1)?.mapData,rows=previous?.visitPlan?.rows||[],places=(previous?.display||[]).map(id=>previous.places.find(p=>p.ref===id));
+      const ref=/визит|visit/iu.test(text)&&rows.length===1?{kind:'visit',id:rows[0].visitId}:places.length===1&&places[0]?.savedId?{kind:'place',id:places[0].savedId}:null;
+      if(ref&&(await notebook.load()).some(p=>p.id===ref.id))draftContext={resource:ref};guard();
+    }
+    const result=await runPulseCommand({text,user,history:chat.messages.filter(m=>m!==answer),pending:draftContext,pulse,model,request,signal:abort.signal,language:profile.language,guard,persist:()=>save()});guard();answer.content=result.reply;answer.pulseIds=result.ids;answer.pulseDraft=result.draft;chat.pulseDraft=result.draft||null;answer.finish='stop';answer.pending=false;chat.updated=Date.now();render();save();if(voiceTurn){voice.update(result.reply);voice.complete(result.reply);}if(result.open){setBusy(false);await features.open('pulse');}}
+  catch(error){if(profile?.account===owner){if(error.draft){answer.pulseDraft=error.draft;chat.pulseDraft=error.draft;}answer.content=error.name==='AbortError'?'Операция остановлена. Проверь Пульс перед повтором.':error.message;answer.failed=true;answer.pending=false;render();save();if(voiceTurn)voice.failure(false,answer.content);}}
+  finally{abort=null;setBusy(false);if(profile?.account===owner)render();}
+}
 async function generate(retry = false, voiceTurn = false) {
   if (busy || !ready) return;
   if (agentMode && !profile) { openAuth(); return; }
@@ -1015,6 +1046,7 @@ async function generate(retry = false, voiceTurn = false) {
     if (!guest || guest.remaining <= 0) { openAuth(); return; }
   }
   const text = $("prompt").value.trim() || (selectedFiles.length ? "Проанализируй прикреплённые файлы." : "");
+  if(!retry&&!selectedFiles.length&&(wantsPulse(text)||current()?.pulseDraft&&pulseDateReply(text))){if(!profile){openAuth();return;}await runPulseChat(text,voiceTurn);return;}
   const noteCommand=!retry&&!selectedFiles.length&&!wantsPlaceHistory(text,current()?.messages||[])&&notebookCommand(text);
   if(noteCommand&&(noteCommand.kind!=='map'||!noteCommand.query)){if(!profile){openAuth();return;}await runNotebookCommand(noteCommand,text,voiceTurn);return;}
   if (profile && !profile.models.includes(model)) {
@@ -1599,6 +1631,8 @@ async function changeChat(action){
 }
 $("chat-rename").onclick=()=>changeChat("rename");$("chat-pin").onclick=()=>changeChat("pin");$("chat-share").onclick=()=>changeChat("share");
 
+$('pulse-open').onclick=()=>features.open('pulse');
+$('chat-reminder').onclick=()=>{const chat=current(),last=chat?.messages.findLast(m=>m.role==='user');$('chat-tools-menu').hidden=true;features.open('pulse',{title:last?.content.slice(0,500)||'',...(chat?{resource:{kind:'chat',id:chat.id}}:{})});};
 $("chat-schedule").onclick=()=>{const chat=chats.find(c=>c.id===currentId),last=chat?.messages.findLast(m=>m.role==='user');$("chat-tools-menu").hidden=true;features.open('autopilot',{instruction:last?.content?.slice(0,200)||''});};
 
 $('chat-export').onclick=()=>{const chat=current();$('chat-tools-menu').hidden=true;if(!chat?.messages.length){toast('Сначала открой диалог с сообщениями.');return;}fileTools.downloadText('# '+chat.title+'\n\n'+chat.messages.map(m=>(m.role==='user'?'## Вы':'## VELIA')+'\n\n'+m.content+(m.fileNames?.length?'\n\nФайлы: '+m.fileNames.join(', '):'')).join('\n\n---\n\n'),'VELIA-chat.md');};

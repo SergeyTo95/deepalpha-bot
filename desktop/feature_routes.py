@@ -6,6 +6,7 @@ from aiohttp import web
 from velia_desktop_routes import AuthenticationUnavailable
 
 ROUTES = [["GET","projects"],["GET","projects/{projectId}"],["POST","projects"],["PATCH","projects/{projectId}"],["GET","project-resources"],["POST","project-resources"],["PATCH","project-resources/{resourceId}"],["GET","medical/status"],["GET","medical/cases"],["POST","medical/cases"],["GET","medical/cases/{caseId}"],["POST","medical/cases/{caseId}/study/begin"],["POST","medical/cases/{caseId}/study/complete"],["POST","medical/cases/{caseId}/research"],["GET","research/status"],["GET","research/missions"],["POST","research/missions"],["GET","research/missions/{missionId}"],["GET","research/missions/{missionId}/sources"],["GET","research/missions/{missionId}/evidence-claims"],["GET","research/missions/{missionId}/claims"],["GET","research/missions/{missionId}/reports"],["GET","research/missions/{missionId}/scientific-alerts"],["GET","research/claims/{claimId}/timeline"],["POST","research/missions/{missionId}/literature"],["POST","research/missions/{missionId}/synthesize"],["POST","research/missions/{missionId}/reports"],["POST","research/missions/{missionId}/runs"],["POST","research/scientific-alerts/{alertId}/acknowledge"],["GET","profile"],["PATCH","profile"],["GET","plugins"],["PATCH","plugins"],["GET","studio/status"],["GET","studio/sessions"],["POST","studio/sessions"],["GET","studio/sessions/{sessionId}"],["GET","studio/sessions/{sessionId}/messages"],["POST","studio/sessions/{sessionId}/assets"],["POST","studio/sessions/{sessionId}/generate"],["GET","usage"],["GET","agent/status"],["GET","agent/tools"],["POST","agent/jobs"],["GET","agent/jobs/{jobId}"],["POST","agent/jobs/{jobId}/actions/{actionId}/approve"],["POST","agent/jobs/{jobId}/actions/{actionId}/reject"],["POST","agent/jobs/{jobId}/run"],["GET","agent/connectors/google-calendar/status"],["GET","agent/connectors/google-calendar/connect"],["DELETE","agent/connectors/google-calendar"],["GET","agents/status"],["GET","agents/capabilities"],["GET","agents"],["POST","agents"],["DELETE","agents/{agentId}"],["GET","agents/{agentId}/conversations"],["POST","agents/{agentId}/conversations"],["GET","developer/projects"],["GET","developer/factory/status"],["GET","developer/autopilot/status"],["GET","developer/autopilot/ci/status"],["GET","developer/autopilot/review/status"],["GET","developer/autopilot/merge-policy/status"],["GET","developer/autopilot/missions"],["POST","developer/autopilot/missions"],["POST","developer/autopilot/missions/{missionId}/activate"],["POST","developer/autopilot/missions/{missionId}/pause"],["GET","developer/autopilot/missions/{missionId}/tasks"],["POST","developer/autopilot/missions/{missionId}/tasks"],["POST","developer/autopilot/tasks/{taskId}/cancel"],["GET","developer/autopilot/missions/{missionId}/runs"],["GET","developer/autopilot/runs/{runId}/ci"],["GET","developer/autopilot/runs/{runId}/reviews"],["GET","developer/autopilot/runs/{runId}/merge-policy"]]
+ROUTES += [("GET", "pulse"), ("POST", "pulse"), ("GET", "pulse/settings"), ("PATCH", "pulse/settings"), ("POST", "pulse/{item_id}"), ("DELETE", "pulse/{item_id}"), ("POST", "pulse/notifications/{notification_id}/read")]
 ROUTES += [("GET", "notebook"), ("PUT", "notebook")]
 ROUTES += [(method, "notebook/materials/{material_id}") for method in ("GET", "PUT", "DELETE")]
 ROUTES += [("GET", "chat-topics"), ("POST", "chat-topics"), ("GET", "conversations/{conversation_id}")]
@@ -38,6 +39,8 @@ def safe_result(value):
     return value
 
 def route_allowed(method, path):
+    if path.startswith('pulse/') and path!='pulse/settings':
+        return bool((method in {'POST','DELETE'} and re.fullmatch(r'pulse/[a-f0-9-]{36}',path)) or (method=='POST' and re.fullmatch(r'pulse/notifications/[a-f0-9-]{36}/read',path)))
     return any(method == verb and pattern.fullmatch(path) for verb, pattern in PATTERNS)
 
 def setup_feature_routes(app, *, session_for, same_origin, upstream, json_response, binary_upstream=None, origin=""):
@@ -93,7 +96,7 @@ def setup_feature_routes(app, *, session_for, same_origin, upstream, json_respon
                     data = await request.json()
                 if not isinstance(data, dict):
                     return error("invalid_request", 400)
-            if (path == 'notebook' or path.startswith('notebook/materials/')) and request.method != 'GET':
+            if (path == 'notebook' or path.startswith('notebook/materials/') or path == 'pulse' or path.startswith('pulse/')) and request.method != 'GET':
                 account = hashlib.sha256((origin + ':' + str(session.user_id)).encode()).hexdigest()[:24]
                 if data.get('account') != account:return error('notebook_owner_changed', 403)
             key = request.headers.get('Idempotency-Key')
@@ -101,7 +104,7 @@ def setup_feature_routes(app, *, session_for, same_origin, upstream, json_respon
                 return error('invalid_request', 400)
             status, result = await upstream(request.method, target, token=session.access, data=data,
                 **({'idempotency_key': key} if key else {}))
-            if path == 'notebook' and isinstance(result, dict) and result.get('ok'):
+            if (path == 'notebook' or path == 'pulse' or path.startswith('pulse/')) and isinstance(result, dict) and result.get('ok'):
                 result = {**result, 'account':hashlib.sha256((origin + ':' + str(session.user_id)).encode()).hexdigest()[:24]}
             return json_response(safe_result(result), status)
         except web.HTTPRequestEntityTooLarge:
