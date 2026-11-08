@@ -81,7 +81,7 @@ def test_group(group, sha):
     env = clean_environment()
     Path(env['HOME']).mkdir(exist_ok=True)
     if group == 'backend':
-        run('python -m pytest -q -p no:cacheprovider tests/test_railway_verified_ci.py tests/test_velia_notebook.py tests/test_velia_notebook_materials.py', env)
+        run('python -m pytest -q -p no:cacheprovider tests/test_railway_verified_ci.py tests/test_velia_notebook.py tests/test_velia_notebook_materials.py tests/test_velia_pulse.py', env)
     if os.geteuid() == 0:
         raise RuntimeError('PostgreSQL validation must run as an unprivileged build user')
     data = tempfile.mkdtemp(prefix='velia-ci-pg-')
