@@ -30,9 +30,10 @@ def zone(value):
     try:return ZoneInfo(value)
     except Exception:raise PulseError('pulse_timezone_invalid') from None
 
-def local_epoch(day,clock,tz):
+def local_epoch(day,clock,tz,second=0):
     if not isinstance(day,str) or not re.fullmatch(r'20\d\d-\d{2}-\d{2}',day) or not isinstance(clock,str) or not TIME.fullmatch(clock):raise PulseError('pulse_time_invalid')
-    try:naive=datetime.fromisoformat(day+'T'+clock)
+    if type(second) is not int or not 0<=second<=59:raise PulseError('pulse_time_invalid')
+    try:naive=datetime.fromisoformat(day+'T'+clock).replace(second=second)
     except ValueError:raise PulseError('pulse_time_invalid') from None
     target=naive.replace(tzinfo=zone(tz),fold=0)
     if datetime.fromtimestamp(target.timestamp(),zone(tz)).replace(tzinfo=None)!=naive:raise PulseError('pulse_dst_gap')
@@ -137,8 +138,8 @@ def normalize(data,at,allow_past=False):
         if type(delay) is not int or not 0<=delay<=10080:raise PulseError('pulse_dependency_invalid')
         schedule={'kind':'after','minutes':delay};due=None
     elif isinstance(schedule,dict) and schedule.get('kind')=='once':
-        if set(schedule)!={'kind','date','time'}:raise PulseError('pulse_invalid')
-        due=local_epoch(schedule['date'],schedule['time'],tz)
+        if set(schedule) not in ({'kind','date','time'},{'kind','date','time','second'}):raise PulseError('pulse_invalid')
+        due=local_epoch(schedule['date'],schedule['time'],tz,schedule.get('second',0))
         if (due<=at and not allow_past) or due>at+366*86400*5:raise PulseError('pulse_time_past')
     elif isinstance(schedule,dict) and schedule.get('kind') in ('daily','weekly'):
         kind=schedule['kind'];allowed_keys={'kind','time'}|({'weekdays'} if kind=='weekly' else set())
@@ -212,7 +213,7 @@ def _emit(c,user,item_id,occurrence,kind,payload,prefs,at,followup=None):
 
 def action(user,item_id,data):
     ensure_schema();at=now()
-    if not isinstance(data,dict) or set(data)-{'action','revision','occurrence_at','date','time','timezone','result'}:raise PulseError('pulse_invalid')
+    if not isinstance(data,dict) or set(data)-{'action','revision','occurrence_at','date','time','second','timezone','result'}:raise PulseError('pulse_invalid')
     verb=data.get('action')
     if verb not in ('complete','snooze','cancel'):raise PulseError('pulse_invalid')
     if type(data.get('revision')) is not int:raise PulseError('pulse_revision_invalid')
@@ -236,9 +237,9 @@ def action(user,item_id,data):
             for iid in cancelled-{item_id}:c.execute("UPDATE velia_pulse_items SET state='cancelled',revision=revision+1,updated_at=%s WHERE user_id=%s AND item_id=%s",(at,int(user),iid))
             c.execute("UPDATE velia_pulse_notifications SET status='done',delivery=CASE WHEN delivery='pending' THEN 'off' ELSE delivery END,followup_at=NULL WHERE user_id=%s AND item_id=%s",(int(user),item_id))
         elif verb=='snooze':
-            tz=data.get('timezone',item['timezone']);due=local_epoch(data.get('date'),data.get('time'),tz)
+            tz=data.get('timezone',item['timezone']);due=local_epoch(data.get('date'),data.get('time'),tz,data.get('second',0))
             if due<=at or due>at+366*86400*5:raise PulseError('pulse_time_past')
-            if item['schedule']['kind']=='once':payload['schedule']={'kind':'once','date':data['date'],'time':data['time']};payload['timezone']=tz
+            if item['schedule']['kind']=='once':payload['schedule']={'kind':'once','date':data['date'],'time':data['time'],**({'second':data['second']} if 'second' in data else {})};payload['timezone']=tz
             notify=quiet_time(due,prefs,item['respect_quiet']);state='active'
             c.execute("UPDATE velia_pulse_notifications SET status='snoozed',delivery=CASE WHEN delivery='pending' THEN 'off' ELSE delivery END,followup_at=NULL WHERE user_id=%s AND item_id=%s AND occurrence_at=%s",(int(user),item_id,occurrence))
         elif verb=='complete':

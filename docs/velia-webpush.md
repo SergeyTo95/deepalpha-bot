@@ -3,6 +3,14 @@
 Web notifications are delivered by the existing backend Pulse worker, not by the
 page timer. No new Railway service or external notification account is needed.
 
+Relative chat commands such as “через 1 минуту” preserve the requested second
+in the one-off schedule, without rounding up to the next clock minute. The
+backend accepts an optional integer `second` from 0 through 59 for one-off
+creation and snooze; existing minute-only clients remain compatible. The
+15-second scheduler and outbox polling intervals still add bounded polling
+latency; OS/browser delivery has no exact-time guarantee. Scheduled user alerts
+use Web Push `Urgency: high` to request prompt background delivery.
+
 ## Release order
 
 1. Deploy the backend release (subscription routes, encrypted outbox, sender).

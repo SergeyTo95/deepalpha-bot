@@ -142,7 +142,7 @@ def wire(notice):
     from pywebpush import WebPusher
     sub=subscription(notice['subscription']);url=urlsplit(sub['endpoint'])
     headers=vapid().sign({'aud':url.scheme+'://'+url.netloc,'sub':valid_origin(notice['origin']),'exp':pulse.now()+3600})
-    headers.update({'Content-Encoding':'aes128gcm','Content-Type':'application/octet-stream','TTL':'3600','Urgency':'normal'})
+    headers.update({'Content-Encoding':'aes128gcm','Content-Type':'application/octet-stream','TTL':'3600','Urgency':'high'})
     body=WebPusher(sub).encode(json.dumps(notice['payload'],ensure_ascii=False,separators=(',',':')).encode())['body']
     return sub['endpoint'],headers,body
 
