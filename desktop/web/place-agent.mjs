@@ -35,5 +35,11 @@ export function createPlaceActions({state,notebook,user,guard,findPlace,persist,
     }else throw Error('Неизвестное действие с историей места.');
     const output=await read(point,false);return {saved:true,...output};
   }
-  return {run};
+  function quickRead(ids=[]){
+    if(ids.length!==1||!state.places.some(p=>p.ref===ids[0]&&p.savedId))return null;
+    const input=user.content.trim();
+    if(/^(?:покажи|открой)\s+(?:мне\s+)?(?:историю|договор[её]нности|материалы)\s+(?:этого места|этого объекта|здесь|его|е[её])[.!?]*$/iu.test(input)||/^(?:show|open)\s+(?:the\s+)?(?:history|agreements|materials)(?:\s+(?:of|for))?\s+(?:this place|this location|it)[.!?]*$/iu.test(input))return {name:'get_place_history',args:{place_id:ids[0]}};
+    return null;
+  }
+  return {run,quickRead};
 }

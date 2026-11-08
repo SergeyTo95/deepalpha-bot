@@ -80,6 +80,8 @@ export async function runMapAgent({model,user,history,notebook,signal,request,pr
   const visits=createVisitActions({state,notebook,user,guard,findPlace:find,addPlace:add,persist,now});
   const placeActions=createPlaceActions({state,notebook,user,guard,findPlace:find,persist,files});
   const catalog=[...tools,...VISIT_TOOLS,...PLACE_TOOLS];
+  const historyRead=/^(?:ru|en)/i.test(language)&&placeActions.quickRead(previous?.display);
+  if(historyRead){await placeActions.run(historyRead.name,historyRead.args);guard();if(!validMapData(state))throw Error('Не удалось проверить историю места.');publish();return {text:String(language).startsWith('en')?'Opened the saved place history.':'Показала историю места.',data:state};}
   const quick=fastVisitReplies&&/^(?:ru|en)/i.test(language)&&visits.quickCommand();
   if(quick){const output=await visits.run(quick.name,quick.args);guard();if(!validMapData(state))throw Error('Не удалось проверить план выездов.');publish();const reply=quickVisitReply(quick.name,output,user.content,language);if(reply)return {text:reply,data:state};}
   const noWrite=/(?:не\s+(?:надо\s+|нужно\s+)?(?:сохран|запомин|добав|запис|обнов|меня)|(?:do not|don't|dont|never)\s+(?:save|remember|add|update|edit))/iu.test(user.content);

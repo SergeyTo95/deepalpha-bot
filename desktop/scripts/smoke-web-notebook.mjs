@@ -106,7 +106,7 @@ try{
   await send('Запиши договорённость по этому месту: оплата по пятницам','Договорённость записана');
   const input=document.querySelector('#attachment-input');Object.defineProperty(input,'files',{value:[new File(['original private act'],'act.txt',{type:'text/plain'})],configurable:true});input.dispatchEvent(new window.Event('change'));await wait(()=>document.querySelector('.file-chip'));
   await send('Прикрепи эти файлы к этому месту','Файл сохранён у места');assert.equal(materials.size,1);assert.ok(!JSON.stringify([...materials]).includes('original private act'));
-  await send('Покажи историю этого места','Оплата по пятницам, заказ передан');assert.equal(mapPlans,14);
+  await send('Покажи историю этого места','Показала историю места');assert.equal(mapPlans,12);
   const historyCard=[...document.querySelectorAll('.chat-map-result')].at(-1);buttons(historyCard,'История и материалы')[0].click();await wait(()=>document.querySelector('.place-card'));
   assert.ok(document.querySelector('.place-card').textContent.toLocaleLowerCase().includes('заказ передан'));assert.ok(document.querySelector('.place-card').textContent.includes('Оплата по пятницам'));
   const entry=document.querySelector('[aria-label="Запись по месту"]');entry.value='Вход со двора';entry.closest('form').dispatchEvent(new window.Event('submit',{cancelable:true}));await wait(()=>document.querySelector('.place-timeline').textContent.includes('Вход со двора'));

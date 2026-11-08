@@ -181,3 +181,7 @@ the gateway. Its two tables initialize lazily through the same database helper
 as the notebook. The stable encryption secret is unchanged; no new service,
 bucket, model or GPU is needed. Refresh open browser tabs after the gateway
 release. Calendar reminders and road optimization are outside this release.
+
+Simple Russian/English commands to open history for one already selected saved
+place read its actual notebook directly, without a model planning call. Ambiguous
+selection, composite requests and history analysis use the selected model.
