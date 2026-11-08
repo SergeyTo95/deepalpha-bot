@@ -100,3 +100,8 @@ hours, digest, ambiguous Telegram delivery and worker startup/shutdown. SQLite
 unit adapters do not exercise PostgreSQL's replica locking; production SQL uses
 explicit user/item/notification locks. Whole-app DOM tests cover all three model
 selections, clarification, form creation, snooze and completion without model calls.
+
+Follow-up ordinary chat receives the actual reminder rows previously displayed
+in that conversation, with bounded text and no unrelated reminder pool. This
+lets planning questions refer to the visible cards instead of guessing their
+contents. Reminder references still cannot authorize an unsolicited write.

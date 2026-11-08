@@ -1,4 +1,4 @@
-import {setupPulse,wantsPulse,pulseWhen,pulseDateReply} from './pulse.mjs';
+import {setupPulse,wantsPulse,pulseWhen,pulseDateReply,pulseMessageContext} from './pulse.mjs';
 import {runPulseCommand} from './pulse-agent.mjs';
 import {visitSummary} from './visits.mjs';
 import {wantsMap,wantsPlaceHistory,runMapAgent,mapMessageContext} from './map-agent.mjs';
@@ -1138,7 +1138,7 @@ async function generate(retry = false, voiceTurn = false) {
   const selected = agentMode&&!backgroundAgent ? "velia-flash" : model,
     user = chat.messages.at(-1),
     payload = agentMode&&!backgroundAgent ? {prompt: user.content, session_id: chat.id} : chat.remote ? {content: user.content, model: selected,
-      idempotency_key: user.requestId || (user.requestId = crypto.randomUUID()), ...(user.attachmentIds?.length ? {attachment_ids:user.attachmentIds} : {})} : chatPayload(chat, selected,{messageContext:mapMessageContext}),
+      idempotency_key: user.requestId || (user.requestId = crypto.randomUUID()), ...(user.attachmentIds?.length ? {attachment_ids:user.attachmentIds} : {})} : chatPayload(chat, selected,{messageContext:message=>pulseMessageContext({...message,content:mapMessageContext(message)},pulse.state().items)}),
     answer = { role: "assistant", content: "", model: selected, pending: true, agent: agentMode, sentAt:Date.now() };
   const privateTurn=chat.medicalNoSearch || chat.remote && chat.topicHistoryChecked===false;
   if(privateTurn && !agentMode){if(chat.remote)payload.medical_no_search=true;payload.web_search=false;}
