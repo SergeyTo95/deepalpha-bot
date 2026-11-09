@@ -103,6 +103,107 @@ def test_disconnect_during_authorization_prevents_new_pending_state():
     asyncio.run(scenario())
 
 
+def test_google_auth_requires_velia_gateway_credentials_not_legacy_backend(monkeypatch):
+    monkeypatch.delenv('VELIA_GOOGLE_OAUTH_CLIENT_ID',raising=False)
+    monkeypatch.delenv('VELIA_GOOGLE_OAUTH_CLIENT_SECRET',raising=False)
+    monkeypatch.setenv('GOOGLE_CLIENT_ID','legacy-client')
+    monkeypatch.setenv('GOOGLE_CLIENT_SECRET','legacy-secret')
+    bridge=WorkspaceConnector('google')
+    async def forbidden(*args,**kwargs):raise AssertionError('legacy Google OAuth backend must not be called')
+    oauth=WorkspaceOAuth(bridge,'https://velia.example','google',forbidden)
+    assert oauth.google_config()['configured'] is False
+    with pytest.raises(FigmaError,match='not_configured'):
+        asyncio.run(oauth.start(('7','session-7')))
+    assert not oauth.pending
+
+
+def test_google_token_exchange_is_direct_and_keeps_all_secrets_in_gateway(monkeypatch):
+    monkeypatch.setenv('VELIA_GOOGLE_OAUTH_CLIENT_ID','velia-public-client')
+    monkeypatch.setenv('VELIA_GOOGLE_OAUTH_CLIENT_SECRET','gateway-private-secret')
+    calls=[]
+    class Response:
+        status=200
+        class Content:
+            async def read(self,limit):
+                assert limit==64001
+                return json.dumps({'access_token':'velia-oauth-token-12345','expires_in':3600,
+                                   'refresh_token':'must-not-appear','id_token':'also-private'}).encode()
+        content=Content()
+        async def __aenter__(self):return self
+        async def __aexit__(self,*_args):return None
+    class Session:
+        def __init__(self,**kwargs):
+            assert kwargs['trust_env'] is False
+        async def __aenter__(self):return self
+        async def __aexit__(self,*_args):return None
+        def post(self,url,**kwargs):
+            calls.append((url,kwargs))
+            return Response()
+    monkeypatch.setattr(workspace_module,'ClientSession',Session)
+    bridge=WorkspaceConnector('google')
+    async def forbidden(*args,**kwargs):raise AssertionError('legacy backend not allowed')
+    oauth=WorkspaceOAuth(bridge,'https://velia.example','google',forbidden)
+    async def scenario():
+        assert (await oauth.backend('config'))['configured'] is True
+        result=await oauth.google_exchange({'code':'google-code','code_verifier':'v'*64})
+        assert result=={'ok':True,'access_token':'velia-oauth-token-12345','expires_in':3600}
+    asyncio.run(scenario())
+    assert calls[0][0]=='https://oauth2.googleapis.com/token'
+    assert calls[0][1]['allow_redirects'] is False
+    assert calls[0][1]['data']['client_id']=='velia-public-client'
+    assert calls[0][1]['data']['client_secret']=='gateway-private-secret'
+    assert calls[0][1]['data']['redirect_uri']=='https://velia.example/web-api/v1/velia/oauth/google/callback'
+    assert calls[0][1]['data']['code_verifier']=='v'*64
+    with pytest.raises(FigmaError,match='invalid_callback'):
+        asyncio.run(oauth.google_exchange({'code':'google-code','code_verifier':'short'}))
+
+
+def test_velia_google_oauth_callback_is_same_origin_session_bound_and_one_use(monkeypatch):
+    monkeypatch.setenv('VELIA_GOOGLE_OAUTH_CLIENT_ID','velia-public-client')
+    monkeypatch.setenv('VELIA_GOOGLE_OAUTH_CLIENT_SECRET','gateway-private-secret')
+    async def scenario():
+        bridge=WorkspaceConnector('google')
+        async def forbidden(*args,**kwargs):raise AssertionError('must not visit backend for Google')
+        oauth=WorkspaceOAuth(bridge,'https://velia.example','google',forbidden)
+        exchanges=[]
+        async def google_exchange(data):
+            exchanges.append(data['code'])
+            return {'ok':True,'access_token':'velia-oauth-token-12345','expires_in':3600}
+        oauth.google_exchange=google_exchange
+        app=web.Application()
+        async def session_for(request):
+            identity=request.headers.get('X-User')
+            return SimpleNamespace(user_id=int(identity),id='session-'+identity,access='access') if identity else None
+        setup_figma_routes(app,session_for=session_for,
+            same_origin=lambda request:request.headers.get('Origin')=='https://velia.example',
+            json_response=lambda data,status=200:web.json_response(data,status=status),
+            connector=bridge,oauth=oauth,provider='google',prefix='/web-api/v1/connections/google')
+        async with TestServer(app) as server, ClientSession() as browser:
+            headers={'Origin':'https://velia.example','X-User':'7'}
+            auth=await browser.post(server.make_url('/web-api/v1/connections/google/authorize'),
+                                    headers=headers,json={})
+            assert auth.status==200
+            query=parse_qs(urlsplit((await auth.json())['authorization_url']).query)
+            assert query['redirect_uri']==['https://velia.example/web-api/v1/velia/oauth/google/callback']
+            assert query['code_challenge_method']==['S256']
+            state=query['state'][0]
+            callback=server.make_url('/web-api/v1/velia/oauth/google/callback')
+            wrong=await browser.get(callback,params={'state':state,'code':'secret-code'},
+                                    headers={'X-User':'8'},allow_redirects=False)
+            assert wrong.status==303 and wrong.headers['Location']=='/?connection=google&result=error'
+            answer=await browser.get(callback,params={'state':state,'code':'secret-code'},
+                                     headers=headers,allow_redirects=False)
+            assert answer.status==303 and answer.headers['Location']=='/?connection=google&result=connected'
+            assert answer.headers['Cache-Control']=='no-store'
+            assert answer.headers['Referrer-Policy']=='no-referrer'
+            assert 'secret-code' not in answer.headers['Location']
+            replay=await browser.get(callback,params={'state':state,'code':'secret-code'},
+                                     headers=headers,allow_redirects=False)
+            assert replay.headers['Location']=='/?connection=google&result=error'
+            assert exchanges==['secret-code']
+    asyncio.run(scenario())
+
+
 # Calendar regression checks run in the existing gateway Docker qualification.
 def execute(name, arguments, payload):
     calls = []
