@@ -1706,3 +1706,39 @@ dialog::backdrop {
 .pulse-cards{display:grid;gap:16px}.pulse-card,.pulse-notice,.chat-pulse-result{display:grid;gap:10px;min-width:0;overflow-wrap:anywhere}.pulse-card textarea,.pulse-editor textarea{width:100%;box-sizing:border-box}.pulse-notice{padding:14px 0;border-bottom:1px solid var(--border)}.chat-pulse-result{padding:16px;border:1px solid var(--border);border-radius:16px}.feature-nav button[data-section="pulse"][data-unread]:not([data-unread=""])::after{content:attr(data-unread);margin-left:auto;font-size:12px;border-radius:12px;padding:1px 6px;background:var(--text);color:var(--bg)}
 
 #pulse-open{position:relative}#pulse-open svg{width:21px;height:21px}#pulse-open[data-unread]:not([data-unread=""])::after{content:attr(data-unread);position:absolute;right:0;top:0;min-width:13px;font-size:10px;line-height:15px;background:var(--text);color:var(--bg);border-radius:9px;padding:0 2px}@media(max-width:600px){.topbar-actions .web-badge{display:none}}
+
+/* Public OAuth transparency and legal navigation — available without login. */
+.public-description {
+  max-width: 650px;
+  margin: 26px auto 10px;
+  padding: 0 16px;
+  color: var(--soft);
+  font-size: 12px;
+  line-height: 1.65;
+  text-align: center;
+}
+.legal-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 9px 18px;
+  padding: 12px 8px;
+  font-size: 12px;
+}
+.legal-links a {
+  color: var(--soft);
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+}
+.legal-links a:hover,
+.legal-links a:focus-visible {
+  text-decoration-color: currentColor;
+  color: var(--text);
+}
+.sidebar-bottom .legal-links {
+  justify-content: flex-start;
+  padding: 9px 8px;
+  font-size: 11px;
+}
