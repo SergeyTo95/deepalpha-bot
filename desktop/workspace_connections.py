@@ -128,11 +128,78 @@ def calendar_event_view(event):
 
 
 class WorkspaceConnector(FigmaConnector):
-    def __init__(self, provider, request=None):
+    def __init__(self, provider, request=None, *, persistent_store=None):
         super().__init__(pair_required=False)
         self.provider=provider
         self.api_request=request or self.api
         self.tools={item['name']:item for item in (GOOGLE_TOOLS if provider=='google' else SHOPIFY_TOOLS)}
+        self.persistent_store=persistent_store if provider=='google' else None
+        self.restore_lock=asyncio.Lock()
+
+    async def connect(self,owner,token,*,oauth_expires=None,refresh_token=None,persist=True):
+        result=await super().connect(owner,token,oauth_expires=oauth_expires)
+        if persist and self.persistent_store is not None:
+            if not oauth_expires:
+                self.connections.pop(owner,None)
+                raise FigmaError('connection_storage_unavailable',503)
+            try:
+                await asyncio.to_thread(self.persistent_store.save,owner[0],
+                    access_token=token,refresh_token=refresh_token,expires_at=oauth_expires,
+                    client_id=self.oauth.google_config()['client_id'])
+            except (OSError, ValueError, RuntimeError, Exception):
+                self.connections.pop(owner,None)
+                raise FigmaError('connection_storage_unavailable',503) from None
+        return result
+
+    async def restore(self,owner):
+        """Restore Google access after Railway cold starts or a new browser session."""
+        if self.persistent_store is None or self.provider!='google':
+            return
+        if owner in self.connections:
+            self.prune()
+            if owner in self.connections:
+                return
+        async with self.restore_lock:
+            self.prune()
+            if owner in self.connections:
+                return
+            client_id=self.oauth.google_config()['client_id']
+            if not client_id:
+                return
+            try:
+                saved=await asyncio.to_thread(self.persistent_store.load,owner[0],client_id=client_id)
+            except Exception:
+                raise FigmaError('connection_storage_unavailable',503) from None
+            if not saved:
+                return
+            expires=float(saved['expires_at'])
+            access=saved['access_token']
+            refresh=saved.get('refresh_token')
+            if expires<=time.time()+90:
+                if not refresh:
+                    await self.forget(owner)
+                    return
+                try:
+                    renewed=await self.oauth.google_refresh(refresh)
+                except FigmaError as error:
+                    if error.code=='connection_authorization_revoked':
+                        await self.forget(owner)
+                        return
+                    raise
+                access=renewed['access_token']
+                expires=time.time()+min(renewed['expires_in'],3600)
+                await self.connect(owner,access,oauth_expires=expires,
+                                   refresh_token=renewed.get('refresh_token') or refresh)
+            else:
+                await self.connect(owner,access,oauth_expires=expires,persist=False)
+
+    async def forget(self,owner):
+        self.disconnect(owner)
+        if self.persistent_store is not None:
+            try:
+                await asyncio.to_thread(self.persistent_store.delete,owner[0])
+            except Exception:
+                raise FigmaError('connection_storage_unavailable',503) from None
 
     async def api(self, connection, method, path, *, data=None, params=None, plain=False):
         if self.provider=='google':
@@ -392,7 +459,7 @@ class WorkspaceOAuth(FigmaOAuth):
             flow.update({'status':'pending','client_id':settings['client_id'],'redirect_uri':settings['redirect_uri'] if self.provider=='google' else self.return_callback})
             params={'client_id':flow['client_id'],'redirect_uri':flow['redirect_uri'],'response_type':'code','scope':settings['scope'],'state':state}
             if self.provider=='google':
-                params.update({'code_challenge':base64.urlsafe_b64encode(hashlib.sha256(flow['verifier'].encode()).digest()).decode().rstrip('='),'code_challenge_method':'S256','prompt':'consent select_account'})
+                params.update({'code_challenge':base64.urlsafe_b64encode(hashlib.sha256(flow['verifier'].encode()).digest()).decode().rstrip('='),'code_challenge_method':'S256','prompt':'consent select_account','access_type':'offline'})
             origin='https://accounts.google.com/o/oauth2/v2/auth' if self.provider=='google' else 'https://'+shop+'/admin/oauth/authorize'
             return {'authorization_url':origin+'?'+urlencode(params)}
         except BaseException:
@@ -410,7 +477,8 @@ class WorkspaceOAuth(FigmaOAuth):
             if self.pending.get(owner) is not flow:raise FigmaError('connection_authorization_cancelled',409)
             lifetime=result.get('expires_in')
             if isinstance(lifetime,bool) or not isinstance(lifetime,(int,float)) or not math.isfinite(lifetime) or lifetime<60:raise FigmaError('connection_invalid_callback')
-            paired=await self.bridge.connect(owner,result.get('access_token'),oauth_expires=time.time()+min(lifetime,86400))
+            paired=await self.bridge.connect(owner,result.get('access_token'),oauth_expires=time.time()+min(lifetime,3600 if self.provider=='google' else 86400),
+                **({'refresh_token':result.get('refresh_token')} if self.provider=='google' else {}))
             connection=self.bridge.connections.get(owner)
             if self.pending.get(owner) is not flow:
                 if connection and connection['id']==paired['connection_id']:self.bridge.connections.pop(owner,None)
