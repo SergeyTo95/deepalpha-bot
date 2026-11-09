@@ -355,7 +355,7 @@ class WorkspaceOAuth(FigmaOAuth):
         if not isinstance(result,dict):raise FigmaError('connection_authorization_failed',400)
         token=result.get('access_token')
         lifetime=result.get('expires_in')
-        if (not isinstance(token,str) or not re.fullmatch(r'[\\x21-\\x7e]{10,4096}',token)
+        if (not isinstance(token,str) or not 10<=len(token)<=4096 or any(ord(char)<33 or ord(char)>126 for char in token)
                 or isinstance(lifetime,bool) or not isinstance(lifetime,(int,float)) or not math.isfinite(lifetime) or lifetime<60):
             raise FigmaError('connection_authorization_failed',400)
         # No refresh token, client secret, or ID token reaches the browser or chat.
