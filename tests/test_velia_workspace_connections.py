@@ -153,3 +153,9 @@ def test_calendar_create_rejects_naive_or_reverse_times():
         ('2027-01-01T12:00:00+03:00','2027-01-03T13:00:00+03:00')]:
         with pytest.raises(FigmaError):
             execute('calendar_event_create',{'title':'Meeting','start':start,'end':end},{})
+
+def test_calendar_create_rejects_daylight_saving_offset_conflict():
+    with pytest.raises(FigmaError):
+        execute('calendar_event_create',{'title':'DST gap',
+            'start':'2027-03-14T02:30:00-05:00','end':'2027-03-14T03:30:00-05:00',
+            'time_zone':'America/New_York'}, {})
