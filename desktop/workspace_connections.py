@@ -405,7 +405,15 @@ class WorkspaceOAuth(FigmaOAuth):
                 async with client.post('https://oauth2.googleapis.com/token',data=body,allow_redirects=False) as response:
                     if response.status!=200:
                         if refresh and response.status in (400,401):
-                            raise FigmaError('connection_authorization_revoked',409)
+                            # Only invalid_grant proves the user's refresh credential was revoked.
+                            detail=await response.content.read(4097)
+                            if len(detail)<=4096:
+                                try:
+                                    failure=json.loads(detail)
+                                    if isinstance(failure,dict) and failure.get('error')=='invalid_grant':
+                                        raise FigmaError('connection_authorization_revoked',409)
+                                except (ValueError,UnicodeError):
+                                    pass
                         raise FigmaError('connection_authorization_failed' if response.status<500 else 'connection_authorization_unavailable',
                                          400 if response.status<500 else 503)
                     payload=await response.content.read(64001)
