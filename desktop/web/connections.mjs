@@ -63,6 +63,18 @@ export async function connectionRequest(provider, action, data, signal) {
         "Этот запрос уже использовался. Проверь проект и отправь новое поручение.",
       connection_busy:
         "Предыдущее действие ещё выполняется. Попробуй чуть позже.",
+      connection_calendar_api_disabled:
+        "В Google Cloud проекта Velia не включён Google Calendar API. Открой APIs & Services → Library → Google Calendar API → Enable, затем повтори запрос.",
+      connection_calendar_permissions_required:
+        "Google не предоставил разрешения на календарь. Отключи Google в разделе «Подключения», подключи заново и разреши доступ к календарю.",
+      connection_calendar_rate_limited:
+        "Google Calendar временно ограничил число запросов. Попробуй позже.",
+      connection_calendar_request_invalid:
+        "Google Calendar отклонил даты или параметры запроса. Уточни время и часовой пояс, затем повтори.",
+      connection_invalid_arguments:
+        "Для действия не хватает корректных параметров. Уточни поручение и отправь снова.",
+      connection_unavailable:
+        "Google API сейчас недоступен или отклонил запрос. Проверь настройки и повтори позже.",
     };
     const error = new Error(
       response.status === 401

@@ -362,6 +362,83 @@ def test_google_status_and_chat_verify_restore_database_after_railway_sleep(tmp_
     assert store.load('7',client_id='velia-public-client') is None
 
 
+def test_calendar_read_errors_are_not_misreported_as_uncertain_writes():
+    async def scenario():
+        calls=[]
+        async def fake(connection,method,path,**kwargs):
+            calls.append(path)
+            if path=='/v1/userinfo':return {'email':'fixture@example.test'}
+            raise FigmaError('connection_calendar_api_disabled',503)
+        bridge=WorkspaceConnector('google',request=fake)
+        owner=('7','session-a')
+        linked=await bridge.connect(owner,'fixture-access-token-012345',oauth_expires=time.time()+3600)
+        data={'connection_id':linked['connection_id'],'request_id':'request-calendar-1234',
+              'run_id':'run-calendar-1234','operation_id':'read-calendar-1234',
+              'name':'calendar_events_list','arguments':{'time_min':'2026-11-10T00:00:00+03:00',
+                                                          'time_max':'2026-11-11T00:00:00+03:00'}}
+        for _ in range(2):
+            with pytest.raises(FigmaError) as error:
+                await bridge.call(owner,data)
+            assert error.value.code=='connection_calendar_api_disabled'
+            assert error.value.status==503
+            assert data['operation_id'] not in bridge.connections[owner]['receipts']
+        assert calls.count('/calendar/v3/calendars/primary/events')==2
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('provider_status,error_body,expected_code',[
+    (403,{'error':{'details':[{'reason':'SERVICE_DISABLED'}]}},'connection_calendar_api_disabled'),
+    (403,{'error':{'errors':[{'reason':'accessNotConfigured'}]}},'connection_calendar_api_disabled'),
+    (403,{'error':{'details':[{'reason':'ACCESS_TOKEN_SCOPE_INSUFFICIENT'}]}},'connection_calendar_permissions_required'),
+    (403,{'error':{'errors':[{'reason':'rateLimitExceeded'}]}},'connection_calendar_rate_limited'),
+    (400,{'error':{'message':'private calendar event data must not leak'}},'connection_calendar_request_invalid'),
+    (403,{'error':{'message':'confidential user data'}},'connection_access_denied')
+])
+def test_calendar_api_errors_have_safe_actionable_status(monkeypatch,provider_status,error_body,expected_code):
+    class FakeResponse:
+        status=provider_status
+        class Content:
+            async def read(self,limit):
+                assert limit==8193
+                return json.dumps(error_body).encode()
+        content=Content()
+        async def __aenter__(self):return self
+        async def __aexit__(self,*_args):return None
+    class FakeSession:
+        def __init__(self,**kwargs):assert kwargs['trust_env'] is False
+        async def __aenter__(self):return self
+        async def __aexit__(self,*_args):return None
+        def request(self,method,url,**kwargs):
+            assert url=='https://www.googleapis.com/calendar/v3/calendars/primary/events'
+            assert kwargs['allow_redirects'] is False
+            return FakeResponse()
+    monkeypatch.setattr(workspace_module,'ClientSession',FakeSession)
+    bridge=WorkspaceConnector('google')
+    with pytest.raises(FigmaError) as raised:
+        asyncio.run(bridge.api({'token':'private-google-token-012345'},'GET','/calendar/v3/calendars/primary/events'))
+    assert raised.value.code==expected_code
+    assert raised.value.code not in json.dumps(error_body)
+
+
+def test_uncertain_write_receipt_stays_conservative_when_google_write_fails():
+    async def scenario():
+        async def fake(connection,method,path,**kwargs):
+            if path=='/v1/userinfo':return {'email':'fixture@example.test'}
+            raise FigmaError('connection_unavailable',503)
+        bridge=WorkspaceConnector('google',request=fake)
+        owner=('7','session-a')
+        linked=await bridge.connect(owner,'fixture-access-token-012345',oauth_expires=time.time()+3600)
+        data={'connection_id':linked['connection_id'],'request_id':'request-create-1234',
+              'run_id':'run-create-1234','operation_id':'create-event-1234',
+              'name':'calendar_event_create','arguments':{'title':'Meeting',
+                  'start':'2026-11-10T15:00:00+03:00','end':'2026-11-10T16:00:00+03:00'}}
+        with pytest.raises(FigmaError) as error:
+            await bridge.call(owner,data)
+        assert error.value.code=='figma_execution_uncertain'
+        assert data['operation_id'] in bridge.connections[owner]['receipts']
+    asyncio.run(scenario())
+
+
 # Calendar regression checks run in the existing gateway Docker qualification.
 def execute(name, arguments, payload):
     calls = []

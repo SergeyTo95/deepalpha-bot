@@ -133,6 +133,9 @@ class WorkspaceConnector(FigmaConnector):
         self.provider=provider
         self.api_request=request or self.api
         self.tools={item['name']:item for item in (GOOGLE_TOOLS if provider=='google' else SHOPIFY_TOOLS)}
+        self.read_only_tools=({'drive_search','drive_read','sheets_read','gmail_search','gmail_read',
+                               'calendar_events_list','calendar_freebusy'} if provider=='google' else
+                              {'shopify_products','shopify_orders'})
         self.persistent_store=persistent_store if provider=='google' else None
         self.restore_lock=asyncio.Lock()
 
@@ -223,9 +226,38 @@ class WorkspaceConnector(FigmaConnector):
         try:
             async with ClientSession(timeout=ClientTimeout(total=30),trust_env=False) as client:
                 async with client.request(method,origin+path,params=params,json=data,headers=headers,allow_redirects=False) as response:
-                    if response.status in {401,403}:
-                        raise FigmaError('connection_access_denied',403)
                     if response.status not in {200,201}:
+                        calendar=self.provider=='google' and path.startswith('/calendar/v3/')
+                        reason=''
+                        if calendar and response.status in {400,401,403,429}:
+                            # Google's error reason can identify disabled APIs without exposing
+                            # sensitive messages, calendar contents, or OAuth credentials.
+                            raw=await response.content.read(8193)
+                            if len(raw)<=8192:
+                                try:
+                                    fault=json.loads(raw)
+                                    error=fault.get('error',{}) if isinstance(fault,dict) else {}
+                                    if isinstance(error,dict):
+                                        candidates=[detail.get('reason') for detail in error.get('details',[])
+                                                    if isinstance(detail,dict)]
+                                        candidates += [item.get('reason') for item in error.get('errors',[])
+                                                       if isinstance(item,dict)]
+                                        if 'SERVICE_DISABLED' in candidates or 'accessNotConfigured' in candidates:
+                                            reason='connection_calendar_api_disabled'
+                                        elif 'ACCESS_TOKEN_SCOPE_INSUFFICIENT' in candidates or 'insufficientPermissions' in candidates:
+                                            reason='connection_calendar_permissions_required'
+                                        elif any(x in candidates for x in ('rateLimitExceeded','userRateLimitExceeded','quotaExceeded')):
+                                            reason='connection_calendar_rate_limited'
+                                except (ValueError,TypeError,UnicodeError):
+                                    pass
+                        if reason:
+                            raise FigmaError(reason,429 if reason.endswith('rate_limited') else 503 if reason.endswith('api_disabled') else 403)
+                        if response.status in {401,403}:
+                            raise FigmaError('connection_access_denied',403)
+                        if calendar and response.status==400:
+                            raise FigmaError('connection_calendar_request_invalid',400)
+                        if calendar and response.status==429:
+                            raise FigmaError('connection_calendar_rate_limited',429)
                         raise FigmaError('connection_unavailable',503)
                     body=await response.content.read(1000001)
                     if len(body)>1000000:
