@@ -14,7 +14,7 @@ import aiohttp
 from aiohttp import web
 
 PREFIX = '/mobile-api/v1/workspace-oauth'
-GOOGLE_SCOPES = 'openid email https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose'
+GOOGLE_SCOPES = 'openid email https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.freebusy'
 SHOPIFY_SCOPES = 'read_products,write_products,read_orders,read_inventory'
 
 
