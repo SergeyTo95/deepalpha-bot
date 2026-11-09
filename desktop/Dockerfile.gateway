@@ -25,7 +25,7 @@ COPY desktop/voice_transport.py /app/desktop/voice_transport.py
 COPY desktop/voice_channel.py /app/desktop/voice_channel.py
 COPY desktop/voice_transcription.py /app/desktop/voice_transcription.py
 COPY desktop/figma_connector.py desktop/figma_routes.py desktop/figma_oauth.py /app/desktop/
-COPY desktop/cloud_connections.py desktop/workspace_connections.py desktop/document_exports.py desktop/map_routes.py /app/desktop/
+COPY desktop/cloud_connections.py desktop/workspace_connections.py desktop/google_connection_store.py desktop/document_exports.py desktop/map_routes.py /app/desktop/
 COPY tests/test_velia_cloud_connections.py tests/test_velia_workspace_connections.py tests/test_velia_document_exports.py tests/test_velia_map.py /app/tests/
 COPY tests/test_velia_figma.py tests/test_velia_figma_oauth.py /app/tests/
 COPY tests/test_velia_voice_transcription.py /app/tests/test_velia_voice_transcription.py
