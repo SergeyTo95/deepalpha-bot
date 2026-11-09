@@ -171,3 +171,36 @@ and a fresh store sees the exhausted quota. Only those probe rows are removed.
   in the conversation). No exact hostname has been provided or purchased here.
   Keep VELIA / Velyon Core as the public product branding. Attach the owned
   domain and update VELIA_WEB_ORIGIN when the actual hostname is provided.
+
+## Velia-only Google OAuth gateway (2026-11-09)
+
+Google Workspace (Calendar, Gmail, Drive, Docs, Sheets) is authorized on the
+existing `velia-desktop-gateway` service. This flow never uses the DeepAlpha
+Google login callback or the legacy backend's Google OAuth credentials.
+The gateway receives Google authorization codes at its dedicated same-origin
+route:
+
+```text
+https://velia-desktop-gateway-deepalpha-bot-pr-577.up.railway.app/web-api/v1/velia/oauth/google/callback
+```
+
+Create a Google OAuth **Web application** client in the Google Cloud project
+owning Velia. Register that exact URL under **Authorized redirect URIs**.
+No JavaScript origin is needed for the server-side PKCE authorization-code
+flow. Configure these service variables in the **existing gateway service**
+in Railway, not in `deepalpha-bot`:
+
+- `VELIA_GOOGLE_OAUTH_CLIENT_ID` (public OAuth client ID)
+- `VELIA_GOOGLE_OAUTH_CLIENT_SECRET` (secret, set only in Railway Variables)
+- `VELIA_WEB_ORIGIN` (the publicly accessible gateway base URL)
+
+The gateway binds OAuth state to the logged-in Velia browser session, uses PKCE
+S256 and exchanges the code server-to-server with Google. It verifies the
+Google identity via the existing Workspace connector, does not send client
+secrets or token exchange results to the browser, and redirects back to the
+existing Velia connection result UI. Shopify and non-Google connections remain
+unchanged. Currently Google OAuth access is session-only, with no refresh token
+persisted; users reconnect after access-token expiry or gateway restart.
+Google's public-production consent, branding and restricted-scope verification
+are separate Google Cloud configuration/approval steps and are not bypassed by
+this route change.
