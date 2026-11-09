@@ -58,7 +58,7 @@ for (const approved of [true,false]) test('calendar create requires direct reque
     const answer=await runCloudAgent({provider:'google',model:'velia-flash',user,history:[user],signal:new AbortController().signal,
       progress:()=>{},persist:async()=>{},request:async()=>{
         const plan=steps.shift();
-        return new Response('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify(plan)},finish_reason:'stop'}]})+'\\n\\ndata: [DONE]\\n\\n',
+        return new Response('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify(plan)},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n',
           {headers:{'Content-Type':'text/event-stream'}});
       }});
     assert.equal(calls.filter(url=>url.endsWith('/call')).length,approved?1:0);
@@ -79,7 +79,7 @@ test('a calendar read request cannot silently create an event',async()=>{
     const user={role:'user',content:'Покажи мои встречи',requestId:'calendar-req-2'};
     const answer=await runCloudAgent({provider:'google',model:'velia-flash',user,history:[user],signal:new AbortController().signal,
       progress:()=>{},persist:async()=>{},request:async()=>new Response(
-        'data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({tool:'calendar_event_create',arguments:{title:'Unwanted',start:'2027-01-01T12:00:00+03:00',end:'2027-01-01T13:00:00+03:00'}})},finish_reason:'stop'}]})+'\\n\\ndata: [DONE]\\n\\n',
+        'data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({tool:'calendar_event_create',arguments:{title:'Unwanted',start:'2027-01-01T12:00:00+03:00',end:'2027-01-01T13:00:00+03:00'}})},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n',
         {headers:{'Content-Type':'text/event-stream'}})});
     assert.equal(writes,0);assert.match(answer,/прямо создать/);
   }finally{globalThis.fetch=previousFetch;globalThis.window=previousWindow;}
