@@ -269,6 +269,11 @@ class WorkspaceConnector(FigmaConnector):
             if not start < end <= start+timedelta(hours=24):
                 raise FigmaError('connection_calendar_range_invalid')
             zone=calendar_zone(a)
+            if zone:
+                target_zone=ZoneInfo(zone)
+                if (start.utcoffset()!=start.astimezone(target_zone).utcoffset()
+                        or end.utcoffset()!=end.astimezone(target_zone).utcoffset()):
+                    raise FigmaError('connection_calendar_timezone_offset_conflict')
             begin={'dateTime':a['start']}
             finish={'dateTime':a['end']}
             if zone:begin['timeZone']=finish['timeZone']=zone
