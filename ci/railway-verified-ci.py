@@ -149,8 +149,9 @@ def wait_for_medical_health(proc, url, timeout=240):
         if elapsed >= last_report + 30:
             print(f'RAILWAY_MEDICAL_HEALTH_WAIT elapsed_s={elapsed} timeout_s={timeout} last_http_status={last_status}', flush=True)
             last_report = elapsed
-        if proc.poll() is not None:
-            raise RuntimeError(f'Medical worker exited before health check; exit_code={proc.returncode}')
+        exit_code = proc.poll()
+        if exit_code is not None:
+            raise RuntimeError(f'Medical worker exited before health check; exit_code={exit_code}')
         try:
             request = urllib.request.Request(url, headers={'Authorization': 'Bearer ci-secret'})
             with opener.open(request, timeout=min(2, max(0.01, deadline - time.monotonic()))) as response:
