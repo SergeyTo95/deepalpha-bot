@@ -41,6 +41,8 @@ def setup_figma_routes(app, *, session_for, same_origin, json_response, connecto
                 return json_response({"ok": False, "error": "unauthorized"}, 401)
             owner = (str(session.user_id), session.id)
             action = request.match_info["action"]
+            if provider == "google" and action in {"status", "tools", "verify", "call"}:
+                await bridge.restore(owner)
             if action == "status":
                 value = bridge.status(owner)
                 if hasattr(oauth, "backend"):
@@ -70,7 +72,10 @@ def setup_figma_routes(app, *, session_for, same_origin, json_response, connecto
                 elif action == "verify":
                     result = await bridge.verify(owner)
                 elif action == "disconnect":
-                    bridge.disconnect(owner)
+                    if provider == "google":
+                        await bridge.forget(owner)
+                    else:
+                        bridge.disconnect(owner)
                     result = {"connected": False}
                 else:
                     result = await bridge.call(owner, data)
