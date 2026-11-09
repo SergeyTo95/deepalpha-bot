@@ -84,3 +84,17 @@ test('a calendar read request cannot silently create an event',async()=>{
     assert.equal(writes,0);assert.match(answer,/прямо создать/);
   }finally{globalThis.fetch=previousFetch;globalThis.window=previousWindow;}
 });
+
+
+test('calendar write replay warns about possible existing event before making requests',async()=>{
+  const previous=globalThis.fetch;
+  let calls=0;
+  try {
+    globalThis.fetch=async()=>{calls++;throw Error('replay must not trigger an API call');};
+    const user={role:'user',content:'создай завтра в 15:00 событие «Тест Velia»',connectionAttempted:true};
+    await assert.rejects(runCloudAgent({provider:'google',model:'velia-flash',user,
+      history:[user],signal:new AbortController().signal,persist:async()=>{},progress:()=>{},request:async()=>{}}),
+      /Сначала проверь Google Calendar/);
+    assert.equal(calls,0);
+  }finally{globalThis.fetch=previous;}
+});
