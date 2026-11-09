@@ -2,6 +2,10 @@ import asyncio
 import json
 from urllib.parse import urlsplit, parse_qs
 from types import SimpleNamespace
+import sqlite3
+import time
+
+from desktop.google_connection_store import GoogleConnectionStore
 
 from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestServer
@@ -146,7 +150,7 @@ def test_google_token_exchange_is_direct_and_keeps_all_secrets_in_gateway(monkey
     async def scenario():
         assert (await oauth.backend('config'))['configured'] is True
         result=await oauth.google_exchange({'code':'google-code','code_verifier':'v'*64})
-        assert result=={'ok':True,'access_token':'velia-oauth-token-12345','expires_in':3600}
+        assert result=={'ok':True,'access_token':'velia-oauth-token-12345','refresh_token':'must-not-appear','expires_in':3600}
     asyncio.run(scenario())
     assert calls[0][0]=='https://oauth2.googleapis.com/token'
     assert calls[0][1]['allow_redirects'] is False
@@ -202,6 +206,112 @@ def test_velia_google_oauth_callback_is_same_origin_session_bound_and_one_use(mo
             assert replay.headers['Location']=='/?connection=google&result=error'
             assert exchanges==['secret-code']
     asyncio.run(scenario())
+
+
+def google_durable_store(tmp_path):
+    return GoogleConnectionStore(None,sqlite_path=str(tmp_path/'google.db'),
+        session_key='temporary-fixture-session-secret-that-is-never-in-repository-config')
+
+
+def test_google_credentials_are_encrypted_per_account_and_can_be_revoked(tmp_path):
+    store=google_durable_store(tmp_path)
+    now=time.time()
+    store.save('user-101',access_token='access-token-not-plaintext-012345',
+        refresh_token='refresh-token-not-plaintext-012345',expires_at=now+3600,
+        client_id='velia-public-client')
+    with sqlite3.connect(str(tmp_path/'google.db')) as connection:
+        row=connection.execute('SELECT account_hash,encrypted FROM velia_google_oauth_connections').fetchone()
+    assert row and 'user-101' not in str(row)
+    assert 'access-token-not-plaintext' not in str(row)
+    assert 'refresh-token-not-plaintext' not in str(row)
+    assert row[0]!=store._key('user-102')
+    assert store.load('user-102',client_id='velia-public-client') is None
+    assert store.load('user-101',client_id='other-google-client') is None
+    record=store.load('user-101',client_id='velia-public-client')
+    assert record['access_token']=='access-token-not-plaintext-012345'
+    assert record['refresh_token']=='refresh-token-not-plaintext-012345'
+    store.delete('user-101')
+    assert store.load('user-101',client_id='velia-public-client') is None
+
+
+def test_google_connection_survives_gateway_restart_and_new_browser_session(tmp_path,monkeypatch):
+    monkeypatch.setenv('VELIA_GOOGLE_OAUTH_CLIENT_ID','velia-public-client')
+    monkeypatch.setenv('VELIA_GOOGLE_OAUTH_CLIENT_SECRET','fixture-client-secret')
+    store=google_durable_store(tmp_path)
+    calls=[]
+    async def fake(connection,method,path,**kwargs):
+        assert connection['token']=='access-token-not-plaintext-012345'
+        calls.append(path)
+        if path=='/v1/userinfo':return {'email':'valid@gmail.test'}
+        return {'ok':True}
+    async def backend_forbidden(*args,**kwargs):
+        raise AssertionError('Google must not use legacy backend')
+    async def scenario():
+        first=WorkspaceConnector('google',request=fake,persistent_store=store)
+        first.oauth=WorkspaceOAuth(first,'https://velia.example','google',backend_forbidden)
+        await first.connect(('user-101','browser-old'),'access-token-not-plaintext-012345',
+            oauth_expires=time.time()+3600,refresh_token='refresh-token-not-plaintext-012345')
+        assert first.status(('user-101','browser-old'))['connected']
+        # A new gateway process starts with a completely empty in-memory connector.
+        restarted=WorkspaceConnector('google',request=fake,persistent_store=store)
+        restarted.oauth=WorkspaceOAuth(restarted,'https://velia.example','google',backend_forbidden)
+        new_owner=('user-101','browser-new')
+        assert restarted.status(new_owner)['connected'] is False
+        await restarted.restore(new_owner)
+        assert restarted.status(new_owner)['connected'] is True
+        assert (await restarted.verify(new_owner))['connected'] is True
+        assert 'calendar_events_list' in {t['name'] for t in restarted.catalog(new_owner)}
+        assert '/v1/userinfo' in calls
+        await restarted.forget(new_owner)
+        assert restarted.status(new_owner)['connected'] is False
+    asyncio.run(scenario())
+    assert store.load('user-101',client_id='velia-public-client') is None
+
+
+def test_google_refresh_and_invalid_grant_are_handled_without_losing_other_users(tmp_path,monkeypatch):
+    monkeypatch.setenv('VELIA_GOOGLE_OAUTH_CLIENT_ID','velia-public-client')
+    monkeypatch.setenv('VELIA_GOOGLE_OAUTH_CLIENT_SECRET','fixture-client-secret')
+    store=google_durable_store(tmp_path)
+    store.save('user-101',access_token='old-access-token-012345',
+        refresh_token='refresh-token-not-plaintext-012345',expires_at=time.time()+2,
+        client_id='velia-public-client')
+    store.save('user-102',access_token='other-access-token-012345',
+        refresh_token='other-refresh-token-012345',expires_at=time.time()+3500,
+        client_id='velia-public-client')
+    async def fake(connection,method,path,**kwargs):
+        assert connection['token']=='new-access-token-012345'
+        return {'email':'valid@gmail.test'} if path=='/v1/userinfo' else {}
+    async def forbidden(*args,**kwargs):raise AssertionError('legacy Google backend invoked')
+    async def scenario():
+        connector=WorkspaceConnector('google',request=fake,persistent_store=store)
+        oauth=WorkspaceOAuth(connector,'https://velia.example','google',forbidden)
+        connector.oauth=oauth
+        calls=[]
+        async def refresh(token):
+            calls.append(token)
+            return {'ok':True,'access_token':'new-access-token-012345',
+                    'refresh_token':None,'expires_in':3600}
+        oauth.google_refresh=refresh
+        await connector.restore(('user-101','new-session'))
+        assert connector.status(('user-101','new-session'))['connected']
+        assert calls==['refresh-token-not-plaintext-012345']
+        assert (await connector.verify(('user-101','new-session')))['connected']
+        record=store.load('user-101',client_id='velia-public-client')
+        assert record['access_token']=='new-access-token-012345'
+        assert record['refresh_token']=='refresh-token-not-plaintext-012345'
+        # A revoked Google token is deleted only for the affected account.
+        store.save('user-103',access_token='revoked-access-token-012345',
+            refresh_token='revoked-refresh-token-012345',expires_at=time.time()+2,
+            client_id='velia-public-client')
+        async def revoked(token):
+            raise FigmaError('connection_authorization_revoked',409)
+        oauth.google_refresh=revoked
+        await connector.restore(('user-103','new-session'))
+        assert connector.status(('user-103','new-session'))['connected'] is False
+        assert store.load('user-103',client_id='velia-public-client') is None
+        assert store.load('user-102',client_id='velia-public-client') is not None
+    asyncio.run(scenario())
+
 
 
 # Calendar regression checks run in the existing gateway Docker qualification.
