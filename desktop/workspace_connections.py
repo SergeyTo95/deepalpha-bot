@@ -87,7 +87,7 @@ def rows(data):
 
 
 def calendar_instant(value):
-    if not isinstance(value,str) or not 20<=len(value)<=80:
+    if not isinstance(value,str) or not 19<=len(value)<=80:
         raise FigmaError('connection_calendar_time_invalid')
     try:
         parsed=datetime.fromisoformat(value.replace('Z','+00:00'))
