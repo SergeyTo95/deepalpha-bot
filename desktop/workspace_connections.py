@@ -252,8 +252,12 @@ class WorkspaceConnector(FigmaConnector):
             body={'timeMin':first,'timeMax':last,'items':[{'id':'primary'}]}
             if zone:body['timeZone']=zone
             result=await api(c,'POST','/calendar/v3/freeBusy',data=body)
-            primary=result.get('calendars',{}).get('primary',{})
-            if primary.get('errors'):raise FigmaError('connection_calendar_availability_unavailable',502)
+            calendars=result.get('calendars',{})
+            if not isinstance(calendars,dict) or len(calendars)!=1:
+                raise FigmaError('connection_calendar_availability_unavailable',502)
+            primary=next(iter(calendars.values()))
+            if not isinstance(primary,dict) or primary.get('errors'):
+                raise FigmaError('connection_calendar_availability_unavailable',502)
             windows=primary.get('busy',[])
             if not isinstance(windows,list):raise FigmaError('connection_unavailable',503)
             return {'busy':[{'start':w.get('start'),'end':w.get('end')} for w in windows[:100] if isinstance(w,dict)],
