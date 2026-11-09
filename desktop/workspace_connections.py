@@ -4,6 +4,8 @@ import base64
 from contextlib import contextmanager
 from contextvars import ContextVar
 from email.message import EmailMessage
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import hashlib
 import json
 import math
@@ -21,6 +23,8 @@ def tool(name, description, properties, required=()):
     return {'name':name,'description':description,'inputSchema':{'type':'object','properties':properties,'required':list(required),'additionalProperties':False}}
 
 S={'type':'string','maxLength':20000}
+TIME={'type':'string','minLength':20,'maxLength':80}
+ZONE={'type':'string','maxLength':100}
 ROWS={'type':'array','maxItems':200,'items':{'type':'array','maxItems':50,'items':{'type':['string','number','boolean','null']}}}
 GOOGLE_TOOLS=[
  tool('drive_search','Find files by name on Google Drive',{'query':S},['query']),
@@ -31,7 +35,10 @@ GOOGLE_TOOLS=[
  tool('docs_create','Create a Google document with text',{'title':S,'text':S},['title','text']),
  tool('gmail_search','Search mail; returns message IDs for gmail_read',{'query':S},['query']),
  tool('gmail_read','Read a message as text',{'message_id':S},['message_id']),
- tool('gmail_draft','Create an email draft. Does not send email.',{'to':S,'subject':S,'body':S},['to','subject','body'])]
+ tool('gmail_draft','Create an email draft. Does not send email.',{'to':S,'subject':S,'body':S},['to','subject','body']),
+ tool('calendar_events_list','List primary Google Calendar events; RFC3339 time_min/time_max include UTC offsets.',{'time_min':TIME,'time_max':TIME,'max_results':{'type':'integer','minimum':1,'maximum':50}}),
+ tool('calendar_freebusy','Check primary Google Calendar busy intervals without changing the calendar.',{'time_min':TIME,'time_max':TIME,'time_zone':ZONE},['time_min','time_max']),
+ tool('calendar_event_create','Create one primary Google Calendar event after explicit user confirmation; no invitations are sent.',{'title':{'type':'string','maxLength':300},'start':TIME,'end':TIME,'time_zone':ZONE,'location':{'type':'string','maxLength':500},'description':{'type':'string','maxLength':2000}},['title','start','end'])]
 SHOPIFY_TOOLS=[
  tool('shopify_products','List up to 30 products with descriptions and inventory totals',{}),
  tool('shopify_orders','List up to 30 recent orders without customer personal data',{}),
@@ -70,6 +77,48 @@ def rows(data):
         if not isinstance(row,list) or not 1<=len(row)<=50 or any(not isinstance(cell,(str,int,float,bool,type(None))) or isinstance(cell,float) and not math.isfinite(cell) or isinstance(cell,str) and len(cell)>2000 for cell in row):
             raise FigmaError('connection_invalid_arguments')
     return [[safe_cell(cell) for cell in row] for row in values]
+
+
+
+def calendar_instant(value):
+    if not isinstance(value,str) or not 20<=len(value)<=80:
+        raise FigmaError('connection_calendar_time_invalid')
+    try:
+        parsed=datetime.fromisoformat(value.replace('Z','+00:00'))
+    except ValueError:
+        raise FigmaError('connection_calendar_time_invalid') from None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise FigmaError('connection_calendar_timezone_required')
+    return parsed
+
+
+def calendar_window(arguments, default=True):
+    now=datetime.now(timezone.utc)
+    first=arguments.get('time_min') or (now.isoformat() if default else '')
+    last=arguments.get('time_max') or ((now+timedelta(days=7)).isoformat() if default else '')
+    start,end=calendar_instant(first),calendar_instant(last)
+    if not start < end <= start+timedelta(days=31):
+        raise FigmaError('connection_calendar_range_invalid')
+    return first,last
+
+
+def calendar_zone(arguments):
+    name=arguments.get('time_zone')
+    if name is None:return None
+    if not isinstance(name,str) or not 1<=len(name)<=100:
+        raise FigmaError('connection_calendar_timezone_invalid')
+    try:ZoneInfo(name)
+    except (ZoneInfoNotFoundError,ValueError):
+        raise FigmaError('connection_calendar_timezone_invalid') from None
+    return name
+
+
+def calendar_event_view(event):
+    value=lambda key,limit: str(event.get(key) or '')[:limit]
+    return {'id':value('id',200),'title':value('summary',300),
+            'start':event.get('start',{}),'end':event.get('end',{}),
+            'location':value('location',500),'status':value('status',30),
+            'url':value('htmlLink',1500)}
 
 
 class WorkspaceConnector(FigmaConnector):
@@ -183,6 +232,49 @@ class WorkspaceConnector(FigmaConnector):
             message=EmailMessage();message['To']=recipient;message['Subject']=subject;message.set_content(text(a,'body'))
             result=await api(c,'POST','/gmail/v1/users/me/drafts',data={'message':{'raw':base64.urlsafe_b64encode(message.as_bytes()).decode()}})
             return {'draft_id':result.get('id'),'sent':False}
+        if name=='calendar_events_list':
+            first,last=calendar_window(a)
+            amount=a.get('max_results',30)
+            if isinstance(amount,bool) or not isinstance(amount,int) or not 1<=amount<=50:
+                raise FigmaError('connection_invalid_arguments')
+            result=await api(c,'GET','/calendar/v3/calendars/primary/events',params={
+                'timeMin':first,'timeMax':last,'maxResults':amount,
+                'singleEvents':'true','orderBy':'startTime',
+                'fields':'items(id,summary,start,end,location,status,htmlLink),timeZone,nextPageToken'})
+            values=result.get('items',[])
+            if not isinstance(values,list):raise FigmaError('connection_unavailable',503)
+            return {'events':[calendar_event_view(event) for event in values[:50] if isinstance(event,dict)],
+                    'time_zone':str(result.get('timeZone') or '')[:100],
+                    'more':bool(result.get('nextPageToken'))}
+        if name=='calendar_freebusy':
+            first,last=calendar_window(a,default=False)
+            zone=calendar_zone(a)
+            body={'timeMin':first,'timeMax':last,'items':[{'id':'primary'}]}
+            if zone:body['timeZone']=zone
+            result=await api(c,'POST','/calendar/v3/freeBusy',data=body)
+            primary=result.get('calendars',{}).get('primary',{})
+            if primary.get('errors'):raise FigmaError('connection_calendar_availability_unavailable',502)
+            windows=primary.get('busy',[])
+            if not isinstance(windows,list):raise FigmaError('connection_unavailable',503)
+            return {'busy':[{'start':w.get('start'),'end':w.get('end')} for w in windows[:100] if isinstance(w,dict)],
+                    'time_min':first,'time_max':last,'time_zone':zone or str(result.get('timeZone') or '')[:100],
+                    'truncated':len(windows)>100}
+        if name=='calendar_event_create':
+            title=text(a,'title',300)
+            start,end=calendar_instant(a.get('start')),calendar_instant(a.get('end'))
+            if not start < end <= start+timedelta(hours=24):
+                raise FigmaError('connection_calendar_range_invalid')
+            zone=calendar_zone(a)
+            begin={'dateTime':a['start']}
+            finish={'dateTime':a['end']}
+            if zone:begin['timeZone']=finish['timeZone']=zone
+            body={'summary':title,'start':begin,'end':finish}
+            if 'location' in a:body['location']=text(a,'location',500)
+            if 'description' in a:body['description']=text(a,'description',2000)
+            result=await api(c,'POST','/calendar/v3/calendars/primary/events',
+                params={'sendUpdates':'none'},data=body)
+            return {'event':calendar_event_view(result),'created':bool(result.get('id')),
+                    'invitations_sent':False}
         if name=='shopify_products':return await self.graphql(c,'{products(first:30){nodes{id title description totalInventory status}}}')
         if name=='shopify_orders':return await self.graphql(c,'{orders(first:30,sortKey:CREATED_AT,reverse:true){nodes{id name createdAt displayFinancialStatus currentTotalPriceSet{shopMoney{amount currencyCode}}}}}')
         if name=='shopify_product_update':
