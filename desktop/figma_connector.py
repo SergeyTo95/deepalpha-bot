@@ -272,6 +272,12 @@ class FigmaConnector:
             try:
                 result = await self.rpc(connection, "tools/call", {"name": data["name"], "arguments": data["arguments"]})
             except FigmaError:
+                # Read-only Workspace actions have no side effects: surface the precise
+                # sanitized failure instead of a misleading "write may have succeeded".
+                # Keep conservative uncertain-write receipts for all other connectors.
+                if data["name"] in getattr(self, "read_only_tools", ()):
+                    connection["receipts"].pop(data["operation_id"], None)
+                    raise
                 raise FigmaError("figma_execution_uncertain", 409) from None
             receipt["result"] = public_result(result, connection["token"], redact=not self.pair_required)
             return receipt["result"]
