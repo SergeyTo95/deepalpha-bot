@@ -146,7 +146,7 @@ class WorkspaceConnector(FigmaConnector):
                 await asyncio.to_thread(self.persistent_store.save,owner[0],
                     access_token=token,refresh_token=refresh_token,expires_at=oauth_expires,
                     client_id=self.oauth.google_config()['client_id'])
-            except (OSError, ValueError, RuntimeError, Exception):
+            except Exception:
                 self.connections.pop(owner,None)
                 raise FigmaError('connection_storage_unavailable',503) from None
         return result
