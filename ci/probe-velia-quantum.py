@@ -1,0 +1,46 @@
+"""One bounded, free-only live acceptance request; no chat or database writes.
+
+Run explicitly in the account service's pre-deploy environment. Only a fixed
+status is logged: never credentials, model output or exception messages.
+"""
+import os
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from services import velia_quantum_service as quantum
+from velia_quantum_provider import configuration, ERRORS, EXPERIENTIAL_URL, FREE_MODEL
+
+
+def main():
+    config = configuration()
+    if (config is None or config.provider != "experiential"
+            or config.base_url != EXPERIENTIAL_URL or config.model != FREE_MODEL):
+        print("VELIA_QUANTUM_LIVE_PROBE_FAILED quantum_unavailable", flush=True)
+        return 1
+    # This process-local bound never changes the running chat's output limit.
+    os.environ["VELIA_QUANTUM_MAX_OUTPUT_TOKENS"] = "1024"
+    try:
+        result = quantum.generate("Ответь одним словом: Готова.",
+            request_id="railway-quantum-release-probe")
+    except Exception:
+        print("VELIA_QUANTUM_LIVE_PROBE_FAILED quantum_provider_error", flush=True)
+        return 1
+    if (result.get("ok") is True and result.get("finish_reason") == "stop"
+            and str(result.get("text") or "").strip()
+            and result.get("provider") == "velia-quantum"
+            and result.get("model") == "velia-quantum"
+            and result.get("estimated_cost_usd") == 0
+            and result.get("fallback_used") is False):
+        print("VELIA_QUANTUM_LIVE_PROBE_OK model=" + FREE_MODEL, flush=True)
+        return 0
+    reason = result.get("reason")
+    print("VELIA_QUANTUM_LIVE_PROBE_FAILED " + (
+        reason if isinstance(reason, str) and reason in ERRORS
+        else "quantum_invalid_response"), flush=True)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

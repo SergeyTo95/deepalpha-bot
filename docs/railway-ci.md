@@ -5,13 +5,17 @@ recipes with mandatory validation stages. Generate it with
 `python ci/render-verified-dockerfile.py` after either recipe changes.
 
 The mapping in `ci/railway-ci-manifest.json` runs the test, compilation and safety
-assertion commands directly from all seven production push workflows. Workflow
+assertion commands directly from the production push workflows. Workflow
 hashes and the complete production workflow inventory are checked first: adding
 or changing a workflow requires reviewing its migration mapping. Python 3.11,
 Python 3.12 for Flash, and PostgreSQL 16 match the original jobs. Each workflow
 gets a separate disposable database. A failure, timeout, skipped test or empty
 test result stops the build. No test receives deployment secrets or production
 database access. GitHub Actions files remain available for normal use.
+
+The Quantum workflow is mapped into the Python 3.12 stage, including its
+PostgreSQL persistence, ownership, idempotency and quota tests. Its live provider
+probe is a separate explicit pre-deploy command, never a credentialed build test.
 
 The medical worker image recipe is included verbatim as a build stage. Its
 fail-closed authenticated health check runs within that image; no model weights

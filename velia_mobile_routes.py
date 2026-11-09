@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, Optional
 
 from aiohttp import web
 from services.velia_flash_service import public_capability, dispatch_send
+from services.velia_quantum_service import public_capability as quantum_capability
 
 from db.database import get_user, get_subscription_until, is_subscribed
 from services.velia_chat_service import (
@@ -233,6 +234,7 @@ def setup_velia_mobile_routes(
                 "features": {
                     "chat": is_velia_chat_enabled_for_user(user_id),
                     **public_capability(),
+                    **quantum_capability(),
                     "debug_usage": is_debug_usage_enabled_for_user(user_id),
                 },
             }
