@@ -314,6 +314,54 @@ def test_google_refresh_and_invalid_grant_are_handled_without_losing_other_users
 
 
 
+def test_google_status_and_chat_verify_restore_database_after_railway_sleep(tmp_path,monkeypatch):
+    monkeypatch.setenv('VELIA_GOOGLE_OAUTH_CLIENT_ID','velia-public-client')
+    monkeypatch.setenv('VELIA_GOOGLE_OAUTH_CLIENT_SECRET','fixture-client-secret')
+    store=google_durable_store(tmp_path)
+    store.save('7',access_token='access-token-not-plaintext-012345',
+        refresh_token='refresh-token-not-plaintext-012345',
+        expires_at=time.time()+3600,client_id='velia-public-client')
+    async def fake(connection,method,path,**kwargs):
+        assert connection['token']=='access-token-not-plaintext-012345'
+        return {'email':'valid@gmail.test'} if path=='/v1/userinfo' else {}
+    async def forbidden(*args,**kwargs):
+        raise AssertionError('The legacy backend is not used by Google OAuth')
+    async def scenario():
+        bridge=WorkspaceConnector('google',request=fake,persistent_store=store)
+        oauth=WorkspaceOAuth(bridge,'https://velia.example','google',forbidden)
+        app=web.Application()
+        async def session_for(request):
+            uid=request.headers.get('X-User')
+            return SimpleNamespace(user_id=uid,id='browser-new',access='access') if uid else None
+        setup_figma_routes(app,session_for=session_for,
+            same_origin=lambda request:request.headers.get('Origin')=='https://velia.example',
+            json_response=lambda data,status=200:web.json_response(data,status=status),
+            connector=bridge,oauth=oauth,provider='google',prefix='/web-api/v1/connections/google')
+        async with TestServer(app) as server, ClientSession() as client:
+            status=await client.get(server.make_url('/web-api/v1/connections/google/status'),
+                                    headers={'X-User':'7'})
+            assert status.status==200
+            details=await status.json()
+            assert details['connected'] is True
+            assert 'access-token-not-plaintext-012345' not in json.dumps(details)
+            verify=await client.post(server.make_url('/web-api/v1/connections/google/verify'),
+                headers={'X-User':'7','Origin':'https://velia.example'},json={})
+            assert verify.status==200
+            assert (await verify.json())['connected'] is True
+            stranger=await client.get(server.make_url('/web-api/v1/connections/google/status'),
+                                      headers={'X-User':'8'})
+            assert (await stranger.json())['connected'] is False
+            disconnect=await client.post(server.make_url('/web-api/v1/connections/google/disconnect'),
+                headers={'X-User':'7','Origin':'https://velia.example'},json={})
+            assert disconnect.status==200
+            assert (await disconnect.json())['connected'] is False
+            again=await client.get(server.make_url('/web-api/v1/connections/google/status'),
+                                  headers={'X-User':'7'})
+            assert (await again.json())['connected'] is False
+    asyncio.run(scenario())
+    assert store.load('7',client_id='velia-public-client') is None
+
+
 # Calendar regression checks run in the existing gateway Docker qualification.
 def execute(name, arguments, payload):
     calls = []
