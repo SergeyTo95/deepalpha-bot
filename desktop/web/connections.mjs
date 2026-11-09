@@ -12,7 +12,7 @@ export const CONNECTION_NAMES = {
 
 export function cloudProvider(text) {
   const calendarIntent =
-    /календар|расписани|встреч[аиуей]|calendar|schedule|meeting/iu.test(text) &&
+    /календар|расписани|встреч[аиуей]|calendar|schedule|meeting|свободн(?:ое|ые) время|когда я свобод|моя занятост/iu.test(text) &&
     /(?:назнач|запланир|добав|созда|постав|покаж|провер|найди|какие|сколько|когда|свобод|занят|перенес|откро|list|show|schedule|book|create|find|availability)/iu.test(text) &&
     !/^(?:что такое|расскажи о|что значит|what is)\s/iu.test(text);
   if (
