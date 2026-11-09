@@ -73,8 +73,6 @@ export async function connectionRequest(provider, action, data, signal) {
         "Google Calendar отклонил даты или параметры запроса. Уточни время и часовой пояс, затем повтори.",
       connection_invalid_arguments:
         "Для действия не хватает корректных параметров. Уточни поручение и отправь снова.",
-      connection_access_denied:
-        "Google отклонил доступ к данным. Проверь разрешения и включённые API в Google Cloud.",
       connection_unavailable:
         "Google API сейчас недоступен или отклонил запрос. Проверь настройки и повтори позже.",
     };
