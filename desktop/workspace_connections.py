@@ -128,11 +128,78 @@ def calendar_event_view(event):
 
 
 class WorkspaceConnector(FigmaConnector):
-    def __init__(self, provider, request=None):
+    def __init__(self, provider, request=None, *, persistent_store=None):
         super().__init__(pair_required=False)
         self.provider=provider
         self.api_request=request or self.api
         self.tools={item['name']:item for item in (GOOGLE_TOOLS if provider=='google' else SHOPIFY_TOOLS)}
+        self.persistent_store=persistent_store if provider=='google' else None
+        self.restore_lock=asyncio.Lock()
+
+    async def connect(self,owner,token,*,oauth_expires=None,refresh_token=None,persist=True):
+        result=await super().connect(owner,token,oauth_expires=oauth_expires)
+        if persist and self.persistent_store is not None:
+            if not oauth_expires:
+                self.connections.pop(owner,None)
+                raise FigmaError('connection_storage_unavailable',503)
+            try:
+                await asyncio.to_thread(self.persistent_store.save,owner[0],
+                    access_token=token,refresh_token=refresh_token,expires_at=oauth_expires,
+                    client_id=self.oauth.google_config()['client_id'])
+            except Exception:
+                self.connections.pop(owner,None)
+                raise FigmaError('connection_storage_unavailable',503) from None
+        return result
+
+    async def restore(self,owner):
+        """Restore Google access after Railway cold starts or a new browser session."""
+        if self.persistent_store is None or self.provider!='google':
+            return
+        if owner in self.connections:
+            self.prune()
+            if owner in self.connections:
+                return
+        async with self.restore_lock:
+            self.prune()
+            if owner in self.connections:
+                return
+            client_id=self.oauth.google_config()['client_id']
+            if not client_id:
+                return
+            try:
+                saved=await asyncio.to_thread(self.persistent_store.load,owner[0],client_id=client_id)
+            except Exception:
+                raise FigmaError('connection_storage_unavailable',503) from None
+            if not saved:
+                return
+            expires=float(saved['expires_at'])
+            access=saved['access_token']
+            refresh=saved.get('refresh_token')
+            if expires<=time.time()+90:
+                if not refresh:
+                    await self.forget(owner)
+                    return
+                try:
+                    renewed=await self.oauth.google_refresh(refresh)
+                except FigmaError as error:
+                    if error.code=='connection_authorization_revoked':
+                        await self.forget(owner)
+                        return
+                    raise
+                access=renewed['access_token']
+                expires=time.time()+min(renewed['expires_in'],3600)
+                await self.connect(owner,access,oauth_expires=expires,
+                                   refresh_token=renewed.get('refresh_token') or refresh)
+            else:
+                await self.connect(owner,access,oauth_expires=expires,persist=False)
+
+    async def forget(self,owner):
+        self.disconnect(owner)
+        if self.persistent_store is not None:
+            try:
+                await asyncio.to_thread(self.persistent_store.delete,owner[0])
+            except Exception:
+                raise FigmaError('connection_storage_unavailable',503) from None
 
     async def api(self, connection, method, path, *, data=None, params=None, plain=False):
         if self.provider=='google':
@@ -331,6 +398,45 @@ class WorkspaceOAuth(FigmaOAuth):
         return {'ok':True,'configured':valid,'client_id':client_id if valid else '',
                 'redirect_uri':self.return_callback if valid else '', 'scope':GOOGLE_OAUTH_SCOPES}
 
+    async def _google_token(self,body,*,refresh=False):
+        """Exchange/renew tokens only over Google's fixed HTTPS endpoint."""
+        try:
+            async with ClientSession(timeout=ClientTimeout(total=20),trust_env=False) as client:
+                async with client.post('https://oauth2.googleapis.com/token',data=body,allow_redirects=False) as response:
+                    if response.status!=200:
+                        if refresh and response.status in (400,401):
+                            # Only invalid_grant proves the user's refresh credential was revoked.
+                            detail=await response.content.read(4097)
+                            if len(detail)<=4096:
+                                try:
+                                    failure=json.loads(detail)
+                                    if isinstance(failure,dict) and failure.get('error')=='invalid_grant':
+                                        raise FigmaError('connection_authorization_revoked',409)
+                                except (ValueError,UnicodeError):
+                                    pass
+                        raise FigmaError('connection_authorization_failed' if response.status<500 else 'connection_authorization_unavailable',
+                                         400 if response.status<500 else 503)
+                    payload=await response.content.read(64001)
+        except (ClientError, OSError, asyncio.TimeoutError):
+            raise FigmaError('connection_authorization_unavailable',503) from None
+        if len(payload)>64000:raise FigmaError('connection_authorization_failed',400)
+        try:result=json.loads(payload)
+        except (UnicodeError, ValueError):raise FigmaError('connection_authorization_failed',400) from None
+        if not isinstance(result,dict):raise FigmaError('connection_authorization_failed',400)
+        token=result.get('access_token')
+        lifetime=result.get('expires_in')
+        if (not isinstance(token,str) or not 10<=len(token)<=4096 or any(ord(char)<33 or ord(char)>126 for char in token)
+                or isinstance(lifetime,bool) or not isinstance(lifetime,(int,float)) or not math.isfinite(lifetime)
+                or not 60<=lifetime<=90000):
+            raise FigmaError('connection_authorization_failed',400)
+        new_refresh=result.get('refresh_token')
+        if new_refresh is not None and (
+                not isinstance(new_refresh,str) or not 10<=len(new_refresh)<=4096
+                or any(ord(char)<33 or ord(char)>126 for char in new_refresh)):
+            raise FigmaError('connection_authorization_failed',400)
+        # Never leak tokens to the browser; the OAuth completion stores them server-side.
+        return {'ok':True,'access_token':token,'refresh_token':new_refresh,'expires_in':lifetime}
+
     async def google_exchange(self,data):
         """Exchange a session-bound PKCE code directly from the Velia gateway."""
         settings=self.google_config()
@@ -342,24 +448,17 @@ class WorkspaceOAuth(FigmaOAuth):
         body={'grant_type':'authorization_code','code':code,'code_verifier':verifier,
               'client_id':settings['client_id'],'client_secret':os.environ['VELIA_GOOGLE_OAUTH_CLIENT_SECRET'],
               'redirect_uri':settings['redirect_uri']}
-        try:
-            async with ClientSession(timeout=ClientTimeout(total=20),trust_env=False) as client:
-                async with client.post('https://oauth2.googleapis.com/token',data=body,allow_redirects=False) as response:
-                    if response.status!=200:raise FigmaError('connection_authorization_failed',400)
-                    payload=await response.content.read(64001)
-        except (ClientError, OSError, asyncio.TimeoutError):
-            raise FigmaError('connection_authorization_unavailable',503) from None
-        if len(payload)>64000:raise FigmaError('connection_authorization_failed',400)
-        try:result=json.loads(payload)
-        except (UnicodeError, ValueError):raise FigmaError('connection_authorization_failed',400) from None
-        if not isinstance(result,dict):raise FigmaError('connection_authorization_failed',400)
-        token=result.get('access_token')
-        lifetime=result.get('expires_in')
-        if (not isinstance(token,str) or not 10<=len(token)<=4096 or any(ord(char)<33 or ord(char)>126 for char in token)
-                or isinstance(lifetime,bool) or not isinstance(lifetime,(int,float)) or not math.isfinite(lifetime) or lifetime<60):
-            raise FigmaError('connection_authorization_failed',400)
-        # No refresh token, client secret, or ID token reaches the browser or chat.
-        return {'ok':True,'access_token':token,'expires_in':lifetime}
+        return await self._google_token(body)
+
+    async def google_refresh(self,refresh_token):
+        """Refresh silently after a cold start; invalid grants require reconnect."""
+        settings=self.google_config()
+        if not settings['configured']:raise FigmaError('connection_app_not_configured',503)
+        if not isinstance(refresh_token,str) or not 10<=len(refresh_token)<=4096:
+            raise FigmaError('connection_authorization_revoked',409)
+        body={'grant_type':'refresh_token','refresh_token':refresh_token,
+              'client_id':settings['client_id'],'client_secret':os.environ['VELIA_GOOGLE_OAUTH_CLIENT_SECRET']}
+        return await self._google_token(body,refresh=True)
 
     async def backend(self,action,data=None):
         if self.provider=='google':
@@ -392,7 +491,7 @@ class WorkspaceOAuth(FigmaOAuth):
             flow.update({'status':'pending','client_id':settings['client_id'],'redirect_uri':settings['redirect_uri'] if self.provider=='google' else self.return_callback})
             params={'client_id':flow['client_id'],'redirect_uri':flow['redirect_uri'],'response_type':'code','scope':settings['scope'],'state':state}
             if self.provider=='google':
-                params.update({'code_challenge':base64.urlsafe_b64encode(hashlib.sha256(flow['verifier'].encode()).digest()).decode().rstrip('='),'code_challenge_method':'S256','prompt':'consent select_account'})
+                params.update({'code_challenge':base64.urlsafe_b64encode(hashlib.sha256(flow['verifier'].encode()).digest()).decode().rstrip('='),'code_challenge_method':'S256','prompt':'consent select_account','access_type':'offline'})
             origin='https://accounts.google.com/o/oauth2/v2/auth' if self.provider=='google' else 'https://'+shop+'/admin/oauth/authorize'
             return {'authorization_url':origin+'?'+urlencode(params)}
         except BaseException:
@@ -410,7 +509,8 @@ class WorkspaceOAuth(FigmaOAuth):
             if self.pending.get(owner) is not flow:raise FigmaError('connection_authorization_cancelled',409)
             lifetime=result.get('expires_in')
             if isinstance(lifetime,bool) or not isinstance(lifetime,(int,float)) or not math.isfinite(lifetime) or lifetime<60:raise FigmaError('connection_invalid_callback')
-            paired=await self.bridge.connect(owner,result.get('access_token'),oauth_expires=time.time()+min(lifetime,86400))
+            paired=await self.bridge.connect(owner,result.get('access_token'),oauth_expires=time.time()+min(lifetime,3600 if self.provider=='google' else 86400),
+                **({'refresh_token':result.get('refresh_token')} if self.provider=='google' else {}))
             connection=self.bridge.connections.get(owner)
             if self.pending.get(owner) is not flow:
                 if connection and connection['id']==paired['connection_id']:self.bridge.connections.pop(owner,None)

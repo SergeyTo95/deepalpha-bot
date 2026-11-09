@@ -530,8 +530,12 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     from desktop.cloud_connections import create_cloud_connections
     cloud_connections = create_cloud_connections(origin)
     from desktop.workspace_connections import WorkspaceConnector, WorkspaceOAuth
+    from desktop.google_connection_store import GoogleConnectionStore
+    google_database = os.getenv("VELIA_WEB_GUEST_DATABASE_URL", "")
+    google_store = (GoogleConnectionStore(google_database, session_key=os.environ["VELIA_WEB_SESSION_KEY"])
+                    if google_database else None)
     for provider in ("google", "shopify"):
-        bridge = WorkspaceConnector(provider)
+        bridge = WorkspaceConnector(provider, persistent_store=google_store if provider == "google" else None)
         bridge.oauth = WorkspaceOAuth(bridge, origin, provider, upstream)
         cloud_connections[provider] = bridge
     for provider, bridge in cloud_connections.items():
