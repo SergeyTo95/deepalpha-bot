@@ -58,7 +58,9 @@ export async function connectionRequest(provider, action, data, signal) {
       connection_task_already_attempted:
         "Задание уже выполнялось. Проверь результат и отправь новое поручение.",
       connection_execution_uncertain:
-        "Связь прервалась во время действия. Проверь проект перед новым поручением.",
+        provider === "google"
+          ? "Результат изменения Google не подтверждён. Проверь календарь или документы перед повторной попыткой, чтобы не создать дубликат."
+          : "Связь прервалась во время действия. Проверь проект перед новым поручением.",
       connection_operation_conflict:
         "Этот запрос уже использовался. Проверь проект и отправь новое поручение.",
       connection_busy:
@@ -71,6 +73,16 @@ export async function connectionRequest(provider, action, data, signal) {
         "Google Calendar временно ограничил число запросов. Попробуй позже.",
       connection_calendar_request_invalid:
         "Google Calendar отклонил даты или параметры запроса. Уточни время и часовой пояс, затем повтори.",
+      connection_calendar_time_invalid:
+        "Не удалось разобрать дату или время события. Укажи дату и время, например: 11 ноября в 15:00.",
+      connection_calendar_timezone_required:
+        "Для создания события нужен часовой пояс. Укажи город или часовой пояс.",
+      connection_calendar_timezone_invalid:
+        "Часовой пояс не распознан. Укажи его в формате Europe/Istanbul.",
+      connection_calendar_timezone_offset_conflict:
+        "Дата и часовой пояс противоречат друг другу. Уточни часовой пояс события.",
+      connection_calendar_range_invalid:
+        "Время окончания должно быть позднее начала, а длительность — не более 24 часов.",
       connection_invalid_arguments:
         "Для действия не хватает корректных параметров. Уточни поручение и отправь снова.",
       connection_unavailable:
@@ -103,7 +115,9 @@ export async function runCloudAgent({
   const label = CONNECTION_NAMES[provider];
   if (user.connectionAttempted)
     throw new Error(
-      "Это задание уже выполнялось. Проверь проект и отправь новое поручение.",
+      provider === "google" && /созда|добав|назнач|запланир|create|schedule/iu.test(user.content || "")
+        ? "Попытка создания уже отправлялась. Сначала проверь Google Calendar: событие могло сохраниться. Если события нет, отправь новое поручение."
+        : "Это задание уже выполнялось. Проверь результат и отправь новое поручение.",
     );
   const status = await connectionRequest(provider, "verify", {}, signal);
   if (user.connectionId && user.connectionId !== status.connection_id)
