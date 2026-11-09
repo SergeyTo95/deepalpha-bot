@@ -1,26 +1,44 @@
 import asyncio
 import json
 from urllib.parse import urlsplit, parse_qs
+from types import SimpleNamespace
+
+from aiohttp import ClientSession, web
+from aiohttp.test_utils import TestServer
+import desktop.workspace_connections as workspace_module
+from desktop.figma_routes import setup_figma_routes
 import pytest
 from desktop.workspace_connections import WorkspaceConnector, WorkspaceOAuth, safe_cell, GOOGLE_TOOLS
 from desktop.figma_connector import FigmaError
 
 
 @pytest.mark.parametrize('provider',['google','shopify'])
-def test_native_oauth_is_owner_bound_and_disconnect_cancels_pending(provider):
+def test_native_oauth_is_owner_bound_and_disconnect_cancels_pending(provider,monkeypatch):
+    if provider=='google':
+        monkeypatch.setenv('VELIA_GOOGLE_OAUTH_CLIENT_ID','public')
+        monkeypatch.setenv('VELIA_GOOGLE_OAUTH_CLIENT_SECRET','private-local-only')
     async def scenario():
         calls=[]
         async def upstream(method,path,*,token,data=None):
+            if provider=='google':raise AssertionError('Google OAuth must never call legacy backend')
             assert token=='account-access';calls.append((method,path,data))
-            if path.endswith('/begin'):return 200,{'ok':True,'configured':True,'client_id':'public','redirect_uri':'https://backend.example/api/auth/google/callback','scope':'read','state':'velia_workspace.signed-state' if provider=='google' else 'signed-state'}
+            if path.endswith('/begin'):return 200,{'ok':True,'configured':True,'client_id':'public','redirect_uri':'https://backend.example/api/auth/google/callback','scope':'read','state':'signed-state'}
             return 200,{'ok':True,'access_token':'private-access-token','expires_in':3600}
         bridge=WorkspaceConnector(provider);oauth=WorkspaceOAuth(bridge,'https://velia.example',provider,upstream);bridge.oauth=oauth
+        if provider=='google':
+            async def google_exchange(data):
+                assert data['code']=='code' and len(data['code_verifier'])>=43
+                return {'ok':True,'access_token':'private-access-token','expires_in':3600}
+            oauth.google_exchange=google_exchange
         owner=('7','session-7')
         with oauth.authentication('account-access'):
             start=await oauth.start(owner,options={'shop':'user-shop.myshopify.com'})
             query=parse_qs(urlsplit(start['authorization_url']).query);state=query['state'][0]
             assert query['client_id']==['public'] and 'private-access-token' not in start['authorization_url']
-            if provider=='google':assert state.startswith('velia_workspace.') and query['code_challenge_method']==['S256']
+            if provider=='google':
+                assert state.startswith('velia_workspace.') and query['code_challenge_method']==['S256']
+                assert query['redirect_uri']==['https://velia.example/web-api/v1/velia/oauth/google/callback']
+                assert 'private-local-only' not in start['authorization_url']
             with pytest.raises(FigmaError):await oauth.complete(('8','session-8'),state,'code')
             result=await oauth.complete(owner,state,'code',callback_query=[('state',state),('code','code')])
             assert result['connected'] and bridge.connections[owner]['shop']=='user-shop.myshopify.com'
@@ -28,9 +46,8 @@ def test_native_oauth_is_owner_bound_and_disconnect_cancels_pending(provider):
             await oauth.start(owner,options={'shop':'user-shop.myshopify.com'})
             bridge.disconnect(owner)
             assert not oauth.pending and not bridge.connections
-        assert sum(path.endswith('/token') for _,path,_ in calls)==1
+        assert sum(path.endswith('/token') for _,path,_ in calls)==(0 if provider=='google' else 1)
     asyncio.run(scenario())
-
 
 def test_google_draft_and_sheet_calls_have_receipts_and_do_not_send_mail():
     async def scenario():
@@ -75,10 +92,12 @@ def test_disconnect_during_authorization_prevents_new_pending_state():
     async def scenario():
         started=asyncio.Event();resume=asyncio.Event()
         async def upstream(*args,**kwargs):
-            started.set();await resume.wait();return 200,{'ok':True,'configured':True,'client_id':'public','redirect_uri':'https://backend.example/callback','scope':'read'}
-        bridge=WorkspaceConnector('google');oauth=WorkspaceOAuth(bridge,'https://velia.example','google',upstream);bridge.oauth=oauth
+            started.set();await resume.wait()
+            return 200,{'ok':True,'configured':True,'client_id':'public','redirect_uri':'https://backend.example/callback','scope':'read','state':'signed-state'}
+        bridge=WorkspaceConnector('shopify');oauth=WorkspaceOAuth(bridge,'https://velia.example','shopify',upstream);bridge.oauth=oauth
         owner=('7','s')
-        task=asyncio.create_task(oauth.start(owner));await started.wait();bridge.disconnect(owner);resume.set()
+        task=asyncio.create_task(oauth.start(owner,options={'shop':'user-shop.myshopify.com'}))
+        await started.wait();bridge.disconnect(owner);resume.set()
         with pytest.raises(FigmaError,match='cancelled'):await task
         assert not oauth.pending and not bridge.connections
     asyncio.run(scenario())
