@@ -485,8 +485,9 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             return error("authentication_unavailable", 503)
 
     async def asset(request):
-        name = request.match_info.get("name", "index.html")
-        if name not in {"index.html", "velia-sw.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "badge-96.png", "web-push.mjs", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "notebook.mjs", "notebook-ui.mjs", "pulse.mjs", "pulse-ui.mjs", "pulse-agent.mjs", "place-history.mjs", "place-card.mjs", "notebook-materials.mjs", "place-agent.mjs", "map.mjs", "map-agent.mjs", "map-result.mjs", "visits.mjs", "visit-ui.mjs", "visit-agent.mjs", "leaflet-vendor.js", "leaflet-vendor.css", "leaflet-LICENSE.txt", "features.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "service-icons.mjs", "document-exports.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
+        name = {"/privacy":"privacy.html", "/terms":"terms.html"}.get(
+            request.path, request.match_info.get("name", "index.html"))
+        if name not in {"privacy.html", "terms.html", "legal.css", "index.html", "velia-sw.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "badge-96.png", "web-push.mjs", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "notebook.mjs", "notebook-ui.mjs", "pulse.mjs", "pulse-ui.mjs", "pulse-agent.mjs", "place-history.mjs", "place-card.mjs", "notebook-materials.mjs", "place-agent.mjs", "map.mjs", "map-agent.mjs", "map-result.mjs", "visits.mjs", "visit-ui.mjs", "visit-agent.mjs", "leaflet-vendor.js", "leaflet-vendor.css", "leaflet-LICENSE.txt", "features.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "service-icons.mjs", "document-exports.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
             raise web.HTTPNotFound()
         response = web.FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
         if name=="velia-sw.js":response.headers["Service-Worker-Allowed"]="/"
@@ -499,6 +500,8 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             "Permissions-Policy": "camera=(), microphone=(self), geolocation=(self)"})
         return response
     app.router.add_get("/", asset)
+    app.router.add_get("/privacy", asset)
+    app.router.add_get("/terms", asset)
     app.router.add_get("/web/{name}", asset)
     app.router.add_get(r"/{name:velia-sw\.js|manifest\.webmanifest}", asset)
     app.router.add_get("/web-api/v1/session", current)
