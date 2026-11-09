@@ -199,8 +199,15 @@ S256 and exchanges the code server-to-server with Google. It verifies the
 Google identity via the existing Workspace connector, does not send client
 secrets or token exchange results to the browser, and redirects back to the
 existing Velia connection result UI. Shopify and non-Google connections remain
-unchanged. Currently Google OAuth access is session-only, with no refresh token
-persisted; users reconnect after access-token expiry or gateway restart.
+unchanged. Google OAuth tokens are now encrypted at rest in the existing
+PostgreSQL database (`VELIA_WEB_GUEST_DATABASE_URL`) using a key derived from
+`VELIA_WEB_SESSION_KEY`. Authorization requests use offline access. On a new
+browser session or a Railway cold start, Velia restores the account-scoped
+connection and refreshes expired access tokens when a Google refresh token is
+available. An explicit Disconnect erases the persisted connection; signing out
+of Velia does not automatically revoke the optional Google integration.
+The user must reconnect once after upgrading from the previous in-memory-only
+implementation so the new durable record can be created.
 Google's public-production consent, branding and restricted-scope verification
 are separate Google Cloud configuration/approval steps and are not bypassed by
 this route change.
