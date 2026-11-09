@@ -439,6 +439,62 @@ def test_uncertain_write_receipt_stays_conservative_when_google_write_fails():
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize('args,code',[
+    ({'title':'Test Velia','start':'2026-11-11T15:00:00','end':'2026-11-11T15:30:00'}, 'connection_calendar_timezone_required'),
+    ({'title':'Test Velia','start':'2026-11-11T15:30:00+03:00',
+      'end':'2026-11-11T15:00:00+03:00'}, 'connection_calendar_range_invalid'),
+    ({'title':'Test Velia','start':'2026-11-11T15:00:00+00:00',
+      'end':'2026-11-11T15:30:00+00:00','time_zone':'Europe/Istanbul'}, 'connection_calendar_timezone_offset_conflict'),
+    ({'title':'Test Velia','start':'bad-time','end':'2026-11-11T15:30:00+03:00'}, 'connection_calendar_time_invalid'),
+    ({'title':'Test Velia','start':'2026-11-11T15:00:00+03:00',
+      'end':'2026-11-11T15:30:00+03:00','attendees':['unauthorized@example.com']}, 'connection_invalid_arguments')
+])
+def test_calendar_write_preflight_rejects_invalid_inputs_before_any_receipt(args,code):
+    async def scenario():
+        calls=[]
+        async def fake(connection,method,path,**kwargs):
+            calls.append(path)
+            return {'email':'fixture@example.test'}
+        bridge=WorkspaceConnector('google',request=fake)
+        owner=('7','session-calendar')
+        conn=await bridge.connect(owner,'fixture-access-token-012345',oauth_expires=time.time()+3600)
+        payload={'connection_id':conn['connection_id'],'request_id':'calendar-create-12345',
+                 'run_id':'calendar-run-12345','operation_id':'create-calendar-12345',
+                 'name':'calendar_event_create','arguments':args}
+        with pytest.raises(FigmaError) as error:
+            await bridge.call(owner,payload)
+        assert error.value.code==code
+        assert not bridge.connections[owner]['receipts']
+        assert not bridge.connections[owner]['runs']
+        assert all(not path.startswith('/calendar/') for path in calls)
+    asyncio.run(scenario())
+
+
+def test_calendar_valid_write_can_reuse_operation_after_preflight_rejection():
+    async def scenario():
+        calls=[]
+        async def fake(connection,method,path,**kwargs):
+            calls.append(path)
+            if path=='/calendar/v3/calendars/primary/events':
+                return {'id':'google-event-id-123','summary':kwargs['data']['summary']}
+            return {'email':'fixture@example.test'}
+        bridge=WorkspaceConnector('google',request=fake)
+        owner=('7','session-calendar')
+        conn=await bridge.connect(owner,'fixture-access-token-012345',oauth_expires=time.time()+3600)
+        base={'connection_id':conn['connection_id'],'request_id':'calendar-create-12345',
+              'run_id':'calendar-run-12345','operation_id':'create-calendar-12345',
+              'name':'calendar_event_create'}
+        with pytest.raises(FigmaError):
+            await bridge.call(owner,{**base,'arguments':{
+                'title':'Test Velia','start':'2026-11-11T15:00:00','end':'2026-11-11T15:30:00'}})
+        result=await bridge.call(owner,{**base,'arguments':{
+            'title':'Test Velia','start':'2026-11-11T15:00:00+03:00',
+            'end':'2026-11-11T15:30:00+03:00','time_zone':'Europe/Istanbul'}})
+        assert 'google-event-id-123' in result['text']
+        assert calls.count('/calendar/v3/calendars/primary/events')==1
+    asyncio.run(scenario())
+
+
 # Calendar regression checks run in the existing gateway Docker qualification.
 def execute(name, arguments, payload):
     calls = []
