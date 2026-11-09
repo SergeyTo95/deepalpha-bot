@@ -9,10 +9,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import hashlib
 import json
 import math
+import os
 import re
 import secrets
 import time
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
 from aiohttp import ClientSession, ClientTimeout, ClientError
 from desktop.figma_connector import FigmaConnector, FigmaError
@@ -25,6 +26,11 @@ def tool(name, description, properties, required=()):
 S={'type':'string','maxLength':20000}
 TIME={'type':'string','minLength':20,'maxLength':80}
 ZONE={'type':'string','maxLength':100}
+GOOGLE_OAUTH_SCOPES = ('openid email https://www.googleapis.com/auth/drive.readonly '
+    'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets '
+    'https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/gmail.readonly '
+    'https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/calendar.events '
+    'https://www.googleapis.com/auth/calendar.freebusy')
 ROWS={'type':'array','maxItems':200,'items':{'type':'array','maxItems':50,'items':{'type':['string','number','boolean','null']}}}
 GOOGLE_TOOLS=[
  tool('drive_search','Find files by name on Google Drive',{'query':S},['query']),
@@ -306,14 +312,65 @@ class WorkspaceOAuth(FigmaOAuth):
         super().__init__(bridge,origin)
         self.provider=provider;self.upstream=upstream
         self.settings={"issuer":"https://accounts.google.com" if provider=="google" else "https://accounts.shopify.com"}
-        self.return_callback=origin.rstrip('/')+'/web-api/v1/connections/'+provider+'/callback'
+        self.return_callback=(origin.rstrip('/')+'/web-api/v1/velia/oauth/google/callback' if provider=='google'
+                              else origin.rstrip('/')+'/web-api/v1/connections/'+provider+'/callback')
         self.access=ContextVar('workspace_access',default=None)
     @contextmanager
     def authentication(self,access):
         token=self.access.set(access)
         try:yield
         finally:self.access.reset(token)
+    def google_config(self):
+        """Google client credentials live exclusively in the Velia gateway, not DeepAlpha."""
+        client_id=os.getenv('VELIA_GOOGLE_OAUTH_CLIENT_ID','').strip()
+        secret=os.getenv('VELIA_GOOGLE_OAUTH_CLIENT_SECRET','')
+        target=urlsplit(self.return_callback)
+        valid=bool(client_id and secret and target.scheme=='https' and target.hostname
+                   and not target.username and not target.password and not target.fragment
+                   and target.path=='/web-api/v1/velia/oauth/google/callback')
+        return {'ok':True,'configured':valid,'client_id':client_id if valid else '',
+                'redirect_uri':self.return_callback if valid else '', 'scope':GOOGLE_OAUTH_SCOPES}
+
+    async def google_exchange(self,data):
+        """Exchange a session-bound PKCE code directly from the Velia gateway."""
+        settings=self.google_config()
+        if not settings['configured']:raise FigmaError('connection_app_not_configured',503)
+        code=data.get('code') if isinstance(data,dict) else None
+        verifier=data.get('code_verifier') if isinstance(data,dict) else None
+        if not isinstance(code,str) or not 1<=len(code)<=2000 or not isinstance(verifier,str) or not re.fullmatch(r'[A-Za-z0-9_-]{43,128}',verifier):
+            raise FigmaError('connection_invalid_callback')
+        body={'grant_type':'authorization_code','code':code,'code_verifier':verifier,
+              'client_id':settings['client_id'],'client_secret':os.environ['VELIA_GOOGLE_OAUTH_CLIENT_SECRET'],
+              'redirect_uri':settings['redirect_uri']}
+        try:
+            async with ClientSession(timeout=ClientTimeout(total=20),trust_env=False) as client:
+                async with client.post('https://oauth2.googleapis.com/token',data=body,allow_redirects=False) as response:
+                    if response.status!=200:raise FigmaError('connection_authorization_failed',400)
+                    payload=await response.content.read(64001)
+        except (ClientError, OSError, asyncio.TimeoutError):
+            raise FigmaError('connection_authorization_unavailable',503) from None
+        if len(payload)>64000:raise FigmaError('connection_authorization_failed',400)
+        try:result=json.loads(payload)
+        except (UnicodeError, ValueError):raise FigmaError('connection_authorization_failed',400) from None
+        if not isinstance(result,dict):raise FigmaError('connection_authorization_failed',400)
+        token=result.get('access_token')
+        lifetime=result.get('expires_in')
+        if (not isinstance(token,str) or not re.fullmatch(r'[\\x21-\\x7e]{10,4096}',token)
+                or isinstance(lifetime,bool) or not isinstance(lifetime,(int,float)) or not math.isfinite(lifetime) or lifetime<60):
+            raise FigmaError('connection_authorization_failed',400)
+        # No refresh token, client secret, or ID token reaches the browser or chat.
+        return {'ok':True,'access_token':token,'expires_in':lifetime}
+
     async def backend(self,action,data=None):
+        if self.provider=='google':
+            if action=='config':return self.google_config()
+            if action=='begin':
+                result=self.google_config()
+                if not result['configured']:raise FigmaError('connection_app_not_configured',503)
+                result['state']=data['state']
+                return result
+            if action=='token':return await self.google_exchange(data)
+            raise FigmaError('connection_authorization_unavailable',503)
         status,result=await self.upstream('GET' if data is None else 'POST','/mobile-api/v1/workspace-oauth/'+self.provider+'/'+action,token=self.access.get(),data=data)
         if status!=200 or not result.get('ok'):raise FigmaError('connection_authorization_unavailable',503)
         return result
@@ -328,7 +385,7 @@ class WorkspaceOAuth(FigmaOAuth):
         flow={'state':state,'verifier':secrets.token_urlsafe(48),'expires':time.monotonic()+600,'started':time.monotonic(),'status':'starting','shop':shop}
         self.pending[owner]=flow
         try:
-            settings=await self.backend('begin',{'shop':shop})
+            settings=await self.backend('begin',{'shop':shop,'state':state})
             if self.pending.get(owner) is not flow:raise FigmaError('connection_authorization_cancelled',409)
             if not settings.get('configured'):raise FigmaError('connection_app_not_configured',503)
             state=settings['state'];flow['state']=state
