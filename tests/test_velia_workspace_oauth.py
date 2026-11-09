@@ -85,3 +85,14 @@ def test_provider_state_cannot_exchange_for_a_different_velia_user(monkeypatch):
     for user,shop in [(8,'user-shop.myshopify.com'),(7,'other-shop.myshopify.com')]:
         with pytest.raises(ValueError):oauth.verify_state(state,user,'shopify',shop)
     with pytest.raises(ValueError):oauth.verify_state(state+'changed',7,'shopify','user-shop.myshopify.com')
+
+
+def test_workspace_google_scopes_include_calendar_without_full_calendar_account_access(monkeypatch):
+    monkeypatch.setenv('GOOGLE_CLIENT_ID', 'test-client')
+    monkeypatch.setenv('GOOGLE_CLIENT_SECRET', 'test-secret')
+    monkeypatch.setenv('GOOGLE_REDIRECT_URI', 'https://backend.example/auth/google/callback')
+    scopes = set(oauth.config('google')['scope'].split())
+    assert 'https://www.googleapis.com/auth/calendar.events' in scopes
+    assert 'https://www.googleapis.com/auth/calendar.freebusy' in scopes
+    assert 'https://www.googleapis.com/auth/gmail.compose' in scopes
+    assert 'https://www.googleapis.com/auth/calendar' not in scopes
