@@ -273,7 +273,9 @@ class WorkspaceConnector(FigmaConnector):
             if 'description' in a:body['description']=text(a,'description',2000)
             result=await api(c,'POST','/calendar/v3/calendars/primary/events',
                 params={'sendUpdates':'none'},data=body)
-            return {'event':calendar_event_view(result),'created':bool(result.get('id')),
+            if not isinstance(result.get('id'),str) or not result['id']:
+                raise FigmaError('connection_calendar_creation_unconfirmed',502)
+            return {'event':calendar_event_view(result),'created':True,
                     'invitations_sent':False}
         if name=='shopify_products':return await self.graphql(c,'{products(first:30){nodes{id title description totalInventory status}}}')
         if name=='shopify_orders':return await self.graphql(c,'{orders(first:30,sortKey:CREATED_AT,reverse:true){nodes{id name createdAt displayFinancialStatus currentTotalPriceSet{shopMoney{amount currencyCode}}}}}')
