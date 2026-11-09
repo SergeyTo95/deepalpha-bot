@@ -641,6 +641,38 @@ def test_oversized_flash_context_has_no_paid_fallback(monkeypatch):
     asyncio.run(run())
 
 
+def test_public_privacy_and_terms_are_accessible_without_login_and_linked_from_home(monkeypatch):
+    async def scenario():
+        async with fixture(monkeypatch) as (server, client, state):
+            async with client.get(server.make_url('/')) as response:
+                assert response.status == 200
+                home = await response.text()
+                assert home.count('href="/privacy"') >= 2
+                assert home.count('href="/terms"') >= 2
+                assert 'Google Calendar, Gmail, Drive, Docs, and Sheets' in home
+            for path, title, evidence in (
+                ('/privacy', 'Privacy Policy', 'Limited Use'),
+                ('/terms', 'Terms of Service', 'Connected services and Google permissions'),
+            ):
+                async with client.get(server.make_url(path)) as response:
+                    assert response.status == 200
+                    assert response.content_type == 'text/html'
+                    assert 'frame-ancestors \'none\'' in response.headers['Content-Security-Policy']
+                    assert response.headers['Referrer-Policy'] == 'no-referrer'
+                    page = await response.text()
+                    assert '<html lang="en">' in page
+                    assert title in page and evidence in page
+                    assert 'velyoncore@gmail.com' in page
+                    assert 'href="/privacy"' in page and 'href="/terms"' in page
+            async with client.get(server.make_url('/web/legal.css')) as response:
+                assert response.status == 200
+                assert response.content_type == 'text/css'
+            async with client.get(server.make_url('/web/secrets.env')) as response:
+                assert response.status == 404
+            assert state['payloads'] == []
+    asyncio.run(scenario())
+
+
 def test_unauthenticated_browser_cannot_use_models_or_read_assets(monkeypatch):
     async def run():
         async with fixture(monkeypatch) as (server, client, state):
