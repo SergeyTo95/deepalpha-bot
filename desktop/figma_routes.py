@@ -102,6 +102,8 @@ def setup_figma_routes(app, *, session_for, same_origin, json_response, connecto
         raise web.HTTPSeeOther(target, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
     app.router.add_get(prefix + "/callback", callback)
+    if provider == "google":
+        app.router.add_get("/web-api/v1/velia/oauth/google/callback", callback)
     app.router.add_get(prefix + "/{action:status|tools}", handle)
     app.router.add_post(prefix + "/{action:authorize|" + ("connect|" if bridge.pair_required else "") + "verify|disconnect|call}", handle)
     return bridge
