@@ -29,7 +29,7 @@ import {setupIncomePlanner} from './income-planner.mjs';
 import {runFigmaAgent, wantsFigma} from './figma.mjs';
 import {cloudProvider, runCloudAgent, CONNECTION_NAMES} from './connections.mjs';
 import {documentExportControl} from "./document-exports.mjs";
-import {wantsFinance,financeFollowup,runFinanceAgent} from './finance.mjs';
+import {wantsFinance,financeFollowup,financeRangeFollowup,runFinanceAgent} from './finance.mjs';
 const $ = (id) => document.getElementById(id);
 const icons = {
   attachment: "M21 11l-8 8a6 6 0 0 1-8-8l9-9a4 4 0 0 1 6 6l-9 9a2 2 0 0 1-3-3l8-8",
@@ -1066,7 +1066,8 @@ async function runFinanceChat(text,voiceTurn) {
       user.content=input;clearFiles();await save();
     }
     let needsInput=false;
-    const reply=await runFinanceAgent({text:input,history:chat.messages.filter(m=>m!==user&&m!==answer),model,request,signal,guard,onQuestion:()=>{needsInput=true;}});guard();
+    const reply=await runFinanceAgent({text:input,history:chat.messages.filter(m=>m!==user&&m!==answer),model,request,signal,guard,operationId:user.requestId,
+      selectedQuery:chat.financeQuery,onQuery:query=>{chat.financeQuery=query;},onQuestion:()=>{needsInput=true;}});guard();
     answer.content=reply;answer.finish='stop';answer.pending=false;
     chat.financePending=needsInput;
     chat.updated=Date.now();render();save();
@@ -1086,7 +1087,7 @@ async function generate(retry = false, voiceTurn = false) {
   }
   const text = $("prompt").value.trim() || (selectedFiles.length ? "Проанализируй прикреплённые файлы." : "");
   if(!retry&&!cloudProvider(text)&&!wantsFigma(text)&&!wantsPulse(text)&&!wantsMap(text,current()?.messages||[])&&
-      (wantsFinance(text)||current()?.financePending&&financeFollowup(text))){
+      (wantsFinance(text)||current()?.financePending&&financeFollowup(text)||current()?.finance&&financeRangeFollowup(text))){
     if(!profile){openAuth();return;}
     if(!profile.models.includes(model)){toast(apiError(profile.pro_locked_reason||'pro_tokens_required'));return;}
     await runFinanceChat(text,voiceTurn);return;

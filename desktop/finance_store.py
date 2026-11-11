@@ -7,7 +7,7 @@ import json
 import secrets
 from cryptography.fernet import Fernet, InvalidToken
 from desktop.guest_store import GuestStore
-from desktop.finance import FinanceError, validate_snapshot
+from desktop.finance import FinanceError, validate_snapshot, edit_snapshot
 
 
 class FinanceStore(GuestStore):
@@ -62,3 +62,15 @@ class FinanceStore(GuestStore):
             if cur.rowcount != 1:
                 raise FinanceError('finance_revision_conflict', 409)
             conn.commit()
+
+    def preview_edit(self, user, edit, revision, *, time_zone, operation_id):
+        current = self.load(user)
+        if current['revision'] != revision:
+            raise FinanceError('finance_revision_conflict', 409)
+        snapshot, change = edit_snapshot(current['snapshot'], edit, time_zone=time_zone, operation_id=operation_id)
+        return snapshot, change
+
+    def apply_edit(self, user, edit, revision, *, time_zone, operation_id):
+        snapshot, change = self.preview_edit(user, edit, revision, time_zone=time_zone, operation_id=operation_id)
+        result = self.save(user, snapshot, revision)
+        return {**result, 'change': change}, snapshot

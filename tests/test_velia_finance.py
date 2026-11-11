@@ -7,7 +7,8 @@ from types import SimpleNamespace
 import pytest
 from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestServer
-from desktop.finance import analyze, FinanceError
+from datetime import datetime, timezone
+from desktop.finance import analyze, FinanceError, edit_snapshot
 from desktop.finance_store import FinanceStore
 from desktop.finance_routes import setup_finance_routes
 
@@ -82,11 +83,10 @@ def test_invalid_amounts_rejected(invalid):
 @pytest.mark.parametrize('mutation', [
     lambda d: d['accounts'].append(deepcopy(d['accounts'][0])),
     lambda d: d['transactions'].append(deepcopy(d['transactions'][0])),
-    lambda d: d['accounts'][0].update(as_of='2026-10-29'),
+    lambda d: d['accounts'][0].update(as_of='2026-09-29'),
     lambda d: d['transactions'][0].update(account_id='other-user-account'),
     lambda d: d['transactions'][0].update(date='2026-09-30'),
     lambda d: d.update(period_end='2026-02-30'),
-    lambda d: d.update(period_start='2024-01-01'),
     lambda d: d['accounts'][0].update(currency='USD;DROP'),
     lambda d: d['accounts'][0].update(restricted='1001'),
     lambda d: d.update(user_id='other-user'),
@@ -183,3 +183,138 @@ def test_finance_planner_uses_selected_model_without_web_search(monkeypatch,tmp_
             for payload in state['payloads']:
                 assert 1024 <= payload.get('max_tokens', payload.get('max_completion_tokens', 0)) <= 8192
     asyncio.run(scenario())
+
+
+def test_any_past_date_range_and_daily_income_expense_results():
+    data = snapshot()
+    data['period_start'] = '2020-01-01'
+    data['transactions'].append({'id': 'old-sale', 'account_id': 'bank', 'date': '2020-01-01', 'kind': 'revenue', 'amount': '5'})
+    all_time = analyze(data, query={'period_start': '2020-01-01', 'period_end': '2026-10-30'})
+    assert all_time['days'] > 366
+    assert all_time['rows'][0]['operating_cash_flow'] == '-95'
+    for first, last, expected in [('2020-01-01', '2020-01-01', '5'), ('2026-10-03', '2026-10-03', '200'),
+                                  ('2026-10-04', '2026-10-04', '-300'), ('2026-10-03', '2026-10-04', '-100')]:
+        result = analyze(data, query={'period_start': first, 'period_end': last})
+        assert result['rows'][0]['operating_cash_flow'] == expected
+        assert sum(float(row['net']) for row in result['daily']) == float(expected)
+        # Never pass the October 30 closing balance off as an earlier balance.
+        assert result['rows'][0]['available'] is None
+        assert result['rows'][0]['forecast'] is None
+    empty = analyze(data, query={'period_start': '2025-01-01', 'period_end': '2025-01-01'})
+    assert empty['rows'][0]['result'] == 'no_data' and empty['transaction_count'] == 0
+
+
+def test_today_and_yesterday_use_user_zone_at_utc_midnight_boundary():
+    now = datetime(2026, 10, 3, 22, 30, tzinfo=timezone.utc)
+    data = snapshot()
+    tr = analyze(data, query={'preset': 'today', 'time_zone': 'Europe/Istanbul'}, now=now)
+    us = analyze(data, query={'preset': 'today', 'time_zone': 'America/New_York'}, now=now)
+    assert tr['period_start'] == '2026-10-04' and tr['rows'][0]['result'] == 'minus'
+    assert us['period_start'] == '2026-10-03' and us['rows'][0]['result'] == 'plus'
+    yesterday = analyze(data, query={'preset': 'yesterday', 'time_zone': 'Europe/Istanbul'}, now=now)
+    assert yesterday['rows'][0]['operating_cash_flow'] == '200'
+    for preset, first in [('week', '2026-09-28'), ('month', '2026-10-01'), ('year', '2026-01-01')]:
+        result = analyze(data, query={'preset': preset, 'time_zone': 'Europe/Istanbul'}, now=now)
+        assert result['period_start'] == first and result['period_end'] == '2026-10-04'
+    for query in [{'period_start': '2026-10-05', 'period_end': '2026-10-04'}, {'time_zone': 'not/a/zone'},
+                  {'preset': 'tomorrow'}, {'preset': 'today', 'period_start': '2026-10-01', 'period_end': '2026-10-02'}]:
+        with pytest.raises(FinanceError):
+            analyze(data, query=query, now=now)
+
+
+def test_project_category_filters_and_no_income_from_financing():
+    data = snapshot()
+    data['accounts'].append({'id': 'personal', 'project': 'Личное', 'currency': 'USD'})
+    data['transactions'].extend([
+        {'id': 'salary', 'account_id': 'personal', 'date': '2026-10-03', 'kind': 'revenue', 'amount': '1000', 'category': 'Зарплата'},
+        {'id': 'loan', 'account_id': 'personal', 'date': '2026-10-03', 'kind': 'financing_in', 'amount': '4000'},
+    ])
+    report = analyze(data, query={'project': 'Личное', 'category': 'Зарплата'})
+    assert report['transaction_count'] == 1
+    assert all(row['revenue'] == '1000' and row['available'] is None for row in report['rows'])
+    assert analyze(data, query={'project': 'missing'})['rows'] == []
+
+
+def test_append_income_without_known_balances_then_edit_and_delete():
+    add = {'type': 'add_transaction', 'account': {'id': 'personal-usd', 'project': 'Личное', 'currency': 'USD'},
+           'transaction': {'account_id': 'personal-usd', 'date': '2026-10-03', 'kind': 'revenue', 'amount': '500'}}
+    first, change = edit_snapshot(None, add, time_zone='Europe/Istanbul', operation_id='income-1')
+    assert change['before'] is None
+    row = analyze(first)['rows'][0]
+    assert row['revenue'] == '500' and row['result'] == 'plus' and row['available'] is None
+    expense = {'type': 'add_transaction', 'transaction': {'account_id': 'personal-usd', 'date': '2026-10-04', 'kind': 'expense', 'amount': '100'}}
+    second, _ = edit_snapshot(first, expense, time_zone='Europe/Istanbul', operation_id='expense-1')
+    assert len(second['transactions']) == 2 and len(first['transactions']) == 1
+    updated, change = edit_snapshot(second, {'type': 'update_transaction', 'transaction_id': 'income-1',
+        'changes': {'amount': '450', 'date': '2026-10-05', 'category': 'Работа'}}, time_zone='Europe/Istanbul', operation_id='edit-1')
+    assert change['before']['amount'] == '500' and change['after']['amount'] == '450'
+    assert updated['period_end'] == '2026-10-05' and len(updated['transactions']) == 2
+    assert analyze(updated)['rows'][0]['operating_cash_flow'] == '350'
+    assert analyze(updated, query={'period_start': '2026-10-03', 'period_end': '2026-10-03'})['rows'][0]['result'] == 'no_data'
+    deleted, _ = edit_snapshot(updated, {'type': 'delete_transaction', 'transaction_id': 'income-1'},
+                               time_zone='Europe/Istanbul', operation_id='delete-1')
+    assert analyze(deleted)['rows'][0]['operating_cash_flow'] == '-100'
+    assert deleted['transactions'][0]['id'] == 'expense-1'
+    with pytest.raises(FinanceError, match='finance_duplicate_transaction'):
+        edit_snapshot(first, add, time_zone='Europe/Istanbul', operation_id='income-1')
+
+
+def test_account_and_budget_edits_recalculate_without_rewriting_observed_balances():
+    data = snapshot()
+    updated, _ = edit_snapshot(data, {'type': 'update_transaction', 'transaction_id': 'sale', 'changes': {'amount': '400'}},
+                               time_zone='UTC', operation_id='edit-sale')
+    assert updated['accounts'] == data['accounts']
+    assert analyze(updated)['rows'][0]['operating_cash_flow'] == '100'
+    moved, _ = edit_snapshot(updated, {'type': 'update_account', 'account_id': 'bank', 'changes': {'project': 'Redo'}},
+                             time_zone='UTC', operation_id='move')
+    assert moved['budgets'] == data['budgets']
+    budget, _ = edit_snapshot(moved, {'type': 'set_budget', 'budget': {'project': 'Redo', 'currency': 'USD', 'monthly_limit': '100'}},
+                              time_zone='UTC', operation_id='budget')
+    assert next(r for r in analyze(budget)['rows'] if r['project'] == 'Redo')['budget_excess'] == '200'
+
+
+def test_edit_routes_preview_commit_revision_conflicts_and_other_owner(tmp_path):
+    async def scenario():
+        store = FinanceStore(sqlite_path=tmp_path/'editing.db', session_key='e'*44)
+        async def session(request):
+            return SimpleNamespace(user_id=int(request.headers['X-User']))
+        app = web.Application()
+        setup_finance_routes(app, session_for=session, same_origin=lambda r:r.headers.get('Origin')=='https://velia.example',
+                             json_response=lambda data,status=200:web.json_response(data,status=status), store=store)
+        async with TestServer(app) as server, ClientSession() as client:
+            async def post(action, data, user='7'):
+                response = await client.post(server.make_url('/web-api/v1/finance/'+action),
+                    headers={'Origin':'https://velia.example', 'X-User':user}, json=data)
+                return response.status, await response.json()
+            initial = (await post('context', {'time_zone':'Europe/Istanbul'}))[1]
+            assert initial['revision'] == '' and initial['accounts'] == []
+            edit = {'type': 'add_transaction', 'account': {'id':'bank','project':'Velia','currency':'USD'},
+                    'transaction': {'account_id':'bank','date':'2026-10-03','kind':'revenue','amount':'500'}}
+            body = {'edit':edit,'revision':'','time_zone':'Europe/Istanbul','operation_id':'new-income',
+                    'query':{'period_start':'2026-10-03','period_end':'2026-10-03'}}
+            status, preview = await post('preview',body)
+            assert status == 200 and preview['report']['rows'][0]['operating_cash_flow'] == '500'
+            assert (await post('load',{}))[1]['snapshot'] is None
+            assert (await post('mutate',body))[0] == 409
+            status, saved = await post('mutate',{**body,'confirmed':True})
+            assert status == 200 and saved['revision']
+            assert (await post('mutate',{**body,'confirmed':True}))[0] == 409
+            correction = {**body,'revision':saved['revision'], 'operation_id':'correction',
+                          'edit':{'type':'update_transaction','transaction_id':'new-income','changes':{'amount':'450'}}}
+            assert (await post('preview',correction,user='8'))[0] == 409
+            status, updated = await post('mutate',{**correction,'confirmed':True})
+            assert status == 200 and updated['report']['rows'][0]['operating_cash_flow'] == '450'
+            assert (await post('mutate',{**correction,'confirmed':True}))[0] == 409
+            assert (await post('load',{},user='8'))[1]['snapshot'] is None
+    asyncio.run(scenario())
+
+
+def test_move_one_income_to_another_project_preserves_other_entries():
+    data = snapshot()
+    moved, change = edit_snapshot(data, {'type':'update_transaction', 'transaction_id':'sale',
+        'changes':{'account_id':'redo-usd'}, 'account':{'id':'redo-usd','project':'Redo','currency':'USD'}},
+        time_zone='UTC', operation_id='move-income')
+    assert change['before']['project'] == 'Velia' and change['after']['project'] == 'Redo'
+    assert analyze(moved, query={'project':'Redo'})['rows'][0]['operating_cash_flow'] == '200'
+    assert analyze(moved, query={'project':'Velia'})['rows'][0]['operating_cash_flow'] == '-300'
+    assert moved['transactions'][1] == data['transactions'][1]
