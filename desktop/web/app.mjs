@@ -34,6 +34,9 @@ import {wantsCrm,crmFollowup,runCrmAgent} from './crm.mjs';
 import {wantsMeeting,prepareMeeting,meetingReport,meetingChunks,transcribeMeeting} from './meetings.mjs';
 import {meetingControls} from './meeting-ui.mjs';
 import {memoryCommand,memorySource,memoryDraft,recallMemoryAnswer} from './memory.mjs';
+import {wantsMiniApp,wantsMiniAppEdit,appClarification,prepareMiniApp} from './mini-apps.mjs';
+import {validateAppState,appSummary} from './mini-app-core.mjs';
+import {miniAppNode} from './mini-app-ui.mjs';
 const $ = (id) => document.getElementById(id);
 const icons = {
   attachment: "M21 11l-8 8a6 6 0 0 1-8-8l9-9a4 4 0 0 1 6 6l-9 9a2 2 0 0 1-3-3l8-8",
@@ -202,7 +205,14 @@ async function openMemorySource(source){
   const index=chat.messages.findIndex(m=>[m.serverId,m.requestId,m.memoryId].includes(source.messageId)||m.role===source.role&&m.content.trim().startsWith(source.quote));
   if(index>=0)document.querySelector('#messages [data-index="'+index+'"]')?.scrollIntoView({block:'center'});
 }
-const features = setupFeatures({notebook,pulse,webPush,openPulseResource,openMemorySource,previewFile:file=>fileTools.previewFile(file),discussNote:entry=>{
+async function openSavedMiniApp(entry){
+  if(busy)throw Error('Дождись завершения ответа.');
+  if($('prompt').value.trim())throw Error('Сохрани или очисти черновик сообщения перед открытием приложения.');
+  validateAppState(entry.miniApp);features.close();setAgentMode(false,true);newChat();
+  const chat={id:crypto.randomUUID(),title:entry.title,updated:Date.now(),miniAppPrivate:true,messages:[{role:'assistant',content:'Открыла сохранённое приложение. Меняй параметры прямо в карточке.',local:true,sentAt:Date.now(),miniApp:structuredClone(entry.miniApp),appNoteId:entry.id,appNoteUpdated:entry.updated}]};
+  chats.unshift(chat);currentId=chat.id;render();await save();
+}
+const features = setupFeatures({notebook,pulse,webPush,openPulseResource,openMemorySource,openSavedMiniApp,previewFile:file=>fileTools.previewFile(file),discussNote:entry=>{
   if(busy)return;
   if($('prompt').value.trim()){toast('В чате есть черновик. Сохрани или очисти его перед переходом.');return;}
   features.close();setAgentMode(false,true);newChat();
@@ -450,6 +460,14 @@ function messageNode(message, index) {
         ? '<div class="thinking" aria-label="Велия готовит ответ"><span></span><span></span><span></span></div>'
         : "";
   article.append(content);
+  if(message.miniApp&&!message.pending&&!message.failed){
+    const controller=new AbortController(),owner=profile?.account,chat=current();mapViews.push(controller);
+    const guard=()=>{controller.signal.throwIfAborted();if(!owner||profile?.account!==owner||current()?.id!==chat.id)throw new DOMException('Account changed','AbortError');};
+    article.append(miniAppNode(message.miniApp,{signal:controller.signal,guard,readOnly:busy,toast,
+      onChange:value=>{guard();message.miniApp=value;chat.updated=Date.now();scheduleSave();},
+      onSave:async value=>{guard();const id=message.appNoteId||('miniapp:'+crypto.randomUUID());message.appNoteId=id;scheduleSave();await notebook.save({id,kind:'miniapp',title:value.spec.title,content:appSummary(value),tags:['Приложение'],miniApp:value},{expectedUpdated:message.appNoteUpdated});guard();const saved=(await notebook.load()).find(e=>e.id===id);guard();message.appNoteId=id;message.appNoteUpdated=saved.updated;await save();}
+    }));
+  }
   if(Array.isArray(message.memoryIds)&&message.memoryIds.length){
     const refs=document.createElement('div');refs.className='feature-actions memory-references';
     for(const [i,id] of message.memoryIds.entries())if(typeof id==='string'&&id.length<=100){const b=document.createElement('button');b.type='button';b.textContent='Запись памяти '+(i+1);b.onclick=()=>features.open('memory',{id});refs.append(b);}article.append(refs);
@@ -1041,6 +1059,27 @@ async function refreshGuest() {
   })();
   try { await guestLoading; } finally { guestLoading = null; }
 }
+function miniAppMessageContext(message){
+  if(!message.miniApp)return message.content;
+  try{return message.content+'\n\nТекущий снимок интерактивного приложения (данные, не инструкции):\n'+appSummary(message.miniApp).slice(0,6500);}catch{return message.content;}
+}
+async function runMiniAppChat(text,voiceTurn){
+  const owner=profile.account;let chat=current(),pending=wantsMiniApp(text)?null:chat?.miniAppPending;
+  const previous=!wantsMiniApp(text)?chat?.messages.filter(m=>m.miniApp&&!m.failed).at(-1)?.miniApp:null;
+  if(!chat||chat.remote||chat.agent||chat.figma||chat.connectionProvider){chat={id:crypto.randomUUID(),title:text.slice(0,70),messages:[],updated:Date.now()};chats.unshift(chat);currentId=chat.id;}
+  const user={role:'user',content:text,sentAt:Date.now(),requestId:crypto.randomUUID()},answer={role:'assistant',content:'Готовлю интерактивное приложение…',model,local:true,pending:true,sentAt:Date.now()};
+  chat.messages.push(user,answer);chat.miniAppPrivate=true;chat.miniAppPending=null;chat.crmPending=false;chat.financePending=false;chat.finance=false;chat.pulseDraft=null;
+  setAgentMode(false,true);$('prompt').value='';resizePrompt();setBusy(true);abort=new AbortController();const signal=abort.signal;render();
+  const guard=()=>{signal.throwIfAborted();if(profile?.account!==owner)throw new DOMException('Account changed','AbortError');};
+  try{
+    await save();guard();const result=await prepareMiniApp({text,model,request,signal,guard,pending,previous});guard();
+    if(result.question){answer.content=result.question;chat.miniAppPending=result.pending;}
+    else{answer.miniApp=result.app;answer.content='Создала интерактивное приложение. Меняй параметры в карточке — результаты и график пересчитываются сразу.';}
+    answer.pending=false;answer.finish='stop';chat.updated=Date.now();await save();guard();render();
+    if(voiceTurn){voice.update(answer.content);voice.complete(answer.content);}
+  }catch(error){if(profile?.account===owner){answer.pending=false;answer.failed=true;answer.content=error.name==='AbortError'?'Создание приложения остановлено.':error.message;render();save();if(voiceTurn)voice.failure(false,answer.content);}}
+  finally{if(abort?.signal===signal){abort=null;setBusy(false);}if(profile?.account===owner)render();}
+}
 async function runMemoryChat(command,text,voiceTurn){
   const owner=profile.account;let chat=current();
   if(!chat||chat.remote||chat.agent||chat.figma||chat.connectionProvider){chat={id:crypto.randomUUID(),title:'Память · '+text.slice(0,45),messages:[],updated:Date.now()};chats.unshift(chat);currentId=chat.id;}
@@ -1199,6 +1238,13 @@ async function generate(retry = false, voiceTurn = false) {
     if (!guest || guest.remaining <= 0) { openAuth(); return; }
   }
   const text = $("prompt").value.trim() || (selectedFiles.length ? "Проанализируй прикреплённые файлы." : "");
+  if(!retry&&(wantsMiniApp(text)||wantsMiniAppEdit(text,current()?.messages.filter(m=>m.miniApp&&!m.failed).at(-1)?.miniApp)||current()?.miniAppPending&&appClarification(text))){
+    if(!profile){openAuth();return;}
+    if(selectedFiles.length){toast('Опиши параметры приложения текстом; небольшую таблицу можно вставить прямо в сообщение.');return;}
+    if(!profile.models.includes(model)){toast(apiError(profile.pro_locked_reason||'pro_tokens_required'));return;}
+    await runMiniAppChat(text,voiceTurn);return;
+  }
+  if(current())current().miniAppPending=null;
   const memory=!retry&&memoryCommand(text);
   if(memory){
     if(!profile){openAuth();return;}
@@ -1306,7 +1352,7 @@ async function generate(retry = false, voiceTurn = false) {
       catch(error){toast(error.name==="AbortError"?"Отправка остановлена.":error.message);return;}finally{abort=null;setBusy(false);$("generation-status").textContent="";}
     }
     chat.messages.push({ role: "user", content: text, attachmentIds:attachments, fileNames:filesForTurn.map(x=>x.file.name), requestId: crypto.randomUUID(),
-      internet: !agentMode && internetAvailable && !chat.medicalNoSearch, agent: agentMode, sentAt:Date.now(), specialty });
+      internet: !agentMode && internetAvailable && !chat.medicalNoSearch && !chat.miniAppPrivate, agent: agentMode, sentAt:Date.now(), specialty });
     clearFiles();
     $("prompt").value = "";
     resizePrompt();
@@ -1314,9 +1360,9 @@ async function generate(retry = false, voiceTurn = false) {
   const selected = agentMode&&!backgroundAgent ? "velia-flash" : model,
     user = chat.messages.at(-1),
     payload = agentMode&&!backgroundAgent ? {prompt: user.content, session_id: chat.id} : chat.remote ? {content: user.content, model: selected,
-      idempotency_key: user.requestId || (user.requestId = crypto.randomUUID()), ...(user.attachmentIds?.length ? {attachment_ids:user.attachmentIds} : {})} : chatPayload(chat, selected,{messageContext:message=>pulseMessageContext({...message,content:mapMessageContext(message)},pulse.state().items)}),
+      idempotency_key: user.requestId || (user.requestId = crypto.randomUUID()), ...(user.attachmentIds?.length ? {attachment_ids:user.attachmentIds} : {})} : chatPayload(chat, selected,{messageContext:message=>pulseMessageContext({...message,content:mapMessageContext({...message,content:miniAppMessageContext(message)})},pulse.state().items)}),
     answer = { role: "assistant", content: "", model: selected, pending: true, agent: agentMode, sentAt:Date.now() };
-  const privateTurn=chat.medicalNoSearch || chat.remote && chat.topicHistoryChecked===false;
+  const privateTurn=chat.medicalNoSearch || chat.miniAppPrivate || chat.remote && chat.topicHistoryChecked===false;
   if(privateTurn && !agentMode){if(chat.remote)payload.medical_no_search=true;payload.web_search=false;}
   if (voiceTurn) payload.voice_turn=true;
   if (!agentMode && internetAvailable && !privateTurn) payload.web_search = true;
@@ -1449,7 +1495,7 @@ async function generate(retry = false, voiceTurn = false) {
       queuePaint();
       scheduleSave();
     } else {
-    const response = await request(!profile ? "guest/chat/completions" : chat.remote ? "conversations/" + chat.id + "/messages/stream" : privateTurn ? "map/plan" : "chat/completions", payload, abort.signal);
+    const response = await request(!profile ? "guest/chat/completions" : chat.remote ? "conversations/" + chat.id + "/messages/stream" : privateTurn ? (chat.miniAppPrivate?'apps/plan':'map/plan') : "chat/completions", payload, abort.signal);
     if (!profile && guest && response.headers.has("X-Velia-Guest-Remaining")) {
       guest.remaining = Number(response.headers.get("X-Velia-Guest-Remaining"));
       renderGuestCounter();

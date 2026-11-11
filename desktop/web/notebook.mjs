@@ -1,19 +1,21 @@
 import {validatePlaceLink} from './place-history.mjs';
 import {validateVisit} from './visits.mjs';
 import {validateMemory} from './memory-schema.mjs';
+import {validateAppState} from './mini-app-core.mjs';
 /** Encrypted account notebook. The server stores ciphertext and a revision only. */
 const encode=bytes=>{let value='';for(const byte of new Uint8Array(bytes))value+=String.fromCharCode(byte);return btoa(value);};
 const decode=value=>Uint8Array.from(atob(value),char=>char.charCodeAt(0));
 const clone=value=>JSON.parse(JSON.stringify(value));
 const AAD=account=>new TextEncoder().encode('velia-notebook-v1:'+account);
 export function validateEntry(entry) {
-  if(!entry||!['note','list','favorite','place','visit','material','memory','memory-settings'].includes(entry.kind)||typeof entry.id!=='string'||entry.id.length>100
+  if(!entry||!['note','list','favorite','place','visit','material','memory','memory-settings','miniapp'].includes(entry.kind)||typeof entry.id!=='string'||entry.id.length>100
       ||typeof entry.title!=='string'||!entry.title.trim()||entry.title.length>200||typeof entry.content!=='string'||entry.content.length>50000
       ||!Array.isArray(entry.tags)||entry.tags.length>12||entry.tags.some(tag=>typeof tag!=='string'||tag.length>40))throw Error('Проверь название и текст заметки.');
   if(entry.kind==='list'&&(!Array.isArray(entry.items)||entry.items.length>200||entry.items.some(item=>!item||typeof item.text!=='string'||!item.text.trim()||item.text.length>500||typeof item.done!=='boolean')))throw Error('Проверь пункты списка.');
   if(entry.kind==='place'&&(!Number.isFinite(entry.lat)||!Number.isFinite(entry.lon)||Math.abs(entry.lat)>90||Math.abs(entry.lon)>180))throw Error('Проверь координаты места.');
   if(entry.kind==='visit')validateVisit(entry);
   if(['memory','memory-settings'].includes(entry.kind))validateMemory(entry);
+  if(entry.kind==='miniapp')validateAppState(entry.miniApp);
   validatePlaceLink(entry);
   return entry;
 }
@@ -76,7 +78,7 @@ export class Notebook {
     await this.mutate(entries=>{
       const index=entries.findIndex(entry=>entry.id===id);
       if(index>=0&&ifAbsent)return;
-      if(expectedUpdated!==undefined&&(index<0||entries[index].updated!==expectedUpdated))throw Object.assign(Error('Запись изменилась. Обнови память перед сохранением.'),{status:409});
+      if(expectedUpdated!==undefined&&(index<0||entries[index].updated!==expectedUpdated))throw Object.assign(Error('Запись изменилась. Обнови список перед сохранением.'),{status:409});
       const previous=index>=0&&Number.isSafeInteger(entries[index].updated)?entries[index].updated:0;
       const record=validateEntry({content:'',tags:[],...value,id,updated:Math.max(Date.now(),previous+1)});
       if(index<0)entries.unshift(record);else entries[index]=record;
