@@ -3,7 +3,7 @@ import {setupPulse,wantsPulse,pulseWhen,pulseDateReply,pulseMessageContext} from
 import {runPulseCommand} from './pulse-agent.mjs';
 import {visitSummary} from './visits.mjs';
 import {wantsMap,wantsPlaceHistory,runMapAgent,mapMessageContext} from './map-agent.mjs';
-import {mapResultNode} from './map-result.mjs';
+import {mapResultNode,mapReplyText} from './map-result.mjs';
 import {Notebook,notebookCommand} from './notebook.mjs';
 import {LocalHistory, browserHistoryStore} from "./local-history.mjs";
 import {
@@ -445,7 +445,7 @@ function messageNode(message, index) {
   if (message.role === "user") content.textContent = message.content;
   else
     content.innerHTML = message.content
-      ? renderMarkdown(message.content, {highlight: !message.pending})
+      ? renderMarkdown(mapReplyText(message.content,message.mapData), {highlight: !message.pending})
       : busy && !message.failed
         ? '<div class="thinking" aria-label="Велия готовит ответ"><span></span><span></span><span></span></div>'
         : "";
@@ -496,7 +496,7 @@ function messageNode(message, index) {
       copy.innerHTML = icon("copy") + "Копировать";
       copy.onclick = () => copyText(message.content);
       actions.append(copy);
-      const speak = document.createElement("button"); speak.textContent = "Озвучить"; speak.onclick = () => voice.speak(message.content); actions.append(speak);
+      const speak = document.createElement("button"); speak.textContent = "Озвучить"; speak.onclick = () => voice.speak(mapReplyText(message.content,message.mapData)); actions.append(speak);
       actions.append(documentExportControl(message.content,toast));
       if(!message.failed&&!message.stopped){
         const remember=document.createElement('button');remember.type='button';remember.textContent='В память';
@@ -1394,18 +1394,19 @@ async function generate(retry = false, voiceTurn = false) {
     paintFrame = null;
     const progress = flush || reducedMotion.matches || document.hidden
       ? 1 : Math.min(1, (time - revealStarted) / revealDuration);
-    let end = Math.ceil(revealFrom + (answer.content.length - revealFrom) * progress);
+    const presentation=mapReplyText(answer.content,answer.mapData);
+    let end = Math.ceil(revealFrom + (presentation.length - revealFrom) * progress);
     // Keep UTF-16 pairs intact while revealing multilingual text and emoji.
-    if (end < answer.content.length && /[\uDC00-\uDFFF]/.test(answer.content[end])) end++;
-    displayed = answer.content.slice(0, end);
+    if (end < presentation.length && /[\uDC00-\uDFFF]/.test(presentation[end])) end++;
+    displayed = presentation.slice(0, end);
     const shouldScroll = conversationScroll.scrollHeight - conversationScroll.scrollTop - conversationScroll.clientHeight < 180;
     contentNode.innerHTML = renderMarkdown(displayed, {highlight: false});
     if (shouldScroll) scrollDown(true);
-    if (displayed !== answer.content) paintFrame = requestAnimationFrame(paint);
+    if (displayed !== presentation) paintFrame = requestAnimationFrame(paint);
     else finishPaint?.();
   };
   const queuePaint = () => {
-    const append = answer.content.startsWith(displayed);
+    const append = mapReplyText(answer.content,answer.mapData).startsWith(displayed);
     revealFrom = displayed.length;
     revealStarted = performance.now();
     if (!append || reducedMotion.matches || document.hidden) paint(revealStarted, true);
@@ -1419,7 +1420,7 @@ async function generate(retry = false, voiceTurn = false) {
   try {
     if(mapTurn){
       const result=await runMapAgent({model:selected,language:profile?.language||navigator.language||'ru',user,history:chat.messages.filter(message=>message!==answer),notebook,signal:abort.signal,request,files:mapFiles,persist:()=>save(),progress:text=>{$('generation-status').textContent=text;},onData:data=>{answer.mapData=data;scheduleSave();}});
-      answer.content=result.text;answer.mapData=result.data;answer.finish='stop';if(voiceTurn)voice.update(answer.content);queuePaint();scheduleSave();
+      answer.content=result.text;answer.mapData=result.data;answer.finish='stop';if(voiceTurn)voice.update(mapReplyText(answer.content,answer.mapData));queuePaint();scheduleSave();
     } else if (connectionProvider) {
       answer.content=await runCloudAgent({provider:connectionProvider,model:selected,user,
         history:chat.messages.filter(message=>message!==answer),signal:abort.signal,request,persist:()=>save(),
@@ -1479,7 +1480,7 @@ async function generate(retry = false, voiceTurn = false) {
       const entry={entry_id:user.requestId,kind:user.specialty,created_at:new Date(user.sentAt || Date.now()).toISOString()};
       await storeTopic(chat,entry,user.requestId);
     }
-    voice.complete(answer.content);
+    voice.complete(mapReplyText(answer.content,answer.mapData));
   } catch (error) {
     voice.failure(false,error.name==="AbortError"?"Ответ остановлен. Повтори подключение, чтобы продолжить.":error.message);
     if (error.name === "AbortError") answer.stopped = true;
