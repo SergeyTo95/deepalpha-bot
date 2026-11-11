@@ -6,6 +6,7 @@ Snapshots describe closing balances, so period flows must not be added again.
 from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal, localcontext, ROUND_HALF_UP
 from copy import deepcopy
+from functools import wraps
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import re
 
@@ -33,7 +34,7 @@ def text(value, limit=100):
 
 
 def amount(value):
-    if not isinstance(value, str) or not re.fullmatch(r'(?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,8})?', value):
+    if not isinstance(value, str) or not re.fullmatch(r'(?:0|[1-9][0-9]{0,29})(?:\.[0-9]{1,36})?', value):
         fail('finance_invalid_amount')
     return Decimal(value)
 
@@ -48,7 +49,7 @@ def day(value):
 
 
 def currency(value):
-    if not isinstance(value, str) or not re.fullmatch(r'[A-Z][A-Z0-9]{1,11}', value):
+    if not isinstance(value, str) or not re.fullmatch(r'[A-Z][A-Z0-9._:-]{1,31}', value):
         fail('finance_invalid_currency')
     return value
 
@@ -67,13 +68,13 @@ def today(time_zone='UTC', now=None):
 
 
 def validate_snapshot(raw):
-    fields(raw, ('period_start', 'period_end', 'source', 'accounts', 'transactions'), ('budgets', 'time_zone'))
+    fields(raw, ('period_start', 'period_end', 'source', 'accounts', 'transactions'), ('budgets', 'time_zone', 'assets', 'fx_rates'))
     first, last = day(raw['period_start']), day(raw['period_end'])
     if first > last or last > today(raw.get('time_zone', 'UTC')):
         fail('finance_invalid_period')
     source = text(raw['source'], 200)
     accounts, transactions, budgets = raw['accounts'], raw['transactions'], raw.get('budgets', [])
-    if not isinstance(accounts, list) or not 1 <= len(accounts) <= 50 or not isinstance(transactions, list) or len(transactions) > 5000 or not isinstance(budgets, list) or len(budgets) > 50:
+    if not isinstance(accounts, list) or len(accounts) > 50 or not isinstance(transactions, list) or len(transactions) > 5000 or not isinstance(budgets, list) or len(budgets) > 50:
         fail()
     ids, account_rows = set(), []
     for row in accounts:
@@ -120,16 +121,32 @@ def validate_snapshot(raw):
     if 'time_zone' in raw:
         zone(raw['time_zone'])
         result['time_zone'] = raw['time_zone']
+    if 'assets' in raw or 'fx_rates' in raw:
+        from desktop.finance_assets import validate_assets
+        result['assets'], result['fx_rates'] = validate_assets(raw.get('assets', []), raw.get('fx_rates', []), first, last)
     return result
 
 
 def number(value):
-    return format(value.quantize(Decimal('.00000001'), rounding=ROUND_HALF_UP).normalize(), 'f')
+    with localcontext() as ctx:
+        ctx.prec = 200
+        rounded = value.quantize(Decimal('1e-36'), rounding=ROUND_HALF_UP)
+        result = format(value if value and not rounded else rounded, 'f')
+        return result.rstrip('0').rstrip('.') if '.' in result else result
+
+
+def decimal_calculation(function):
+    @wraps(function)
+    def calculate(*args, **kwargs):
+        with localcontext() as ctx:
+            ctx.prec = 200
+            return function(*args, **kwargs)
+    return calculate
 
 
 def period_window(query, snapshot, *, now=None):
     query = {} if query is None else query
-    fields(query, (), ('period_start', 'period_end', 'preset', 'project', 'category', 'time_zone'))
+    fields(query, (), ('period_start', 'period_end', 'preset', 'project', 'category', 'time_zone', 'base_currency', 'asset_type', 'asset_id', 'asset_name'))
     tz = query.get('time_zone', snapshot.get('time_zone', 'UTC'))
     current = today(tz, now)
     preset = query.get('preset', 'all')
@@ -151,12 +168,19 @@ def period_window(query, snapshot, *, now=None):
                  'month': current.replace(day=1), 'year': current.replace(month=1, day=1)}[preset]
     if first > last or last > current:
         fail('finance_invalid_period')
-    for key in ('project', 'category'):
+    for key in ('project', 'category', 'asset_id', 'asset_name'):
         if key in query:
             text(query[key])
+    if 'base_currency' in query:
+        currency(query['base_currency'])
+    if 'asset_type' in query:
+        from desktop.finance_assets import ASSET_TYPES
+        if query['asset_type'] not in ASSET_TYPES:
+            fail('finance_invalid_asset_type')
     return first, last, tz
 
 
+@decimal_calculation
 def analyze(raw, *, reserve_months=6, query=None, now=None):
     if type(reserve_months) is not int or not 1 <= reserve_months <= 24:
         fail('finance_invalid_reserve')
@@ -164,7 +188,8 @@ def analyze(raw, *, reserve_months=6, query=None, now=None):
     first, last, tz = period_window(query, snapshot, now=now)
     query = query or {}
     days = (last-first).days + 1
-    accounts = {a['id']: a for a in snapshot['accounts'] if not query.get('project') or a['project'] == query['project']}
+    asset_only = any(query.get(key) for key in ('asset_type', 'asset_id', 'asset_name'))
+    accounts = {a['id']: a for a in snapshot['accounts'] if not asset_only and (not query.get('project') or a['project'] == query['project'])}
     transactions = [t for t in snapshot['transactions'] if t['account_id'] in accounts and first <= day(t['date']) <= last
                     and (not query.get('category') or t.get('category') == query['category'])]
     groups = {}
@@ -198,7 +223,7 @@ def analyze(raw, *, reserve_months=6, query=None, now=None):
     budgets = {(b['project'], b['currency']): amount(b['monthly_limit']) for b in snapshot['budgets']}
     rows = []
     with localcontext() as ctx:
-        ctx.prec = 50
+        ctx.prec = 200
         for (project, code), g in sorted(groups.items(), key=lambda item: (item[0][0] or '', item[0][1])):
             monthly_expense = g['expense'] * 30 / days
             monthly_revenue = g['revenue'] * 30 / days
@@ -237,11 +262,13 @@ def analyze(raw, *, reserve_months=6, query=None, now=None):
         warnings.append('requested_period_exceeds_recorded_coverage')
     if any(not value for value in balance_known.values()):
         warnings.append('closing_balance_missing_for_selected_period')
-    if any(a.get('liquid') and a['currency'] not in {'USD','EUR','TRY','GBP','RUB','BYN','CNY','CHF','AED','JPY','CAD','AUD'} for a in accounts.values()):
+    if any(a.get('liquid') and a['currency'].split(':')[0] in {'BTC','ETH','TON','USDT','USDC','SOL','BNB','XRP','ADA','DOGE','LTC','TRX','DAI','XMR','DOT','AVAX'} for a in accounts.values()):
         warnings.append('user_classified_crypto_liquidity_has_market_risk')
+    from desktop.finance_assets import portfolio
     return {'period_start': first.isoformat(), 'period_end': last.isoformat(), 'days': days, 'time_zone': tz,
             'source': snapshot['source'], 'reserve_months': reserve_months, 'accounts': list(accounts.values()),
-            'filters': {k: query[k] for k in ('project', 'category') if k in query},
+            'filters': {k: query[k] for k in ('project', 'category', 'base_currency', 'asset_type', 'asset_id', 'asset_name') if k in query},
+            'portfolio': portfolio(snapshot, first, last, query) if not query.get('category') else None,
             'transactions': sorted(transactions, key=lambda t: (t['date'], t['id']), reverse=True)[:100],
             'transaction_count': len(transactions), 'rows': rows, 'warnings': warnings,
             'daily': [{'date': d, 'currency': c, **{k: number(v) for k, v in values.items()},
@@ -250,9 +277,14 @@ def analyze(raw, *, reserve_months=6, query=None, now=None):
 
 def edit_snapshot(current, edit, *, time_zone='UTC', operation_id):
     """Apply one reviewed local accounting edit. Never adjust observed bank balances."""
-    fields(edit, ('type',), ('transaction', 'transaction_id', 'changes', 'account', 'account_id', 'budget'))
+    fields(edit, ('type',), ('transaction', 'transaction_id', 'changes', 'account', 'account_id', 'budget',
+                            'holding', 'asset_id', 'observation', 'date', 'rate'))
     operation_id = text(operation_id, 100)
     zone(time_zone)
+    if edit['type'] in ('upsert_asset', 'set_asset_observation', 'delete_asset', 'delete_asset_observation', 'set_fx_rate'):
+        from desktop.finance_assets import edit_assets
+        snapshot, change = edit_assets(current, edit, time_zone=time_zone, operation_id=operation_id)
+        return validate_snapshot(snapshot), change
     doc = deepcopy(current) if current else None
     kind = edit['type']
     before = None

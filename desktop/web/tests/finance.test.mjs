@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {wantsFinance,financeFollowup,financeRangeFollowup,parseFinancePlan,financeReport,runFinanceAgent} from '../finance.mjs';
+import {wantsFinance,financeFollowup,financeRangeFollowup,parseFinancePlan,financeReport,financePortfolioReport,financeChange,runFinanceAgent} from '../finance.mjs';
 
 const report={period_start:'2026-10-01',period_end:'2026-10-30',source:'User data',reserve_months:6,warnings:[],rows:[{
   project:null,currency:'USD',available:'850',monthly_expense:'300',reserve_required:'1800',reserve_gap:'950',runway_months:'8.5',operating_cash_flow:'-100',forecast:{3:'550',6:'250',12:'-350'},stress_runway_months:'4.25',monthly_budget:null
@@ -15,6 +15,7 @@ test('financial intents do not capture calendar or generic questions',()=>{
   assert.equal(financeRangeFollowup('А за прошлый месяц?'),true);
   assert.equal(financeRangeFollowup('Сегодня погода минус 5 градусов?'),false);
   assert.equal(wantsFinance('Сегодня минус 5 градусов?'),false);
+  for(const text of ['Добавь актив Bitcoin','Покажи портфель акций','Исправь оценку золота','Покажи мои активы в EUR'])assert.equal(wantsFinance(text),true,text);
 });
 
 test('planner JSON is validated without executing arbitrary tools',()=>{
@@ -128,5 +129,34 @@ for(const action of ['save','delete'])test('single-income edit cannot replace or
     await assert.rejects(runFinanceAgent({text:'Исправь этот доход на 450 USD',history:[],model:'velia-flash',signal:new AbortController().signal,
       confirm:()=>{throw new Error('must not confirm whole-history changes');},request:async()=>stream({action,...(action==='save'?{snapshot:{}}:{})})}),/история не заменена|Вся история не удалена/);
     assert.equal(calls.some(url=>url.endsWith('/save')||url.endsWith('/delete')),false);
+  }finally{globalThis.fetch=previous;}
+});
+
+const assetPortfolio={as_of:'2026-10-30',positions:[{id:'private-position-id',name:'Bitcoin',symbol:'BTC',project:'Личное',identity:{network:'Bitcoin'},quantity:'0.000000000000000001',unit:'BTC',currency:'USD',unit_price:'70000',market_value:'0.00000000000007',unrealized_gain:'0.00000000000002',as_of:'2026-10-29',stale:true,source:'User estimate',holding_value_change:null}],
+  totals:[{currency:'USD',value:'0.00000000000007',known_value:'0.00000000000007',unpriced:0}],base_total:{currency:'EUR',value:null,known_value:'0',complete:false,missing_assets:['private-position-id'],rates:[]}};
+
+test('portfolio rendering preserves crypto precision, states stale/manual quotes and incomplete FX',()=>{
+  const text=financePortfolioReport(assetPortfolio);
+  assert.match(text,/0\.000000000000000001 BTC/);assert.match(text,/0\.00000000000007 USD/);
+  assert.match(text,/автоматические котировки не подключены/);assert.match(text,/более ранняя оценка/);
+  assert.match(text,/Полная оценка в EUR недоступна/);assert.match(text,/Рост цены не считается денежным доходом/);
+  assert.doesNotMatch(text,/private-position-id|Общая оценка зарегистрированных активов/);
+});
+
+test('asset preview names units, cost basis and sources without exposing raw schema',()=>{
+  const value=financeChange({type:'set_asset_observation',before:null,after:{id:'private-id',asset_type:'metal',name:'Золото',quantity:'10',unit:'g',unit_price:'70',currency:'USD',cost_basis:'500',cost_currency:'USD',date:'2026-10-30',source:'User estimate'}});
+  assert.match(value,/Драгоценный металл/);assert.match(value,/Количество: 10/);assert.match(value,/Единица: g/);assert.match(value,/Общая себестоимость: 500/);
+  assert.doesNotMatch(value,/private-id|unit_price|cost_basis|object Object/);
+});
+
+test('asset task uses selected model, asset contract and authoritative preview before storing',async()=>{
+  const previous=globalThis.fetch,calls=[];
+  try{
+    const change={type:'upsert_asset',before:null,after:{name:'Bitcoin',asset_type:'crypto',quantity:'0.1',unit:'BTC',date:'2026-10-30',source:'User'}};
+    globalThis.fetch=async(url,options)=>{calls.push({url,data:JSON.parse(options.body)});return Response.json(url.endsWith('/context')?{ok:true,revision:'',today:'2026-10-30',accounts:[],assets:[]}:{ok:true,change,report:{...report,portfolio:assetPortfolio}});};
+    const reply=await runFinanceAgent({text:'Добавь актив Bitcoin 0.1 BTC',history:[],model:'velia-quantum',signal:new AbortController().signal,
+      confirm:text=>{assert.match(text,/Криптовалюта/);assert.match(text,/Количество: 0.1/);return true;},
+      request:async(path,payload)=>{assert.equal(payload.model,'velia-quantum');assert.match(payload.messages[0].content,/set_asset_observation/);assert.match(payload.messages[0].content,/не выдавай цену за унцию за цену за грамм/);return stream({action:'mutate',edit:{type:'upsert_asset',holding:{project:'Личное',asset_type:'crypto',name:'Bitcoin',symbol:'BTC',unit:'BTC'},observation:{date:'2026-10-30',quantity:'0.1',currency:'USD',source:'User'}}});}});
+    assert.equal(calls.filter(c=>c.url.endsWith('/mutate')).length,1);assert.match(reply,/Портфель активов/);
   }finally{globalThis.fetch=previous;}
 });

@@ -72,7 +72,7 @@ def test_no_flow_and_profitable_period_are_not_infinite_runway():
     assert analyze(data)['rows'][0]['runway_months'] is None
 
 
-@pytest.mark.parametrize('invalid', [1, 1.2, True, '-1', 'NaN', 'Infinity', '1e2', '1,2', '0.000000001', '9'*16, '', None])
+@pytest.mark.parametrize('invalid', [1, 1.2, True, '-1', 'NaN', 'Infinity', '1e2', '1,2', '0.'+'0'*36+'1', '9'*31, '', None])
 def test_invalid_amounts_rejected(invalid):
     data = snapshot()
     data['accounts'][0]['balance'] = invalid

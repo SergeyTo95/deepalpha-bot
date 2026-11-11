@@ -45,6 +45,10 @@ def setup_finance_routes(app, *, session_for, same_origin, json_response, store=
                 return json_response({'ok': True, 'configured': store is not None, 'revision': saved['revision'],
                     'today': today(time_zone).isoformat(), 'time_zone': time_zone,
                     'accounts': [{k: a[k] for k in ('id', 'project', 'currency')} for a in snapshot['accounts']] if snapshot else [],
+                    'assets': [{**{k: a[k] for k in ('id', 'project', 'asset_type', 'name', 'symbol', 'unit')},
+                                'identity': a.get('identity', {})}
+                               for a in snapshot.get('assets', [])[:20]] if snapshot else [],
+                    'asset_count': len(snapshot.get('assets', [])) if snapshot else 0,
                     'period_start': snapshot['period_start'] if snapshot else None,
                     'period_end': snapshot['period_end'] if snapshot else None,
                     'transaction_count': len(snapshot['transactions']) if snapshot else 0})

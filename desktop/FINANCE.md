@@ -48,7 +48,7 @@ projects; moving an account does not silently change another project's budget.
 
 Reserve, runway, 3/6/12-month and stress scenarios use 30-day monthly cash-flow
 normalization with constant revenue/expenses. Short observations are flagged.
-These scenarios exclude future financing, investments, FX/asset-price changes
+These cash scenarios exclude future financing, investments, FX/asset-price changes
 and seasonality. Crypto liquidity is user classified and flagged for market risk.
 
 ## Storage, API and bounds
@@ -80,7 +80,8 @@ live inference acceptance still remains before release.
 ## Release boundary
 
 No automatic bank, broker, exchange or wallet synchronization, reconciliation,
-trading, transfers, payments, FX conversion or scheduled notifications are added.
+trading, transfers, payments, live quote feeds or scheduled notifications are added.
+Asset valuation can convert currencies using explicitly supplied dated FX rates.
 No new infrastructure or provider account is created. This branch is not deployed.
 
 Synthetic acceptance: add 500 USD income on October 3 and 100 USD expense on
@@ -89,3 +90,66 @@ Correct income to 450: the combined result becomes +350; delete that receipt:
 the combined result becomes -100. Without an observed closing balance the result
 must not claim account liquidity or runway. Repeat from another account and check
 isolation, then check calendar and existing chat/connectors after deployment.
+
+
+## Multi-asset portfolio
+
+The same encrypted ledger now supports dated positions for cash, crypto, metals,
+stocks, bonds, funds, real estate, business interests, collectibles, commodities,
+receivables and custom assets (`other`). A custom asset can use quantity=1 and an
+explicit whole-object estimate. Assets can exist without bank accounts or quotes.
+Each instrument has an ID, project, type, name, symbol, unit and optional network,
+contract, venue, ISIN or reference. Different IDs/venues/chains stay distinct;
+no ticker-only merge occurs. Units and instrument identity cannot be relabelled
+across existing history. Prices must refer to the declared unit; no automatic
+ounce/gram, purity, split or token-redenomination conversion is performed.
+
+`assets[].observations[]` contains date, quantity, source and optional quote currency /
+optional unit price / total cost basis with its own currency. Alternatively,
+unit_cost records acquisition cost per declared unit; the server multiplies it by
+quantity. Providing total basis and unit cost simultaneously is rejected. Dates are independent
+historical observations, not real buy/sell events. The latest observation at or
+before the report end is used; older observations are explicitly marked stale.
+No future quote is used. Missing prices and cost basis remain unknown. An unpriced asset needs no assumed
+quote currency; adding a price requires its currency. Partial
+price updates preserve prior quantity and basis only when quantity is unchanged;
+a new quantity without a new total basis makes basis unknown. New-day updates do
+not silently make an old price current. Quantity zero records a closed position;
+a positive remaining basis on a zero position is rejected.
+
+Market value = quantity × unit price. Unrealized gain is calculated only when a
+known total basis is denominated in the same currency as that value. The period
+change compares ending value to the last observation strictly before the start
+date, and is labelled position-value change, never investment return. It can
+include contributions, purchases, disposals and quantity changes. Adding a holding
+or mark does not create cash income or payment. Dividends and sale proceeds must
+be entered as explicit cash records; tax lots, FIFO and realized-return attribution
+are not implemented. Cash balances are shown separately and are not automatically
+added to portfolio value, preventing a default double count.
+
+Currencies use extensible codes (2–32 uppercase letters/digits/._:-) without a
+small whitelist. Monetary amounts/quantities accept up to 30 integer and 36
+fractional digits as strings, with Decimal precision 200 for calculations. Tiny
+crypto quantities are not coerced to float or rounded to zero. Values produced by
+quantity×price preserve fractional products; division-based metrics use bounded
+Decimal precision. User estimates remain unverified values rather than certified
+market prices.
+
+`fx_rates[]` stores base, quote, positive rate, date and source: 1 base = rate quote.
+`query.base_currency` requests a portfolio total. Direct or inverse rates at or
+before the valuation date are used, with dates/sources/staleness exposed. No FX
+triangulation, assumed stablecoin peg or live quote lookup occurs. Missing rates
+or asset prices yield a partial known subtotal and an unknown complete total.
+USD and USDT are converted only with an explicit rate. Original cash-flow rows
+stay in their recorded currencies.
+
+Edits: upsert_asset, set_asset_observation, delete_asset_observation, delete_asset,
+set_fx_rate, through the same reviewed preview/revision-controlled commit flow.
+History remains intact when a new mark is recorded. Deleting a mark differs from
+deleting a position and its history. `query.asset_type`, asset_id and asset_name
+support scoped selection. Context/entry lookups expose at most 20 instruments to
+the planner per step; ambiguous or larger matches need a narrower selection.
+Portfolio capacity is 200 instruments / 5,000 observations / 2,000 FX observations;
+request-size and per-instrument limits also apply. The source prompt is chosen for
+cash versus asset tasks, keeping the existing cash path free of the larger asset
+schema. Inference quality still needs live synthetic acceptance before release.
