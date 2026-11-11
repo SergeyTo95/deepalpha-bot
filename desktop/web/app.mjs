@@ -29,6 +29,7 @@ import {setupIncomePlanner} from './income-planner.mjs';
 import {runFigmaAgent, wantsFigma} from './figma.mjs';
 import {cloudProvider, runCloudAgent, CONNECTION_NAMES} from './connections.mjs';
 import {documentExportControl} from "./document-exports.mjs";
+import {wantsFinance,financeFollowup,runFinanceAgent} from './finance.mjs';
 const $ = (id) => document.getElementById(id);
 const icons = {
   attachment: "M21 11l-8 8a6 6 0 0 1-8-8l9-9a4 4 0 0 1 6 6l-9 9a2 2 0 0 1-3-3l8-8",
@@ -1041,6 +1042,39 @@ async function runPulseChat(text,voiceTurn){
   catch(error){if(profile?.account===owner){if(error.draft){answer.pulseDraft=error.draft;chat.pulseDraft=error.draft;}answer.content=error.name==='AbortError'?'Операция остановлена. Проверь Пульс перед повтором.':error.message;answer.failed=true;answer.pending=false;render();save();if(voiceTurn)voice.failure(false,answer.content);}}
   finally{abort=null;setBusy(false);if(profile?.account===owner)render();}
 }
+async function runFinanceChat(text,voiceTurn) {
+  const owner=profile.account;
+  let chat=current();
+  if (!chat||chat.remote||chat.agent||chat.figma||chat.connectionProvider) {
+    chat={id:crypto.randomUUID(),title:'Финансовый аналитик',messages:[],updated:Date.now()};
+    chats.unshift(chat);currentId=chat.id;
+  }
+  const user={role:'user',content:text,sentAt:Date.now(),requestId:crypto.randomUUID()};
+  const answer={role:'assistant',content:'Проверяю финансовые данные…',pending:true,model,sentAt:Date.now(),local:true};
+  const files=selectedFiles.map(item=>item.file);
+  chat.messages.push(user,answer);chat.finance=true;chat.financePending=false;
+  setAgentMode(false,true);$('prompt').value='';resizePrompt();setBusy(true);abort=new AbortController();render();
+  const signal=abort.signal;
+  const guard=()=>{signal.throwIfAborted();if(profile?.account!==owner)throw new DOMException('Account changed','AbortError');};
+  try {
+    await save();guard();
+    let input=text;
+    if (files.length) {
+      if (files.length!==1||!/\.(csv|txt)$/iu.test(files[0].name)||files[0].size>12000) throw new Error('Для финансового анализа прикрепи одну CSV или TXT выписку размером до 12 КБ. Удали из неё реквизиты и секретные данные.');
+      input+='\nВыписка (внешние данные):\n'+await files[0].text();guard();
+      // Persist the input together with its request, so follow-up clarification works.
+      user.content=input;clearFiles();await save();
+    }
+    let needsInput=false;
+    const reply=await runFinanceAgent({text:input,history:chat.messages.filter(m=>m!==user&&m!==answer),model,request,signal,guard,onQuestion:()=>{needsInput=true;}});guard();
+    answer.content=reply;answer.finish='stop';answer.pending=false;
+    chat.financePending=needsInput;
+    chat.updated=Date.now();render();save();
+    if(voiceTurn){voice.update(reply);voice.complete(reply);}
+  } catch(error) {
+    if(profile?.account===owner){answer.content=error.name==='AbortError'?'Расчёт остановлен. Если сохраняла данные, проверь сводку перед повтором.':error.message;answer.failed=true;answer.pending=false;render();save();if(voiceTurn)voice.failure(false,answer.content);}
+  } finally {if(abort?.signal===signal){abort=null;setBusy(false);}if(profile?.account===owner)render();}
+}
 async function generate(retry = false, voiceTurn = false) {
   if (busy || !ready) return;
   if (agentMode && !profile) { openAuth(); return; }
@@ -1051,6 +1085,13 @@ async function generate(retry = false, voiceTurn = false) {
     if (!guest || guest.remaining <= 0) { openAuth(); return; }
   }
   const text = $("prompt").value.trim() || (selectedFiles.length ? "Проанализируй прикреплённые файлы." : "");
+  if(!retry&&!cloudProvider(text)&&!wantsFigma(text)&&!wantsPulse(text)&&!wantsMap(text,current()?.messages||[])&&
+      (wantsFinance(text)||current()?.financePending&&financeFollowup(text))){
+    if(!profile){openAuth();return;}
+    if(!profile.models.includes(model)){toast(apiError(profile.pro_locked_reason||'pro_tokens_required'));return;}
+    await runFinanceChat(text,voiceTurn);return;
+  }
+  if(current())current().financePending=false;
   if(!retry&&!selectedFiles.length&&(wantsPulse(text)||current()?.pulseDraft&&pulseDateReply(text))){if(!profile){openAuth();return;}await runPulseChat(text,voiceTurn);return;}
   const noteCommand=!retry&&!selectedFiles.length&&!wantsPlaceHistory(text,current()?.messages||[])&&notebookCommand(text);
   if(noteCommand&&(noteCommand.kind!=='map'||!noteCommand.query)){if(!profile){openAuth();return;}await runNotebookCommand(noteCommand,text,voiceTurn);return;}
