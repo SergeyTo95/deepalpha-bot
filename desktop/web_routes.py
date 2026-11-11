@@ -528,7 +528,6 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     from desktop.finance_routes import setup_finance_routes
     setup_finance_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response)
     from desktop.crm_routes import setup_crm_routes
-    setup_crm_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response)
     from desktop.document_exports import setup_document_exports
     setup_document_exports(app, session_for=session_for, same_origin=same_origin, json_response=json_response)
     from desktop.voice_routes import setup_voice_routes
@@ -546,6 +545,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
         bridge = WorkspaceConnector(provider, persistent_store=google_store if provider == "google" else None)
         bridge.oauth = WorkspaceOAuth(bridge, origin, provider, upstream)
         cloud_connections[provider] = bridge
+    setup_crm_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response, google=cloud_connections['google'])
     for provider, bridge in cloud_connections.items():
         setup_figma_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response,
             connector=bridge, oauth=bridge.oauth, provider=provider, prefix="/web-api/v1/connections/" + provider)

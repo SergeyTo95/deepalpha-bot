@@ -9,7 +9,7 @@ const user=()=>({role:'user',content:'',requestId:'170aa0cf-6e95-4d11-a269-a3f75
 const stream=plan=>new Response('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify(plan)},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n',{headers:{'Content-Type':'text/event-stream'}});
 
 test('CRM intent and followups distinguish generic and financial questions',()=>{
-  for(const text of ['Добавь инвестора Анну','Кому из инвесторов мы давно не отвечали?','Покажи сделки по Velia','Сохрани карточку контакта в заметки','Назначь встречу с инвестором Анной','Напомни позвонить клиенту'])assert.equal(wantsCrm(text),true,text);
+  for(const text of ['Импортируй письма инвестора из Gmail в CRM','Добавь инвестора Анну','Кому из инвесторов мы давно не отвечали?','Покажи сделки по Velia','Сохрани карточку контакта в заметки','Назначь встречу с инвестором Анной','Напомни позвонить клиенту'])assert.equal(wantsCrm(text),true,text);
   for(const text of ['Что такое CRM?','Покажи финансовый резерв','Погода в Анталии'])assert.equal(wantsCrm(text),false,text);
   assert.equal(crmFollowup('Сохрани её в заметки'),true);assert.equal(crmFollowup('А ему встречу завтра'),true);assert.equal(crmFollowup('Покажи расходы'),false);
   for(const bad of ['[]','{}','{"action":"send_email"}','{"action":"query","user_id":8}'])assert.throws(()=>parseCrmPlan(bad));
@@ -21,6 +21,47 @@ test('CRM report distinguishes unknown history and never claims live mail or mon
   assert.doesNotMatch(text,/contact-anna/);
   const preview=crmChange({type:'batch',changes:[{type:'add_contact',before:null,after:{id:'private-id',name:'Анна',roles:['investor']}},{type:'delete_contact',before:{name:'Борис',related_removed:{interactions:2,tasks:1,deals:0}},after:null}]});
   assert.match(preview,/Инвестор/);assert.match(preview,/записей общения 2/);assert.doesNotMatch(preview,/private-id|object Object/);
+});
+
+for(const approved of [true,false])test('Gmail import previews actual snippets and commits only reviewed token: '+approved,async()=>{
+  const previous=globalThis.fetch,calls=[];let step=0;
+  try{
+    globalThis.fetch=async(url,options)=>{
+      const data=JSON.parse(options.body);calls.push({url,data});
+      return Response.json(url.endsWith('/context')?context:url.endsWith('/query')?{ok:true,revision:'v2',result:{...result,view:'card'}}:
+        url.endsWith('/mail-preview')?{ok:true,count:1,token:'sealed-provider-evidence',mailbox:'me@example.org',duplicates:2,skipped:0,more:true,preview:[{date:'2026-10-02',direction:'inbound',summary:'Actual provider subject'}]}:{ok:true,count:1,revision:'v3'});
+    };
+    const reply=await runCrmAgent({text:'Импортируй письма инвестора Анны из Gmail в CRM за октябрь 2026',model:'velia-flash',user:user(),signal:new AbortController().signal,
+      confirm:text=>{assert.match(text,/Actual provider subject/);assert.match(text,/me@example.org/);assert.match(text,/без вложений/);return approved;},
+      request:async()=>stream(step++===0?{action:'lookup',query:{view:'card',search:'Анна'}}:{action:'mail_import',contact_id:contact.id,start_date:'2026-10-01',end_date:'2026-10-31'})});
+    const preview=calls.find(c=>c.url.endsWith('/mail-preview'));assert.equal(preview.data.revision,'v2');assert.equal(preview.data.end_date,'2026-10-31');
+    assert.equal(calls.some(c=>c.url.endsWith('/mail-commit')),approved);
+    if(approved){assert.deepEqual(calls.at(-1).data,{token:'sealed-provider-evidence',confirmed:true});assert.match(reply,/сохранено писем: 1/);assert.match(reply,/часть переписки/);}
+    else assert.match(reply,/отменён/);
+  }finally{globalThis.fetch=previous;}
+});
+
+test('read-only CRM request cannot trigger Gmail import selected by model',async()=>{
+  const previous=globalThis.fetch;
+  try{
+    globalThis.fetch=async url=>{assert.ok(!url.includes('mail-'));return Response.json(url.endsWith('/context')?context:{ok:true,revision:'v1',result});};
+    await assert.rejects(runCrmAgent({text:'Кому из инвесторов не отвечали?',model:'velia-pro',user:user(),signal:new AbortController().signal,
+      request:async()=>stream({action:'mail_import',contact_id:contact.id,start_date:'2026-10-01',end_date:'2026-10-31'})}),/попроси импортировать/);
+  }finally{globalThis.fetch=previous;}
+});
+
+test('empty Gmail preview never commits and reports bounded scope',async()=>{
+  const previous=globalThis.fetch;
+  try{
+    globalThis.fetch=async url=>{
+      assert.ok(!url.endsWith('/mail-commit'));
+      return Response.json(url.endsWith('/context')?context:url.endsWith('/query')?{ok:true,revision:'v1',result}:
+        {ok:true,count:0,mailbox:'me@example.org',duplicates:8,skipped:1,more:true});
+    };
+    const reply=await runCrmAgent({text:'Загрузи переписку с контактом из почты в CRM за октябрь',model:'velia-quantum',user:user(),signal:new AbortController().signal,
+      confirm:()=>{throw Error('No confirmation for empty preview');},request:async()=>stream({action:'mail_import',contact_id:contact.id,start_date:'2026-10-01',end_date:'2026-10-31'})});
+    assert.match(reply,/Новых писем.*не найдено/);assert.match(reply,/Уже в CRM: 8/);assert.match(reply,/часть переписки/);
+  }finally{globalThis.fetch=previous;}
 });
 
 for(const model of ['velia-flash','velia-quantum','velia-pro'])test('query uses selected model and authoritative CRM: '+model,async()=>{

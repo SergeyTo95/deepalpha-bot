@@ -1108,7 +1108,7 @@ async function generate(retry = false, voiceTurn = false) {
   }
   const text = $("prompt").value.trim() || (selectedFiles.length ? "Проанализируй прикреплённые файлы." : "");
   const provider=cloudProvider(text),crmContinuation=current()?.messages.filter(m=>m.role==='assistant').at(-1)?.crm;
-  if(!retry&&!wantsFigma(text)&&!wantsMap(text,current()?.messages||[])&&(!provider||provider==='google'&&/встреч|календар|meeting|calendar/iu.test(text))&&
+  if(!retry&&!wantsFigma(text)&&!wantsMap(text,current()?.messages||[])&&(!provider||provider==='google'&&/встреч|календар|meeting|calendar|импорт|подгрузи|загрузи|import/iu.test(text))&&
       (wantsCrm(text)||crmContinuation&&crmFollowup(text)||current()?.crmPending&&!wantsFinance(text)&&!wantsPulse(text)&&!/погод|weather|новост|news/iu.test(text))){
     if(!profile){openAuth();return;}if(!profile.models.includes(model)){toast(apiError(profile.pro_locked_reason||'pro_tokens_required'));return;}
     await runCrmChat(text,voiceTurn);return;

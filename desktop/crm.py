@@ -119,7 +119,7 @@ def validate(doc, *, time_zone='UTC', now=None):
     deals={d['id']:d for d in result['deals']}
     require(len(deals)==len(result['deals']),'crm_duplicate_id')
     for row in doc['interactions']:
-        fields(row,('id','contact_id','date','direction','channel','summary'),('requires_reply','reply_to','resolved','time_zone'))
+        fields(row,('id','contact_id','date','direction','channel','summary'),('requires_reply','reply_to','resolved','time_zone','source'))
         item={k:string(row[k],2000 if k=='summary' else 100) for k in ('id','contact_id','date','direction','channel','summary')}
         require(item['contact_id'] in known,'crm_contact_not_found',404)
         item['time_zone']=row.get('time_zone',time_zone)
@@ -129,7 +129,14 @@ def validate(doc, *, time_zone='UTC', now=None):
         require(type(item['requires_reply']) is bool and type(item['resolved']) is bool)
         require(not item['requires_reply'] or item['direction']=='inbound')
         if 'reply_to' in row:item['reply_to']=string(row['reply_to'],100)
+        if 'source' in row:
+            source=fields(row['source'],('provider','mailbox','message_id'))
+            require(source['provider']=='gmail' and item['channel']=='email')
+            require(re.fullmatch(r'[A-Za-z0-9_-]{1,128}',source['message_id']),'crm_invalid_mail_source')
+            item['source']={'provider':'gmail','mailbox':string(source['mailbox'],320),'message_id':source['message_id']}
         result['interactions'].append(item)
+    sources=[(i['source']['mailbox'].casefold(),i['source']['message_id']) for i in result['interactions'] if 'source' in i]
+    require(len(sources)==len(set(sources)),'crm_duplicate_mail',409)
     interactions={i['id']:i for i in result['interactions']}
     require(len(interactions)==len(result['interactions']),'crm_duplicate_id')
     for item in interactions.values():

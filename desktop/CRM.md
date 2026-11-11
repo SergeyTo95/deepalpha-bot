@@ -56,14 +56,43 @@ recreated as a substitute for unsupported rescheduling.
 
 ## Source and permission boundaries
 
-This first version uses user-provided records, including pasted text or small
-CSV/TXT attachments. It does not scrape/import contact books, read Gmail/Telegram
-inboxes, send messages, invite participants, auto-resolve correspondence or run
-background relationship monitoring. Reports identify their recorded-data scope.
+This version uses user-provided records, including pasted text or small CSV/TXT
+attachments, plus explicit, reviewed Gmail history imports. It does not scrape
+contact books, read Telegram, send messages, invite participants, auto-resolve
+correspondence or run background relationship monitoring. Reports identify their
+recorded-data scope.
 Prepared responses are text only and do not become sent-history entries. The
 current existing service connections still operate independently on explicit
-requests. Inference extraction is fixture tested; live synthetic acceptance is
-still required before release.
+requests. Inference extraction is fixture tested; live provider acceptance still
+requires a connected test account.
+
+### Gmail history import
+
+Ask to import correspondence with an existing CRM contact for an inclusive date
+range, e.g. `Импортируй переписку с инвестором Анной из Gmail в CRM за октябрь 2026`.
+The contact must have an explicit, supported email address. Velia uses the existing
+Google OAuth connection and only GET requests to Gmail profile, messages list and
+message metadata. No new keys, infrastructure, sends, read-state updates or
+attachments are involved. Exact parsed addresses, DRAFT/SPAM/TRASH exclusions,
+SENT label and provider internalDate are checked server-side. Date filters use
+epoch bounds for the selected time zone; untrusted Date headers do not set dates.
+Outgoing aliases are conservatively skipped unless they match the mailbox address.
+
+One request inspects a bounded list of up to 30 messages, imports up to eight new
+subjects/snippets, and explicitly reports partial results. Already imported IDs
+are skipped before metadata reads. Repeating can import remaining messages in the
+first page; if more pages remain, narrow the period. No full-inbox coverage is
+claimed. Duplicate provenance is scoped to Gmail mailbox/message ID across CRM,
+so the same email is not silently assigned to several contacts.
+
+The server seals a reviewed proposal for ten minutes, bound to user, session,
+Google connection and CRM revision. Commit accepts only that proposal, with
+confirmed=true. Editing source identifiers through ordinary mutation routes is
+rejected. A stale revision, altered proposal or account change commits nothing.
+Imported rows never infer requires_reply, resolved or reply_to automatically.
+Source credentials never enter planner prompts; message excerpts are presented
+for review without another model call. Later card queries can expose relevant
+saved excerpts to the selected model like other CRM data.
 
 ## Storage, API and capacity
 
@@ -78,7 +107,7 @@ fails closed. No credentials are accepted in the CRM model contract.
 
 `POST /web-api/v1/crm/plan` uses the normal selected-model authorization/quota path
 with internet search disabled. Other POST actions are context, query, preview and
-mutate. Edits require expected revision and stable operation_id; commit requires
+mutate, mail-preview and mail-commit. Edits require expected revision and stable operation_id; commit requires
 confirmed=true. Query validation occurs before commit. Context and planner lookup
 content are bounded; larger match sets need a narrower selection or pagination.
 
@@ -100,4 +129,5 @@ be split. The service build packages and tests CRM alongside existing modules.
 
 Verify real results before reporting success, namesake clarification, cancellation,
 expired revisions and a second account's isolation. This branch has not been
-merged or deployed; it is stacked on the financial-analyst branch.
+merged; it is stacked on the financial-analyst branch. Deployment status is tracked
+in Railway, independently of this source document.
