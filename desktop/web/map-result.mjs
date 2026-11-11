@@ -1,7 +1,8 @@
 import {VISIT_STATUSES} from './visits.mjs';
 import {loadMapLibrary} from './map.mjs';
 import {validMapData,routeUrl} from './map-agent.mjs';
-export function mapResultNode(data,{signal,autoOpen=false,toast=()=>{},openPlaces=()=>{},loadLibrary=loadMapLibrary}){
+import {roadRouteText} from './map-routing.mjs';
+export function mapResultNode(data,{signal,autoOpen=false,toast=()=>{},openPlaces=()=>{},openReminder,loadLibrary=loadMapLibrary}){
   if(!validMapData(data)||!data.display.length&&!data.visitPlan&&!data.placeHistory)return null;
   const node=(tag,text)=>{const e=document.createElement(tag);if(text)e.textContent=text;return e;};
   const root=node('section');root.className='chat-map-result';root.setAttribute('aria-label','Места из поручения');
@@ -18,7 +19,14 @@ export function mapResultNode(data,{signal,autoOpen=false,toast=()=>{},openPlace
   if(data.placeHistory){const details=node('div');details.className='chat-place-history';details.append(node('strong','История места · '+data.placeHistory.total));for(const entry of data.placeHistory.items){const row=node('p',entry.kind==='visit'?[entry.date,entry.time,entry.task,entry.status==='done'?'Выполнен':entry.status==='cancelled'?'Отменён':'Запланирован',entry.result].filter(Boolean).join(' · '):entry.kind==='material'?'Файл: '+entry.name+' · '+(entry.upload_status==='ready'?'Сохранён':'Загрузка не завершена')+(entry.caption?' · '+entry.caption:''):(entry.type==='agreement'?'Договорённость: ':'Заметка: ')+entry.text);details.append(row);}if(data.placeHistory.total>data.placeHistory.items.length)details.append(node('p','Полная история доступна в карточке места.'));root.append(details);}
   const actions=node('div');actions.className='feature-actions';const toggle=node('button','Показать карту');toggle.type='button';toggle.setAttribute('aria-expanded','false');
   const saved=node('button',plan?'Открыть план':'Мои места');saved.type='button';saved.onclick=()=>openPlaces(plan?{tab:'visits',date:plan.date}:{});if(places.length)actions.append(toggle);actions.append(saved);
-  if(data.route){const route=node('a','Открыть маршрут в навигаторе');route.href=routeUrl(data.route.ids.map(id=>data.places.find(p=>p.ref===id)),data.route.mode);route.target='_blank';route.rel='noopener noreferrer';actions.append(route);root.append(node('p','Порядок точек задан в поручении. Дороги и время поездки рассчитает навигатор.'));}
+  if(data.route){const route=node('a','Открыть маршрут в навигаторе');route.href=routeUrl(data.route.ids.map(id=>data.places.find(p=>p.ref===id)),data.route.mode);route.target='_blank';route.rel='noopener noreferrer';actions.append(route);
+    const road=data.route.road;root.append(node('p',road?roadRouteText(road):data.route.notice||'Порядок точек задан в поручении. Дороги и время поездки рассчитает навигатор.'));
+    if(road){
+      if(openReminder){const remind=node('button','Напомнить о выезде');remind.type='button';remind.onclick=()=>{if(!signal.aborted)openReminder({title:('Выехать: '+places.map(p=>p.title).join(' → ')).slice(0,400)+' · дорога примерно '+Math.ceil(road.duration_s/60)+' мин без пробок'});};actions.append(remind);}
+      root.append(node('small','Расчёт: '+new Date(road.calculated_at*1000).toLocaleString()+'. Время на остановки не включено.'));
+      const attribution=node('p');for(const [label,url] of [['© openrouteservice by HeiGIT','https://heigit.org/'],['Data © OpenStreetMap contributors','https://www.openstreetmap.org/copyright'],['CC BY-SA 4.0','https://creativecommons.org/licenses/by-sa/4.0/']]){const a=node('a',label);a.href=url;a.target='_blank';a.rel='noopener noreferrer';attribution.append(a,document.createTextNode(' · '));}root.append(attribution);
+    }
+  }
   const canvas=node('div');canvas.className='velia-map chat-map-preview';canvas.hidden=true;root.append(actions,canvas);let map=null,loading=false;
   async function show(){
     if(signal.aborted||loading)return;
@@ -29,7 +37,9 @@ export function mapResultNode(data,{signal,autoOpen=false,toast=()=>{},openPlace
       map=L.map(canvas,{scrollWheelZoom:false});map.attributionControl.setPrefix(false);
       L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,updateWhenIdle:true,keepBuffer:1,referrerPolicy:'strict-origin-when-cross-origin',attribution:'© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors'}).addTo(map);
       places.forEach((place,index)=>{const popup=node('div');popup.append(node('strong',place.title),node('p',place.address));L.marker([place.lat,place.lon],{icon:L.divIcon({className:'map-pin map-pin-number',html:'<span>'+(index+1)+'</span>',iconSize:[24,24],iconAnchor:[12,24]})}).addTo(map).bindPopup(popup);});
-      if(places.length===1)map.setView([places[0].lat,places[0].lon],14);else map.fitBounds(places.map(p=>[p.lat,p.lon]),{padding:[24,24],maxZoom:15});
+      const geometry=data.route?.road?.geometry.map(p=>[p[1],p[0]]);
+      if(geometry){L.polyline(geometry,{color:'#4f86ff',weight:5,opacity:0.85}).addTo(map);map.attributionControl.addAttribution('© openrouteservice by HeiGIT · CC BY-SA 4.0');}
+      if(places.length===1)map.setView([places[0].lat,places[0].lon],14);else map.fitBounds(geometry||places.map(p=>[p.lat,p.lon]),{padding:[24,24],maxZoom:15});
       toggle.textContent='Скрыть карту';toggle.setAttribute('aria-expanded','true');
     }catch{if(!signal.aborted){map?.remove();map=null;canvas.hidden=true;toast('Не удалось загрузить карту. Адреса доступны в ответе.');}}
     finally{loading=false;if(!signal.aborted)toggle.disabled=false;}

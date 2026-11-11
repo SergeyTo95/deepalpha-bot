@@ -489,7 +489,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     async def asset(request):
         name = {"/privacy":"privacy.html", "/terms":"terms.html"}.get(
             request.path, request.match_info.get("name", "index.html"))
-        if name not in {"privacy.html", "terms.html", "legal.css", "index.html", "velia-sw.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "badge-96.png", "web-push.mjs", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "notebook.mjs", "notebook-ui.mjs", "pulse.mjs", "pulse-ui.mjs", "pulse-agent.mjs", "place-history.mjs", "place-card.mjs", "notebook-materials.mjs", "place-agent.mjs", "map.mjs", "map-agent.mjs", "map-result.mjs", "visits.mjs", "visit-ui.mjs", "visit-agent.mjs", "leaflet-vendor.js", "leaflet-vendor.css", "leaflet-LICENSE.txt", "features.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "service-icons.mjs", "document-exports.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "finance.mjs", "crm.mjs", "meetings.mjs", "meeting-ui.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
+        if name not in {"privacy.html", "terms.html", "legal.css", "index.html", "velia-sw.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "badge-96.png", "web-push.mjs", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "notebook.mjs", "notebook-ui.mjs", "pulse.mjs", "pulse-ui.mjs", "pulse-agent.mjs", "place-history.mjs", "place-card.mjs", "notebook-materials.mjs", "place-agent.mjs", "map.mjs", "map-agent.mjs", "map-result.mjs", "map-routing.mjs", "visits.mjs", "visit-ui.mjs", "visit-agent.mjs", "leaflet-vendor.js", "leaflet-vendor.css", "leaflet-LICENSE.txt", "features.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "service-icons.mjs", "document-exports.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "finance.mjs", "crm.mjs", "meetings.mjs", "meeting-ui.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
             raise web.HTTPNotFound()
         response = web.FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
         if name=="velia-sw.js":response.headers["Service-Worker-Allowed"]="/"
@@ -526,6 +526,8 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
         handlers=handlers, web_search=web_search, origin=origin)
     from desktop.map_routes import setup_map_routes
     setup_map_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response, origin=origin)
+    from desktop.map_routing import setup_routing_routes
+    setup_routing_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response)
     from desktop.finance_routes import setup_finance_routes
     setup_finance_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response)
     from desktop.crm_routes import setup_crm_routes
