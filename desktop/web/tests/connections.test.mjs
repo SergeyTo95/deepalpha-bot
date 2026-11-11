@@ -2,6 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {cloudProvider,runCloudAgent} from '../connections.mjs';
 
+test('calendar-scoped CRM handoff cannot call unrelated Google tools',async()=>{
+  const original=globalThis.fetch,calls=[];
+  try{
+    globalThis.fetch=async(url,options)=>{
+      calls.push(url);
+      if(url.endsWith('/verify'))return Response.json({ok:true,connection_id:'google-current'});
+      if(url.endsWith('/tools'))return Response.json({ok:true,tools:[{name:'calendar_events_list',description:'List calendar'},{name:'docs_create',description:'Create document'}]});
+      throw Error('An unrelated tool must not be called');
+    };
+    await assert.rejects(runCloudAgent({provider:'google',model:'velia-pro',user:{content:'Назначь встречу',requestId:'request'},history:[],signal:new AbortController().signal,
+      allowedTools:['calendar_events_list','calendar_freebusy','calendar_event_create'],progress:()=>{},persist:async()=>{},
+      request:async()=>new Response('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify({tool:'docs_create',arguments:{title:'Unexpected'}})},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n',{headers:{'Content-Type':'text/event-stream'}})}),/недоступен/);
+    assert.equal(calls.some(url=>url.endsWith('/call')),false);
+  }finally{globalThis.fetch=original;}
+});
+
 test('cloud requests distinguish provider actions from general questions',()=>{
   assert.equal(cloudProvider('Проверь деплой на Railway'),'railway');
   assert.equal(cloudProvider('Покажи мои проекты в Vercel'),'vercel');

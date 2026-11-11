@@ -133,6 +133,8 @@ export async function runCloudAgent({
   request,
   progress,
   persist,
+  onToolResult=()=>{},
+  allowedTools,
 }) {
   const label = CONNECTION_NAMES[provider];
   if (user.connectionAttempted)
@@ -154,8 +156,9 @@ export async function runCloudAgent({
     undefined,
     signal,
   );
-  const catalog = new Map(tools.map((tool) => [tool.name, tool]));
-  const summary = tools.map((tool) => ({
+  const permitted = allowedTools ? tools.filter(tool=>allowedTools.includes(tool.name)) : tools;
+  const catalog = new Map(permitted.map((tool) => [tool.name, tool]));
+  const summary = permitted.map((tool) => ({
     name: tool.name,
     description: tool.description.slice(0, 140),
   }));
@@ -255,6 +258,7 @@ export async function runCloudAgent({
       },
       signal,
     );
+    onToolResult(name,resultData);
     messages.push({
       role: "user",
       content:
