@@ -87,7 +87,7 @@ def rows(data):
 
 
 def calendar_instant(value):
-    if not isinstance(value,str) or not 20<=len(value)<=80:
+    if not isinstance(value,str) or not 19<=len(value)<=80:
         raise FigmaError('connection_calendar_time_invalid')
     try:
         parsed=datetime.fromisoformat(value.replace('Z','+00:00'))
@@ -127,6 +127,36 @@ def calendar_event_view(event):
             'url':value('htmlLink',1500)}
 
 
+def calendar_create_payload(a):
+    """Validate a proposed Calendar write before allocating a write receipt.
+
+    This preflight performs no Google API calls, so invalid times/arguments can
+    fail definitively without claiming an ambiguous remote write occurred.
+    """
+    if not isinstance(a, dict):
+        raise FigmaError('connection_invalid_arguments')
+    allowed={'title','start','end','time_zone','location','description'}
+    if set(a)-allowed:
+        raise FigmaError('connection_invalid_arguments')
+    title=text(a,'title',300)
+    start,end=calendar_instant(a.get('start')),calendar_instant(a.get('end'))
+    if not start < end <= start+timedelta(hours=24):
+        raise FigmaError('connection_calendar_range_invalid')
+    zone=calendar_zone(a)
+    if zone:
+        target_zone=ZoneInfo(zone)
+        if (start.utcoffset()!=start.astimezone(target_zone).utcoffset()
+                or end.utcoffset()!=end.astimezone(target_zone).utcoffset()):
+            raise FigmaError('connection_calendar_timezone_offset_conflict')
+    begin={'dateTime':a['start']}
+    finish={'dateTime':a['end']}
+    if zone:begin['timeZone']=finish['timeZone']=zone
+    body={'summary':title,'start':begin,'end':finish}
+    if 'location' in a:body['location']=text(a,'location',500)
+    if 'description' in a:body['description']=text(a,'description',2000)
+    return body
+
+
 class WorkspaceConnector(FigmaConnector):
     def __init__(self, provider, request=None, *, persistent_store=None):
         super().__init__(pair_required=False)
@@ -138,6 +168,11 @@ class WorkspaceConnector(FigmaConnector):
                               {'shopify_products','shopify_orders'})
         self.persistent_store=persistent_store if provider=='google' else None
         self.restore_lock=asyncio.Lock()
+
+    async def call(self, owner, data):
+        if self.provider=='google' and isinstance(data,dict) and data.get('name')=='calendar_event_create':
+            calendar_create_payload(data.get('arguments'))
+        return await super().call(owner,data)
 
     async def connect(self,owner,token,*,oauth_expires=None,refresh_token=None,persist=True):
         result=await super().connect(owner,token,oauth_expires=oauth_expires)
@@ -369,22 +404,7 @@ class WorkspaceConnector(FigmaConnector):
                     'time_min':first,'time_max':last,'time_zone':zone or str(result.get('timeZone') or '')[:100],
                     'truncated':len(windows)>100}
         if name=='calendar_event_create':
-            title=text(a,'title',300)
-            start,end=calendar_instant(a.get('start')),calendar_instant(a.get('end'))
-            if not start < end <= start+timedelta(hours=24):
-                raise FigmaError('connection_calendar_range_invalid')
-            zone=calendar_zone(a)
-            if zone:
-                target_zone=ZoneInfo(zone)
-                if (start.utcoffset()!=start.astimezone(target_zone).utcoffset()
-                        or end.utcoffset()!=end.astimezone(target_zone).utcoffset()):
-                    raise FigmaError('connection_calendar_timezone_offset_conflict')
-            begin={'dateTime':a['start']}
-            finish={'dateTime':a['end']}
-            if zone:begin['timeZone']=finish['timeZone']=zone
-            body={'summary':title,'start':begin,'end':finish}
-            if 'location' in a:body['location']=text(a,'location',500)
-            if 'description' in a:body['description']=text(a,'description',2000)
+            body=calendar_create_payload(a)
             result=await api(c,'POST','/calendar/v3/calendars/primary/events',
                 params={'sendUpdates':'none'},data=body)
             if not isinstance(result.get('id'),str) or not result['id']:

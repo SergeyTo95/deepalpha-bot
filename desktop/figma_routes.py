@@ -1,5 +1,6 @@
 """Authenticated Figma connection and execution for the Velia web client."""
 import asyncio
+import logging
 from contextlib import nullcontext
 
 from aiohttp import web
@@ -81,6 +82,11 @@ def setup_figma_routes(app, *, session_for, same_origin, json_response, connecto
                     result = await bridge.call(owner, data)
                 return json_response({"ok": True, **result})
         except FigmaError as exc:
+            if provider == "google" and request.match_info.get("action") == "call":
+                # Fixed application error code/status only. Never log user IDs, tokens,
+                # calendar arguments, event details, or other account content.
+                logging.getLogger("velia.google").warning(
+                    "VELIA_GOOGLE_CALL_REJECTED code=%s status=%d", exc.code, exc.status)
             return json_response({"ok": False, "error": exc.code.replace("figma_", "connection_") if provider else exc.code}, exc.status)
         except (ValueError, TypeError, UnicodeError, RecursionError):
             return json_response({"ok": False, "error": "figma_invalid_call"}, 400)
