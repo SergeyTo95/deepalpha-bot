@@ -1458,6 +1458,13 @@ dialog::backdrop {
 .feature-help { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
 .file-dialog { width: min(960px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); padding: 22px; border: 1px solid var(--border); border-radius: 18px; background: var(--rail); color: var(--text); }
 .file-dialog::backdrop { background: #000b; }
+.chat-meeting-result { display: grid; gap: 14px; min-width: 0; margin-top: 18px; }
+.chat-meeting-result details { padding: 14px; border: 1px solid var(--border); border-radius: 12px; }
+.chat-meeting-result summary { cursor: pointer; font-weight: 600; }
+.chat-meeting-result pre { max-height: 340px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 13px; line-height: 1.6; }
+.chat-meeting-result .feature-card { margin: 0; padding: 16px; }
+.file-dialog > input, .file-dialog > select { display: block; box-sizing: border-box; width: 100%; padding: 12px; margin: 12px 0; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 10px; font: inherit; }
+.file-view-body audio { width: 100%; margin: 16px 0; }
 .file-view-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; }
 .file-view-header h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: 18px; }
 .file-dialog button, .file-dialog a { min-height: 44px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; color: var(--text); background: var(--surface); font: inherit; font-size: 13px; cursor: pointer; text-decoration: none; }

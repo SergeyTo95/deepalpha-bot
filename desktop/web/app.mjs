@@ -31,6 +31,8 @@ import {cloudProvider, runCloudAgent, CONNECTION_NAMES} from './connections.mjs'
 import {documentExportControl} from "./document-exports.mjs";
 import {wantsFinance,financeFollowup,financeRangeFollowup,runFinanceAgent} from './finance.mjs';
 import {wantsCrm,crmFollowup,runCrmAgent} from './crm.mjs';
+import {wantsMeeting,prepareMeeting,meetingReport,meetingChunks,transcribeMeeting} from './meetings.mjs';
+import {meetingControls} from './meeting-ui.mjs';
 const $ = (id) => document.getElementById(id);
 const icons = {
   attachment: "M21 11l-8 8a6 6 0 0 1-8-8l9-9a4 4 0 0 1 6 6l-9 9a2 2 0 0 1-3-3l8-8",
@@ -108,7 +110,7 @@ const fileTools=setupFileTools({toast});
 const notebook=new Notebook(featureRequest);
 let mapViews=[];
 function clearFiles(){selectedFiles=[];$("attachment-input").value="";$("attachment-preview").replaceChildren();}
-function filePreview(){const target=$("attachment-preview");target.replaceChildren();selectedFiles.forEach((item,i)=>{const chip=document.createElement('div');chip.className='file-chip';const view=document.createElement('button');view.type='button';view.textContent=item.file.name+' · '+fileSize(item.file.size)+(item.file.type.startsWith('image/')&&(model!=="velia-pro"||profile?.free_api_tiers)?' · Распознавание текста':'');view.onclick=()=>fileTools.previewFile(item.file).catch(()=>toast('Не удалось открыть файл.'));const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label','Удалить '+item.file.name);remove.onclick=()=>{selectedFiles.splice(i,1);filePreview();resizePrompt();};chip.append(view,remove);target.append(chip);});if(selectedFiles.length){const bar=document.createElement('div');bar.className='file-shortcuts';for(const [title,prompt] of [['Пересказать','Кратко перескажи содержание прикреплённых файлов.'],['Извлечь текст','Извлеки текст из прикреплённых файлов. Отметь неразборчивые места.'],['Проверить ошибки','Проверь прикреплённые файлы на ошибки и несоответствия.']]){const b=document.createElement('button');b.type='button';b.textContent=title;b.onclick=()=>{$('prompt').value=prompt;resizePrompt();$('prompt').focus();};bar.append(b);}target.append(bar);}}
+function filePreview(){const target=$("attachment-preview");target.replaceChildren();selectedFiles.forEach((item,i)=>{const chip=document.createElement('div');chip.className='file-chip';const view=document.createElement('button');view.type='button';view.textContent=item.file.name+' · '+fileSize(item.file.size)+(item.file.type.startsWith('image/')&&(model!=="velia-pro"||profile?.free_api_tiers)?' · Распознавание текста':'');view.onclick=()=>fileTools.previewFile(item.file).catch(()=>toast('Не удалось открыть файл.'));const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label','Удалить '+item.file.name);remove.onclick=()=>{selectedFiles.splice(i,1);filePreview();resizePrompt();};chip.append(view,remove);target.append(chip);});if(selectedFiles.length){const bar=document.createElement('div');bar.className='file-shortcuts';for(const [title,prompt] of [['Протокол встречи','Подготовь протокол встречи: решения, поручения и открытые вопросы.'],['Пересказать','Кратко перескажи содержание прикреплённых файлов.'],['Извлечь текст','Извлеки текст из прикреплённых файлов. Отметь неразборчивые места.'],['Проверить ошибки','Проверь прикреплённые файлы на ошибки и несоответствия.']]){const b=document.createElement('button');b.type='button';b.textContent=title;b.onclick=()=>{$('prompt').value=prompt;resizePrompt();$('prompt').focus();};bar.append(b);}target.append(bar);}}
 function addFiles(files) {
   if (busy) return;
   if (!profile) { openAuth(); return; }
@@ -300,7 +302,7 @@ function closeModels() {
 }
 function setModel(value) {
   if (busy || !MODELS[value] || (!profile && value !== "velia-flash")) return;
-  if (value === "velia-quantum" && selectedFiles.length && !profile?.quantum_attachments) { toast(apiError("quantum_attachments_unsupported")); return; }
+  if (value === "velia-quantum" && selectedFiles.length && !wantsMeeting($('prompt').value,selectedFiles.map(item=>item.file)) && !profile?.quantum_attachments) { toast(apiError("quantum_attachments_unsupported")); return; }
   model = value;
   background.modelChanged(value);
   $('background-enabled').disabled=agentMode&&value!=='velia-flash';
@@ -432,6 +434,13 @@ function messageNode(message, index) {
         ? '<div class="thinking" aria-label="Велия готовит ответ"><span></span><span></span><span></span></div>'
         : "";
   article.append(content);
+  if(message.meeting&&!message.pending&&!message.failed){
+    const controller=new AbortController(),owner=profile?.account,chat=current();mapViews.push(controller);
+    const guard=()=>{controller.signal.throwIfAborted();if(!owner||profile?.account!==owner||current()?.id!==chat.id)throw new DOMException('Account changed','AbortError');};
+    article.append(meetingControls(message.meeting,{controller,guard,notebook,toast,chatId:chat.id,persist:()=>save(),openPulse:draft=>features.open('pulse',draft),downloadText:fileTools.downloadText,
+      onDraft:text=>{chat.messages.push({role:'assistant',content:text,model,local:true,sentAt:Date.now()});chat.updated=Date.now();save();},
+      run:async action=>{if(busy)throw Error('Дождись завершения текущего действия.');guard();setBusy(true);abort=controller;try{await action();}finally{if(abort===controller){abort=null;setBusy(false);}if(profile?.account===owner)render();}}}));
+  }
   if(message.mapData){const controller=new AbortController();mapViews.push(controller);const view=mapResultNode(message.mapData,{signal:controller.signal,autoOpen:!busy&&!message.pending&&index===current().messages.length-1,toast,openPlaces:draft=>features.open('map',draft)});if(view)article.append(view);}
   if(message.pulseIds?.length||message.pulseDraft){const box=document.createElement('section');box.className='chat-pulse-result';for(const id of (message.pulseIds||[]).slice(0,12)){const item=pulse.state().items.find(p=>p.item_id===id);if(item){const p=document.createElement('p');p.textContent=item.title+' · '+pulseWhen(item);box.append(p);}}const b=document.createElement('button');b.type='button';b.textContent=message.pulseDraft?'Уточнить напоминание':'Открыть Пульс';b.onclick=()=>features.open('pulse',message.pulseDraft||{});box.append(b);article.append(box);}
   if(message.role==='user'&&!wantsPulse(message.content)&&/(?:надо бы|нужно будет|обещал[аи]?).{0,100}(?:завтра|сегодня|пятниц|понедельник|вторник|сред|четверг|суббот|воскрес)/iu.test(message.content)){const b=document.createElement('button');b.type='button';b.textContent='Напомнить об этом';b.onclick=()=>features.open('pulse',{title:message.content.slice(0,500),resource:{kind:'chat',id:current().id}});article.append(b);}
@@ -1097,6 +1106,35 @@ async function runCrmChat(text,voiceTurn){
   }catch(error){if(profile?.account===owner){answer.content=error.name==='AbortError'?'Действие остановлено. Проверь CRM, заметки и календарь перед повтором.':error.message;answer.failed=true;answer.pending=false;render();save();if(voiceTurn)voice.failure(false,answer.content);}}
   finally{if(abort?.signal===signal){abort=null;setBusy(false);}if(profile?.account===owner)render();}
 }
+async function runMeetingChat(text,voiceTurn,retryInput=null){
+  const owner=profile.account;let chat=current();
+  if(!chat||chat.remote||chat.agent||chat.figma||chat.connectionProvider){chat={id:crypto.randomUUID(),title:'Встречи и договорённости',messages:[],updated:Date.now()};chats.unshift(chat);currentId=chat.id;}
+  const files=selectedFiles.map(item=>item.file),previous=chat.messages.filter(m=>m.meetingSource||m.meeting?.source).at(-1);
+  const user={role:'user',content:text,sentAt:Date.now(),requestId:crypto.randomUUID(),fileNames:files.map(f=>f.name),meetingTurn:true},answer={role:'assistant',content:'Читаю запись встречи…',pending:true,model,local:true,sentAt:Date.now()};
+  chat.messages.push(user,answer);chat.crmPending=false;chat.financePending=false;chat.finance=false;
+  setAgentMode(false,true);$('prompt').value='';resizePrompt();setBusy(true);abort=new AbortController();const signal=abort.signal;render();
+  const guard=()=>{signal.throwIfAborted();if(profile?.account!==owner)throw new DOMException('Account changed','AbortError');};
+  try{
+    await save();guard();let source='',audio=false,title='Итоги встречи';
+    if(files.length){
+      if(files.length!==1)throw Error('Для одного протокола прикрепи одну аудиозапись или одну расшифровку TXT, MD, SRT, VTT.');
+      const file=files[0];title=file.name;
+      if(file.type.startsWith('audio/')){answer.content='Распознаю запись встречи…';render();const result=await transcribeMeeting(file,{signal});guard();source=result.text;audio=true;}
+      else{if(!/\.(txt|md|srt|vtt)$/iu.test(file.name)||file.size>120000)throw Error('Прикрепи расшифровку TXT, MD, SRT или VTT до 30 000 символов.');source=await file.text();guard();}
+    }else{
+      const marker=text.match(/(?:расшифровка|транскрипт|transcript)\s*[:：]\s*([\s\S]+)/iu);
+      const selected=retryInput||previous;
+      source=marker?.[1]||selected?.meetingSource||selected?.meeting?.source||'';
+      if(!marker){audio=Boolean(selected?.meetingAudio||selected?.meeting?.audio);title=selected?.meetingTitle||selected?.meeting?.title||title;}
+    }
+    if(!source.trim())throw Error('Прикрепи запись встречи или текстовый файл. Можно вставить текст после строки «Расшифровка:».');
+    meetingChunks(source);Object.assign(user,{meetingSource:source,meetingAudio:audio,meetingTitle:title});clearFiles();await save();guard();
+    const result=await prepareMeeting({source,title,model,request,signal,guard,id:user.requestId,language:profile.language||'ru',progress:value=>{answer.content=value;render();}});guard();
+    result.audio=audio;answer.meeting=result;answer.content=meetingReport(result);answer.pending=false;answer.finish='stop';chat.updated=Date.now();await save();guard();render();
+    if(voiceTurn){const spoken='Подготовила черновик протокола. Решений: '+result.decisions.length+', поручений: '+result.actions.length+'. Проверь цитаты в чате.';voice.update(spoken);voice.complete(spoken);}
+  }catch(error){if(profile?.account===owner){answer.content=error.name==='AbortError'?'Обработка встречи остановлена.':error.message;answer.failed=true;answer.pending=false;render();save();if(voiceTurn)voice.failure(false,answer.content);}}
+  finally{if(abort?.signal===signal){abort=null;setBusy(false);}if(profile?.account===owner)render();}
+}
 async function generate(retry = false, voiceTurn = false) {
   if (busy || !ready) return;
   if (agentMode && !profile) { openAuth(); return; }
@@ -1107,6 +1145,8 @@ async function generate(retry = false, voiceTurn = false) {
     if (!guest || guest.remaining <= 0) { openAuth(); return; }
   }
   const text = $("prompt").value.trim() || (selectedFiles.length ? "Проанализируй прикреплённые файлы." : "");
+  const retriedMeeting=retry&&current()?.messages.filter(m=>m.role==='user').at(-1)?.meetingTurn?current().messages.filter(m=>m.role==='user').at(-1):null;
+  if(retriedMeeting||!retry&&wantsMeeting(text,selectedFiles.map(item=>item.file))){if(!profile){openAuth();return;}if(!profile.models.includes(model)){toast(apiError(profile.pro_locked_reason||'pro_tokens_required'));return;}await runMeetingChat(retriedMeeting?.content||text,voiceTurn,retriedMeeting);return;}
   const provider=cloudProvider(text),crmContinuation=current()?.messages.filter(m=>m.role==='assistant').at(-1)?.crm;
   if(!retry&&!wantsFigma(text)&&!wantsMap(text,current()?.messages||[])&&(!provider||provider==='google'&&/встреч|календар|meeting|calendar|импорт|подгрузи|загрузи|import/iu.test(text))&&
       (wantsCrm(text)||crmContinuation&&crmFollowup(text)||current()?.crmPending&&!wantsFinance(text)&&!wantsPulse(text)&&!/погод|weather|новост|news/iu.test(text))){

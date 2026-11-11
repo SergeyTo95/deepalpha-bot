@@ -29,14 +29,15 @@ def audio_type(data, mime):
         return mime
     raise ValueError("invalid_audio")
 
-async def transcribe(data, mime, language):
+async def transcribe(data, mime, language, *, timeout=15, max_text=12000):
     form = FormData()
-    form.add_field("file", data, filename="utterance." + TYPES[mime], content_type=mime)
+    extension={**TYPES,'audio/mpeg':'mp3','audio/wav':'wav','audio/flac':'flac'}[mime]
+    form.add_field("file", data, filename="utterance." + extension, content_type=mime)
     form.add_field("model", "whisper-large-v3-turbo")
     form.add_field("response_format", "json")
     form.add_field("temperature", "0")
-    form.add_field("language", language)
-    async with ClientSession(timeout=ClientTimeout(total=15, connect=4)) as client:
+    if language:form.add_field("language", language)
+    async with ClientSession(timeout=ClientTimeout(total=timeout, connect=4)) as client:
         async with client.post("https://api.groq.com/openai/v1/audio/transcriptions", data=form,
                 headers={"Authorization": "Bearer " + os.environ["GROQ_API_KEY"]}, allow_redirects=False) as response:
             if response.status == 429:
@@ -46,14 +47,14 @@ async def transcribe(data, mime, language):
             raw = bytearray()
             async for part in response.content.iter_chunked(8192):
                 raw.extend(part)
-                if len(raw) > 65536:
+                if len(raw) > max(65536,max_text*6+1024):
                     raise RuntimeError("stt_invalid_response")
             try:
                 result = json.loads(raw)
             except (ValueError, UnicodeDecodeError):
                 raise RuntimeError("stt_invalid_response") from None
             text = result.get("text") if isinstance(result, dict) else None
-            if not isinstance(text, str) or len(text) > 12000:
+            if not isinstance(text, str) or len(text) > max_text:
                 raise RuntimeError("stt_invalid_response")
             return text.strip()
 
