@@ -27,6 +27,22 @@ for the deployment's use case.
 
 ## Supported behavior
 
+Simple named `from → to` requests use a bounded route-specific workflow rather
+than the general ten-step tool planner: one selected-model extraction, provider
+lookups for each endpoint, and selected-model verification using short candidate
+IDs. Each endpoint gets at most one alternate-language lookup; ambiguous matches
+get at most one additional selection pass. No unverified first-result choice,
+invented coordinates or automatic landmark alias is used. Category filters belong
+to each endpoint separately: an airport destination does not filter out a historic
+starting point. Generic repeated identical searches also stop before another
+provider request, and terminal failure wording does not claim results were saved.
+
+This addresses a live failure where four successful geocoder HTTP responses were
+followed by repeated planner calls without ever invoking `/map/route`. HTTP 200
+from geocoding alone does not establish a correct landmark selection. Tests cover
+the reported Hadrian's Gate → Antalya Airport request and same-name hotel/other
+city ambiguity. Live provider acceptance still requires an authenticated account.
+
 - 2–5 distinct points, driving, walking or cycling. Public transport retains the
   navigator handoff; no timetables or transit estimates are fabricated.
 - Actual provider road geometry, total distance and estimated duration, visible
