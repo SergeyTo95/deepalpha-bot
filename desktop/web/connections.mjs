@@ -112,7 +112,7 @@ function validCalendarEventArguments(raw) {
   if (!cleaned.title || !cleaned.start || !cleaned.end || cleaned.title.length > 300 ||
       (cleaned.location && cleaned.location.length > 500) ||
       (cleaned.description && cleaned.description.length > 2000)) return null;
-  const offsetTime = /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(?::\\d{2}(?:\\.\\d{1,6})?)?(?:Z|[+-]\\d{2}:\\d{2})$/;
+  const offsetTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2})$/;
   if (!offsetTime.test(cleaned.start) || !offsetTime.test(cleaned.end)) return null;
   const start = Date.parse(cleaned.start), end = Date.parse(cleaned.end);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start ||
