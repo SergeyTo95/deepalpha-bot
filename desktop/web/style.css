@@ -1749,3 +1749,6 @@ dialog::backdrop {
   padding: 9px 8px;
   font-size: 11px;
 }
+
+/* Saved memory: responsive cards, source quotations and entity connections. */
+.memory-toggle{display:flex;align-items:center;gap:.65rem;margin-block:1rem}.memory-toggle input{width:1.15rem;height:1.15rem}.memory-content,.memory-quote{white-space:pre-wrap;overflow-wrap:anywhere}.memory-quote{border-inline-start:2px solid var(--line,#444);padding-inline-start:.8rem;opacity:.85}.memory-connections{margin-block:1.5rem}.memory-connections h2{font-size:1rem}.memory-connections button[aria-pressed="true"]{outline:2px solid currentColor}.memory-card details{margin-block:1rem}.memory-card summary{cursor:pointer;overflow-wrap:anywhere}.memory-editor input,.memory-editor textarea,.memory-editor select{max-width:100%;min-width:0}.memory-references{margin-block:.75rem}

@@ -33,6 +33,7 @@ import {wantsFinance,financeFollowup,financeRangeFollowup,runFinanceAgent} from 
 import {wantsCrm,crmFollowup,runCrmAgent} from './crm.mjs';
 import {wantsMeeting,prepareMeeting,meetingReport,meetingChunks,transcribeMeeting} from './meetings.mjs';
 import {meetingControls} from './meeting-ui.mjs';
+import {memoryCommand,memorySource,memoryDraft,recallMemoryAnswer} from './memory.mjs';
 const $ = (id) => document.getElementById(id);
 const icons = {
   attachment: "M21 11l-8 8a6 6 0 0 1-8-8l9-9a4 4 0 0 1 6 6l-9 9a2 2 0 0 1-3-3l8-8",
@@ -186,7 +187,22 @@ async function openPulseResource(resource){
     if(entry.kind==='place')await features.open('map',{placeId:entry.id});else if(entry.kind==='visit')await features.open('map',{tab:'visits',date:entry.date});else await features.open('notes',{id:entry.id});
   }catch(error){toast(error.message);}
 }
-const features = setupFeatures({notebook,pulse,webPush,openPulseResource,previewFile:file=>fileTools.previewFile(file),discussNote:entry=>{
+async function openMemorySource(source){
+  if(busy)return;
+  const owner=profile?.account;
+  if(source.kind==='note'){
+    const entry=(await notebook.load()).find(e=>e.id===source.id);if(profile?.account!==owner)return;
+    if(!entry)throw Error('Исходная заметка удалена. Цитата сохранена в памяти.');
+    await features.open('notes',{id:entry.id});return;
+  }
+  let chat=chats.find(c=>c.id===source.id);
+  if(!chat){await syncHistory();if(profile?.account!==owner)return;chat=chats.find(c=>c.id===source.id);}
+  if(!chat)throw Error('Исходный чат недоступен на этом устройстве или удалён. Цитата сохранена в памяти.');
+  features.close();await openChat(chat);if(profile?.account!==owner)return;
+  const index=chat.messages.findIndex(m=>[m.serverId,m.requestId,m.memoryId].includes(source.messageId)||m.role===source.role&&m.content.trim().startsWith(source.quote));
+  if(index>=0)document.querySelector('#messages [data-index="'+index+'"]')?.scrollIntoView({block:'center'});
+}
+const features = setupFeatures({notebook,pulse,webPush,openPulseResource,openMemorySource,previewFile:file=>fileTools.previewFile(file),discussNote:entry=>{
   if(busy)return;
   if($('prompt').value.trim()){toast('В чате есть черновик. Сохрани или очисти его перед переходом.');return;}
   features.close();setAgentMode(false,true);newChat();
@@ -434,6 +450,10 @@ function messageNode(message, index) {
         ? '<div class="thinking" aria-label="Велия готовит ответ"><span></span><span></span><span></span></div>'
         : "";
   article.append(content);
+  if(Array.isArray(message.memoryIds)&&message.memoryIds.length){
+    const refs=document.createElement('div');refs.className='feature-actions memory-references';
+    for(const [i,id] of message.memoryIds.entries())if(typeof id==='string'&&id.length<=100){const b=document.createElement('button');b.type='button';b.textContent='Запись памяти '+(i+1);b.onclick=()=>features.open('memory',{id});refs.append(b);}article.append(refs);
+  }
   if(message.meeting&&!message.pending&&!message.failed){
     const controller=new AbortController(),owner=profile?.account,chat=current();mapViews.push(controller);
     const guard=()=>{controller.signal.throwIfAborted();if(!owner||profile?.account!==owner||current()?.id!==chat.id)throw new DOMException('Account changed','AbortError');};
@@ -478,6 +498,14 @@ function messageNode(message, index) {
       actions.append(copy);
       const speak = document.createElement("button"); speak.textContent = "Озвучить"; speak.onclick = () => voice.speak(message.content); actions.append(speak);
       actions.append(documentExportControl(message.content,toast));
+      if(!message.failed&&!message.stopped){
+        const remember=document.createElement('button');remember.type='button';remember.textContent='В память';
+        remember.onclick=async()=>{
+          if(!profile){openAuth();return;}const owner=profile.account;remember.disabled=true;
+          try{const chat=current(),source=memorySource(chat,message),entries=await notebook.load(true);if(profile?.account!==owner)return;await save();if(profile?.account!==owner)return;await features.open('memory',{entry:memoryDraft(source.quote,source,entries)});}
+          catch(error){if(profile?.account===owner)toast(error.message);}finally{remember.disabled=false;}
+        };actions.append(remember);
+      }
       const favoriteId='favorite:'+current().id+':'+index;
       const favorite=document.createElement('button');favorite.textContent='☆';favorite.title='В избранное';favorite.setAttribute('aria-label','Сохранить ответ в избранное');
       favorite.onclick=async()=>{if(!profile){openAuth();return;}favorite.disabled=true;try{await notebook.save({id:favoriteId,kind:'favorite',title:message.content.replace(/[#*`]/g,'').slice(0,100).trim()||'Ответ Велии',content:message.content,tags:['Из чата']},{ifAbsent:true});favorite.textContent='★';toast('Ответ сохранён в избранном.');}catch(error){toast(error.message);}finally{favorite.disabled=false;}};actions.append(favorite);const remind=document.createElement('button');remind.type='button';remind.textContent='Напомнить';remind.onclick=()=>{if(!profile){openAuth();return;}features.open('pulse',{title:message.content.slice(0,500),resource:{kind:'chat',id:current().id}});};actions.append(remind);
@@ -1013,6 +1041,32 @@ async function refreshGuest() {
   })();
   try { await guestLoading; } finally { guestLoading = null; }
 }
+async function runMemoryChat(command,text,voiceTurn){
+  const owner=profile.account;let chat=current();
+  if(!chat||chat.remote||chat.agent||chat.figma||chat.connectionProvider){chat={id:crypto.randomUUID(),title:'Память · '+text.slice(0,45),messages:[],updated:Date.now()};chats.unshift(chat);currentId=chat.id;}
+  const user={role:'user',content:text,sentAt:Date.now(),requestId:crypto.randomUUID()},answer={role:'assistant',content:'',pending:true,model,local:true,sentAt:Date.now()};
+  chat.messages.push(user,answer);chat.crmPending=false;chat.financePending=false;chat.finance=false;chat.pulseDraft=null;
+  setAgentMode(false,true);$('prompt').value='';resizePrompt();setBusy(true);abort=new AbortController();const signal=abort.signal;render();
+  const guard=()=>{signal.throwIfAborted();if(profile?.account!==owner)throw new DOMException('Account changed','AbortError');};
+  let destination=null;
+  try{
+    await save();guard();
+    if(command.kind==='save'){
+      const entries=await notebook.load(true);guard();
+      const entry=memoryDraft(command.content,memorySource(chat,user),entries);entry.id='memory:'+user.requestId;
+      await notebook.save(entry,{ifAbsent:true});guard();answer.content='Запомнила. Запись можно исправить, связать с проектом или человеком и удалить в разделе «Память».';answer.memoryIds=[entry.id];
+    }else if(command.kind==='recall'){
+      const result=await recallMemoryAnswer({notebook,query:command.query,model,request,signal,guard,language:profile.language||'ru'});guard();answer.content=result.text;answer.memoryIds=result.ids;
+    }else{
+      answer.content=command.remove?'Выбери запись в разделе «Память» и нажми «Удалить». Пока ничего не удалено.':'Открываю сохранённую память.';
+      destination={query:command.query};
+    }
+    answer.pending=false;answer.finish='stop';chat.updated=Date.now();await save();guard();render();
+    if(voiceTurn){voice.update(answer.content);voice.complete(answer.content);}
+  }catch(error){if(profile?.account===owner){answer.pending=false;answer.failed=true;answer.content=error.name==='AbortError'?'Действие остановлено. Проверь память перед повтором.':error.message;render();save();if(voiceTurn)voice.failure(false,answer.content);}}
+  finally{if(abort?.signal===signal){abort=null;setBusy(false);}if(profile?.account===owner)render();}
+  if(profile?.account===owner&&destination)await features.open('memory',destination);
+}
 async function runNotebookCommand(command,text,voiceTurn){
   const owner=profile.account;setBusy(true);let reply='',destination=null;
   try{
@@ -1145,6 +1199,13 @@ async function generate(retry = false, voiceTurn = false) {
     if (!guest || guest.remaining <= 0) { openAuth(); return; }
   }
   const text = $("prompt").value.trim() || (selectedFiles.length ? "Проанализируй прикреплённые файлы." : "");
+  const memory=!retry&&memoryCommand(text);
+  if(memory){
+    if(!profile){openAuth();return;}
+    if(selectedFiles.length){toast('Для памяти выдели нужный факт текстом или сохрани ответ кнопкой «В память».');return;}
+    if(memory.kind==='recall'&&!profile.models.includes(model)){toast(apiError(profile.pro_locked_reason||'pro_tokens_required'));return;}
+    await runMemoryChat(memory,text,voiceTurn);return;
+  }
   const retriedMeeting=retry&&current()?.messages.filter(m=>m.role==='user').at(-1)?.meetingTurn?current().messages.filter(m=>m.role==='user').at(-1):null;
   if(retriedMeeting||!retry&&wantsMeeting(text,selectedFiles.map(item=>item.file))){if(!profile){openAuth();return;}if(!profile.models.includes(model)){toast(apiError(profile.pro_locked_reason||'pro_tokens_required'));return;}await runMeetingChat(retriedMeeting?.content||text,voiceTurn,retriedMeeting);return;}
   const provider=cloudProvider(text),crmContinuation=current()?.messages.filter(m=>m.role==='assistant').at(-1)?.crm;
