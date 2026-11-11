@@ -71,6 +71,8 @@ def test_map_planner_uses_authenticated_selected_model_without_web_search(monkey
                 response=await client.post(url,headers=headers(cookie),json={**body,'model':model})
                 value=await response.text();assert response.status==200 and '[DONE]' in value,(model,response.status,value)
             assert len(state['payloads'])==3 and not state['search_queries'] and not state['intent_payloads']
+            route_asset=await client.get(server.make_url('/web/route-planner.mjs'))
+            assert route_asset.status==200 and 'runDirectRoute' in await route_asset.text()
     asyncio.run(scenario())
 
 
