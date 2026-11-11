@@ -4,6 +4,7 @@ from collections import OrderedDict, deque
 import hashlib
 import itertools
 import json
+import logging
 import math
 import os
 import time
@@ -129,7 +130,9 @@ class FreeRouter:
                 matrix=await self.call('matrix','/matrix/'+profile,{'locations':coordinates,'metrics':['duration']})
                 require(isinstance(matrix,dict),'route_invalid_response',502)
                 order=best_order(matrix.get('durations'),len(coordinates))
-            raw=await self.call('directions','/directions/'+profile+'/geojson',{'coordinates':[coordinates[i] for i in order],'instructions':False,'geometry_simplify':True})
+            # ORS clears segments when instructions are disabled (RouteResultBuilder).
+            # Request them to retain per-stop distance/time; extract_route discards steps.
+            raw=await self.call('directions','/directions/'+profile+'/geojson',{'coordinates':[coordinates[i] for i in order],'instructions':True,'geometry_simplify':True})
             result=extract_route(raw,coordinates,order,mode,optimize)
             self.cache[fingerprint]=(self.clock()+600,result)
             def expire():
@@ -151,7 +154,9 @@ def setup_routing_routes(app,*,session_for,same_origin,json_response,router=None
             result=await router.route(session.user_id,data)
             return json_response({'ok':True,'route':result})
         except AuthenticationUnavailable:return json_response({'ok':False,'error':'authentication_unavailable'},503)
-        except RouteError as exc:return json_response({'ok':False,'error':exc.code},exc.status)
+        except RouteError as exc:
+            if exc.status>=500:logging.getLogger(__name__).warning('Map routing failed: %s (status %s)',exc.code,exc.status)
+            return json_response({'ok':False,'error':exc.code},exc.status)
         except web.HTTPRequestEntityTooLarge:return json_response({'ok':False,'error':'route_invalid_data'},413)
         except (ValueError,TypeError,UnicodeError):return json_response({'ok':False,'error':'route_invalid_data'},400)
         except (ClientError,TimeoutError):return json_response({'ok':False,'error':'route_unavailable'},503)

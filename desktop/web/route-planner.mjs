@@ -1,5 +1,5 @@
 import {readCompletion} from './core.mjs';
-import {validRoadRoute,roadRouteText} from './map-routing.mjs';
+import {validRoadRoute,roadRouteText,roadRouteFailure} from './map-routing.mjs';
 
 export function directRouteStops(text){
   if(typeof text!=='string'||!/маршрут|доех|добрат|route|directions|drive|walk/iu.test(text)||/сохран|запиши|напомни|назнач|через|заед|календар|\bvia\b|\bsave\b|\bremind\b|\bschedule\b/iu.test(text))return null;
@@ -92,6 +92,6 @@ export async function runDirectRoute({text,model,request,lookup,routeLookup,sign
     if(!validRoadRoute(road,places)||road.mode!==task.mode||road.optimized!==false)throw Error('Не удалось проверить дорожный маршрут.');
     state.route.road=road;publish();return {text:roadRouteText(road,language)+'\n\n© [openrouteservice by HeiGIT](https://heigit.org/) · [OpenStreetMap](https://www.openstreetmap.org/copyright) · [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)',data:state};
   }catch(error){guard();if(error.name==='AbortError'||error.status===401)throw error;
-    state.route.notice=(en?'Road calculation is unavailable. Open the navigator.':error.message+' Дороги и время рассчитает навигатор.');publish();return {text:state.route.notice,data:state};
+    state.route.notice=roadRouteFailure(error,language)+(en?' Open the navigator.':' Дороги и время рассчитает навигатор.');publish();return {text:state.route.notice,data:state};
   }
 }

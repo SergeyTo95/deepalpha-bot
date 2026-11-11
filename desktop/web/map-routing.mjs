@@ -8,11 +8,26 @@ export function validRoadRoute(route,points){
   return Array.isArray(route.geometry)&&route.geometry.length>=2&&route.geometry.length<=10000&&route.geometry.every(p=>Array.isArray(p)&&p.length===2&&Number.isFinite(p[0])&&Math.abs(p[0])<=180&&Number.isFinite(p[1])&&Math.abs(p[1])<=90)&&Array.isArray(route.legs)&&route.legs.length===n-1&&route.legs.every(p=>p&&Number.isFinite(p.distance_m)&&p.distance_m>=0&&Number.isFinite(p.duration_s)&&p.duration_s>=0);
 }
 const ERRORS={route_key_required:'Для расчёта внутри Velia ещё не настроен бесплатный ключ маршрутизации.',route_free_limit:'Достигнут бесплатный лимит маршрутизации. Платный расчёт не включается.',route_user_limit:'Лимит расчётов сейчас исчерпан. Попробуй позже.',route_mode_unavailable:'Этот транспорт пока рассчитывается только в навигаторе.',route_no_path:'Не удалось построить проезжаемый маршрут через эти точки.',route_busy:'Расчёт маршрутов занят. Попробуй немного позже.',route_access_denied:'Бесплатный сервис маршрутизации отклонил доступ. Можно открыть маршрут в навигаторе.'};
+export function roadRouteFailure(error,language='ru'){
+  if(String(language).startsWith('en'))return 'Road calculation is unavailable.';
+  return Object.hasOwn(ERRORS,error?.code)?ERRORS[error.code]:'Расчёт дорог сейчас недоступен.';
+}
+function routeError(code,status=0){
+  const error=Error(status===401?'Войди в Велию для расчёта маршрута.':roadRouteFailure({code}));
+  error.code=code;error.status=status;return error;
+}
 export async function requestRoadRoute(points,mode,optimize,signal){
-  const response=await fetch('/web-api/v1/map/route',{method:'POST',credentials:'same-origin',signal,headers:{'Content-Type':'application/json','X-Velia-Request':'1'},body:JSON.stringify({coordinates:points.map(p=>[p.lon,p.lat]),mode,optimize})});
-  const value=await response.json();
-  if(!response.ok||!value.ok){const error=Error(response.status===401?'Войди в Велию для расчёта маршрута.':ERRORS[value.error]||'Расчёт дорог сейчас недоступен.');error.status=response.status;throw error;}
-  if(!validRoadRoute(value.route,points)||value.route.mode!==mode||value.route.optimized!==optimize)throw Error('Не удалось проверить рассчитанный маршрут.');
+  let response,value;
+  try{
+    response=await fetch('/web-api/v1/map/route',{method:'POST',credentials:'same-origin',signal,headers:{'Content-Type':'application/json','X-Velia-Request':'1'},body:JSON.stringify({coordinates:points.map(p=>[p.lon,p.lat]),mode,optimize})});
+    if(response.status===401)throw routeError('unauthorized',401);
+    value=await response.json();
+  }catch(error){
+    if(error.name==='AbortError'||error.status===401)throw error;
+    throw routeError('route_unavailable',response?.status);
+  }
+  if(!response.ok||!value||value.ok!==true)throw routeError(value?.error,response.status);
+  if(!validRoadRoute(value.route,points)||value.route.mode!==mode||value.route.optimized!==optimize)throw routeError('route_invalid_response',response.status);
   return value.route;
 }
 export function roadRouteText(route,language='ru'){

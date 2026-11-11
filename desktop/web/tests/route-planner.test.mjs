@@ -74,6 +74,13 @@ test('route-provider error returns actual selected points and navigator handoff 
   assert.equal(value.routes,1);assert.equal(value.result.data.route.road,undefined);assert.equal(value.result.data.route.ids.length,2);assert.match(value.result.text,/навигатор/);assert.doesNotMatch(value.result.text,/км|\d+ мин/);
 });
 
+test('named route preserves pins but never publishes raw HTML or JSON parsing errors',async()=>{
+  const value=await fixture({routeLookup:async()=>{throw SyntaxError('Unexpected token < <!DOCTYPE private detail');}});
+  assert.match(value.result.text,/Расчёт дорог сейчас недоступен/);
+  assert.doesNotMatch(JSON.stringify(value.result),/Unexpected|DOCTYPE|private detail/);
+  assert.equal(value.result.data.route.road,undefined);assert.equal(value.result.data.route.ids.length,2);
+});
+
 test('repeating the same generic place search stops before another lookup or ten model calls',async()=>{
   let calls=0,lookups=0;const user={role:'user',content:'Найди кафе в Анталии',requestId:'owned'};
   const result=await runMapAgent({model:'velia-flash',user,history:[user],notebook:{account:'owned',epoch:1},signal:new AbortController().signal,

@@ -43,7 +43,10 @@ def test_fixed_host_payload_scoped_cache_limits_and_no_fallback():
         async def request(path,body):
             calls.append((path,body))
             if path.startswith('/matrix'):return {'durations':[[0,100,1,50],[50,0,100,1],[50,1,0,100],[50,50,50,0]]}
-            return response(body['coordinates'])
+            result=response(body['coordinates'])
+            # Real ORS resets segments when instructions=false, even with geometry.
+            if not body.get('instructions'):result['features'][0]['properties'].pop('segments')
+            return result
         router=FreeRouter(api_key='private-free-key',request=request,clock=clock)
         data={'coordinates':POINTS,'mode':'driving','optimize':True}
         result=await router.route(7,data)
@@ -51,6 +54,7 @@ def test_fixed_host_payload_scoped_cache_limits_and_no_fallback():
         assert calls[1][1]['coordinates']==[POINTS[i] for i in result['order']]
         assert set(calls[0][1])=={'locations','metrics'}
         assert set(calls[1][1])=={'coordinates','instructions','geometry_simplify'}
+        assert calls[1][1]['instructions'] is True
         assert 'private-free-key' not in str(result)
         assert (await router.route(7,data))['cached'] and len(calls)==2
         await router.route(8,data);assert len(calls)==4
@@ -60,6 +64,45 @@ def test_fixed_host_payload_scoped_cache_limits_and_no_fallback():
         missing=FreeRouter(api_key='',request=request)
         with pytest.raises(RouteError,match='route_key_required'):await missing.route(7,data)
         assert len(calls)==4
+    asyncio.run(scenario())
+
+
+def test_provider_http_contract_retains_segments_and_discards_navigation_steps(monkeypatch):
+    async def scenario():
+        async def directions(req):
+            assert req.headers['Authorization']=='test-key'
+            body=await req.json();result=response(body['coordinates'])
+            props=result['features'][0]['properties']
+            if body.get('instructions'):
+                for segment in props['segments']:segment['steps']=[{'instruction':'Private street name'}]
+            else:props.pop('segments')
+            return web.json_response(result,content_type='application/geo+json')
+        app=web.Application();app.router.add_post('/directions/driving-car/geojson',directions)
+        async with TestServer(app) as server:
+            monkeypatch.setattr('desktop.map_routing.API',str(server.make_url('')).rstrip('/'))
+            router=FreeRouter(api_key='test-key')
+            result=await router.route(7,{'coordinates':POINTS[:2]})
+            assert result['distance_m']==12000 and result['duration_s']==1800
+            assert len(result['legs'])==1 and result['geometry']==POINTS[:2]
+            assert 'Private street' not in str(result) and 'steps' not in str(result)
+    asyncio.run(scenario())
+
+
+def test_provider_html_redirects_and_auth_errors_never_escape_as_raw_text(monkeypatch):
+    async def scenario():
+        status=[200];hits=[]
+        async def broken(req):
+            hits.append(req.path)
+            return web.Response(text='<!DOCTYPE html><html>private provider error</html>',status=status[0],headers={'Location':'/must-not-follow'},content_type='text/html')
+        app=web.Application();app.router.add_post('/broken',broken)
+        async with TestServer(app) as server:
+            monkeypatch.setattr('desktop.map_routing.API',str(server.make_url('')).rstrip('/'))
+            router=FreeRouter(api_key='test-key')
+            for http,code in [(200,'route_invalid_response'),(502,'route_unavailable'),(302,'route_unavailable'),(401,'route_access_denied'),(403,'route_access_denied'),(429,'route_free_limit')]:
+                status[0]=http
+                with pytest.raises(RouteError,match=code) as error:await router.remote('/broken',{})
+                assert '<' not in str(error.value) and 'private' not in str(error.value)
+            assert hits==['/broken']*6
     asyncio.run(scenario())
 
 

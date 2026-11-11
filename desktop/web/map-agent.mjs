@@ -5,7 +5,7 @@ import {createVisitActions,VISIT_TOOLS,VISIT_ARGS,quickVisitReply} from './visit
 import {readCompletion} from './core.mjs';
 import {parseFigmaPlan} from './figma.mjs';
 import {searchPlaces,navigationUrl} from './map.mjs';
-import {requestRoadRoute,validRoadRoute,roadRouteText} from './map-routing.mjs';
+import {requestRoadRoute,validRoadRoute,roadRouteText,roadRouteFailure} from './map-routing.mjs';
 import {runDirectRoute} from './route-planner.mjs';
 
 const GEO=/визит|выезд|\bvisits?\b|appointments?|карт[аеуы]|маршрут|адрес[ауоые]?|мест[ао](?:\s|$|[.,!?])|мо[иём]+ мест|сохран[её]нн.{0,15}мест|географ|координат|аэропорт|аэродром|вокзал|больниц|клиник|университет|школ|\bairport\b|\bhospital\b|\bclinic\b|\bstation\b|\bschool\b|\buniversity\b|прогулк|поездк|кафе|ресторан|достопримечател|аптек|музе|отел|\bcafes?\b|\brestaurants?\b|\btrip\b|\bmap\b|\bplaces?\b|\broute\b|\baddress(?:es)?\b/iu;
@@ -140,7 +140,7 @@ export async function runMapAgent({model,user,history,notebook,signal,request,pr
           return {text:roadRouteText(road,language)+'\n\n© [openrouteservice by HeiGIT](https://heigit.org/) · [OpenStreetMap](https://www.openstreetmap.org/copyright) · [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)',data:state};
         }catch(error){guard();if(error.name==='AbortError'||error.status===401)throw error;
           state.route={ids:places.map(p=>p.ref),mode};state.display=state.route.ids;
-          const en=String(language).startsWith('en');state.route.notice=en?'Road calculation is unavailable. The navigator will calculate roads and travel time.':error.message+' Дороги и время рассчитает навигатор; порядок точек сохранён.';
+          const en=String(language).startsWith('en');state.route.notice=roadRouteFailure(error,language)+(en?' The navigator will calculate roads and travel time.':' Дороги и время рассчитает навигатор; порядок точек сохранён.');
           publish();return {text:state.route.notice,data:state};
         }
       }else{

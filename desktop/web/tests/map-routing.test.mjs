@@ -24,6 +24,26 @@ test('route HTTP body contains only coordinates, mode and explicit optimize flag
   }finally{globalThis.fetch=previous;}
 });
 
+test('HTML responses, invalid JSON shapes and network errors give safe messages with HTTP status',async()=>{
+  const previous=globalThis.fetch;
+  try{
+    for(const status of [200,502,503]){
+      globalThis.fetch=async()=>new Response('<!DOCTYPE html><html>private upstream detail</html>',{status,headers:{'Content-Type':'text/html'}});
+      await assert.rejects(requestRoadRoute(places,'driving',false),error=>error.status===status&&error.message==='Расчёт дорог сейчас недоступен.');
+    }
+    for(const value of [null,[],{ok:false,error:'<!DOCTYPE private detail'},{ok:true,route:null}]){
+      globalThis.fetch=async()=>Response.json(value);
+      await assert.rejects(requestRoadRoute(places,'driving',false),/Расчёт дорог сейчас недоступен/);
+    }
+    globalThis.fetch=async()=>{throw TypeError('Failed to fetch private host');};
+    await assert.rejects(requestRoadRoute(places,'driving',false),error=>error.status===0&&!error.message.includes('private'));
+    globalThis.fetch=async()=>new Response('<!DOCTYPE html>',{status:401});
+    await assert.rejects(requestRoadRoute(places,'driving',false),error=>error.status===401&&/Войди/.test(error.message));
+    globalThis.fetch=async()=>{throw new DOMException('Stopped','AbortError');};
+    await assert.rejects(requestRoadRoute(places,'driving',false),{name:'AbortError'});
+  }finally{globalThis.fetch=previous;}
+});
+
 async function run({optimize=false,text='Построй маршрут между местами',routeLookup=async()=>road(optimize)}){
   const user={role:'user',content:text,requestId:'user-owned'};let calls=0;
   const notebook={account:'owned',epoch:1};
@@ -43,6 +63,13 @@ test('missing free key or exhausted provider quota preserves original-order navi
   const result=await run({optimize:true,text:'Оптимизируй маршрут между местами',routeLookup:async()=>{throw Error('Лимит бесплатного сервиса исчерпан.');}});
   assert.equal(result.data.route.road,undefined);assert.deepEqual(result.data.route.ids,['p0','p1','p2','p3']);assert.match(result.text,/порядок точек сохранён/);assert.match(result.text,/навигатор/);
   assert.ok(validMapData(result.data));
+});
+
+test('generic map route fallback never publishes arbitrary exception text',async()=>{
+  const result=await run({routeLookup:async()=>{throw SyntaxError('Unexpected token < <!DOCTYPE private detail');}});
+  assert.match(result.text,/Расчёт дорог сейчас недоступен/);
+  assert.doesNotMatch(JSON.stringify(result),/Unexpected|DOCTYPE|private detail/);
+  assert.equal(result.data.route.road,undefined);assert.ok(validMapData(result.data));
 });
 
 test('routing never silently reorders on model initiative and abort does not publish results',async()=>{
