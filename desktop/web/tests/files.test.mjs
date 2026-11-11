@@ -12,3 +12,9 @@ test('unsupported, empty and oversized files fail before upload',()=>{
   assert.equal(prepareFile(new File(['x'],'photo.webp')).type,'image/webp');
 });
 test('size labels are bounded and readable',()=>{assert.equal(fileSize(1024),'1 КБ');assert.equal(fileSize(1024*1024),'1.0 МБ');});
+test('meeting formats preserve original bytes and normalize recording MIME',async()=>{
+  for(const [name,mime] of [['meeting.MP3','audio/mpeg'],['meeting.m4a','audio/mp4'],['meeting.wav','audio/wav'],['meeting.ogg','audio/ogg'],['meeting.webm','audio/webm'],['meeting.flac','audio/flac'],['meeting.srt','text/plain'],['meeting.vtt','text/plain']]){
+    const file=new File(['source bytes'],name,{type:'application/octet-stream'}),prepared=prepareFile(file);
+    assert.equal(prepared.type,mime);assert.equal(await prepared.text(),'source bytes');assert.equal(prepared.name,name);
+  }
+});
