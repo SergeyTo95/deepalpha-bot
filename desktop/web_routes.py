@@ -606,6 +606,8 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     from desktop.feature_routes import setup_feature_routes
     from desktop.creem_test_webhook import setup_creem_test_webhook
     setup_creem_test_webhook(app)
+    from desktop.creem_webhook_relay import setup_creem_webhook_relay
+    setup_creem_webhook_relay(app, upstream=upstream, json_response=json_response)
     setup_feature_routes(app, session_for=session_for, same_origin=same_origin, upstream=upstream,
         json_response=json_response, binary_upstream=binary_upstream, origin=origin)
     setup_account_routes(app, session_for=session_for, same_origin=same_origin, upstream=upstream,

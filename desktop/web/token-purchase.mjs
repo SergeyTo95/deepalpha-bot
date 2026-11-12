@@ -19,8 +19,8 @@ function element(tag, text, className) {
   return item;
 }
 
-export function mountTokenPurchase(root, catalog) {
-  mountSubscriptionPlans(root);
+export function mountTokenPurchase(root, catalog, options={}) {
+  mountSubscriptionPlans(root, options);
   const section = element('section', undefined, 'feature-card token-purchase');
   const title = element('h3', 'Купить токены');
   section.append(title, element('p', 'Токены VELIA — внутренний баланс для платных возможностей сервиса. Это не криптовалюта; обмен на деньги не предусмотрен.'));

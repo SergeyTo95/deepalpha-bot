@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {tokenPackages,mountTokenPurchase} from '../token-purchase.mjs';
-import {CREEM_SUBSCRIPTIONS} from '../subscription-plans.mjs';
+import {CREEM_SUBSCRIPTIONS,paymentDestination} from '../subscription-plans.mjs';
 
 class Element {
   constructor(tag) {this.tag=tag;this.children=[];this.textContent='';this.events={};this.attributes={};}
@@ -15,7 +15,11 @@ const catalog = {ok:true,topups:[{credits:250,store_price_usd:4.99},{credits:100
 function withUI(run) {
   const previous=globalThis.document;
   globalThis.document={createElement:tag=>new Element(tag)};
-  try {run();} finally {globalThis.document=previous;}
+  try {
+    const result=run();
+    if(result?.then)return result.finally(()=>{globalThis.document=previous;});
+    globalThis.document=previous;return result;
+  } catch(error) {globalThis.document=previous;throw error;}
 }
 
 test('packages come from a valid server catalog and malformed prices are never offered',()=>{
@@ -52,7 +56,7 @@ test('subscription references cannot activate payment or replace prices through 
   const cards=all(root).filter(node=>node.tag==='article');
   assert.equal(cards.length,3);
   assert.match(all(cards[0]).find(node=>node.className==='subscription-price').textContent,/14,99/);
-  assert.match(all(cards[0]).find(node=>node.className==='subscription-credits').textContent,/1\s200/);
+  assert.ok(all(cards[0]).some(node=>node.textContent.includes('1 200 токенов')));
   for(const node of all(root)) {
     if(node.tag==='button') {assert.equal(node.disabled,true);assert.deepEqual(node.events,{});}
     assert.equal(node.href,undefined);
@@ -68,4 +72,61 @@ test('subscription references cannot activate payment or replace prices through 
     assert.equal(url.pathname,`/payment/${plan.productId}`);
     assert.equal(url.search,'');assert.equal(url.hash,'');
   }
+}));
+
+const billingReady={ok:true,enabled:true,mode:'prod'};
+const noSubscription={ok:true,plan_code:'free',has_subscription:false,has_active_subscription:false};
+
+test('enabled checkout is account-bound through the server and never opens the static product URL',()=>withUI(async()=>{
+  const root=new Element('div'),calls=[],opened=[];
+  mountTokenPurchase(root,catalog,{billing:billingReady,account:noSubscription,
+    request:async(path,options)=>{calls.push([path,options]);return {ok:true,checkout_url:'https://www.creem.io/checkout/prod_example/ch_example'};},
+    navigate:url=>opened.push(url)});
+  const buy=all(root).find(node=>node.textContent==='Выбрать Pro');
+  assert.equal(buy.disabled,false);
+  await buy.events.click();
+  assert.equal(calls[0][0],'economy/creem/checkout');
+  assert.equal(calls[0][1].data.plan,'pro');
+  assert.match(calls[0][1].data.attempt,/^[0-9a-f-]{36}$/);
+  assert.deepEqual(Object.keys(calls[0][1].data).sort(),['attempt','plan']);
+  assert.deepEqual(opened,['https://www.creem.io/checkout/prod_example/ch_example']);
+}));
+
+test('a late payment response cannot redirect a different account or closed view',()=>withUI(async()=>{
+  const root=new Element('div'),opened=[];let current=true,finish;
+  mountTokenPurchase(root,catalog,{billing:billingReady,account:noSubscription,
+    request:()=>new Promise(resolve=>{finish=resolve;}),isCurrent:()=>current,navigate:url=>opened.push(url)});
+  const pending=all(root).find(node=>node.textContent==='Выбрать Plus').events.click();
+  current=false;finish({ok:true,checkout_url:'https://www.creem.io/checkout/prod_example/ch_example'});
+  await pending;assert.deepEqual(opened,[]);
+}));
+
+test('an existing subscription opens only the owner portal',()=>withUI(async()=>{
+  const root=new Element('div'),calls=[],opened=[];
+  mountTokenPurchase(root,catalog,{billing:billingReady,account:{ok:true,plan_code:'pro',has_subscription:true,has_active_subscription:true},
+    request:async(path,options)=>{calls.push([path,options]);return {ok:true,portal_url:'https://www.creem.io/portal/cust_example?token=fixture'};},
+    navigate:url=>opened.push(url)});
+  await all(root).find(node=>node.textContent==='Управлять подпиской').events.click();
+  assert.equal(calls[0][0],'economy/creem/portal');assert.deepEqual(calls[0][1].data,{});
+  assert.equal(opened.length,1);
+}));
+
+test('payment redirects reject foreign hosts, credentials, non-HTTPS and public product links',()=>{
+  for(const url of ['https://evil.test/checkout/ch_a','https://www.creem.io.evil.test/checkout/ch_a',
+    'http://www.creem.io/checkout/ch_a','https://user@www.creem.io/checkout/ch_a',
+    CREEM_SUBSCRIPTIONS[0].productUrl,'https://www.creem.io:444/checkout/ch_a'])assert.throws(()=>paymentDestination(url));
+});
+
+
+test('renewal management remains available while new purchases are disabled',()=>withUI(async()=>{
+  const root=new Element('div'),calls=[];
+  mountTokenPurchase(root,catalog,{billing:{ok:true,enabled:false,mode:'prod'},
+    account:{ok:true,plan_code:'pro',has_subscription:true,has_active_subscription:true,can_manage:true},
+    request:async(path,options)=>{calls.push(path);return {ok:true,portal_url:'https://www.creem.io/portal/cust_example'};},navigate:()=>{}});
+  const manage=all(root).find(node=>node.textContent==='Платежи и управление продлением');
+  assert.equal(manage.disabled,false);
+  await manage.events.click();
+  assert.deepEqual(calls,['economy/creem/portal']);
+  const other=all(root).filter(node=>node.textContent==='Подписка уже оформлена');
+  assert.ok(other.every(node=>node.disabled===true));
 }));
