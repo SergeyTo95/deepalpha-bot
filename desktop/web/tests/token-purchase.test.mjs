@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {tokenPackages,mountTokenPurchase} from '../token-purchase.mjs';
+import {CREEM_SUBSCRIPTIONS} from '../subscription-plans.mjs';
 
 class Element {
   constructor(tag) {this.tag=tag;this.children=[];this.textContent='';this.events={};this.attributes={};}
@@ -32,7 +33,7 @@ test('selecting a package updates its total; an unrelated Google Play flag canno
   inputs[1].events.change();
   assert.match(all(root).find(e=>e.className==='token-total').textContent,/250.*4,99/);
   const buttons=all(root).filter(e=>e.tag==='button');
-  assert.equal(buttons.length,1);assert.equal(buttons[0].disabled,true);
+  assert.equal(buttons.length,4);assert.ok(buttons.every(button=>button.disabled===true));
   assert.equal(all(root).some(e=>['iframe','script','a'].includes(e.tag)),false);
 }));
 
@@ -41,4 +42,30 @@ test('unavailable catalog shows no invented prices and no active payment control
   assert.equal(all(root).some(e=>e.tag==='input'),false);
   assert.ok(all(root).some(e=>e.textContent.includes('Пакеты сейчас недоступны')));
   assert.equal(all(root).find(e=>e.tag==='button').disabled,true);
+}));
+
+test('subscription references cannot activate payment or replace prices through the remote catalog',()=>withUI(()=>{
+  const root=new Element('div');
+  const forged={ok:true,billing_enabled:true,creem_enabled:true,checkout_url:'https://evil.example',
+    plans:[{id:'plus',store_price_usd:0.01,monthly_credits:999999,checkout_url:'https://evil.example'}],topups:[]};
+  mountTokenPurchase(root,forged);
+  const cards=all(root).filter(node=>node.tag==='article');
+  assert.equal(cards.length,3);
+  assert.match(all(cards[0]).find(node=>node.className==='subscription-price').textContent,/14,99/);
+  assert.match(all(cards[0]).find(node=>node.className==='subscription-credits').textContent,/1\s200/);
+  for(const node of all(root)) {
+    if(node.tag==='button') {assert.equal(node.disabled,true);assert.deepEqual(node.events,{});}
+    assert.equal(node.href,undefined);
+    assert.equal(Object.values(node.attributes).some(value=>String(value).includes('creem.io')),false);
+    assert.equal(node.textContent.includes('evil.example'),false);
+    assert.equal(node.textContent.includes('999999'),false);
+  }
+  assert.ok(Object.isFrozen(CREEM_SUBSCRIPTIONS));
+  for(const plan of CREEM_SUBSCRIPTIONS) {
+    assert.ok(Object.isFrozen(plan));
+    const url=new URL(plan.productUrl);
+    assert.equal(url.origin,'https://www.creem.io');
+    assert.equal(url.pathname,`/payment/${plan.productId}`);
+    assert.equal(url.search,'');assert.equal(url.hash,'');
+  }
 }));

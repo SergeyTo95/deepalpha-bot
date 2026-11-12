@@ -1,4 +1,5 @@
 // Purchase preparation only. No client callback or redirect can grant credits.
+import {mountSubscriptionPlans} from './subscription-plans.mjs';
 export function tokenPackages(catalog) {
   if (catalog?.ok !== true || !Array.isArray(catalog.topups)) return [];
   const seen = new Set();
@@ -19,6 +20,7 @@ function element(tag, text, className) {
 }
 
 export function mountTokenPurchase(root, catalog) {
+  mountSubscriptionPlans(root);
   const section = element('section', undefined, 'feature-card token-purchase');
   const title = element('h3', 'Купить токены');
   section.append(title, element('p', 'Токены VELIA — внутренний баланс для платных возможностей сервиса. Это не криптовалюта; обмен на деньги не предусмотрен.'));
