@@ -114,7 +114,7 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
         try:
             async with app[CLIENT].request(method, config.auth_origin + path, headers=headers,
                     json=data, allow_redirects=False,
-                    timeout=ClientTimeout(total=360, sock_read=300) if any(x in path for x in ('/generate', '/literature', '/synthesize', '/runs', '/research')) else ClientTimeout(total=25)) as response:
+                    timeout=ClientTimeout(total=360, sock_read=300) if any(x in path for x in ('/generate', '/literature', '/synthesize', '/runs', '/research')) else ClientTimeout(total=45 if path=='/mobile-api/v1/economy/creem/checkout' else 25)) as response:
                 body = bytearray()
                 async for chunk in response.content.iter_chunked(8192):
                     body.extend(chunk)

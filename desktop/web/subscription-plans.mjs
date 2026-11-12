@@ -38,7 +38,8 @@ const benefits = {
 };
 const errors = {
   subscription_exists:'У тебя уже есть подписка. Открой управление подпиской, чтобы проверить её или отменить продление.',
-  checkout_already_pending:'Есть незавершённая оплата. Продолжи выбранный ранее тариф. Если страница оплаты не открывается, напиши support@velyoncore.ai.',
+  checkout_already_pending:'Страница оплаты ещё подготавливается. Подожди немного и снова выбери тот же тариф.',
+  billing_provider_timeout:'Страница оплаты создаётся дольше обычного. Повтори тот же тариф — сохранённый заказ будет продолжен.',
   billing_not_configured:'Оплата ещё подключается. Попробуй позже.',
   billing_product_mismatch:'Параметры тарифа изменились. Обнови раздел перед оплатой.',
 };
@@ -46,6 +47,7 @@ const errors = {
 export function mountSubscriptionPlans(root, {billing=null, account=null, billingError=null, accountError=null, onRefresh=null, request=null,
     isCurrent=()=>true, navigate=url=>globalThis.location.assign(url)}={}) {
   const section = element('section', undefined, 'feature-card subscription-plans');
+  section.id='velia-memberships';
   const header = element('div',undefined,'subscription-heading');
   header.append(element('span','VELIA MEMBERSHIP','subscription-eyebrow'),
     element('h3','Больше возможностей для твоих идей'),
@@ -76,13 +78,16 @@ export function mountSubscriptionPlans(root, {billing=null, account=null, billin
   const feedback = element('p','', 'subscription-feedback');
   feedback.setAttribute('role','status'); feedback.setAttribute('aria-live','polite');
   const money = value => new Intl.NumberFormat('ru-RU',{style:'currency',currency:'USD'}).format(value);
-  const controls = [], initialDisabled = new Map(), attempts = new Map();
+  const controls = [], initialDisabled = new Map(), attempts = new Map(), statusSlots=[];
   let busy = false;
-  const transact = async (plan, portal=false) => {
+  const transact = async (plan, portal=false, status=feedback, trigger=null) => {
     if (!(portal?canManage:enabled) || busy || !isCurrent()) return;
     busy = true;
+    const label=trigger?.textContent;
+    statusSlots.forEach(slot=>slot.textContent='');
+    if(trigger)trigger.textContent=portal?'Открываю кабинет…':'Открываю оплату…';
     controls.forEach(button=>button.disabled=true);
-    feedback.textContent = portal ? 'Открываю управление подпиской…' : 'Готовлю защищённую страницу оплаты…';
+    status.textContent = portal ? 'Открываю управление подпиской…' : 'Готовлю защищённую страницу оплаты…';
     try {
       if (!portal && !attempts.has(plan)) attempts.set(plan,crypto.randomUUID());
       const result = await request('economy/creem/'+(portal?'portal':'checkout'),
@@ -91,11 +96,11 @@ export function mountSubscriptionPlans(root, {billing=null, account=null, billin
       if (!result?.ok) throw Error(result?.error||'Не удалось открыть оплату.');
       navigate(paymentDestination(portal?result.portal_url:result.checkout_url,portal));
     } catch (error) {
-      if (isCurrent() && error.name!=='AbortError') feedback.textContent = errors[error.code] || errors[error.message] || unavailable[error.code] ||
+      if (isCurrent() && error.name!=='AbortError') status.textContent = errors[error.code] || errors[error.message] || unavailable[error.code] ||
         'Не удалось открыть оплату. Обнови раздел или обратись в support@velyoncore.ai. Повторного списания здесь не выполняется.';
     } finally {
       busy = false;
-      if (isCurrent()) controls.forEach(button=>button.disabled=initialDisabled.get(button));
+      if (isCurrent()) {controls.forEach(button=>button.disabled=initialDisabled.get(button));if(trigger)trigger.textContent=label;}
     }
   };
   for (const plan of CREEM_SUBSCRIPTIONS) {
@@ -118,8 +123,10 @@ export function mountSubscriptionPlans(root, {billing=null, account=null, billin
     button.setAttribute('aria-label',current?'Управлять подпиской '+plan.name:'Оформить подписку '+plan.name);
     // Only server-created, owner-bound checkouts can be opened. Public product
     // links above remain identifiers for configuration, never a payment fallback.
-    if (!button.disabled) button.addEventListener('click',()=>transact(plan.code,existing));
-    controls.push(button); content.append(button);
+    const status=element('p','','subscription-feedback');status.id='velia-payment-status-'+plan.code;status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+    button.setAttribute('aria-describedby',status.id);statusSlots.push(status);
+    if (!button.disabled) button.addEventListener('click',()=>transact(plan.code,existing,status,button));
+    controls.push(button); content.append(button,status);
     card.append(art,content); grid.append(card);
   }
   section.append(grid,feedback);
