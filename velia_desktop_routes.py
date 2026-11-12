@@ -255,17 +255,18 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
         return web.json_response({"error": {"message": code, "type": "velia_desktop_error"}},
                                  status=status, headers={"Cache-Control": "no-store"})
 
-    def reserve(user_id):
+    def reserve(user_id, *, background=False):
         user_id = str(user_id)
+        active_key = ('background:' if background else '') + user_id
         queue = calls.setdefault(user_id, deque())
         now = time.monotonic()
         while queue and queue[0] < now - 3600:
             queue.popleft()
-        if user_id in active or len(active) >= 2:
+        if active_key in active or len(active) >= 2 or background and any(k.startswith('background:') for k in active):
             return error("preview_capacity_exceeded", 429)
         if len(queue) >= 30:
             return error("preview_hourly_request_limit", 429)
-        active.add(user_id)
+        active.add(active_key)
         queue.append(now)
         return None
 
@@ -444,4 +445,6 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
     app.router.add_get("/desktop-api/v1/models", models)
     app.router.add_post("/desktop-api/v1/chat/completions", complete)
     return {"models": models, "complete": complete, "reserve": reserve,
-            "release": lambda user_id: active.discard(str(user_id))}
+            "release": lambda user_id: active.discard(str(user_id)),
+            "reserve_background": lambda user_id: reserve(user_id, background=True),
+            "release_background": lambda user_id: active.discard("background:"+str(user_id))}

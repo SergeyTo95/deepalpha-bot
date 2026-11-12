@@ -150,6 +150,7 @@ class Session:
     quantum_attachments: bool = False
     quantum_native_tools: bool = False
     selected_model_inputs: bool = False
+    background_jobs: int = 0
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
@@ -208,7 +209,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
         if key not in sessions and len(sessions) >= 256:
             # Credentials remain encrypted in the cookie after cache eviction.
             # Never evict a record while its refresh rotation is in progress.
-            evict = next((k for k, v in sessions.items() if not v.lock.locked()), None)
+            evict = next((k for k, v in sessions.items() if not v.lock.locked() and not v.background_jobs), None)
             if evict is None:
                 raise AuthenticationUnavailable()
             del sessions[evict]
@@ -243,6 +244,20 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             session.selected_model_inputs = identity.get("selected_model_inputs") is True
         request[WEB_SESSION] = session
         return session
+    async def mission_identity(session):
+        # Closed tabs cannot rotate their cookie, so retain the active job's
+        # existing in-memory session and serialize refresh with foreground calls.
+        async with session.lock:
+            if session.id in revoked or session.expires<=time.time():return None
+            if session.access_until<=time.time()+120:
+                status,result=await upstream('POST','/mobile-api/v1/auth/refresh',data={'refresh_token':session.refresh,'device_id':session.device})
+                if status!=200 or result.get('ok') is not True:return None
+                if not valid_session(result):raise AuthenticationUnavailable()
+                session.access,session.refresh=result['access_token'],result['refresh_token']
+                session.access_until=time.time()+result['access_expires_in']
+            identity=await authenticate(session.access)
+            if not identity or identity['user_id']!=session.user_id or not allowed(session.user_id):return None
+            return identity
     async def profile(session):
         account = hashlib.sha256((origin + ":" + str(session.user_id)).encode()).hexdigest()[:24]
         try:
@@ -489,7 +504,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     async def asset(request):
         name = {"/privacy":"privacy.html", "/terms":"terms.html"}.get(
             request.path, request.match_info.get("name", "index.html"))
-        if name not in {"privacy.html", "terms.html", "legal.css", "index.html", "velia-sw.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "badge-96.png", "web-push.mjs", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "notebook.mjs", "notebook-ui.mjs", "pulse.mjs", "pulse-ui.mjs", "pulse-agent.mjs", "place-history.mjs", "place-card.mjs", "notebook-materials.mjs", "place-agent.mjs", "map.mjs", "map-agent.mjs", "map-result.mjs", "map-routing.mjs", "route-planner.mjs", "memory.mjs", "memory-schema.mjs", "memory-ui.mjs", "mini-app-core.mjs", "mini-apps.mjs", "mini-app-ui.mjs", "missions.mjs", "mission-ui.mjs", "visits.mjs", "visit-ui.mjs", "visit-agent.mjs", "leaflet-vendor.js", "leaflet-vendor.css", "leaflet-LICENSE.txt", "features.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "service-icons.mjs", "document-exports.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "finance.mjs", "crm.mjs", "meetings.mjs", "meeting-ui.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
+        if name not in {"privacy.html", "terms.html", "legal.css", "index.html", "velia-sw.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "badge-96.png", "web-push.mjs", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "notebook.mjs", "notebook-ui.mjs", "pulse.mjs", "pulse-ui.mjs", "pulse-agent.mjs", "place-history.mjs", "place-card.mjs", "notebook-materials.mjs", "place-agent.mjs", "map.mjs", "map-agent.mjs", "map-result.mjs", "map-routing.mjs", "route-planner.mjs", "memory.mjs", "memory-schema.mjs", "memory-ui.mjs", "mini-app-core.mjs", "mini-apps.mjs", "mini-app-ui.mjs", "missions.mjs", "mission-ui.mjs", "task-results.mjs", "visits.mjs", "visit-ui.mjs", "visit-agent.mjs", "leaflet-vendor.js", "leaflet-vendor.css", "leaflet-LICENSE.txt", "features.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "service-icons.mjs", "document-exports.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "finance.mjs", "crm.mjs", "meetings.mjs", "meeting-ui.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
             raise web.HTTPNotFound()
         response = web.FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
         if name=="velia-sw.js":response.headers["Service-Worker-Allowed"]="/"
@@ -557,7 +572,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     from desktop.mission_routes import setup_mission_routes
     setup_mission_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response,
         upstream=upstream, upstream_stream=upstream_stream, authorize_model=authorize_model, authenticate=authenticate,
-        handlers=handlers, google=cloud_connections['google'], web_search=web_search, origin=origin)
+        handlers=handlers, google=cloud_connections['google'], web_search=web_search, origin=origin, session_identity=mission_identity)
     for provider, bridge in cloud_connections.items():
         setup_figma_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response,
             connector=bridge, oauth=bridge.oauth, provider=provider, prefix="/web-api/v1/connections/" + provider)
