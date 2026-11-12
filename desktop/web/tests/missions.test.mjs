@@ -81,3 +81,16 @@ test('mission list cleanup detaches both list and detail subscribers',async()=>d
 test('non-JSON errors are friendly and do not expose upstream HTML',async()=>{
   const previous=globalThis.fetch;globalThis.fetch=async()=>new Response('<!DOCTYPE secret>',{status:502});try{await assert.rejects(missionRequest(),e=>!e.message.includes('DOCTYPE')&&e.message.includes('соединение'));}finally{globalThis.fetch=previous;}
 });
+
+test('failed planning retains the goal and offers planning retry without 0 of 0 steps',async()=>dom(async()=>{
+  const m={...mission(),status:'failed',needs_plan:true,planning_error:'mission_invalid_plan',steps:[]};
+  const calls=[],controller=new AbortController(),parent=new Element('div');
+  const client={get:()=>m,watch:()=>()=>{},subscribe:()=>()=>{},action:async(_m,name)=>calls.push(name),refresh:async()=>m};
+  mountMissionCard(parent,{client,id,signal:controller.signal});
+  const text=nodes(parent).map(n=>n.textContent).join(' ');
+  assert.ok(text.includes('План ещё не составлен'));
+  assert.ok(!text.includes('0 из 0'));
+  assert.ok(!text.includes('Опиши конкретный результат'));
+  await find(parent,'Повторить планирование').onclick();
+  assert.deepEqual(calls,['run']);controller.abort();
+}));

@@ -261,7 +261,8 @@ def test_legacy_conversation_request_runs_real_plan_draft_pdf_and_returns_to_sam
             native.append(data)
             assert data['chat_mode']==model.removeprefix('velia-')
             if data['idempotency_key'].startswith('mission:'):
-                text=json.dumps(p,ensure_ascii=False) if ':plan-' in data['idempotency_key'] else '# План запуска\nДни 1–7: каталог. Дни 8–30: проверка продаж.'
+                assert ':plan-' not in data['idempotency_key'], 'standalone document must not depend on model-generated plan JSON'
+                text='# План запуска\n'+'\n'.join(f'День {day}: подготовить и проверить очередной этап запуска магазина. Результат: проверяемый шаг выполнен.' for day in range(1,31))
             else:
                 assert data['content']=='Привет','complex request reached ordinary generator'
                 text='Обычный ответ'
@@ -283,7 +284,7 @@ def test_legacy_conversation_request_runs_real_plan_draft_pdf_and_returns_to_sam
             assert response.status==200 and 'Приняла задачу' in text and '[DONE]' in text and 'Задача выполнена' not in text
             id=response.headers['X-Velia-Mission-Id'];m=await wait_for(store,id,'completed')
             assert m['time_zone']=='Europe/Istanbul' and m['source']['chat_id']==cid and foreground==[]
-            assert len(native)==2
+            assert len(native)==1
             history=await (await client.get('/web-api/v1/conversations/'+cid+'/messages',headers=HEAD)).json()
             assert len(history['messages'])==3 and 'Задача выполнена' in history['messages'][-1]['content']
             assert 'Скачать PDF' in history['messages'][-1]['content']
@@ -291,7 +292,7 @@ def test_legacy_conversation_request_runs_real_plan_draft_pdf_and_returns_to_sam
             file=await client.get('/web-api/v1/missions/'+id+'/files/s2',headers=HEAD)
             assert file.status==200 and (await file.read()).startswith(b'%PDF')
             repeated=await client.post(url,json=body,headers=HEAD)
-            assert repeated.status==200 and repeated.headers['X-Velia-Mission-Id']==id and len(native)==2
+            assert repeated.status==200 and repeated.headers['X-Velia-Mission-Id']==id and len(native)==1
             assert (await client.get('/web-api/v1/missions/'+id+'/files/s2',headers={'X-User':'8'})).status==404
             normal=await client.post(url,json={**body,'content':'Привет','idempotency_key':str(uuid.uuid4()),'web_search':False},headers=HEAD)
             assert normal.status==200 and 'X-Velia-Mission-Id' not in normal.headers and 'Обычный ответ' in await normal.text()

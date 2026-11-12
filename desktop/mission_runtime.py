@@ -103,6 +103,9 @@ class MissionTools:
                     if source is not None:await source.aclose()
                 finally:self.handlers.get('release_background',self.handlers['release'])(session.user_id)
     async def plan(self,session,m,save_conversation):
+        from desktop.mission_delivery import document_plan
+        compiled=document_plan(m['goal'])
+        if compiled is not None:return compiled
         step={'id':'plan-'+str(m.get('plan_generation',0)),'arguments':{'instruction':'Составь план миссии'}}
         raw=await self.draft(session,m,step,save_conversation,planning=True)
         from desktop.mission_delivery import parse_plan
@@ -132,7 +135,13 @@ class MissionTools:
         elif name=='calendar.list':
             data=await self.google_call(session,m,step,'calendar_events_list',a);require(isinstance(data.get('events'),list),'mission_tool_unconfirmed',502);evidence.update(kind='calendar_read')
         elif name=='text.draft':
-            data={'text':await self.draft(session,m,step,save_conversation)};kind='draft';evidence.update(kind='generated_draft',semantic_review_required=True)
+            content=await self.draft(session,m,step,save_conversation)
+            from desktop.mission_delivery import document_plan
+            # A short acknowledgement is not a detailed document. Preserve the
+            # failed step for an explicit retry; do not export it as a finished PDF.
+            if document_plan(m['goal']) is not None and any(word in m['goal'].casefold() for word in ('подробн','детальн','detailed')):
+                require(len(content.strip())>=300,'mission_draft_incomplete',502)
+            data={'text':content};kind='draft';evidence.update(kind='generated_draft',semantic_review_required=True)
         elif name=='document.export':
             content=self.source(m,step);body=await asyncio.to_thread(export_document,a['format'],content,a['title']);require(isinstance(body,bytes) and 0<len(body)<=512*1024,'mission_file_too_large',413)
             sha=hashlib.sha256(body).hexdigest();file=base64.b64encode(body).decode();kind='file';data={'format':a['format'],'title':a['title'],'bytes':len(body),'sha256':sha,'source_step':a['source_step']};evidence.update(kind='file_created',sha256=sha)
