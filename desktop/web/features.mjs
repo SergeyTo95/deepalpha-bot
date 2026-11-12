@@ -360,6 +360,9 @@ export function setupFeatures({notebook,pulse,webPush,openPulseResource=()=>{},o
         mountTokenPurchase(body,results[2].status==='fulfilled'?results[2].value:null, {
           billing:results[3].status==='fulfilled'?results[3].value:null,
           account:results[4].status==='fulfilled'?results[4].value:null,
+          billingError:results[3].status==='rejected'?results[3].reason:null,
+          accountError:results[4].status==='rejected'?results[4].reason:null,
+          onRefresh:()=>{if(ticket===epoch && section==='balance')open('balance');},
           request:call,isCurrent:()=>ticket===epoch && section==='balance' && signedIn(),
         });
       } else if (name === 'studio') await studio(body);

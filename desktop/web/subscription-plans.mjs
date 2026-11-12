@@ -43,7 +43,7 @@ const errors = {
   billing_product_mismatch:'Параметры тарифа изменились. Обнови раздел перед оплатой.',
 };
 
-export function mountSubscriptionPlans(root, {billing=null, account=null, request=null,
+export function mountSubscriptionPlans(root, {billing=null, account=null, billingError=null, accountError=null, onRefresh=null, request=null,
     isCurrent=()=>true, navigate=url=>globalThis.location.assign(url)}={}) {
   const section = element('section', undefined, 'feature-card subscription-plans');
   const header = element('div',undefined,'subscription-heading');
@@ -53,9 +53,25 @@ export function mountSubscriptionPlans(root, {billing=null, account=null, reques
   section.append(header);
   const enabled = billing?.ok===true && billing.enabled===true && billing.mode==='prod' && account?.ok===true && typeof request==='function';
   const canManage = account?.ok===true && typeof request==='function' && (enabled || account.can_manage===true);
+  const unavailable = {
+    billing_not_configured:'Оплата пока не включена. Поддержка проверяет настройки Creem.',
+    billing_webhook_not_ready:'Оплата недоступна: подключение подтверждений платежей ещё не готово.',
+    billing_product_mismatch:'Оплата недоступна: настройки тарифа на платёжной стороне требуют проверки.',
+    billing_provider_unavailable:'Платёжный сервис временно недоступен. Попробуй обновить статус.',
+    billing_provider_credentials:'Подключение к платёжному сервису требует проверки. Попробуй позже.',
+    billing_upstream_invalid_response:'Не удалось подключиться к серверу оплаты. Попробуй обновить статус.',
+  };
+  const reason = billingError?.code || billing?.unavailable_reason;
+  const unavailableText = unavailable[reason] || (accountError ?
+    'Не удалось проверить подписку аккаунта. Попробуй обновить статус.' :
+    'Оплата временно недоступна. Попробуй обновить статус или обратись в support@velyoncore.ai.');
   const notice = element('p', enabled ? 'Ежемесячная подписка · отмена продления в любой момент' :
-    'Онлайн-оплата подключается. Тарифы уже доступны для ознакомления.', 'subscription-notice');
+    unavailableText, 'subscription-notice');
   section.append(notice);
+  if (!enabled && typeof onRefresh==='function') {
+    const retry = element('button','Проверить оплату ещё раз','subscription-manage'); retry.type='button';
+    retry.addEventListener('click',()=>{if(isCurrent())onRefresh();}); section.append(retry);
+  }
   const grid = element('div', undefined, 'subscription-grid');
   const feedback = element('p','', 'subscription-feedback');
   feedback.setAttribute('role','status'); feedback.setAttribute('aria-live','polite');
@@ -75,7 +91,7 @@ export function mountSubscriptionPlans(root, {billing=null, account=null, reques
       if (!result?.ok) throw Error(result?.error||'Не удалось открыть оплату.');
       navigate(paymentDestination(portal?result.portal_url:result.checkout_url,portal));
     } catch (error) {
-      if (isCurrent() && error.name!=='AbortError') feedback.textContent = errors[error.message] ||
+      if (isCurrent() && error.name!=='AbortError') feedback.textContent = errors[error.code] || errors[error.message] || unavailable[error.code] ||
         'Не удалось открыть оплату. Обнови раздел или обратись в support@velyoncore.ai. Повторного списания здесь не выполняется.';
     } finally {
       busy = false;
@@ -96,6 +112,7 @@ export function mountSubscriptionPlans(root, {billing=null, account=null, reques
     const current = account?.plan_code===plan.code;
     const button = element('button',current?'Управлять подпиской':'Выбрать '+plan.name,'feature-primary');
     const existing = account?.has_active_subscription===true;
+    if (!enabled && !existing) button.textContent='Оплата недоступна';
     if (existing && !current) button.textContent='Подписка уже оформлена';
     button.type = 'button'; button.disabled = existing ? (!current || !canManage) : !enabled;
     button.setAttribute('aria-label',current?'Управлять подпиской '+plan.name:'Оформить подписку '+plan.name);

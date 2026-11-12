@@ -1069,6 +1069,7 @@ def test_browser_shell_carries_a_public_client_version_without_model_calls(monke
             assert response.status==200 and response.headers['Cache-Control']=='no-store'
             html=await response.text();version=re.search(r'data-client-version="([a-f0-9]{64})"',html).group(1)
             assert '/web/app.mjs?v='+version+'"' in html
+            assert '/web/style.css?v='+version+'"' in html
             response=await client.get(server.make_url('/web-api/v1/client-version'))
             assert response.status==200 and response.headers['Cache-Control']=='no-store'
             assert await response.json()=={'ok':True,'version':version}
