@@ -33,7 +33,7 @@ COPY tests/test_velia_meetings.py /app/tests/test_velia_meetings.py
 COPY tests/test_velia_map_routing.py /app/tests/test_velia_map_routing.py
 COPY tests/test_velia_web_memory.py /app/tests/test_velia_web_memory.py
 COPY tests/test_velia_inline_apps.py /app/tests/test_velia_inline_apps.py
-COPY desktop/mission_delivery.py desktop/mission_schema.py desktop/mission_store.py desktop/mission_runtime.py desktop/mission_routes.py /app/desktop/
+COPY desktop/mission_chat.py desktop/mission_delivery.py desktop/mission_schema.py desktop/mission_store.py desktop/mission_runtime.py desktop/mission_routes.py /app/desktop/
 COPY tests/test_velia_missions.py tests/test_velia_task_delivery.py /app/tests/
 COPY desktop/finance.py desktop/finance_assets.py desktop/finance_store.py desktop/finance_routes.py /app/desktop/
 COPY tests/test_velia_finance.py tests/test_velia_finance_assets.py /app/tests/

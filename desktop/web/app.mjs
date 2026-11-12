@@ -40,7 +40,7 @@ import {validateAppState,appSummary} from './mini-app-core.mjs';
 import {miniAppNode} from './mini-app-ui.mjs';
 import {setupMissionClient,wantsMission,wantsBackgroundTask,activeMission,missionClarification} from './missions.mjs';
 import {mountMissionCard} from './mission-ui.mjs';
-import {mergeMissionMessages,missionMessageContext} from './task-results.mjs';
+import {mergeMissionMessages,missionMessageContext,missionHistoryMetadata} from './task-results.mjs';
 const $ = (id) => document.getElementById(id);
 const icons = {
   attachment: "M21 11l-8 8a6 6 0 0 1-8-8l9-9a4 4 0 0 1 6 6l-9 9a2 2 0 0 1-3-3l8-8",
@@ -935,6 +935,7 @@ async function openChat(chat, background = false) {
       const previous = chat.messages;
       chat.messages = data.messages.map((m, i) => ({
         role: m.role, content: m.role === "assistant" ? cleanAssistantHistory(m.content) : m.content || "", serverId:m.id, sentAt:Date.parse(m.created_at),
+        ...missionHistoryMetadata(m),
         attachmentIds: m.attachments?.map(a=>a.id) || previous[i]?.attachmentIds || [], fileNames: m.attachments?.map(a=>a.name).filter(Boolean) || previous[i]?.fileNames || [],
         requestId: previous[i]?.role === m.role && previous[i]?.content === m.content ? previous[i]?.requestId : undefined,
         model: m.chat_mode === "quantum" ? "velia-quantum" : m.chat_mode === "flash" ? "velia-flash" : "velia-pro",
@@ -1056,6 +1057,10 @@ async function applyProfile(value) {
   setModel(model);
   render();
   syncHistory();
+  const taskId=new URL(location.href).searchParams.get('task');
+  if(taskId&&/^[0-9a-f-]{36}$/u.test(taskId)){
+    features.open('autopilot',{tab:'missions',missionId:taskId});const target=new URL(location.href);target.searchParams.delete('task');history.replaceState(null,'',target);
+  }
   const notificationId=new URL(location.href).searchParams.get('pulse');
   if(notificationId){features.open('pulse',{notification_id:notificationId});const target=new URL(location.href);target.searchParams.delete('pulse');history.replaceState(null,'',target);}
 }
@@ -1565,6 +1570,10 @@ async function generate(retry = false, voiceTurn = false) {
       scheduleSave();
     } else {
     const response = await request(!profile ? "guest/chat/completions" : chat.remote ? "conversations/" + chat.id + "/messages/stream" : privateTurn ? (chat.missionPrivate?'missions/plan':chat.miniAppPrivate?'apps/plan':'map/plan') : "chat/completions", payload, abort.signal);
+    const routedTask=response.headers.get('X-Velia-Mission-Id');
+    if(profile&&routedTask&&/^[0-9a-f-]{36}$/u.test(routedTask)){
+      user.missionOrigin=routedTask;answer.missionId=routedTask;answer.missionAck=routedTask;answer.missionTurn=true;answer.local=true;chat.missionPrivate=true;missions.poll().catch(()=>{});
+    }
     if (!profile && guest && response.headers.has("X-Velia-Guest-Remaining")) {
       guest.remaining = Number(response.headers.get("X-Velia-Guest-Remaining"));
       renderGuestCounter();

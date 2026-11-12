@@ -7,7 +7,7 @@ import time
 import uuid
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from desktop.mission_schema import MissionError,require,TOOLS,digest
-from desktop.account_routes import account_events
+from desktop.account_routes import account_events,ERRORS
 from desktop.document_exports import export_document,MIME
 
 class MissionTools:
@@ -86,7 +86,10 @@ class MissionTools:
             events=account_events(source,m['model']);answer='';complete=False
             async for frame in events:
                 if not frame.startswith(b'data: ') or b'[DONE]' in frame:continue
-                value=json.loads(frame[6:]);require(not value.get('error'),'mission_model_unavailable',503)
+                value=json.loads(frame[6:])
+                if value.get('error'):
+                    code=value['error'].get('message') if isinstance(value['error'],dict) else None
+                    raise MissionError(code if code in ERRORS else 'mission_model_unavailable',503)
                 if value.get('reset'):answer=''
                 choice=(value.get('choices') or [{}])[0];answer+=choice.get('delta',{}).get('content','')
                 require(len(answer)<=8000,'mission_result_too_large',502)
