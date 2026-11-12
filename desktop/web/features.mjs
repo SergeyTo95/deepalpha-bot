@@ -12,6 +12,7 @@ import {mountWork} from './work.mjs';
 import {mountAgentix} from './agentix.mjs';
 import {mountFigma} from './figma.mjs';
 import {mountConnections,mountGithubRepositories} from './connections.mjs';
+import {mountTokenPurchase} from './token-purchase.mjs';
 
 export const SECTIONS = Object.freeze([
   ['studio', 'Studio'], ['projects', 'Проекты'], ['research', 'Исследования'],
@@ -346,7 +347,17 @@ export function setupFeatures({notebook,pulse,webPush,openPulseResource=()=>{},o
           }
         }
       } else if (name === 'balance') {
-        const results = await Promise.all([call('economy/me'),call('usage')]); if(ticket!==epoch)return; body.replaceChildren(...results.map((r,i)=>{const card=node('article',undefined,'feature-card');card.append(node('h3',i===0?'Твой баланс':'Использование'),display(r.account||r.usage||r));return card;}));
+        const results = await Promise.allSettled([call('economy/me'),call('usage'),call('economy/catalog')]);
+        if(ticket!==epoch)return;
+        body.replaceChildren();
+        for (const [index,result] of results.slice(0,2).entries()) {
+          const card=node('article',undefined,'feature-card');
+          card.append(node('h3',index===0?'Твой баланс':'Использование'));
+          if(result.status==='fulfilled')card.append(display(result.value.account||result.value.usage||result.value));
+          else card.append(node('p',index===0?'Не удалось загрузить баланс. Обнови раздел.':'Статистика временно недоступна.','field-hint'));
+          body.append(card);
+        }
+        mountTokenPurchase(body,results[2].status==='fulfilled'?results[2].value:null);
       } else if (name === 'studio') await studio(body);
       else if (name === 'research' || name === 'medical') {
         await topicHistory(name, body, ticket);
