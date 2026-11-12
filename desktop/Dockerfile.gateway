@@ -42,6 +42,8 @@ COPY tests/test_velia_figma.py tests/test_velia_figma_oauth.py /app/tests/
 COPY tests/test_velia_voice_transcription.py /app/tests/test_velia_voice_transcription.py
 RUN python -m pytest -q -p no:cacheprovider tests/test_velia_voice_transcription.py
 COPY services/velia_structured_output.py /app/services/velia_structured_output.py
+# Read-only source for the public/account price consistency check; not imported.
+COPY services/velia_mobile_commercial_service.py /app/services/velia_mobile_commercial_service.py
 COPY desktop/probe_web_voice.py /app/desktop/probe_web_voice.py
 COPY tests/test_velia_voice_transport.py /app/tests/test_velia_voice_transport.py
 COPY tests/test_velia_voice_channel.py /app/tests/test_velia_voice_channel.py
