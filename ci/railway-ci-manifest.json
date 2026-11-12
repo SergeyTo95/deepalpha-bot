@@ -69,5 +69,12 @@
       4
     ],
     "sha256": "78000b16e8f68c1924afca91f2bdcb1fb97374acfe00de0f2d4660afe6a1b85c"
+  },
+  "velia-creem-billing.yml": {
+    "group": "backend",
+    "steps": [
+      3
+    ],
+    "sha256": "426ef01b9dad63cd1a4202b413baee21ca759e749d86eb58aeecb8f683ef3ff4"
   }
 }
