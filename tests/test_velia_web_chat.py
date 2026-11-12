@@ -970,3 +970,18 @@ def test_notification_session_exposes_only_an_authenticated_account_fingerprint(
             state['validity']=False
             assert (await client.get(url,headers=headers(cookie))).status==401
     asyncio.run(scenario())
+
+
+def test_browser_shell_carries_a_public_client_version_without_model_calls(monkeypatch):
+    import re
+    async def scenario():
+        async with fixture(monkeypatch) as (server,client,state):
+            response=await client.get(server.make_url('/'))
+            assert response.status==200 and response.headers['Cache-Control']=='no-store'
+            html=await response.text();version=re.search(r'data-client-version="([a-f0-9]{64})"',html).group(1)
+            response=await client.get(server.make_url('/web-api/v1/client-version'))
+            assert response.status==200 and response.headers['Cache-Control']=='no-store'
+            assert await response.json()=={'ok':True,'version':version}
+            assert (await client.get(server.make_url('/web/client-updates.mjs'))).status==200
+            assert state['payloads']==[]
+    asyncio.run(scenario())

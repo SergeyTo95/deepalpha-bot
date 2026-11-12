@@ -1759,3 +1759,5 @@ dialog::backdrop {
 
 /* Durable mission progress and exact-action approval. */
 .mission-card{margin-block:20px;min-width:0}.mission-state{font-weight:600}.mission-steps{padding-inline-start:24px}.mission-steps>li{padding:12px 0;border-bottom:1px solid var(--border,#333)}.mission-steps>li>small{display:block;opacity:.7;margin:6px 0}.mission-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto}.mission-approval{padding:16px;margin-top:12px;border:1px solid var(--border,#555);border-radius:14px}.mission-approval button{margin-top:12px}.mission-file{display:inline-block;margin:12px 0}.mission-card details{margin-top:10px}.mission-card a{overflow-wrap:anywhere}.mission-card .feature-actions{flex-wrap:wrap;gap:8px}
+
+.client-update{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-shrink:0;padding:12px 24px;border-block:1px solid var(--line);background:var(--panel);color:var(--text)}.client-update[hidden]{display:none}.client-update button{padding:8px 14px;border:1px solid var(--line);border-radius:10px;background:var(--user);color:var(--text);cursor:pointer}

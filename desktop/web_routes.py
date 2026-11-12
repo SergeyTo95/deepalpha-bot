@@ -157,6 +157,10 @@ class Session:
 def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_session,
                      json_response, handlers, account_balance, authorize_model, upstream_stream,
                      web_search=None, browser_agent_run=None, browser_takeover=None, binary_upstream=None):
+    client_digest=hashlib.sha256()
+    for path in sorted([*STATIC.glob('*.mjs'),STATIC/'index.html',STATIC/'style.css']):
+        client_digest.update(path.name.encode()+b'\0'+path.read_bytes())
+    client_version=client_digest.hexdigest()
     cipher = Fernet(os.environ["VELIA_WEB_SESSION_KEY"].encode())
     sessions, exchanges, revoked = {}, deque(), {}
     def decode(request):
@@ -504,9 +508,12 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     async def asset(request):
         name = {"/privacy":"privacy.html", "/terms":"terms.html"}.get(
             request.path, request.match_info.get("name", "index.html"))
-        if name not in {"privacy.html", "terms.html", "legal.css", "index.html", "velia-sw.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "badge-96.png", "web-push.mjs", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "notebook.mjs", "notebook-ui.mjs", "pulse.mjs", "pulse-ui.mjs", "pulse-agent.mjs", "place-history.mjs", "place-card.mjs", "notebook-materials.mjs", "place-agent.mjs", "map.mjs", "map-agent.mjs", "map-result.mjs", "map-routing.mjs", "route-planner.mjs", "memory.mjs", "memory-schema.mjs", "memory-ui.mjs", "mini-app-core.mjs", "mini-apps.mjs", "mini-app-ui.mjs", "missions.mjs", "mission-ui.mjs", "task-results.mjs", "visits.mjs", "visit-ui.mjs", "visit-agent.mjs", "leaflet-vendor.js", "leaflet-vendor.css", "leaflet-LICENSE.txt", "features.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "service-icons.mjs", "document-exports.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "finance.mjs", "crm.mjs", "meetings.mjs", "meeting-ui.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
+        if name not in {"privacy.html", "terms.html", "legal.css", "index.html", "velia-sw.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "badge-96.png", "web-push.mjs", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "notebook.mjs", "notebook-ui.mjs", "pulse.mjs", "pulse-ui.mjs", "pulse-agent.mjs", "place-history.mjs", "place-card.mjs", "notebook-materials.mjs", "place-agent.mjs", "map.mjs", "map-agent.mjs", "map-result.mjs", "map-routing.mjs", "route-planner.mjs", "memory.mjs", "memory-schema.mjs", "memory-ui.mjs", "mini-app-core.mjs", "mini-apps.mjs", "mini-app-ui.mjs", "missions.mjs", "mission-ui.mjs", "task-results.mjs", "client-updates.mjs", "visits.mjs", "visit-ui.mjs", "visit-agent.mjs", "leaflet-vendor.js", "leaflet-vendor.css", "leaflet-LICENSE.txt", "features.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "service-icons.mjs", "document-exports.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "finance.mjs", "crm.mjs", "meetings.mjs", "meeting-ui.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
             raise web.HTTPNotFound()
-        response = web.FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
+        if name=='index.html':
+            html=(STATIC/name).read_text().replace('<html ', '<html data-client-version="'+client_version+'" ',1)
+            response=web.Response(text=html,content_type='text/html',headers={'Cache-Control':'no-store'})
+        else:response = web.FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
         if name=="velia-sw.js":response.headers["Service-Worker-Allowed"]="/"
         if name=="manifest.webmanifest":response.content_type="application/manifest+json"
         response.headers.update({"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
@@ -516,6 +523,8 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
                 "base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
             "Permissions-Policy": "camera=(), microphone=(self), geolocation=(self)"})
         return response
+    async def client_version_status(request):return json_response({'ok':True,'version':client_version})
+    app.router.add_get('/web-api/v1/client-version',client_version_status)
     app.router.add_get("/", asset)
     app.router.add_get("/privacy", asset)
     app.router.add_get("/terms", asset)
