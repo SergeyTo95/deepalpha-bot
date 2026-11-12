@@ -701,6 +701,34 @@ def test_public_privacy_and_terms_are_accessible_without_login_and_linked_from_h
     asyncio.run(scenario())
 
 
+def test_purchase_return_is_public_and_ignores_forged_checkout_claims(monkeypatch):
+    async def scenario():
+        async with fixture(monkeypatch) as (server, client, state):
+            async with client.get(server.make_url('/thanks')) as response:
+                assert response.status == 200
+                assert response.content_type == 'text/html'
+                assert response.headers['Cache-Control'] == 'no-store'
+                assert response.headers['Referrer-Policy'] == 'no-referrer'
+                assert response.headers['X-Robots-Tag'] == 'noindex, nofollow'
+                assert "frame-ancestors 'none'" in response.headers['Content-Security-Policy']
+                original = await response.text()
+                assert '<html lang="en">' in original
+                assert 'Thank you for' in original and 'Return to VELIA' in original
+                assert 'href="/"' in original and 'mailto:support@velyoncore.ai' in original
+                assert '<script' not in original and '<form' not in original
+            for path in ('/thanks?status=paid&amount=0&plan=max&credits=999999&signature=forged',
+                         '/thanks?checkout_id=%3Cscript%3Ealert(1)%3C%2Fscript%3E',
+                         '/web/thanks.html?status=completed'):
+                async with client.get(server.make_url(path)) as response:
+                    assert response.status == 200 and await response.text() == original
+                    assert response.headers['Cache-Control'] == 'no-store'
+            assert (await client.post(server.make_url('/thanks'), json={'status': 'paid'})).status == 405
+            assert (await client.get(server.make_url('/web/thanks.css'))).status == 200
+            assert state['tokens'] == 100 and state['credits'] == 100
+            assert state['account_calls'] == [] and state['payloads'] == [] and state['seen'] == []
+    asyncio.run(scenario())
+
+
 def test_public_credit_prices_match_the_existing_account_catalog():
     import ast
     from html.parser import HTMLParser

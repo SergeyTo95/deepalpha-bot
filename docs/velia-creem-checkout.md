@@ -81,3 +81,22 @@ If Cloudflare challenges requests, inspect the route-specific WAF configuration;
 do not disable general site protection or trust source IP in place of signatures.
 
 Official webhook reference: https://docs.creem.io/code/webhooks
+
+## Shared English purchase-return page
+
+After manually deploying this revision, all subscription and top-up products can
+use `https://velyoncore.ai/thanks` as their optional Return URL. The page links
+back to VELIA and to support. It is public, English, responsive, noindex and
+no-store, with no scripts, trackers, forms or external assets. Its no-referrer
+policy prevents checkout query parameters being forwarded in link referrers.
+
+The page does not read or display checkout query parameters, announce verified
+payment success, poll a nonexistent billing-status API, or mutate account state.
+The same content is returned for direct visits and forged success/amount/plan
+parameters. This return page is not a payment receipt and does not enable live
+purchases: authoritative webhook fulfillment is still required.
+
+Product setup for this release: keep usage-based charges, trial periods, extra
+checkout fields, abandoned-cart emails and automatic affiliate enrollment off.
+Use the existing plan and package prices; taxes are excluded as in the pricing
+proposal. SaaS is the software category if the dashboard offers it.
