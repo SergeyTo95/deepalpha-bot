@@ -649,10 +649,16 @@ def test_public_privacy_and_terms_are_accessible_without_login_and_linked_from_h
                 home = await response.text()
                 assert home.count('href="/privacy"') >= 2
                 assert home.count('href="/terms"') >= 2
+                assert home.count('href="/pricing"') >= 2
+                assert home.count('href="/content-policy"') >= 2
+                assert 'mailto:support@velyoncore.ai' in home
+                assert 'velyoncore@gmail.com' not in home
                 assert 'Google Calendar, Gmail, Drive, Docs, and Sheets' in home
             for path, title, evidence in (
                 ('/privacy', 'Privacy Policy', 'Limited Use'),
                 ('/terms', 'Terms of Service', 'Connected services and Google permissions'),
+                ('/pricing', 'Usage credit pricing', '$109.99'),
+                ('/content-policy', 'Content Policy', 'Sexually explicit content is prohibited'),
             ):
                 async with client.get(server.make_url(path)) as response:
                     assert response.status == 200
@@ -662,8 +668,17 @@ def test_public_privacy_and_terms_are_accessible_without_login_and_linked_from_h
                     page = await response.text()
                     assert '<html lang="en">' in page
                     assert title in page and evidence in page
-                    assert 'velyoncore@gmail.com' in page
+                    assert 'support@velyoncore.ai' in page
+                    assert 'velyoncore@gmail.com' not in page
                     assert 'href="/privacy"' in page and 'href="/terms"' in page
+                    if path == '/terms':
+                        assert 'Sexually explicit content is prohibited' in page
+                        assert 'href="/content-policy"' in page
+                        assert 'href="/pricing"' in page
+                    if path == '/pricing':
+                        assert 'Purchases are not enabled yet' in page
+                        assert 'Баланс и использование' in page
+                        assert '<script' not in page
             async with client.get(server.make_url('/web/legal.css')) as response:
                 assert response.status == 200
                 assert response.content_type == 'text/css'
@@ -671,6 +686,38 @@ def test_public_privacy_and_terms_are_accessible_without_login_and_linked_from_h
                 assert response.status == 404
             assert state['payloads'] == []
     asyncio.run(scenario())
+
+
+def test_public_credit_prices_match_the_existing_account_catalog():
+    import ast
+    from html.parser import HTMLParser
+    from pathlib import Path
+
+    class Prices(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.rows, self.row, self.capture = [], [], False
+        def handle_starttag(self, tag, attrs):
+            if tag == 'tr':
+                self.row = []
+            if tag in {'td', 'th'}:
+                self.capture = True
+        def handle_endtag(self, tag):
+            if tag in {'td', 'th'}:
+                self.capture = False
+            if tag == 'tr' and self.row:
+                self.rows.append(self.row)
+        def handle_data(self, data):
+            if self.capture:
+                self.row.append(data)
+
+    root = Path(__file__).resolve().parents[1]
+    source = ast.parse((root / 'services/velia_mobile_commercial_service.py').read_text())
+    catalog = next(ast.literal_eval(item.value) for item in source.body
+                   if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name) and item.target.id == 'TOPUPS')
+    parser = Prices()
+    parser.feed((root / 'desktop/web/pricing.html').read_text())
+    assert parser.rows[1:] == [[f"{item['credits']:,} credits", f"${item['store_price_usd']:.2f}"] for item in catalog]
 
 
 def test_unauthenticated_browser_cannot_use_models_or_read_assets(monkeypatch):
