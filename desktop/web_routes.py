@@ -601,6 +601,8 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     app.router.add_get("/.well-known/velia/vercel.json", client_metadata)
     from desktop.account_routes import setup_account_routes
     from desktop.feature_routes import setup_feature_routes
+    from desktop.creem_test_webhook import setup_creem_test_webhook
+    setup_creem_test_webhook(app)
     setup_feature_routes(app, session_for=session_for, same_origin=same_origin, upstream=upstream,
         json_response=json_response, binary_upstream=binary_upstream, origin=origin)
     setup_account_routes(app, session_for=session_for, same_origin=same_origin, upstream=upstream,
