@@ -18,6 +18,19 @@ CODE = "ABCDEFGH23456789"
 ORIGIN = "https://velia.example.com"
 
 
+def test_gateway_registers_unconfigured_test_webhook_without_browser_session(monkeypatch):
+    from desktop.creem_test_webhook import PATH
+    async def scenario():
+        monkeypatch.delenv('VELIA_CREEM_TEST_WEBHOOK_SECRET', raising=False)
+        async with fixture(monkeypatch) as context:
+            # Use the same gateway fixture as the browser session acceptance tests.
+            server, client, _ = context
+            response = await client.post(server.make_url(PATH), json={'id': 'evt_test'})
+            assert response.status == 503
+            assert (await response.json())['error'] == 'creem_test_not_configured'
+    asyncio.run(scenario())
+
+
 @asynccontextmanager
 async def fixture(monkeypatch, **state):
     state.setdefault("user_id", 7)
