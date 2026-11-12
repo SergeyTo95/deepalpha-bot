@@ -117,7 +117,9 @@ def setup_mission_routes(app,*,session_for,same_origin,json_response,upstream,up
                 final=await asyncio.to_thread(store.detail,user,id)
                 code=final.get('planning_error') or next((s.get('error') for s in final['steps'] if s.get('error')),None) or 'none'
                 if not re.fullmatch(r'[a-z0-9_]{1,80}',str(code)):code='mission_step_failed'
-                logging.getLogger(__name__).info('VELIA_MISSION_STATE task_id=%s model=%s state=%s code=%s completed=%d total=%d',id,final['model'],final['status'],code,sum(s['status']=='completed' for s in final['steps']),len(final['steps']))
+                logger=logging.getLogger(__name__)
+                log=logger.warning if final['status'] in {'failed','interrupted','uncertain'} else logger.info
+                log('VELIA_MISSION_STATE task_id=%s model=%s state=%s code=%s completed=%d total=%d',id,final['model'],final['status'],code,sum(s['status']=='completed' for s in final['steps']),len(final['steps']))
             except Exception:pass
             # The result is already durable before any notification is attempted.
             if not asyncio.current_task().cancelling():flush(session)

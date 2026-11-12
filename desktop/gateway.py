@@ -490,6 +490,8 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
         filter_stream=public_web_stream, authorize_model=authorize_model, enrich_payload=enrich_web,
         quantum_browser=native_quantum_browser,
         quantum_search=web_search.search if web_search and web_search.available else None)
+    from desktop.mission_generation import generate_text
+    handlers['generate_background'] = generate_text
     if os.getenv("VELIA_WEB_ENABLED", "").lower() in {"true", "1"}:
         origin = web_origin or https_origin(os.environ["VELIA_WEB_ORIGIN"])
         agent_available = (
