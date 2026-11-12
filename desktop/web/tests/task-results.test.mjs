@@ -70,3 +70,15 @@ test('ordinary follow-up receives actual task state without approval tokens or i
   const {missionMessageContext}=await import('../task-results.mjs');const m=fixture();m.status='awaiting_approval';m.lease='INTERNAL_LEASE';m.steps[1].approval={token:'APPROVAL_SECRET'};
   const text=missionMessageContext({missionId:mid,content:'Приняла задачу'},m);assert.match(text,/awaiting_approval/);assert.doesNotMatch(text,/APPROVAL_SECRET|INTERNAL_LEASE/);assert.match(text,/обычный ответ в чате не разрешает/);
 });
+
+test('typed task markers from native history do not duplicate a delivered result',async()=>{
+  const {missionHistoryMetadata}=await import('../task-results.mjs');const m=fixture(),n=notice();
+  const chats=[{id:cid,title:'Исходный диалог',updated:1,messages:[
+    {role:'user',content:m.goal,...missionHistoryMetadata({role:'user',mission_id:mid,mission_origin:true})},
+    {role:'assistant',content:'Приняла задачу',...missionHistoryMetadata({role:'assistant',mission_id:mid,mission_ack:true})},
+    {role:'assistant',content:'Готово',...missionHistoryMetadata({role:'assistant',mission_id:mid,mission_event_id:nid})}
+  ]}];
+  assert.equal(mergeMissionMessages(chats,m,[n]),false);assert.equal(chats[0].messages.length,3);
+  assert.deepEqual(missionHistoryMetadata({mission_id:'bad'}),{});
+  assert.equal(wantsBackgroundTask('Создай PDF с планом'),true);
+});

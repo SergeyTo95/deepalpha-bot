@@ -78,7 +78,7 @@ class MissionStore(GuestStore):
             old=next((m for m in doc['missions'] if m['request_id']==key),None)
             if old:require(old['request_hash']==fingerprint,'mission_request_conflict',409);return old
             require(len(doc['missions'])<10,'mission_limit',429)
-            now=self.clock();m={'id':str(uuid.uuid4()),'goal':goal,'title':plan['title'] if plan else goal[:120],'model':model,'time_zone':zone,'request_id':key,'request_hash':fingerprint,'revision':1,'created_at':now,'updated_at':now,'status':'draft','lease':None,'lease_until':0,'conversation_id':None,'source':deepcopy(source),'context':context,'needs_plan':plan is None,'plan_generation':0,'question':None,'notices':[],
+            now=self.clock();m={'id':str(uuid.uuid4()),'goal':goal,'original_goal':goal,'title':plan['title'] if plan else goal[:120],'model':model,'time_zone':zone,'request_id':key,'request_hash':fingerprint,'revision':1,'created_at':now,'updated_at':now,'status':'draft','lease':None,'lease_until':0,'conversation_id':None,'source':deepcopy(source),'context':context,'needs_plan':plan is None,'plan_generation':0,'question':None,'notices':[],
               'steps':[{**deepcopy(s),'status':'pending','result':None,'error':None,'approval':None,'approved':None} for s in (plan['steps'] if plan else [])]}
             doc['missions'].insert(0,m);return m
         return self.transaction(user,change)
@@ -211,7 +211,7 @@ class MissionStore(GuestStore):
     @staticmethod
     def public(m,*,summary=False):
         value=deepcopy(m)
-        for k in ('lease','lease_until','conversation_id','request_id','request_hash','notices','context','last_answer'):value.pop(k,None)
+        for k in ('lease','lease_until','conversation_id','request_id','request_hash','notices','context','last_answer','original_goal'):value.pop(k,None)
         for step in value['steps']:
             step.pop('approved',None)
             step.pop('dispatched',None)

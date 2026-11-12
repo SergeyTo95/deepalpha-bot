@@ -511,7 +511,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
         if name not in {"privacy.html", "terms.html", "legal.css", "index.html", "velia-sw.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "badge-96.png", "web-push.mjs", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "notebook.mjs", "notebook-ui.mjs", "pulse.mjs", "pulse-ui.mjs", "pulse-agent.mjs", "place-history.mjs", "place-card.mjs", "notebook-materials.mjs", "place-agent.mjs", "map.mjs", "map-agent.mjs", "map-result.mjs", "map-routing.mjs", "route-planner.mjs", "memory.mjs", "memory-schema.mjs", "memory-ui.mjs", "mini-app-core.mjs", "mini-apps.mjs", "mini-app-ui.mjs", "missions.mjs", "mission-ui.mjs", "task-results.mjs", "client-updates.mjs", "visits.mjs", "visit-ui.mjs", "visit-agent.mjs", "leaflet-vendor.js", "leaflet-vendor.css", "leaflet-LICENSE.txt", "features.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "service-icons.mjs", "document-exports.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "finance.mjs", "crm.mjs", "meetings.mjs", "meeting-ui.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
             raise web.HTTPNotFound()
         if name=='index.html':
-            html=(STATIC/name).read_text().replace('<html ', '<html data-client-version="'+client_version+'" ',1)
+            html=(STATIC/name).read_text().replace('<html ', '<html data-client-version="'+client_version+'" ',1).replace('/web/app.mjs"','/web/app.mjs?v='+client_version+'"',1)
             response=web.Response(text=html,content_type='text/html',headers={'Cache-Control':'no-store'})
         else:response = web.FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
         if name=="velia-sw.js":response.headers["Service-Worker-Allowed"]="/"
@@ -579,7 +579,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
         cloud_connections[provider] = bridge
     setup_crm_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response, google=cloud_connections['google'])
     from desktop.mission_routes import setup_mission_routes
-    setup_mission_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response,
+    mission_service=setup_mission_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response,
         upstream=upstream, upstream_stream=upstream_stream, authorize_model=authorize_model, authenticate=authenticate,
         handlers=handlers, google=cloud_connections['google'], web_search=web_search, origin=origin, session_identity=mission_identity)
     for provider, bridge in cloud_connections.items():
@@ -603,4 +603,4 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
         json_response=json_response, binary_upstream=binary_upstream, origin=origin)
     setup_account_routes(app, session_for=session_for, same_origin=same_origin, upstream=upstream,
         upstream_stream=upstream_stream, authorize_model=authorize_model, handlers=handlers,
-        json_response=json_response, web_search=web_search)
+        json_response=json_response, web_search=web_search, missions=mission_service)

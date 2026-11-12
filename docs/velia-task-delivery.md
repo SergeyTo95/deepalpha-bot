@@ -37,3 +37,15 @@ resent. Read system notices complete their transport reminders to release Pulse
 quota; that operation never approves or completes the mission itself. Push still
 requires the user's existing browser permission/subscription and healthy backend
 workers. No new service, push provider or GPU is provisioned.
+
+
+Older conversation clients are also supported at the authenticated messages/stream
+endpoint. The server recognizes complex work and document requests before invoking
+the ordinary generator, verifies ownership of the source conversation and submits
+to the same executor. This path accepts only the existing typed chat request; it
+cannot choose another user or grant approval. Its idempotency key is bound to the
+conversation and original request. Legacy acknowledgements include an authenticated
+task-page link, and normal conversation history returns durable task messages and
+actual file-download links. New clients preserve typed mission message identifiers
+when refreshing history, preventing duplicate overlays. The HTML entry module URL
+also carries its content fingerprint to bypass an older cached entry script.

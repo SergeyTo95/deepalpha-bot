@@ -112,6 +112,13 @@ def setup_mission_routes(app,*,session_for,same_origin,json_response,upstream,up
             if isinstance(exc,asyncio.CancelledError):raise
         finally:
             for gate in reversed(held):gate.release()
+            # Fixed state/code only: no goals, credentials, draft text or approvals.
+            try:
+                final=await asyncio.to_thread(store.detail,user,id)
+                code=final.get('planning_error') or next((s.get('error') for s in final['steps'] if s.get('error')),None) or 'none'
+                if not re.fullmatch(r'[a-z0-9_]{1,80}',str(code)):code='mission_step_failed'
+                logging.getLogger(__name__).info('VELIA_MISSION_STATE task_id=%s model=%s state=%s code=%s completed=%d total=%d',id,final['model'],final['status'],code,sum(s['status']=='completed' for s in final['steps']),len(final['steps']))
+            except Exception:pass
             # The result is already durable before any notification is attempted.
             if not asyncio.current_task().cancelling():flush(session)
     async def start(session,id,expected,*,submitted=False):
@@ -192,6 +199,49 @@ def setup_mission_routes(app,*,session_for,same_origin,json_response,upstream,up
         result=step['result'];body=base64.b64decode(result['file'],validate=True);data=result['data']
         require(hashlib.sha256(body).hexdigest()==data['sha256'],'mission_file_invalid',503)
         return web.Response(body=body,content_type=MIME[data['format']],headers={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Disposition':"attachment; filename*=UTF-8''"+quote(data['title']+'.'+data['format'],safe='')})
+    async def accept_conversation(session,cid,content,model,request_id):
+        # This entry is already authenticated by account_routes and cannot set a
+        # user/recipient/approval. Verify the native conversation before creating work.
+        configured()
+        status,value=await upstream('GET','/mobile-api/v1/conversations/'+cid+'/messages?limit=20',token=session.access)
+        require(status==200 and value.get('ok') is True,'conversation_not_found',404)
+        key='conversation:'+hashlib.sha256((cid+'\0'+request_id).encode()).hexdigest()
+        doc=await asyncio.to_thread(store.transaction,session.user_id)
+        existing=next((m for m in doc['missions'] if m['request_id']==key),None)
+        if existing:
+            require(existing.get('original_goal',existing['goal'])==content and existing['model']==model and (existing.get('source') or {}).get('chat_id')==cid,'mission_request_conflict',409);m=existing
+        else:
+            context='\n'.join(str(v.get('role',''))+': '+str(v.get('content','')) for v in value.get('messages',[])[-4:])[-2000:]
+            zone='UTC'
+            try:
+                from zoneinfo import ZoneInfo
+                pulse_status,pulse=await asyncio.wait_for(upstream('GET','/mobile-api/v1/pulse',token=session.access),2)
+                candidate=pulse.get('settings',{}).get('timezone')
+                if pulse_status==200 and isinstance(candidate,str) and len(candidate)<=80:ZoneInfo(candidate);zone=candidate
+            except Exception:pass
+            try:
+                m=await asyncio.to_thread(store.create,session.user_id,content,None,model,zone,key,
+                    source={'chat_id':cid,'title':content[:70],'remote':True},context=context)
+            except MissionError as exc:
+                if exc.code!='mission_request_conflict':raise
+                current=await asyncio.to_thread(store.transaction,session.user_id)
+                m=next((x for x in current['missions'] if x['request_id']==key),None)
+                require(m and m.get('original_goal',m['goal'])==content and m['model']==model and (m.get('source') or {}).get('chat_id')==cid,'mission_request_conflict',409)
+        if m['status']=='draft':await start(session,m['id'],m['revision'],submitted=True)
+        m=await asyncio.to_thread(store.detail,session.user_id,m['id'])
+        return store.public(m)
+    async def detach_conversation(user,cid):
+        if not store:return
+        def detach(doc):
+            for m in doc['missions']:
+                source=m.get('source') or {}
+                if source.get('chat_id')==cid and not source.get('detached'):
+                    source['detached']=True;store.touch(m,store.clock())
+        await asyncio.to_thread(store.transaction,user,detach)
+    async def conversation_history(user,cid):
+        if not store:return []
+        from desktop.mission_chat import conversation_messages
+        return conversation_messages(await asyncio.to_thread(store.transaction,user),cid,origin)
     app.router.add_get('/web-api/v1/missions/inbox',inbox)
     app.router.add_post('/web-api/v1/missions/inbox/{notice_id}/read',read_notice)
     app.router.add_post('/web-api/v1/missions/submit',submit)
@@ -204,3 +254,5 @@ def setup_mission_routes(app,*,session_for,same_origin,json_response,upstream,up
     app.router.add_delete('/web-api/v1/missions/{mission_id}',delete)
     app.router.add_post('/web-api/v1/missions/{mission_id}/{action:run|pause|cancel|approve|refresh-approval}',action)
     app.router.add_get('/web-api/v1/missions/{mission_id}/files/{step_id:s[1-8]}',file)
+
+    return {'enabled':store is not None,'accept':accept_conversation,'messages':conversation_history,'detach':detach_conversation,'origin':origin}

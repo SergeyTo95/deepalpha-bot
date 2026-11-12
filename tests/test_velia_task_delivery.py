@@ -226,3 +226,97 @@ def test_closed_tab_job_can_refresh_its_existing_session_without_duplicate_rotat
             assert first['user_id']==7 and second['user_id']==7 and session.access==ROTATED and state['refreshes']==1
             session.expires=time.time()-1;assert await captured['identity'](session) is None and state['refreshes']==1
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('model',['velia-flash','velia-quantum','velia-pro'])
+def test_legacy_conversation_request_runs_real_plan_draft_pdf_and_returns_to_same_chat(store,monkeypatch,model):
+    """The exact screenshot path works without new JS or a mission/account payload."""
+    from desktop.account_routes import setup_account_routes
+    from desktop.mission_runtime import MissionTools
+    monkeypatch.setenv('VELIA_DESKTOP_FLASH_ENABLED','true')
+    monkeypatch.setenv('VELIA_DESKTOP_FLASH_API_KEY','fixture-key')
+    monkeypatch.setenv('VELIA_DESKTOP_FLASH_BASE_URL','http://127.0.0.1:1')
+    monkeypatch.setenv('VELIA_FREE_API_TIERS_ENABLED','false')
+    async def scenario():
+        cid=str(uuid.uuid4());native=[];foreground=[];known={cid:7};origin='https://velia.example'
+        goal='Подготовь подробный план запуска цветочного интернет-магазина на 30 дней и создай PDF'
+        p={'title':'План запуска магазина','steps':[
+            {'id':'s1','title':'Подготовить план','tool':'text.draft','arguments':{'instruction':'План на 30 дней'}},
+            {'id':'s2','title':'Создать PDF','tool':'document.export','arguments':{'source_step':'s1','title':'План запуска','format':'pdf'}}]}
+        async def upstream(method,path,*,token=None,data=None,**kw):
+            user=int(token.split(':')[1])
+            if method=='GET' and '/conversations/' in path:
+                target=path.split('/conversations/')[1].split('/')[0]
+                return (200,{'ok':True,'messages':[]}) if known.get(target)==user else (404,{'ok':False})
+            if method=='DELETE' and '/conversations/' in path:
+                target=path.split('/conversations/')[1].split('/')[0]
+                if known.get(target)!=user:return 404,{'ok':False}
+                del known[target];return 200,{'ok':True}
+            if method=='POST' and path=='/mobile-api/v1/conversations':
+                id=str(uuid.uuid4());known[id]=user;return 201,{'ok':True,'conversation':{'id':id}}
+            if path=='/mobile-api/v1/pulse':
+                return (201,{'ok':True,'item':{'item_id':data['id']}}) if method=='POST' else (200,{'ok':True,'settings':{'timezone':'Europe/Istanbul'},'items':[]})
+            return 404,{'ok':False}
+        async def stream(path,*,token,data):
+            native.append(data)
+            assert data['chat_mode']==model.removeprefix('velia-')
+            if data['idempotency_key'].startswith('mission:'):
+                text=json.dumps(p,ensure_ascii=False) if ':plan-' in data['idempotency_key'] else '# План запуска\nДни 1–7: каталог. Дни 8–30: проверка продаж.'
+            else:
+                assert data['content']=='Привет','complex request reached ordinary generator'
+                text='Обычный ответ'
+            yield ('data: '+json.dumps({'type':'complete','result':{'assistant_message':{'content':text}}},ensure_ascii=False)+'\n\n').encode()
+        async def session(req):
+            user=req.headers.get('X-User')
+            return SimpleNamespace(user_id=int(user),access='fixture:'+user,id='session-'+user,quantum=True,free_api=True,quantum_attachments=True,quantum_native_tools=True) if user else None
+        app=web.Application();handlers={'reserve':lambda u:foreground.append(u),'release':lambda u:None,'reserve_background':lambda u:None,'release_background':lambda u:None}
+        tools=MissionTools(upstream=upstream,upstream_stream=stream,authorize_model=permitted,handlers=handlers)
+        service=setup_mission_routes(app,session_for=session,same_origin=lambda r:r.headers.get('Origin')==origin,json_response=lambda d,s=200:web.json_response(d,status=s),upstream=upstream,upstream_stream=stream,authorize_model=permitted,authenticate=identity,handlers=handlers,store=store,tools=tools,origin=origin)
+        setup_account_routes(app,session_for=session,same_origin=lambda r:r.headers.get('Origin')==origin,upstream=upstream,upstream_stream=stream,authorize_model=permitted,handlers=handlers,json_response=lambda d,s=200:web.json_response(d,status=s),missions=service)
+        async with TestClient(TestServer(app)) as client:
+            url='/web-api/v1/conversations/'+cid+'/messages/stream';body={'model':model,'content':goal,'idempotency_key':str(uuid.uuid4()),'web_search':True}
+            assert (await client.post(url,json=body,headers={'Origin':origin})).status==401
+            assert (await client.post(url,json=body,headers={**HEAD,'Origin':'https://evil.example'})).status==403
+            assert (await client.post(url,json=body,headers={**HEAD,'X-User':'8'})).status==404
+            assert store.transaction(8)['missions']==[]
+            response=await client.post(url,json=body,headers=HEAD);text=await response.text()
+            assert response.status==200 and 'Приняла задачу' in text and '[DONE]' in text and 'Задача выполнена' not in text
+            id=response.headers['X-Velia-Mission-Id'];m=await wait_for(store,id,'completed')
+            assert m['time_zone']=='Europe/Istanbul' and m['source']['chat_id']==cid and foreground==[]
+            assert len(native)==2
+            history=await (await client.get('/web-api/v1/conversations/'+cid+'/messages',headers=HEAD)).json()
+            assert len(history['messages'])==3 and 'Задача выполнена' in history['messages'][-1]['content']
+            assert 'Скачать PDF' in history['messages'][-1]['content']
+            assert history['messages'][-1]['mission_id']==id and history['messages'][-1]['mission_event_id']
+            file=await client.get('/web-api/v1/missions/'+id+'/files/s2',headers=HEAD)
+            assert file.status==200 and (await file.read()).startswith(b'%PDF')
+            repeated=await client.post(url,json=body,headers=HEAD)
+            assert repeated.status==200 and repeated.headers['X-Velia-Mission-Id']==id and len(native)==2
+            assert (await client.get('/web-api/v1/missions/'+id+'/files/s2',headers={'X-User':'8'})).status==404
+            normal=await client.post(url,json={**body,'content':'Привет','idempotency_key':str(uuid.uuid4()),'web_search':False},headers=HEAD)
+            assert normal.status==200 and 'X-Velia-Mission-Id' not in normal.headers and 'Обычный ответ' in await normal.text()
+            assert foreground==[7] and len(store.transaction(7)['missions'])==1
+            deleted=await client.post('/web-api/v1/conversations/'+cid+'/delete',json={},headers=HEAD)
+            assert deleted.status==200 and store.detail(7,id)['source']['detached'] is True
+            assert await service['messages'](7,cid)==[]
+    asyncio.run(scenario())
+
+
+def test_server_task_detection_includes_documents_but_preserves_simple_chat():
+    from desktop.mission_chat import wants_task
+    for value in ['Создай PDF с планом','Подготовь подробный план запуска цветочного интернет-магазина на 30 дней и создай PDF','Сформируй презентацию на 5 слайдов','Prepare a detailed report','Create a PDF report']:
+        assert wants_task(value),value
+    for value in ['Привет','Что такое PDF?','Сколько будет 2 + 2?','Напомни завтра в 10','Создай калькулятор расходов','Объясни как создать документ']:
+        assert not wants_task(value),value
+
+
+def test_task_generation_preserves_safe_quota_errors_and_releases_admission():
+    from desktop.mission_runtime import MissionTools
+    async def scenario():
+        released=[]
+        async def stream(path,**kw):yield b'data: {"type":"error","error":"user_daily_limit_exceeded"}\n\n'
+        t=MissionTools(upstream=None,upstream_stream=stream,authorize_model=permitted,handlers={'reserve':lambda _:None,'release':released.append})
+        m={'id':str(uuid.uuid4()),'title':'План','goal':'План','model':'velia-flash','time_zone':'UTC','conversation_id':str(uuid.uuid4()),'steps':PLAN['steps']}
+        with pytest.raises(MissionError,match='user_daily_limit_exceeded'):await t.execute(USER,m,m['steps'][0],permitted)
+        assert released==[7]
+    asyncio.run(scenario())

@@ -8,6 +8,7 @@ import re
 import time
 from aiohttp import ClientError, web
 from velia_desktop_routes import AuthenticationUnavailable, FLASH_ID, MODEL_ID, flash_enabled
+from desktop.mission_schema import MissionError
 from desktop.web_search import SearchUnavailable, SearchTooLong, UnderstandingUnavailable, source_event
 from velia_quantum_provider import ERRORS as QUANTUM_ERRORS, MODEL_ID as QUANTUM_ID, QuantumError
 
@@ -104,7 +105,7 @@ async def account_events(source, model):
 
 
 def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_stream,
-                         authorize_model, handlers, json_response, web_search=None):
+                         authorize_model, handlers, json_response, web_search=None, missions=None):
     def error(code, status):
         return json_response({"ok": False, "error": code}, status)
 
@@ -131,6 +132,8 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
             if value is not None and not ID.fullmatch(value):
                 return error("conversation_not_found", 404)
             return await handler(request)
+        except MissionError as exc:
+            return error(exc.code,exc.status)
         except web.HTTPRequestEntityTooLarge:
             return error("request_too_large", 413)
         except (ValueError, TypeError, UnicodeDecodeError):
@@ -174,6 +177,10 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
             if web_search:
                 result["messages"] = await web_search.restore_messages(request[ACCOUNT_SESSION].user_id,
                     request.match_info["conversation_id"], result["messages"])
+            if missions and missions['enabled']:
+                extra=await missions['messages'](request[ACCOUNT_SESSION].user_id,request.match_info['conversation_id'])
+                ids={m.get('id') for m in result['messages']};result['messages'].extend(m for m in extra if m['id'] not in ids)
+                result['messages'].sort(key=lambda m:str(m.get('created_at') or ''))
         return json_response(result, status)
 
     async def delete(request):
@@ -181,6 +188,7 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
         if data:
             return error("invalid_request", 400)
         status, result = await relay(request, "DELETE")
+        if result.get("ok") and missions and missions["enabled"]:await missions["detach"](request[ACCOUNT_SESSION].user_id,request.match_info["conversation_id"])
         return json_response({"ok": bool(result.get("ok")), **({"error": result["error"]} if "error" in result else {})}, status)
 
     async def send(request):
@@ -210,6 +218,14 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
             if data["model"] == QUANTUM_ID else await authorize_model(session.access, data["model"]))
         if permission:
             return error(*permission)
+        if missions and missions['enabled'] and not attachments and not data.get('medical_no_search'):
+            from desktop.mission_chat import wants_task,accepted_text
+            if wants_task(data['content']):
+                m=await missions['accept'](session,request.match_info['conversation_id'],data['content'],data['model'],data['idempotency_key'])
+                LOG.info('VELIA_CONVERSATION_TASK_ACCEPTED model=%s task_id=%s',data['model'],m['id'])
+                text=accepted_text(m,missions['origin'])
+                event={'model':data['model'],'choices':[{'delta':{'content':text},'finish_reason':'stop'}]}
+                return web.Response(body=('data: '+json.dumps(event,ensure_ascii=False)+'\n\ndata: [DONE]\n\n').encode(),content_type='text/event-stream',headers={'Cache-Control':'no-store','X-Velia-Mission-Id':m['id']})
         failure = handlers["reserve"](session.user_id)
         if failure is not None:
             return failure

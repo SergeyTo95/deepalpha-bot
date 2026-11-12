@@ -35,6 +35,7 @@ const busy=activeMission;
 export function wantsBackgroundTask(text){
   const s=String(text).trim();
   if(/^(?:напомни|запомни|покажи|открой|объясни кратко|что такое|как дела)|калькулятор|интерактивн|репозитор|деплой|github|каждый день|каждые|по расписанию/iu.test(s))return false;
+  if(/^(?:велия[,\s]+)?(?:создай|сделай|подготовь|сформируй|экспортируй|create|make|prepare|export)(?=\s).{0,160}(?:\bPDF\b|\bDOCX\b|\bPPTX\b|\bXLSX\b|презентаци|документ)/iu.test(s))return true;
   return /(?:сделай|выполни|подготовь|проанализируй|исследуй|сравни|составь|разработай).{0,120}(?:в фоне|подробн.{0,25}(?:анализ|отч[её]т|план)|бизнес[- ]план|стратеги|глубок.{0,25}(?:анализ|исследован))|(?:подробн|глубок).{0,25}(?:проанализируй|исследуй)|исследуй.{0,25}подробн|^(?:research|analyze|analyse|prepare|compare).{0,100}(?:detailed|in depth|comprehensive|in the background)/iu.test(s) || /^(?:сравни|compare)/iu.test(s)&&s.length>=120 || /^(?:проанализируй|исследуй|разработай|подготовь|analyze|research)/iu.test(s)&&s.length>=1000;
 }
 export function setupMissionClient({profile,request=missionRequest,onUnauthorized=()=>{}}){
