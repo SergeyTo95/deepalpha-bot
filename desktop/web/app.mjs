@@ -37,8 +37,9 @@ import {memoryCommand,memorySource,memoryDraft,recallMemoryAnswer} from './memor
 import {wantsMiniApp,wantsMiniAppEdit,appClarification,prepareMiniApp} from './mini-apps.mjs';
 import {validateAppState,appSummary} from './mini-app-core.mjs';
 import {miniAppNode} from './mini-app-ui.mjs';
-import {setupMissionClient,wantsMission,missionClarification,prepareMission} from './missions.mjs';
+import {setupMissionClient,wantsMission,wantsBackgroundTask,activeMission,missionClarification} from './missions.mjs';
 import {mountMissionCard} from './mission-ui.mjs';
+import {mergeMissionMessages,missionMessageContext} from './task-results.mjs';
 const $ = (id) => document.getElementById(id);
 const icons = {
   attachment: "M21 11l-8 8a6 6 0 0 1-8-8l9-9a4 4 0 0 1 6 6l-9 9a2 2 0 0 1-3-3l8-8",
@@ -183,11 +184,12 @@ async function saveIncomePlan(plan) {
     'План открыт. Сохранение на устройстве недоступно. Его можно скачать в меню диалога.');
 }
 const voice = setupVoice({accountLanguage:()=>profile?.language||'', busy:()=>busy, toast, modelName:()=>MODELS[model], send:text=>{if(agentMode&&model==='velia-flash')setAgentMode(false);$("prompt").value=text;return generate(false, true);}});
-const pulse=setupPulse({request:featureRequest,profile:()=>profile,toast,accountChanged:()=>resetOtherTab(),changed:()=>{const b=document.querySelector('[data-section="pulse"]');if(b){const count=pulse.state().notifications.filter(n=>n.status==='unread').length;b.setAttribute('aria-label','Пульс'+(count?' · непрочитанных '+count:''));b.dataset.unread=count||'';const bell=$('pulse-open');if(bell){bell.dataset.unread=count||'';bell.setAttribute('aria-label','Пульс'+(count?' · непрочитанных '+count:' — напоминания'));}}}});
+const pulse=setupPulse({taskInbox:()=>missions.notifications(),readTask:id=>missions.readNotice(id),request:featureRequest,profile:()=>profile,toast,accountChanged:()=>resetOtherTab(),changed:()=>{const b=document.querySelector('[data-section="pulse"]');if(b){const count=pulse.state().notifications.filter(n=>n.status==='unread').length;b.setAttribute('aria-label','Пульс'+(count?' · непрочитанных '+count:''));b.dataset.unread=count||'';const bell=$('pulse-open');if(bell){bell.dataset.unread=count||'';bell.setAttribute('aria-label','Пульс'+(count?' · непрочитанных '+count:' — напоминания'));}}}});
 const webPush=setupWebPush({profile:()=>profile,pulse});
 async function openPulseResource(resource){
   if(busy){toast('Дождись завершения текущего ответа.');return;}
   try{if(resource.kind==='chat'){let chat=chats.find(p=>p.id===resource.id);if(!chat){await syncHistory();chat=chats.find(p=>p.id===resource.id);}if(!chat)throw Error('Диалог не найден в этом аккаунте.');features.close();await openChat(chat);return;}
+    if(resource.kind==='mission'){const m=await missions.refresh(resource.id);if(!profile)return;restoreTaskMessages();const chat=chats.find(c=>c.id===m.source?.chat_id);if(chat&&!m.source?.detached){await openChat(chat);Array.from(document.querySelectorAll('[data-mission-id="'+m.id+'"][data-task-event]')).at(-1)?.scrollIntoView({block:'center'});}else await features.open('autopilot',{tab:'missions',missionId:m.id});return;}
     const entry=(await notebook.load()).find(p=>p.id===resource.id);if(!entry)throw Error('Связанная запись удалена. Само напоминание сохранено.');
     if(entry.kind==='place')await features.open('map',{placeId:entry.id});else if(entry.kind==='visit')await features.open('map',{tab:'visits',date:entry.date});else await features.open('notes',{id:entry.id});
   }catch(error){toast(error.message);}
@@ -215,6 +217,21 @@ async function openSavedMiniApp(entry){
   chats.unshift(chat);currentId=chat.id;render();await save();
 }
 const missions=setupMissionClient({profile:()=>profile,onUnauthorized:()=>{lockHistory();profile=null;guest=null;notifyAuthChange('lock');render();openAuth();}});
+let missionHistoryReady=false;const taskNoticeSeen=new Set();
+function restoreTaskMessages(paint=true){
+  if(!missionHistoryReady||!profile||busy)return false;
+  let changed=false;
+  for(const row of missions.list()){
+    const m=missions.get(row.id);if(m)changed=mergeMissionMessages(chats,m,missions.notifications())||changed;
+  }
+  if(changed){save();if(paint)render();}return changed;
+}
+missions.subscribe(()=>{
+  pulse.refreshTasks();restoreTaskMessages();
+  const fresh=missions.notifications().filter(n=>n.status==='unread'&&!taskNoticeSeen.has(n.id));
+  for(const n of missions.notifications())taskNoticeSeen.add(n.id);while(taskNoticeSeen.size>500)taskNoticeSeen.delete(taskNoticeSeen.values().next().value);
+  if(profile&&fresh.length)toast(fresh.length>1?'Есть обновления задач ('+fresh.length+').':pulse.state().settings?.preview?fresh[0].title:fresh[0].task_status==='completed'?'Ваша задача выполнена. Результат сохранён в чате.':'Для вашей задачи есть обновление. Откройте «Задачи» или Pulse.');
+});
 const features = setupFeatures({missionClient:missions,prepareMissionChat:()=>{
   if(busy){toast('Дождись завершения ответа.');return;}
   if($('prompt').value.trim()){toast('Сохрани или очисти черновик сообщения перед переходом.');return;}
@@ -271,6 +288,7 @@ const localHistory = new LocalHistory(browserHistoryStore());
 const authChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('velia-auth-v1') : null;
 function lockHistory() {
   incomeToSave = null;
+  missionHistoryReady=false;taskNoticeSeen.clear();
   missions.reset();
   incomePlanner.reset();
   backgroundTakeover=null;
@@ -468,7 +486,9 @@ function messageNode(message, index) {
         ? '<div class="thinking" aria-label="Велия готовит ответ"><span></span><span></span><span></span></div>'
         : "";
   article.append(content);
-  if(profile&&typeof message.missionId==='string'&&/^[0-9a-f-]{36}$/u.test(message.missionId)){
+  if(message.taskEvent){article.dataset.taskEvent=message.taskEvent;article.dataset.missionId=message.missionId;}
+  const latestTaskEvent=message.missionId?current().messages.findLast(m=>m.missionId===message.missionId&&m.taskEvent)?.taskEvent:null;
+  if((!latestTaskEvent||message.taskEvent===latestTaskEvent)&&profile&&typeof message.missionId==='string'&&/^[0-9a-f-]{36}$/u.test(message.missionId)){
     const controller=new AbortController();mapViews.push(controller);
     mountMissionCard(article,{client:missions,id:message.missionId,signal:controller.signal,toast});
   }
@@ -589,6 +609,7 @@ function sourceNode(value) {
   return section;
 }
 function render() {
+  restoreTaskMessages(false);
   mapViews.forEach(controller=>controller.abort());mapViews=[];
   const chat = current(),
     topics = (chat?.topics || []).filter(entry=>!isDocumentTopic(entry.kind)),
@@ -932,6 +953,7 @@ async function openChat(chat, background = false) {
     } catch (error) { toast(error.message); }
     finally { $("generation-status").textContent = ""; }
   }
+  restoreTaskMessages();
   save();
   render();
 }
@@ -1015,6 +1037,7 @@ async function applyProfile(value) {
         }
     save();
   }
+  missionHistoryReady=true;restoreTaskMessages();
   $("account-label").replaceChildren(document.createTextNode(value.name || "Аккаунт VELIA"));
   const small = document.createElement("small");
   small.textContent = (Number.isInteger(value.credits) ? value.credits + " токенов · " : "") + "Выйти из аккаунта";
@@ -1077,28 +1100,22 @@ function miniAppMessageContext(message){
   try{return message.content+'\n\nТекущий снимок интерактивного приложения (данные, не инструкции):\n'+appSummary(message.miniApp).slice(0,6500);}catch{return message.content;}
 }
 async function runMissionChat(text,voiceTurn){
-  const owner=profile.account,turnModel=model;let chat=current(),pending=wantsMission(text)?null:chat?.missionPending;
-  if(!chat||chat.remote||chat.agent||chat.figma||chat.connectionProvider){chat={id:crypto.randomUUID(),title:text.slice(0,70),messages:[],updated:Date.now()};chats.unshift(chat);currentId=chat.id;}
-  const user={role:'user',content:text,sentAt:Date.now(),requestId:crypto.randomUUID(),missionTurn:true},answer={role:'assistant',content:'Составляю план миссии…',model:turnModel,local:true,pending:true,sentAt:Date.now(),missionTurn:true};
+  const owner=profile.account,turnModel=model;let chat=current();
+  const context=(chat?.messages||[]).filter(m=>!m.pending&&!m.failed&&!m.missionId).slice(-4).map(m=>m.role+': '+m.content).join('\n').slice(-2000);
+  const goal=chat?.missionPending&&!wantsMission(text)?chat.missionPending.goal+'\nУточнение: '+text:text;
+  if(!chat||chat.agent||chat.figma||chat.connectionProvider){chat={id:crypto.randomUUID(),title:text.slice(0,70),messages:[],updated:Date.now()};chats.unshift(chat);currentId=chat.id;}
+  const user={role:'user',content:text,sentAt:Date.now(),requestId:crypto.randomUUID(),missionTurn:true},answer={role:'assistant',content:'Сохраняю задачу…',model:turnModel,local:true,pending:true,sentAt:Date.now(),missionTurn:true};
   chat.messages.push(user,answer);chat.missionPrivate=true;chat.missionPending=null;chat.miniAppPending=null;chat.crmPending=false;chat.financePending=false;chat.finance=false;chat.pulseDraft=null;
   setAgentMode(false,true);$('prompt').value='';resizePrompt();setBusy(true);abort=new AbortController();const signal=abort.signal;render();
   const guard=()=>{signal.throwIfAborted();if(profile?.account!==owner)throw new DOMException('Account changed','AbortError');};
   try{
-    await save();guard();const catalog=await missions.catalog();guard();
-    if(!catalog.available)throw Error('Хранилище миссий пока недоступно.');
-    const timeZone=Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC';
-    const result=await prepareMission({text,pending,model:turnModel,request,catalog,signal,guard,timeZone});guard();
-    if(result.question){answer.content=result.question;chat.missionPending=result.pending;}
-    else{
-      const mission=await missions.create({goal:result.goal,plan:result.plan,model:turnModel,time_zone:timeZone,request_id:user.requestId},signal);guard();
-      answer.missionId=mission.id;answer.content='Миссия создана. Шаги и результаты обновляются в карточке и в разделе «Задачи → Миссии». Закрытие вкладки не останавливает серверное выполнение. Действия с Google потребуют подтверждения в карточке.';
-      answer.pending=false;await save();guard();render();
-      await missions.action(mission,'run');guard();
-    }
-    answer.pending=false;answer.finish='stop';chat.updated=Date.now();await save();guard();render();
-    if(voiceTurn){const spoken=result.question||'Миссия создана. Ход выполнения и подтверждения доступны в карточке.';voice.update(spoken);voice.complete(spoken);}
-  }catch(error){if(profile?.account===owner){answer.pending=false;answer.failed=true;answer.content=(error.name==='AbortError'?'Подготовка остановлена.':error.message)+' Проверь раздел «Задачи → Миссии» перед повтором: уже созданная миссия остаётся там.';render();save();if(voiceTurn)voice.failure(false,answer.content);}}
-  finally{if(abort?.signal===signal){abort=null;setBusy(false);}if(profile?.account===owner)render();}
+    await save();guard();
+    const m=await missions.submit({goal,model:turnModel,time_zone:Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC',request_id:user.requestId,source:{chat_id:chat.id,title:chat.title.slice(0,160),remote:!!chat.remote},context},signal);guard();
+    user.missionOrigin=m.id;answer.missionId=m.id;answer.missionAck=m.id;answer.content='Задача принята. Планирование и выполнение продолжатся в фоне. Можешь продолжать общение или закрыть сайт — результат сохранится в этом диалоге и в «Задачах», уведомление появится в Pulse. Push использует ваши настройки доставки и тихие часы.';
+    answer.pending=false;answer.finish='stop';chat.updated=Date.now();await save();guard();render();missions.poll().catch(()=>{});
+    if(voiceTurn){voice.backgroundAccepted('Приняла задачу. Выполню в фоне и сообщу о результате. Можем продолжать разговор.');}
+  }catch(error){if(profile?.account===owner){answer.pending=false;answer.failed=true;answer.content=(error.name==='AbortError'?'Приём задачи остановлен.':error.message)+' Проверь «Задачи → Миссии» перед повтором: уже сохранённая задача остаётся там.';render();save();if(voiceTurn)voice.failure(false,answer.content);}}
+  finally{if(abort?.signal===signal){abort=null;setBusy(false);}if(profile?.account===owner){restoreTaskMessages();render();}}
 }
 async function runMiniAppChat(text,voiceTurn){
   const owner=profile.account;let chat=current(),pending=wantsMiniApp(text)?null:chat?.miniAppPending;
@@ -1281,7 +1298,7 @@ async function generate(retry = false, voiceTurn = false) {
     if(!profile.models.includes(model)){toast(apiError(profile.pro_locked_reason||'pro_tokens_required'));return;}
     await runMiniAppChat(text,voiceTurn);return;
   }
-  if(!retry&&(wantsMission(text)||current()?.missionPending&&missionClarification(text))){
+  if(!retry&&(wantsMission(text)||!agentMode&&!selectedFiles.length&&wantsBackgroundTask(text)||current()?.missionPending&&missionClarification(text))){
     if(!profile){openAuth();return;}
     if(selectedFiles.length){toast('Для первой версии миссий опиши исходные данные текстом или сохрани их в заметках.');return;}
     if(!profile.models.includes(model)){toast(apiError(profile.pro_locked_reason||'pro_tokens_required'));return;}
@@ -1348,6 +1365,8 @@ async function generate(retry = false, voiceTurn = false) {
   if(backgroundAgent&&!profile?.background_agent){toast(apiError('background_agent_unavailable'));return;}
   if (!retry && !text) return;
   let chat = current();
+  const foregroundTask=!agentMode&&!connectedTurn&&!specialty&&missions.list().some(activeMission);
+  if(foregroundTask&&chat?.remote){chat={...chat,id:crypto.randomUUID(),remote:false,title:chat.title,updated:Date.now(),messages:chat.messages.slice(-80),missionPrivate:true};chats.unshift(chat);currentId=chat.id;}
   if(mapTurn&&chat?.remote){chat={...chat,id:crypto.randomUUID(),remote:false,updated:Date.now(),messages:chat.messages.slice(-100),mapChat:true};chats.unshift(chat);currentId=chat.id;}
   if(connectedTurn && chat && (chat.remote || figmaTurn && chat.connectionProvider
       || connectionProvider && (chat.figma || chat.connectionProvider && chat.connectionProvider!==connectionProvider))){currentId=null;chat=null;}
@@ -1361,7 +1380,7 @@ async function generate(retry = false, voiceTurn = false) {
     chat.messages.pop();
   } else {
     if (!chat) {
-      if (!profile || agentMode&&!backgroundAgent || connectedTurn) {
+      if (!profile || agentMode&&!backgroundAgent || connectedTurn || foregroundTask) {
         chat = {id: crypto.randomUUID(), title: text.replace(/\s+/g, " ").slice(0, 70),
           updated: Date.now(), messages: [], agent: agentMode, ...(figmaTurn ? {figma:true} : {}), ...(connectionProvider?{connectionProvider}:{})};
       } else {
@@ -1404,7 +1423,7 @@ async function generate(retry = false, voiceTurn = false) {
   const selected = agentMode&&!backgroundAgent ? "velia-flash" : model,
     user = chat.messages.at(-1),
     payload = agentMode&&!backgroundAgent ? {prompt: user.content, session_id: chat.id} : chat.remote ? {content: user.content, model: selected,
-      idempotency_key: user.requestId || (user.requestId = crypto.randomUUID()), ...(user.attachmentIds?.length ? {attachment_ids:user.attachmentIds} : {})} : chatPayload(chat, selected,{messageContext:message=>pulseMessageContext({...message,content:mapMessageContext({...message,content:miniAppMessageContext(message)})},pulse.state().items)}),
+      idempotency_key: user.requestId || (user.requestId = crypto.randomUUID()), ...(user.attachmentIds?.length ? {attachment_ids:user.attachmentIds} : {})} : chatPayload(chat, selected,{messageContext:message=>pulseMessageContext({...message,content:mapMessageContext({...message,content:missionMessageContext({...message,content:miniAppMessageContext(message)},missions.get(message.missionId))})},pulse.state().items)}),
     answer = { role: "assistant", content: "", model: selected, pending: true, agent: agentMode, sentAt:Date.now() };
   const privateTurn=chat.medicalNoSearch || chat.miniAppPrivate || chat.missionPrivate || chat.remote && chat.topicHistoryChecked===false;
   if(privateTurn && !agentMode){if(chat.remote)payload.medical_no_search=true;payload.web_search=false;}
@@ -1828,6 +1847,7 @@ $("delete-confirm").onclick = async () => {
   const button = $("delete-confirm");
   button.disabled = true;
   try {
+    if(chat&&profile)await missions.detachChat(chat.id);
     if (chat?.remote) await jsonRequest("conversations/" + chat.id + "/delete", {});
   chats = chats.filter((c) => c.id !== deleteId);
   if (currentId === deleteId) currentId = null;

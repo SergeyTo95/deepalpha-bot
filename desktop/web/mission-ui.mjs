@@ -1,8 +1,8 @@
-import {MISSION_LABELS,missionError} from './missions.mjs';
+import {MISSION_LABELS,missionError,activeMission} from './missions.mjs';
 import {financeReport} from './finance.mjs';
 const node=(tag,text,className)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(className)e.className=className;return e;};
 const button=(text,action)=>{const e=node('button',text);e.type='button';e.onclick=action;return e;};
-const active=m=>['running','pausing','cancelling'].includes(m.status);
+const active=activeMission;
 function resultText(step){
   const data=step.result?.data;if(!data)return '';
   if(step.result.kind==='draft')return data.text;
@@ -27,8 +27,15 @@ export function mountMissionCard(parent,{client,id,signal,toast=()=>{}}){
   function draw(){
     if(signal.aborted)return;
     const m=client.get(id);if(!m){root.replaceChildren(node('p',client.loaded?.()&&!client.list().some(m=>m.id===id)?'Миссия удалена или недоступна.':'Загружаю состояние миссии…'));return;}
-    const next=m.revision+':'+(client.status?.()||'');if(next===signature)return;signature=next;
+    const next=m.revision+':'+(client.status?.()||'');if(next===signature)return;if(root.contains?.(document.activeElement)&&document.activeElement?.tagName==='TEXTAREA')return;signature=next;
     root.replaceChildren(node('small','VELYON MISSION','feature-eyebrow'),node('h3',m.title),node('p',MISSION_LABELS[m.status]||'Проверяю состояние','mission-state'));
+    if(m.planning_error)root.append(node('p',missionError(m.planning_error),'feature-notice'));
+    if(m.status==='waiting_input'&&m.question){
+      const form=node('form',undefined,'feature-form'),input=node('textarea'),submit=node('button','Продолжить с ответом');
+      input.maxLength=2000;input.required=true;input.rows=3;input.setAttribute('aria-label','Ответ на уточнение задачи');submit.type='submit';
+      form.append(node('p',m.question),input,submit);let key=crypto.randomUUID(),previous='';
+      form.onsubmit=async e=>{e.preventDefault();if(working||!input.value.trim())return;working=true;submit.disabled=true;if(previous!==input.value.trim()){key=crypto.randomUUID();previous=input.value.trim();}try{await client.answer(m,input.value.trim(),key);}catch(error){toast(error.message);}finally{working=false;signature='';draw();}};root.append(form);
+    }
     const done=m.steps.filter(s=>s.status==='completed').length;root.append(node('p',done+' из '+m.steps.length+' шагов · '+({'velia-flash':'Flash','velia-quantum':'Quantum','velia-pro':'PRO'}[m.model]||'VELIA'),'notebook-hint'));
     if(client.status?.())root.append(node('p','Не удалось обновить состояние. Показан последний полученный результат.','feature-notice'));
     const steps=node('ol',undefined,'mission-steps');
@@ -63,7 +70,7 @@ export function mountMissionCard(parent,{client,id,signal,toast=()=>{}}){
     if(m.status==='uncertain')root.append(node('p','Проверь внешний сервис: операция могла выполниться. Автоматический повтор заблокирован.','feature-notice'));
     const actions=node('div',undefined,'feature-actions');
     if(['draft','paused','failed','interrupted'].includes(m.status)){const b=button(m.status==='draft'?'Запустить':'Продолжить с сохранённого шага',()=>run(m,'run',b));actions.append(b);}
-    if(active(m)){const pause=button('Приостановить',()=>run(m,'pause',pause));actions.append(pause);}
+    if(['queued','planning','running'].includes(m.status)){const pause=button('Приостановить',()=>run(m,'pause',pause));actions.append(pause);}
     if(!['completed','cancelled'].includes(m.status)){const cancel=button('Отменить миссию',()=>run(m,'cancel',cancel));actions.append(cancel);}
     const refresh=button('Обновить',async()=>{try{await client.refresh(id);}catch(e){if(!signal.aborted)toast(e.message);}});actions.append(refresh);
     if(!active(m)){const remove=button('Удалить',async()=>{if(!confirm('Удалить миссию и её файлы?'))return;try{await client.remove(m);if(!signal.aborted)root.replaceChildren(node('p','Миссия удалена.'));}catch(e){if(!signal.aborted)toast(e.message);}});actions.append(remove);}

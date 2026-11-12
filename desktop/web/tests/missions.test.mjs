@@ -36,25 +36,25 @@ test('planner questions retain goal and unknown or executable tools are rejected
 });
 
 test('approval uses the exact displayed revision and nonce, and refresh is not approval',async t=>{
-  const calls=[],m=mission(),client=setupMissionClient({profile:()=>({account:'a'}),request:async(path,options)=>{calls.push({path,options});return {ok:true,mission:m};}});t.after(()=>client.reset());
-  await client.refresh(id);await client.action(m,'approve');assert.deepEqual(calls.at(-1).options.data,{revision:1,token:'fixture-nonce'});
-  await client.action(m,'refresh-approval');assert.deepEqual(calls.at(-1).options.data,{revision:1});
+  const calls=[],m=mission(),client=setupMissionClient({profile:()=>({account:'a'}),request:async(path,options)=>{calls.push({path,options});return {ok:true,account:'a',mission:m};}});t.after(()=>client.reset());
+  await client.refresh(id);await client.action(m,'approve');assert.deepEqual(calls.at(-1).options.data,{revision:1,token:'fixture-nonce',account:'a'});
+  await client.action(m,'refresh-approval');assert.deepEqual(calls.at(-1).options.data,{revision:1,account:'a'});
 });
 
 test('late responses from a previous account never populate a new account',async t=>{
-  let account='a';const old=deferred();const client=setupMissionClient({profile:()=>({account}),request:()=>account==='a'?old.promise:Promise.resolve({ok:true,missions:[]})});t.after(()=>client.reset());
-  const pending=client.poll();client.reset();account='b';await client.poll();old.resolve({ok:true,missions:[mission()]});await assert.rejects(pending,{name:'AbortError'});
+  let account='a';const old=deferred();const client=setupMissionClient({profile:()=>({account}),request:()=>account==='a'?old.promise:Promise.resolve({ok:true,account:'b',missions:[]})});t.after(()=>client.reset());
+  const pending=client.poll();client.reset();account='b';await client.poll();old.resolve({ok:true,account:'a',missions:[mission()]});await assert.rejects(pending,{name:'AbortError'});
   assert.deepEqual(client.list(),[]);assert.equal(client.get(id),undefined);
 });
 
 test('poll failure preserves last status, shows stale notice, and clears on successful refresh',async t=>{
-  let fail=false;const m=mission();const client=setupMissionClient({profile:()=>({account:'a'}),request:async()=>{if(fail)throw Error('Нет соединения');return {ok:true,missions:[m]};}});t.after(()=>client.reset());
+  let fail=false;const m=mission();const client=setupMissionClient({profile:()=>({account:'a'}),request:async()=>{if(fail)throw Error('Нет соединения');return {ok:true,account:'a',missions:[m]};}});t.after(()=>client.reset());
   await client.poll();fail=true;await assert.rejects(client.poll(),/Нет соединения/);assert.equal(client.list()[0].id,id);assert.match(client.status(),/соединения/);
   fail=false;await client.poll();assert.equal(client.status(),'');
 });
 
 test('a broken view listener cannot interrupt logout or account cleanup',async t=>{
-  const client=setupMissionClient({profile:()=>({account:'a'}),request:async()=>({ok:true,missions:[mission()]})});t.after(()=>client.reset());
+  const client=setupMissionClient({profile:()=>({account:'a'}),request:async()=>({ok:true,account:'a',missions:[mission()]})});t.after(()=>client.reset());
   await client.poll();client.subscribe(()=>{throw Error('Detached UI');});assert.doesNotThrow(()=>client.reset());assert.deepEqual(client.list(),[]);
 });
 

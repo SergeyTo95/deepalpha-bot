@@ -199,8 +199,8 @@ def test_mission_http_auth_origin_owner_download_and_run(tmp_path):
         app=web.Application();setup_mission_routes(app,session_for=session,same_origin=lambda req:req.headers.get('Origin')=='https://velia.example',json_response=lambda d,s=200:web.json_response(d,status=s),upstream=noop,upstream_stream=None,authorize_model=permitted,authenticate=identity,handlers={},store=store,tools=t)
         async with TestClient(TestServer(app)) as client:
             assert (await client.get('/web-api/v1/missions')).status==401
-            h={'Origin':'https://velia.example','X-User':'7'};p=plan(step(),step('document.export','s2',source_step='s1',title='Файл',format='pdf'))
-            body={'goal':'План','plan':p,'model':'velia-flash','time_zone':'UTC','request_id':'http-request'}
+            h={'Origin':'https://velia.example','X-User':'7'};account=hashlib.sha256(b':7').hexdigest()[:24];p=plan(step(),step('document.export','s2',source_step='s1',title='Файл',format='pdf'))
+            body={'account':account,'goal':'План','plan':p,'model':'velia-flash','time_zone':'UTC','request_id':'http-request'}
             assert (await client.post('/web-api/v1/missions',json=body,headers={'X-User':'7'})).status==403
             assert (await client.post('/web-api/v1/missions',json={**body,'approved':True},headers=h)).status==400
             response=await client.post('/web-api/v1/missions',json=body,headers=h);value=await response.json();assert response.status==201,value
@@ -209,7 +209,7 @@ def test_mission_http_auth_origin_owner_download_and_run(tmp_path):
             # Persist an actual draft, then run the real PDF adapter.
             claimed=store.claim(7,m['id'],1);store.begin(7,m['id'],claimed['lease']);store.checkpoint(7,m['id'],claimed['lease'],lambda target:target['steps'][0].update(status='completed',result={'kind':'draft','data':{'text':'План Velia'},'evidence':{}}))
             store.control(7,m['id'],store.detail(7,m['id'])['revision'],'pause')
-            m=store.detail(7,m['id']);response=await client.post(url+'/run',headers=h,json={'revision':m['revision']});assert response.status==200,await response.text()
+            m=store.detail(7,m['id']);response=await client.post(url+'/run',headers=h,json={'revision':m['revision'],'account':account});assert response.status==200,await response.text()
             for _ in range(100):
                 await asyncio.sleep(.01);m=store.detail(7,m['id'])
                 if m['status'] not in {'running','pausing'}:break
@@ -218,7 +218,7 @@ def test_mission_http_auth_origin_owner_download_and_run(tmp_path):
             download=await client.get(url+'/files/s2',headers=h);assert download.status==200 and (await download.read()).startswith(b'%PDF')
             assert download.headers['Cache-Control']=='private, no-store'
             assert (await client.get(url+'/files/s2',headers={'X-User':'8'})).status==404
-            assert (await client.delete(url,headers=h,json={'revision':m['revision']})).status==200
+            assert (await client.delete(url,headers=h,json={'revision':m['revision'],'account':account})).status==200
             assert (await client.get(url,headers=h)).status==404
     asyncio.run(scenario())
 
