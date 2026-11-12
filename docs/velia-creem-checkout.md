@@ -8,8 +8,31 @@ web session; no billing write endpoint is exposed.
 
 Card payments are deliberately unavailable in this release. Selecting a package
 only updates its displayed total. The catalog's `billing_enabled` flag refers to
-Google Play and must never enable Creem. There are no provider keys, checkout
-links, receipts, external scripts or payment callbacks in the client.
+Google Play and must never enable Creem. There are no provider keys, receipts,
+external scripts or payment callbacks in the client. Owner-supplied public
+product references are registered below but are not actionable checkout links.
+
+## Subscription product references
+
+The Balance section now lists the three monthly subscription products supplied
+by the owner. They remain unavailable for payment until account-bound checkout
+and authoritative credit fulfillment are implemented. The registration uses
+the agreed prices/allowances; provider-side fields have not been independently
+verified by this change. The public links do not bind a VELIA account.
+
+| Plan | USD/month | Credits/paid month | Live product ID |
+| --- | ---: | ---: | --- |
+| Plus | 14.99 | 1200 | prod_3YUMifrIso3U0JEvAJEl3o |
+| Pro | 29.99 | 3000 | prod_1E2KmHCJDzxC3nMraYc1iB |
+| Max | 59.99 | 6500 | prod_QM6adegRzqFXCFL6lyO6a |
+
+`desktop/web/subscription-plans.mjs` retains the exact public product URLs and
+renders display-only cards. No href, URL data attribute or purchase event handler
+is attached to them. Google Play flags, catalog URLs or injected plan values do
+not enable these controls. Remote top-up catalog failure does not hide the
+registered subscription cards. Max is a web subscription proposal here, not a
+new Google Play entitlement or a change to the authority's account plan state.
+Do not advertise feature unlocks until plan access checks are implemented.
 
 ## Follow-up for live acceptance
 
