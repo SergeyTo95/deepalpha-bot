@@ -59,6 +59,12 @@ def setup_velia_mobile_commercial_routes(app: web.Application, mobile_routes_mod
         if not auth:
             return _json_response({"ok": False, "error": "unauthorized"}, status=401)
         result = await asyncio.to_thread(commercial_state_for_user, int(auth["user_id"]))
+        if result.get('ok'):
+            from services.velia_creem_billing import RANK, epoch_or_zero
+            creem = await asyncio.to_thread(creem_billing.account, int(auth['user_id']))
+            account = result['account']
+            if (RANK.get(creem['plan_code'], 0), epoch_or_zero(creem['subscription_until'])) > (RANK.get(account['plan_code'], 0), epoch_or_zero(account['subscription_until'])):
+                account.update(plan_code=creem['plan_code'], subscription_until=creem['subscription_until'], source='creem')
         return _json_response(result, status=200 if result.get("ok") else 404)
 
     async def handle_google_play_verify(request: web.Request) -> web.Response:
@@ -92,3 +98,5 @@ def setup_velia_mobile_commercial_routes(app: web.Application, mobile_routes_mod
     app.router.add_get("/mobile-api/v1/economy/catalog", handle_catalog)
     app.router.add_get("/mobile-api/v1/economy/me", handle_account)
     app.router.add_post("/mobile-api/v1/economy/google-play/verify", handle_google_play_verify)
+    from services.velia_creem_routes import setup_creem_routes
+    creem_billing = setup_creem_routes(app, require_auth=require_auth, api_available=api_available)
