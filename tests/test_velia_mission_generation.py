@@ -24,7 +24,7 @@ def wire(text=BODY,reason='stop',*,done=True,tool=False):
 
 
 @pytest.mark.parametrize('model',['velia-flash','velia-quantum','velia-pro'])
-@pytest.mark.parametrize('ack_first',[False,True])
+@pytest.mark.parametrize('ack_first',[False,True,'grouped_days'])
 def test_gateway_selected_free_model_finishes_failed_task_and_pdf_without_native_chat(tmp_path,monkeypatch,model,ack_first):
     async def scenario():
         observed=[];released=[];reserved=[]
@@ -36,7 +36,9 @@ def test_gateway_selected_free_model_finishes_failed_task_and_pdf_without_native
             assert '3–5 коротких предложений' not in body['messages'][0]['content']
             assert not body.get('tools') and not body.get('tool_choice')
             assert body['thinking']['type']==('enabled' if model=='velia-pro' else 'disabled')
-            return web.Response(body=wire('Я подготовлю план. Давайте сначала соберём информацию.' if ack_first and len(observed)==1 else BODY),content_type='text/event-stream')
+            first=('\n'.join(f'### День {n}-{n+1}: подготовить очередной этап запуска магазина. Результат: этап проверен.' for n in range(1,30,2))
+                if ack_first=='grouped_days' else 'Я подготовлю план. Давайте сначала соберём информацию.')
+            return web.Response(body=wire(first if ack_first and len(observed)==1 else BODY.replace(' Результат:','\n- Результат:')),content_type='text/event-stream')
         server=web.Application();server.router.add_post('/v4/chat/completions',provider)
         async with TestServer(server) as host:
             base=str(host.make_url('/v4'))
@@ -64,6 +66,7 @@ def test_gateway_selected_free_model_finishes_failed_task_and_pdf_without_native
             text='\n'.join(page.extract_text() for page in PdfReader(BytesIO(pdf)).pages)
             for day in range(1,31):assert f'День {day}:' in text
             assert 'PRIVATE_REASONING' not in text
+            assert 'Ожидаемый результат:' in text
             assert observed[0]['model']==free_models.TIERS[model.removeprefix('velia-')][1]
             assert reserved==released==[7]*(2 if ack_first else 1)
     asyncio.run(scenario())
@@ -136,6 +139,23 @@ def test_two_short_completions_stop_without_third_attempt_or_file():
             await t.execute(SESSION,m,step,unexpected)
         assert len(calls)==2 and reserved==released==[7,7]
         assert 'Предыдущая попытка' in calls[1][-1]['content']
+    asyncio.run(scenario())
+
+
+def test_repeated_missing_days_are_not_exported_as_a_complete_daily_plan():
+    async def scenario():
+        calls=[]
+        async def grouped(model,messages,**kw):
+            calls.append(messages)
+            return '\n'.join(f'День {n}-{n+1}: действие с ожидаемым результатом и критерием готовности.' for n in range(1,30,2))
+        async def unexpected(*_,**__):raise AssertionError('unexpected native call')
+        t=MissionTools(upstream=unexpected,upstream_stream=unexpected,authorize_model=allowed,
+            handlers={'generate_background':grouped,'reserve':lambda _:None,'release':lambda _:None})
+        step={'id':'s1','tool':'text.draft','arguments':{'instruction':'План на 30 дней'}}
+        m={'model':'velia-flash','goal':GOAL,'time_zone':'Europe/Istanbul','steps':[step]}
+        with pytest.raises(MissionError,match='mission_plan_incomplete'):
+            await t.execute(SESSION,m,step,unexpected)
+        assert len(calls)==2 and 'Нужны отдельные записи для дней:' in calls[1][-1]['content']
     asyncio.run(scenario())
 
 
