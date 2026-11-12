@@ -179,21 +179,39 @@ def test_order_attempt_resumes_existing_checkout_but_cannot_create_two_subscript
         service.checkout(7,'max',attempt)
 
 
-def test_uncertain_checkout_is_not_retried_or_charged_again(billing):
-    service, _ = billing
-    count = []
-    original = service.api.request
-    def lost(method, resource, **kwargs):
-        if resource != 'checkouts' or method != 'POST':
-            return original(method, resource, **kwargs)
-        count.append(1)
-        raise BillingError('billing_provider_unavailable',502)
-    service.api.request = lost
-    with pytest.raises(BillingError):
-        service.checkout(7,'plus',str(uuid.uuid4()))
-    with pytest.raises(BillingError):
-        service.checkout(7,'plus',str(uuid.uuid4()))
-    assert len(count) == 1  # An ambiguous create is held for reconciliation, never reissued.
+def test_uncertain_checkout_reuses_exact_durable_order_and_request_id(billing):
+    service,connect=billing
+    original=service.api.request
+    posted=[]
+    def lost_once(method,resource,**kwargs):
+        if method=='POST' and resource=='checkouts':
+            posted.append(deepcopy(kwargs['data']))
+            result=original(method,resource,**kwargs)
+            if len(posted)==1:raise BillingError('billing_provider_timeout',502)
+            return result
+        return original(method,resource,**kwargs)
+    service.api.request=lost_once
+    with pytest.raises(BillingError):service.checkout(7,'plus',str(uuid.uuid4()))
+    result=service.checkout(7,'plus',str(uuid.uuid4()))
+    assert result['ok'] and posted[0]==posted[1]
+    with connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM velia_creem_orders').fetchone()[0]==1
+    assert balance(connect)==(100,None)
+
+
+def test_uncertain_checkout_cannot_switch_product_or_user_binding(billing):
+    service,_=billing
+    original=service.api.request
+    posted=[]
+    def lost(method,resource,**kwargs):
+        if method=='POST' and resource=='checkouts':
+            posted.append(kwargs['data'])
+            raise BillingError('billing_provider_timeout',502)
+        return original(method,resource,**kwargs)
+    service.api.request=lost
+    with pytest.raises(BillingError):service.checkout(7,'plus',str(uuid.uuid4()))
+    with pytest.raises(BillingError,match='checkout_already_pending'):service.checkout(7,'max',str(uuid.uuid4()))
+    assert len(posted)==1
 
 
 @pytest.mark.parametrize('before_paid',[False,True])
@@ -294,3 +312,22 @@ def test_readiness_returns_only_safe_reason_and_caches_provider_failures(billing
     assert value['enabled'] is False and value['unavailable_reason']=='billing_provider_credentials'
     assert service.catalog()==value and len(calls)==1
     assert set(value)=={'ok','enabled','mode','plans','unavailable_reason'}
+
+
+def test_known_checkout_is_recovered_by_read_only_lookup_after_validation_failure(billing):
+    service,connect=billing
+    original=service.api.request
+    def bad_url(method,resource,**kwargs):
+        result=original(method,resource,**kwargs)
+        if resource=='checkouts':result['checkout_url']='https://untrusted.test/checkout/ch_example'
+        return result
+    service.api.request=bad_url
+    with pytest.raises(BillingError):service.checkout(7,'plus',str(uuid.uuid4()))
+    with connect() as conn:
+        order=conn.execute('SELECT id,checkout_id FROM velia_creem_orders').fetchone()
+    assert order[1]=='ch_example'
+    service.api.values[('checkouts','ch_example')]={'id':'ch_example','mode':'prod','status':'pending',
+        'product':PLANS['plus']['product_id'],'request_id':order[0],
+        'checkout_url':'https://www.creem.io/checkout/prod_example/ch_example'}
+    assert service.checkout(7,'plus',str(uuid.uuid4()))['ok'] is True
+    assert len(service.api.posts)==1
