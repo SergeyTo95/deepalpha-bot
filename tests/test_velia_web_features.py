@@ -31,6 +31,33 @@ def test_feature_paths_are_exact_and_do_not_expose_auth_or_admin():
 def test_credentials_are_removed_recursively():
     assert safe_result({'ok': True, 'access_token': 'secret', 'nested': [{'api_key':'secret','title':'Keep'}]}) == {'ok':True,'nested':[{'title':'Keep'}]}
 
+
+def test_token_catalog_and_balance_require_session_and_expose_no_payment_writes():
+    async def scenario():
+        seen = []
+        async def session_for(request):
+            return SimpleNamespace(access='owner-token', user_id=7) if request.headers.get('X-Test') else None
+        async def upstream(method, path, **kwargs):
+            seen.append((method, path, kwargs))
+            return 200, {'ok': True, 'topups': [], 'api_key': 'must-not-leak'}
+        app = web.Application()
+        setup_feature_routes(app, session_for=session_for, same_origin=lambda r: True,
+                             upstream=upstream, json_response=lambda d, status=200: web.json_response(d, status=status))
+        async with TestServer(app) as server, ClientSession() as client:
+            for path in ('economy/me', 'economy/catalog'):
+                url = str(server.make_url('/web-api/v1/features/' + path))
+                assert (await client.get(url)).status == 401
+                assert not seen
+                response = await client.get(url, headers={'X-Test': 'yes'})
+                assert response.status == 200
+                assert 'api_key' not in await response.json()
+                assert seen.pop() == ('GET', '/mobile-api/v1/' + path, {'token': 'owner-token', 'data': None})
+                assert (await client.post(url, headers={'X-Test': 'yes'}, json={})).status == 404
+            for path in ('economy/checkout', 'economy/google-play/verify', 'economy/webhooks/creem'):
+                assert not route_allowed('POST', path)
+            assert not seen
+    asyncio.run(scenario())
+
 def test_feature_relay_checks_origin_identity_ownership_and_passes_idempotency():
     async def scenario():
         seen=[]
