@@ -1,3 +1,4 @@
+import {setupClientUpdates} from './client-updates.mjs';
 import {setupWebPush} from './web-push.mjs';
 import {setupPulse,wantsPulse,pulseWhen,pulseDateReply,pulseMessageContext} from './pulse.mjs';
 import {runPulseCommand} from './pulse-agent.mjs';
@@ -285,6 +286,10 @@ $('autoloop-create').onclick=()=>{
 };
 const browserStorage = { getItem: (key) => localStorage.getItem(key) };
 const localHistory = new LocalHistory(browserHistoryStore());
+const clientUpdates=setupClientUpdates({version:document.documentElement.dataset.clientVersion,request,toast,
+  blocked:()=>busy||selectedFiles.length>0||!!$('prompt').value.trim()||!$('feature-view').hidden||!!document.querySelector('.voice-dialog[open],#takeover-dialog[open]'),
+  show:reload=>{$('client-update').hidden=false;$('client-update-refresh').onclick=reload;},
+  refresh:async()=>{await save();location.reload();}});
 const authChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('velia-auth-v1') : null;
 function lockHistory() {
   incomeToSave = null;
@@ -1283,6 +1288,7 @@ async function runMeetingChat(text,voiceTurn,retryInput=null){
   finally{if(abort?.signal===signal){abort=null;setBusy(false);}if(profile?.account===owner)render();}
 }
 async function generate(retry = false, voiceTurn = false) {
+  if(clientUpdates.stale()&&!voiceTurn){toast('Доступно обновление. Скопируй черновик и обнови страницу кнопкой выше.');return;}
   if (busy || !ready) return;
   if (agentMode && !profile) { openAuth(); return; }
   if (agentMode && current()?.medicalNoSearch) {toast('Для действий в браузере открой новый чат.');return;}
