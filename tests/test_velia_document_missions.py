@@ -7,7 +7,7 @@ import json
 from types import SimpleNamespace
 import uuid
 import pytest
-from desktop.mission_delivery import document_plan
+from desktop.mission_delivery import document_plan,daily_plan_days,missing_plan_days,document_title,document_text
 from desktop.mission_runtime import MissionTools,run_mission
 from desktop.mission_store import MissionStore
 from desktop.mission_schema import validate_plan
@@ -33,6 +33,36 @@ def test_standalone_text_uses_validated_fixed_document_steps(goal,formats):
     assert [s['tool'] for s in p['steps']]==['text.draft']+['document.export']*len(formats)
     assert [s['arguments']['format'] for s in p['steps'][1:]]==formats
     assert all(s['arguments']['source_step']=='s1' for s in p['steps'][1:])
+
+
+def test_daily_entries_cannot_be_replaced_by_ranges_or_a_partial_plan():
+    assert daily_plan_days(GOAL)==30
+    assert daily_plan_days('Create a 14-day launch plan as PDF')==14
+    assert daily_plan_days('План на 61 день в PDF') is None
+    assert daily_plan_days('План на 7 дней и 30 дней в PDF') is None
+    assert daily_plan_days('Подготовь план на 30 дней по неделям и создай PDF') is None
+    assert daily_plan_days('Create a weekly plan for 30 days as PDF') is None
+    assert missing_plan_days(GOAL,BODY)==[]
+    grouped='\n'.join(f'### День {n}-{n+1}: этап' for n in range(1,30,2))
+    assert missing_plan_days(GOAL,grouped)==list(range(1,31))
+    assert missing_plan_days(GOAL,BODY.replace('День 18:','Этап 18:'))==[18]
+    assert not missing_plan_days('Create a plan for 2 days as PDF','## Day 1\nWrite the catalog.\n**Day 2**: Test checkout.')
+
+
+def test_plan_title_and_future_result_labels_preserve_substantive_text():
+    assert document_title(GOAL)=='План запуска цветочного интернет-магазина на 30 дней'
+    assert document_title('Create a detailed launch plan as PDF')=='Launch plan'
+    draft='### День 1\n- Результат: Зарегистрирован бизнес\n- Критерий: документы готовы\n'
+    assert document_text(GOAL,draft)==draft.replace('Результат:','Ожидаемый результат:')
+    assert document_text('Напиши статью в PDF',draft)==draft
+    assert document_text('Create a plan as PDF','**Result**: A tested checkout')=='**Expected outcome**: A tested checkout'
+
+
+def test_largest_supported_daily_plan_stays_inside_typed_instruction_limit():
+    goal='Подготовь подробный план запуска магазина на 60 дней и создай PDF'
+    p=document_plan(goal)
+    assert validate_plan(p,goal)
+    assert len(p['steps'][0]['arguments']['instruction'])<=2000
 
 @pytest.mark.parametrize('goal',[
     'Что такое PDF?',

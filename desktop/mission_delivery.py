@@ -34,6 +34,53 @@ def parse_plan(raw,goal):
     return validate_plan(plan,goal)
 
 
+def daily_plan_days(goal):
+    """Only an explicit, unambiguous bounded daily-plan period, never inferred."""
+    if not isinstance(goal,str) or not re.search(r'\bплан\w*|\bplan\b',goal,re.I):return None
+    if re.search(r'по\s+(?:недел\w*|этап\w*|месяц\w*)|не\s+по\s+дням|\bweekly\b|\bby\s+week\b|\bin\s+phases\b',goal,re.I):return None
+    periods={int(n) for n in re.findall(r'(?<![\d.])(\d{1,2})\s*[-–]?\s*(?:дней|дня|день|дневн\w*|days?)\b',goal,re.I)}
+    return next(iter(periods)) if len(periods)==1 and 1<=next(iter(periods))<=60 else None
+
+
+def missing_plan_days(goal,content):
+    days=daily_plan_days(goal)
+    if days is None:return []
+    # A range such as “День 1–3” cannot stand in for three daily entries.
+    headings=re.findall(r'^\s{0,3}(?:#{1,6}\s*)?(?:\*\*)?(?:День|Day)\s+(\d{1,2})(?!\d)\s*(?:\*\*)?(?=\s*(?::|$|[—–-]\s*[^\d\s]))',content,re.I|re.M)
+    found={int(n) for n in headings}
+    return [n for n in range(1,days+1) if n not in found]
+
+
+def document_guidance(goal):
+    if not re.search(r'\bплан\w*|\bplan\b',goal,re.I):return ''
+    guide=('Это план будущих действий. В пунктах пиши конкретное действие и «Ожидаемый результат», '
+        'а не утверждения о выполненной регистрации, подписанных договорах, запуске рекламы или продажах. '
+        'У результата должен быть проверяемый критерий: документ, готовый элемент или тест. '
+        'Не добавляй мобильное приложение, штат сотрудников и другие крупные работы, если они не нужны для минимального запуска. '
+        'Общие риски и необходимые допущения вынеси в один короткий раздел. Не повторяй одинаковые шаблонные риски каждый день. ')
+    days=daily_plan_days(goal)
+    if days is not None:
+        guide+=('Каждый день обязан иметь отдельный заголовок «День N» (или «Day N» для английского текста). '
+            'Не объединяй дни в диапазоны, не заменяй их оглавлением. Под каждым заголовком дай действие и ожидаемый результат в 1–2 коротких предложениях. '
+            'Обязательные номера дней: '+', '.join(map(str,range(1,days+1)))+'. ')
+    return guide
+
+
+def document_title(goal):
+    title=re.sub(r'^\s*(?:подготовь|составь|напиши|создай|сделай|сформируй|prepare|write|create|draft|make)\s+(?:подробн\w*\s+|детальн\w*\s+|a\s+|an\s+|detailed\s+)*','',goal,flags=re.I)
+    title=re.sub(r'\s+(?:(?:и\s+)?(?:создай|сделай|сформируй|сохрани|экспортируй)\s+(?:файл\s+)?|(?:and\s+)?(?:create|as|in)\s+)(?:pdf|docx|пдф)(?:\s*(?:и|and|,)\s*(?:pdf|docx|пдф))*[.!\s]*$','',title,flags=re.I)
+    title=re.sub(r'\s+',' ',title).strip(' .')[:160]
+    return title[:1].upper()+title[1:] if title else goal[:160]
+
+
+def document_text(goal,content):
+    if not re.search(r'\bплан\w*|\bplan\b',goal,re.I):return content
+    # Label expectations explicitly without changing the model's substantive
+    # advice, quoted facts, task records or unrelated article text.
+    return re.sub(r'^([ \t]*(?:[-*][ \t]+)?(?:\*\*)?)(Результат|Result|Outcome)(?=(?:\*\*)?[ \t]*:)',
+        lambda m:m[1]+('Ожидаемый результат' if m[2].casefold()=='результат' else 'Expected outcome'),content,flags=re.I|re.M)
+
+
 def document_plan(goal):
     """Compile only standalone text documents, never omit reads or external actions.
 
@@ -59,13 +106,13 @@ def document_plan(goal):
         r'\b(?:search|research|find|check|send|publish|save|schedule|calendar|email|'
         r'approve|confirm|attach|upload|convert|translate|source|data|current|latest|today|my|our|previous|above)\b|'
         r'github|railway|vercel|notion|shopify|gmail|outlook|telegram|crm',s):return None
-    title=re.sub(r'\s+',' ',goal).strip()[:160]
+    title=document_title(goal)
     instruction=('Подготовь полностью готовый текст по исходному запросу, который затем будет экспортирован в документ. '
         'Начинай сразу с содержания, без обещаний, вступления о будущей работе и уточняющих вопросов. '
-        'Если нужен план на дни, распиши действия для каждого дня указанного периода, а не только диапазоны недель. '
+        'Соблюдай запрошенную детализацию периода. '
         'Укажи результат каждого этапа, критерии готовности и риски. '
         'Недостающие условия обозначь как допущения. Не выдумывай факты, цены и результаты исследований. '
-        'Не утверждай, что файл уже создан: его создаёт следующий инструмент.')
+        'Не утверждай, что файл уже создан: его создаёт следующий инструмент. '+document_guidance(goal))
     steps=[{'id':'s1','title':'Подготовить текст документа','tool':'text.draft','arguments':{'instruction':instruction}}]
     for index,fmt in enumerate(formats,2):
         steps.append({'id':'s'+str(index),'title':'Создать '+fmt.upper(),'tool':'document.export',
