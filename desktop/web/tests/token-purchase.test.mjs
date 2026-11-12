@@ -142,3 +142,14 @@ test('unavailable billing explains the failure, offers a safe refresh and never 
   all(root).find(n=>n.textContent==='Проверить оплату ещё раз').events.click();assert.equal(refreshes,1);
   assert.equal(all(root).some(n=>n.textContent.includes('must-not-show-key')),false);
 }));
+
+
+test('checkout failure is visible next to the clicked plan and button text recovers',()=>withUI(async()=>{
+  const root=new Element('div');
+  mountTokenPurchase(root,catalog,{billing:billingReady,account:noSubscription,
+    request:async()=>{throw Object.assign(new Error('redacted'),{code:'billing_provider_timeout'});}});
+  const card=all(root).find(n=>n.tag==='article' && n.className.includes('subscription-plan-plus'));
+  const buy=all(card).find(n=>n.textContent==='Выбрать Plus');await buy.events.click();
+  assert.equal(buy.textContent,'Выбрать Plus');assert.equal(buy.disabled,false);
+  assert.ok(all(card).some(n=>n.textContent.includes('сохранённый заказ будет продолжен')));
+}));

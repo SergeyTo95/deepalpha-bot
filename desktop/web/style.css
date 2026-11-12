@@ -1417,6 +1417,25 @@ dialog::backdrop {
 .token-total { font-weight:600; }
 .token-purchase details { margin-top:18px; }
 .token-purchase li { margin:8px 0; }
+/* Customer balance: explicit personal fields, no provider/admin diagnostics. */
+.balance-overview { margin:14px 0 28px; }
+.balance-hero { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(0,1fr); gap:32px; padding:32px; border:1px solid var(--border); border-radius:24px; background:radial-gradient(ellipse at 0 0,#82dfd212,transparent 65%),var(--rail); overflow:hidden; }
+.balance-eyebrow { display:block; color:var(--muted); font-size:10px; font-weight:650; letter-spacing:.15em; }
+.balance-number { font-size:clamp(32px,5vw,48px); font-weight:650; letter-spacing:-.055em; line-height:1.12; margin:18px 0 5px; font-variant-numeric:tabular-nums; overflow-wrap:normal; }
+.balance-unit { color:var(--soft); font-size:13px; }
+.balance-caption { color:var(--muted); font-size:12px; line-height:1.6; margin:14px 0 0; }
+.balance-plan { min-width:0; border-left:1px solid var(--border); padding-left:30px; display:flex; flex-direction:column; align-items:flex-start; justify-content:center; }
+.balance-plan-badge { color:var(--text); display:inline-block; margin-top:16px; padding:5px 13px; border:1px solid var(--border); border-radius:100px; font-size:16px; font-weight:600; }
+.balance-plan-plus { color:#82dfd2; border-color:#82dfd255; }
+.balance-plan-pro { color:#c7a6ff; border-color:#c7a6ff55; }
+.balance-plan-max { color:#e9ca90; border-color:#e9ca9055; }
+.balance-plan-status { color:var(--soft); font-size:12px; margin:12px 0 18px; }
+.balance-plan-link { font-size:12px; text-decoration:none; border-bottom:1px solid var(--border); padding:4px 0; min-height:32px; }
+.balance-activity { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px 24px; margin-top:12px; padding:18px 24px; border:1px solid var(--border); border-radius:16px; background:var(--rail); }
+.balance-activity-value { display:flex; align-items:baseline; flex-wrap:wrap; gap:10px; color:var(--soft); font-size:12px; }
+.balance-activity-value strong { color:var(--text); font-size:23px; font-weight:600; font-variant-numeric:tabular-nums; }
+.balance-activity .balance-caption { margin:0; max-width:280px; font-size:11px; }
+@media(max-width:620px) { .balance-hero { grid-template-columns:minmax(0,1fr); gap:24px; padding:26px 24px; } .balance-plan { border-left:0; border-top:1px solid var(--border); padding:22px 0 0; } .balance-number { font-size:clamp(30px,8vw,44px); } .balance-activity { padding:16px 20px; } }
 .subscription-plans { padding:28px 24px; background:linear-gradient(155deg,var(--rail),var(--bg)); }
 .subscription-heading { max-width:620px; margin:0 auto 22px; text-align:center; }
 .subscription-eyebrow { font-size:10px; font-weight:700; letter-spacing:.2em; color:var(--soft); }
@@ -1437,8 +1456,8 @@ dialog::backdrop {
 .subscription-benefits { list-style:none; padding:0; margin:22px 0 24px; color:var(--soft); font-size:12px; line-height:1.6; }
 .subscription-benefits li { position:relative; padding-left:17px; margin:0 0 11px; }
 .subscription-benefits li::before { content:'✓'; position:absolute; left:0; color:var(--plan-accent); }
-.subscription-plan .feature-primary { margin-top:auto; width:100%; min-width:0; font-size:12px; padding:12px 8px; }
-.subscription-plan-pro .feature-primary { background:#c7a6ff; color:#20132e; border-color:#c7a6ff; }
+.feature-view .subscription-plan .feature-primary { background:var(--strong); color:var(--on); border-color:var(--strong); margin-top:auto; width:100%; min-width:0; font-size:12px; padding:12px 8px; }
+.feature-view .subscription-plan-pro .feature-primary { background:#c7a6ff; color:#20132e; border-color:#c7a6ff; }
 .subscription-plan button:disabled { opacity:.45; cursor:not-allowed; }
 .subscription-notice { margin:0; font-size:12px; text-align:center; color:var(--soft); }
 .subscription-feedback { min-height:20px; color:var(--soft); font-size:13px; }

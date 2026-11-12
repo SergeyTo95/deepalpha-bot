@@ -13,6 +13,7 @@ import {mountAgentix} from './agentix.mjs';
 import {mountFigma} from './figma.mjs';
 import {mountConnections,mountGithubRepositories} from './connections.mjs';
 import {mountTokenPurchase} from './token-purchase.mjs';
+import {mountBalanceOverview} from './balance-overview.mjs';
 
 export const SECTIONS = Object.freeze([
   ['studio', 'Studio'], ['projects', 'Проекты'], ['research', 'Исследования'],
@@ -350,13 +351,10 @@ export function setupFeatures({notebook,pulse,webPush,openPulseResource=()=>{},o
         const results = await Promise.allSettled([call('economy/me'),call('usage'),call('economy/catalog'),call('economy/creem/catalog'),call('economy/creem/account')]);
         if(ticket!==epoch)return;
         body.replaceChildren();
-        for (const [index,result] of results.slice(0,2).entries()) {
-          const card=node('article',undefined,'feature-card');
-          card.append(node('h3',index===0?'Твой баланс':'Использование'));
-          if(result.status==='fulfilled')card.append(display(result.value.account||result.value.usage||result.value));
-          else card.append(node('p',index===0?'Не удалось загрузить баланс. Обнови раздел.':'Статистика временно недоступна.','field-hint'));
-          body.append(card);
-        }
+        mountBalanceOverview(body, {
+          account:results[0].status==='fulfilled'?results[0].value.account:null,
+          usage:results[1].status==='fulfilled'?results[1].value.usage:null,
+        });
         mountTokenPurchase(body,results[2].status==='fulfilled'?results[2].value:null, {
           billing:results[3].status==='fulfilled'?results[3].value:null,
           account:results[4].status==='fulfilled'?results[4].value:null,

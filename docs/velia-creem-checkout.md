@@ -90,11 +90,18 @@ Spent credits are recorded as unrecovered rather than producing a negative
 balance. Won disputes and unrecovered amounts need operator reconciliation.
 A partial refund leaves the paid period active while a net grant remains.
 
-An ambiguous checkout creation is held for reconciliation and is never silently
-reissued. An existing open checkout is resumed; switching plans while another
-checkout is pending is blocked. Expired or uncertain checkouts currently need
-support to reconcile against Creem before releasing the pending order. Do not
-clear them just to bypass a duplicate-subscription guard.
+An ambiguous checkout response preserves the existing owner, plan, order UUID,
+provider `request_id`, and exact creation payload. An explicit retry claims that
+same order under the PostgreSQL user lock; concurrent creates are blocked. If a
+verified provider checkout ID was received, recovery only retrieves that checkout
+by ID. If the response was lost before receiving its ID, the retry repeats the
+same request ID, following Creem's documented checkout retry/idempotency guidance.
+There is no automatic create loop and no replacement order. The buyer must still
+complete hosted checkout before any charge or credit grant.
+
+An open checkout is resumed; switching plans while another checkout is pending
+is blocked. Expired checkouts need provider reconciliation before releasing the
+pending order. Do not clear them just to bypass a duplicate-subscription guard.
 
 The portal always resolves the stored customer of the authenticated account;
 the browser cannot submit a customer ID. Management remains available with a
@@ -147,3 +154,18 @@ The UI distinguishes transport failure from provider readiness and offers a
 read-only retry. Disabled purchase controls say that payment is unavailable.
 The HTML shell versions both app and CSS URLs to avoid new membership markup
 being rendered with an old cached stylesheet.
+
+## Customer balance overview
+
+The web balance section renders explicit customer fields instead of dumping API
+objects: grouped credit balance, a known plan name, a readable paid access period,
+and the personal counted-answer statistic when available. A Free account does
+not display unrelated legacy subscription timestamps. Missing balances remain
+unavailable rather than appearing as zero. Provider costs, global counters,
+internal budget limits and raw source codes are not shown. No credit-usage
+percentage or invented allowance is inferred from provider dollar budgets.
+
+Checkout feedback is rendered beside the clicked plan, with a loading button
+label and an explicit retry message. Provider failures log only a safe phase,
+reason code and HTTP status; no URLs, tokens, customer data or response bodies
+are logged.
