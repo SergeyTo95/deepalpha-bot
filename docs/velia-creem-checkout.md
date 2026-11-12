@@ -2,10 +2,17 @@
 
 ## Release and activation
 
-Deploy the account authority (`deepalpha-bot`) first, then
-`velia-desktop-gateway`, in the existing Railway environment. Keep their separate
-source branches: the authority contains account API changes absent from the
-older gateway base. This release creates no service, database or project.
+Deploy the account authority (`deepalpha-bot`) in **production** first, then
+`velia-desktop-gateway` in **deepalpha-bot-pr-577**. The public website currently
+runs on that gateway environment, but its canonical account authority is
+`https://deepalpha-bot-production.up.railway.app`. Billing and all balance
+changes must stay with that production authority. A billing deployment in the
+gateway's preview environment cannot serve production account payments.
+
+Preserve the authority's current production ancestry (Google Workspace/calendar
+backend) and the gateway's independent ancestry. This release creates no
+service, database or project. Do not switch account origins to the preview
+backend or create a separate billing authority.
 
 In **Creem live mode**, create a webhook with this exact endpoint:
 
@@ -18,7 +25,7 @@ Select `checkout.completed`, `subscription.active`, `subscription.paid`,
 An empty event list means all events in Creem's API. Creem credit-meter events
 are unrelated to VELIA credits and are not required.
 
-Set these variables **directly in Railway on `deepalpha-bot`**, never in chat,
+Set these variables **directly in Railway on `deepalpha-bot`, environment `production`**, never in chat,
 browser JavaScript, a repository or logs:
 
 | Variable | Value |
@@ -29,8 +36,10 @@ browser JavaScript, a repository or logs:
 
 The API key must permit checkout creation, product/subscription/transaction
 reads, customer billing portal creation, and webhook/secret reads. No live Creem
-key is needed in the gateway. Its existing `VELIA_DESKTOP_AUTH_ORIGIN` points at
-the account authority; the existing `DATABASE_URL` there owns balances.
+key is needed in the gateway. Keys entered on `deepalpha-bot-pr-577` are not
+inherited by production and must be entered in production separately. Its
+existing `VELIA_DESKTOP_AUTH_ORIGIN` continues to point at the production account
+authority; the existing `DATABASE_URL` there owns balances.
 
 Purchasing fails closed until the server confirms all three live products,
 prices, monthly recurrence, USD, active status, exclusive tax mode, and the
@@ -128,3 +137,13 @@ Official references:
 - https://docs.creem.io/code/webhooks
 - https://docs.creem.io/api-reference/endpoint/list-webhooks
 - https://docs.creem.io/api-reference/endpoint/get-webhook-secret
+
+## Availability and browser updates
+
+The authenticated catalog returns a safe `unavailable_reason` when preflight
+fails; it never returns keys, secret values, provider bodies or customer data.
+Readiness failures are cached for 30 seconds and logged by reason code only.
+The UI distinguishes transport failure from provider readiness and offers a
+read-only retry. Disabled purchase controls say that payment is unavailable.
+The HTML shell versions both app and CSS URLs to avoid new membership markup
+being rendered with an old cached stylesheet.

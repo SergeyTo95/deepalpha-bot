@@ -110,6 +110,7 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
             headers["Authorization"] = "Bearer " + token
         if idempotency_key:
             headers['Idempotency-Key'] = idempotency_key
+        billing = path.startswith("/mobile-api/v1/economy/creem/")
         try:
             async with app[CLIENT].request(method, config.auth_origin + path, headers=headers,
                     json=data, allow_redirects=False,
@@ -120,7 +121,13 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
                     limit = MAX_AUTH_RESPONSE if path.startswith('/mobile-api/v1/auth/') else (8 * 1024 * 1024 if re.fullmatch(r'/mobile-api/v1/notebook/materials/[a-f0-9-]{36}', path) else 2 * 1024 * 1024)
                     if len(body) > limit:
                         raise AuthenticationUnavailable()
-                result = json.loads(body)
+                try:
+                    result = json.loads(body)
+                except (ValueError, UnicodeDecodeError):
+                    if billing:
+                        logging.getLogger(__name__).warning('Creem relay rejected non-JSON response status=%s', response.status)
+                        return 503, {'ok': False, 'error': 'billing_upstream_invalid_response'}
+                    raise
                 if not isinstance(result, dict) or response.status not in {200, 201, 202, 400, 401, 402, 403, 404, 409, 411, 413, 415, 422, 429, 500, 502, 503, 504}:
                     raise AuthenticationUnavailable()
                 return response.status, result

@@ -130,3 +130,15 @@ test('renewal management remains available while new purchases are disabled',()=
   const other=all(root).filter(node=>node.textContent==='Подписка уже оформлена');
   assert.ok(other.every(node=>node.disabled===true));
 }));
+
+
+test('unavailable billing explains the failure, offers a safe refresh and never enables checkout',()=>withUI(()=>{
+  const root=new Element('div');let refreshes=0;
+  mountTokenPurchase(root,catalog,{billingError:{code:'billing_upstream_invalid_response',message:'must-not-show-key'},
+    account:noSubscription,request:async()=>{throw Error('must not create checkout');},onRefresh:()=>refreshes++});
+  assert.ok(all(root).some(n=>n.textContent.includes('Не удалось подключиться к серверу оплаты')));
+  const disabled=all(root).filter(n=>n.textContent==='Оплата недоступна');
+  assert.equal(disabled.length,3);assert.ok(disabled.every(n=>n.disabled));
+  all(root).find(n=>n.textContent==='Проверить оплату ещё раз').events.click();assert.equal(refreshes,1);
+  assert.equal(all(root).some(n=>n.textContent.includes('must-not-show-key')),false);
+}));
