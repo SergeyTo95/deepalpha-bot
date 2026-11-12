@@ -29,6 +29,10 @@ BINARY_ROUTES = [
     ("GET", re.compile(r"studio-assets/[A-Za-z0-9_-]{1,128}/content\Z")),
     ("GET", re.compile(r"media/(?:images|videos|music)/[A-Za-z0-9_-]{1,128}/content\Z")),
 ]
+PATTERNS += [
+    ('GET', re.compile(r'economy/creem/(?:catalog|account)\Z')),
+    ('POST', re.compile(r'economy/creem/(?:checkout|portal)\Z')),
+]
 QUERY_KEYS = {"offset", "limit", "conversation_id", "mode", "kind", "project_id", "before_revision", "unread_only", "client_request_id", "user_id", "expires", "signature", "installation_id"}
 SENSITIVE = {"access_token", "refresh_token", "api_key", "provider_api_key", "authorization", "worker_url", "worker_token"}
 

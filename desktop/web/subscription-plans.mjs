@@ -19,28 +19,102 @@ function element(tag, text, className) {
   return node;
 }
 
-export function mountSubscriptionPlans(root) {
+export function paymentDestination(value, portal=false) {
+  if (typeof value !== 'string' || value.length > 4096) throw Error('Некорректный адрес оплаты.');
+  const url = new URL(value);
+  const allowed = portal
+    ? ['www.creem.io','creem.io'].includes(url.hostname) && url.pathname.startsWith('/portal/')
+    : (['www.creem.io','creem.io'].includes(url.hostname) && url.pathname.startsWith('/checkout/')) ||
+      (url.hostname==='checkout.creem.io' && url.pathname.startsWith('/ch_'));
+  if (url.protocol !== 'https:' || url.hash || url.username || url.password || url.port && url.port!=='443' || !allowed)
+    throw Error('Некорректный адрес оплаты.');
+  return url.href;
+}
+
+const benefits = {
+  plus: ['1 200 токенов каждый оплаченный месяц','Для личных задач, текстов и документов','Удобный старт с платными возможностями'],
+  pro: ['3 000 токенов каждый оплаченный месяц','Для регулярной работы и исследований','На 20% выгоднее за токен, чем Plus'],
+  max: ['6 500 токенов каждый оплаченный месяц','Для больших проектов и активной работы','На 26% выгоднее за токен, чем Plus'],
+};
+const errors = {
+  subscription_exists:'У тебя уже есть подписка. Открой управление подпиской, чтобы проверить её или отменить продление.',
+  checkout_already_pending:'Есть незавершённая оплата. Продолжи выбранный ранее тариф. Если страница оплаты не открывается, напиши support@velyoncore.ai.',
+  billing_not_configured:'Оплата ещё подключается. Попробуй позже.',
+  billing_product_mismatch:'Параметры тарифа изменились. Обнови раздел перед оплатой.',
+};
+
+export function mountSubscriptionPlans(root, {billing=null, account=null, request=null,
+    isCurrent=()=>true, navigate=url=>globalThis.location.assign(url)}={}) {
   const section = element('section', undefined, 'feature-card subscription-plans');
-  section.append(element('h3','Подписки VELIA'),
-    element('p','Ежемесячные тарифы с токенами для платных возможностей VELIA.'),
-    element('p','Подписки готовятся к запуску. Оплата станет доступна после подключения начислений.','subscription-notice'));
+  const header = element('div',undefined,'subscription-heading');
+  header.append(element('span','VELIA MEMBERSHIP','subscription-eyebrow'),
+    element('h3','Больше возможностей для твоих идей'),
+    element('p','Выбери запас токенов под свой ритм. Пиши, исследуй и создавай документы вместе с Велией.'));
+  section.append(header);
+  const enabled = billing?.ok===true && billing.enabled===true && billing.mode==='prod' && account?.ok===true && typeof request==='function';
+  const canManage = account?.ok===true && typeof request==='function' && (enabled || account.can_manage===true);
+  const notice = element('p', enabled ? 'Ежемесячная подписка · отмена продления в любой момент' :
+    'Онлайн-оплата подключается. Тарифы уже доступны для ознакомления.', 'subscription-notice');
+  section.append(notice);
   const grid = element('div', undefined, 'subscription-grid');
+  const feedback = element('p','', 'subscription-feedback');
+  feedback.setAttribute('role','status'); feedback.setAttribute('aria-live','polite');
   const money = value => new Intl.NumberFormat('ru-RU',{style:'currency',currency:'USD'}).format(value);
+  const controls = [], initialDisabled = new Map(), attempts = new Map();
+  let busy = false;
+  const transact = async (plan, portal=false) => {
+    if (!(portal?canManage:enabled) || busy || !isCurrent()) return;
+    busy = true;
+    controls.forEach(button=>button.disabled=true);
+    feedback.textContent = portal ? 'Открываю управление подпиской…' : 'Готовлю защищённую страницу оплаты…';
+    try {
+      if (!portal && !attempts.has(plan)) attempts.set(plan,crypto.randomUUID());
+      const result = await request('economy/creem/'+(portal?'portal':'checkout'),
+        {method:'POST',data:portal?{}:{plan,attempt:attempts.get(plan)}});
+      if (!isCurrent()) return;
+      if (!result?.ok) throw Error(result?.error||'Не удалось открыть оплату.');
+      navigate(paymentDestination(portal?result.portal_url:result.checkout_url,portal));
+    } catch (error) {
+      if (isCurrent() && error.name!=='AbortError') feedback.textContent = errors[error.message] ||
+        'Не удалось открыть оплату. Обнови раздел или обратись в support@velyoncore.ai. Повторного списания здесь не выполняется.';
+    } finally {
+      busy = false;
+      if (isCurrent()) controls.forEach(button=>button.disabled=initialDisabled.get(button));
+    }
+  };
   for (const plan of CREEM_SUBSCRIPTIONS) {
     const card = element('article', undefined, `subscription-plan subscription-plan-${plan.code}`);
-    card.append(element('h4',plan.name),element('p',`${money(plan.price)} / месяц`,'subscription-price'),
-      element('p',`${plan.monthlyCredits.toLocaleString('ru-RU')} токенов за оплаченный месяц`,'subscription-credits'));
-    const button = element('button','Подписка — скоро','feature-primary');
-    button.type = 'button'; button.disabled = true;
-    button.setAttribute('aria-label',`Подписка ${plan.name} пока недоступна`);
-    // Do not attach productUrl to href, data attributes or a click handler.
-    // A live public payment link cannot bind the purchase to this account.
-    card.append(button);
-    grid.append(card);
+    const art = element('div',undefined,'subscription-art'); art.setAttribute('aria-hidden','true');
+    art.append(element('span','V','subscription-monogram'),element('span','', 'subscription-orbit'));
+    const badge = element('span', plan.code==='pro'?'Для ежедневной работы':plan.code==='max'?'Максимум токенов':'Лёгкий старт','subscription-badge');
+    const content = element('div',undefined,'subscription-content');
+    content.append(badge,element('h4',plan.name),element('p',money(plan.price),'subscription-price'),
+      element('span','в месяц · USD','subscription-period'));
+    const list = element('ul',undefined,'subscription-benefits');
+    benefits[plan.code].forEach(text=>list.append(element('li',text)));
+    content.append(list);
+    const current = account?.plan_code===plan.code;
+    const button = element('button',current?'Управлять подпиской':'Выбрать '+plan.name,'feature-primary');
+    const existing = account?.has_active_subscription===true;
+    if (existing && !current) button.textContent='Подписка уже оформлена';
+    button.type = 'button'; button.disabled = existing ? (!current || !canManage) : !enabled;
+    button.setAttribute('aria-label',current?'Управлять подпиской '+plan.name:'Оформить подписку '+plan.name);
+    // Only server-created, owner-bound checkouts can be opened. Public product
+    // links above remain identifiers for configuration, never a payment fallback.
+    if (!button.disabled) button.addEventListener('click',()=>transact(plan.code,existing));
+    controls.push(button); content.append(button);
+    card.append(art,content); grid.append(card);
   }
-  section.append(grid,
-    element('p','После запуска: автоматическое продление каждый месяц с возможностью отменить следующие списания. Итоговая сумма с применимыми налогами будет показана перед оплатой.','field-hint'),
-    element('p','Разовое пополнение токенов не меняет тариф подписки.','field-hint'));
+  section.append(grid,feedback);
+  if (account?.has_subscription) {
+    const manage = element('button','Платежи и управление продлением','subscription-manage');
+    manage.type='button'; manage.disabled=!canManage;
+    if (canManage) manage.addEventListener('click',()=>transact(null,true));
+    controls.push(manage); section.append(manage);
+  }
+  controls.forEach(button=>initialDisabled.set(button,button.disabled));
+  section.append(element('p','После оплаты токены зачисляются после подтверждения платежа. Применимые налоги и итоговая сумма будут показаны на странице оплаты.','field-hint'),
+    element('p','Free остаётся доступным. Разовое пополнение токенов не меняет тариф подписки.','field-hint'));
   root.append(section);
   return section;
 }

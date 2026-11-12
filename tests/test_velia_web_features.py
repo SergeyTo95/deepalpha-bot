@@ -207,3 +207,28 @@ def test_push_routes_are_exact_and_bind_the_trusted_origin_and_current_account()
             assert response.status==200 and (await response.json())['account']==account
             assert seen[0]['origin']==origin
     asyncio.run(scenario())
+
+
+def test_creem_writes_require_origin_and_session_and_never_expose_webhook_relay():
+    async def scenario():
+        seen=[]
+        async def session_for(request):
+            return SimpleNamespace(access='owner-session',user_id=7) if request.headers.get('X-Test') else None
+        async def upstream(method,path,**kwargs):
+            seen.append((method,path,kwargs)); return 200,{'ok':True}
+        app=web.Application()
+        setup_feature_routes(app,session_for=session_for,
+            same_origin=lambda r:r.headers.get('Origin')=='https://velyoncore.ai' and r.headers.get('X-Velia-Request')=='1',
+            upstream=upstream,json_response=lambda data,status=200:web.json_response(data,status=status))
+        async with TestServer(app) as server,ClientSession() as client:
+            url=server.make_url('/web-api/v1/features/economy/creem/checkout')
+            body={'plan':'plus','attempt':'opaque'}
+            assert (await client.post(url,json=body)).status==403
+            headers={'Origin':'https://velyoncore.ai','X-Velia-Request':'1'}
+            assert (await client.post(url,headers=headers,json=body)).status==401
+            assert not seen
+            headers['X-Test']='yes'
+            assert (await client.post(url,headers=headers,json=body)).status==200
+            assert seen.pop()==('POST','/mobile-api/v1/economy/creem/checkout',{'token':'owner-session','data':body})
+            assert not route_allowed('POST','economy/creem/webhook')
+    asyncio.run(scenario())

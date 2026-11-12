@@ -347,7 +347,7 @@ export function setupFeatures({notebook,pulse,webPush,openPulseResource=()=>{},o
           }
         }
       } else if (name === 'balance') {
-        const results = await Promise.allSettled([call('economy/me'),call('usage'),call('economy/catalog')]);
+        const results = await Promise.allSettled([call('economy/me'),call('usage'),call('economy/catalog'),call('economy/creem/catalog'),call('economy/creem/account')]);
         if(ticket!==epoch)return;
         body.replaceChildren();
         for (const [index,result] of results.slice(0,2).entries()) {
@@ -357,7 +357,11 @@ export function setupFeatures({notebook,pulse,webPush,openPulseResource=()=>{},o
           else card.append(node('p',index===0?'Не удалось загрузить баланс. Обнови раздел.':'Статистика временно недоступна.','field-hint'));
           body.append(card);
         }
-        mountTokenPurchase(body,results[2].status==='fulfilled'?results[2].value:null);
+        mountTokenPurchase(body,results[2].status==='fulfilled'?results[2].value:null, {
+          billing:results[3].status==='fulfilled'?results[3].value:null,
+          account:results[4].status==='fulfilled'?results[4].value:null,
+          request:call,isCurrent:()=>ticket===epoch && section==='balance' && signedIn(),
+        });
       } else if (name === 'studio') await studio(body);
       else if (name === 'research' || name === 'medical') {
         await topicHistory(name, body, ticket);

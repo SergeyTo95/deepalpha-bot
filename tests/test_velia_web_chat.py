@@ -670,7 +670,7 @@ def test_public_privacy_and_terms_are_accessible_without_login_and_linked_from_h
             for path, title, evidence in (
                 ('/privacy', 'Privacy Policy', 'Limited Use'),
                 ('/terms', 'Terms of Service', 'Connected services and Google permissions'),
-                ('/pricing', 'Usage credit pricing', '$109.99'),
+                ('/pricing', 'Plans and usage credits', '$109.99'),
                 ('/content-policy', 'Content Policy', 'Sexually explicit content is prohibited'),
             ):
                 async with client.get(server.make_url(path)) as response:
@@ -689,7 +689,8 @@ def test_public_privacy_and_terms_are_accessible_without_login_and_linked_from_h
                         assert 'href="/content-policy"' in page
                         assert 'href="/pricing"' in page
                     if path == '/pricing':
-                        assert 'Purchases are not enabled yet' in page
+                        assert 'Sign in and open Balance and usage' in page
+                        assert 'Plus — $14.99/month' in page and 'Pro — $29.99/month' in page and 'Max — $59.99/month' in page
                         assert 'Баланс и использование' in page
                         assert '<script' not in page
             async with client.get(server.make_url('/web/legal.css')) as response:
