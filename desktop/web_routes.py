@@ -70,7 +70,7 @@ def prepare_web_payload(request, data, *, search_enabled=False):
         output_limit = 1536
     if free_config and data["model"] == MODEL_ID:
         output_limit = free_config.max_tokens
-    if getattr(request, 'path', '') in ('/web-api/v1/finance/plan','/web-api/v1/crm/plan','/web-api/v1/meetings/plan','/web-api/v1/apps/plan') and data['model'] == FLASH_ID:
+    if getattr(request, 'path', '') in ('/web-api/v1/finance/plan','/web-api/v1/crm/plan','/web-api/v1/meetings/plan','/web-api/v1/apps/plan','/web-api/v1/missions/plan') and data['model'] == FLASH_ID:
         output_limit = 1536
     return {**{key: value for key, value in data.items() if key not in {"web_search", "voice_turn"}},
             "messages": [{"role": "system", "content": PERSONA + reply_language_instruction(getattr(request.get(WEB_SESSION), "language", "")) + (" Это голосовой разговор. Ответь естественно, 1–2 законченными короткими фразами. Без Markdown. Используй свежие факты только при наличии переданных веб-источников." if voice_turn else "")}] + messages,
@@ -371,7 +371,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
                 if not figma_bridge.status((str(session.user_id), session.id))["connected"]:
                     return error("figma_connect_required", 409)
                 forwarded[WEB_FIGMA] = True
-            elif request.path in {"/web-api/v1/map/plan", "/web-api/v1/finance/plan", "/web-api/v1/crm/plan", "/web-api/v1/meetings/plan", "/web-api/v1/memory/plan", "/web-api/v1/apps/plan"}:
+            elif request.path in {"/web-api/v1/map/plan", "/web-api/v1/finance/plan", "/web-api/v1/crm/plan", "/web-api/v1/meetings/plan", "/web-api/v1/memory/plan", "/web-api/v1/apps/plan", "/web-api/v1/missions/plan"}:
                 forwarded[WEB_FIGMA] = True
             elif request.path.startswith("/web-api/v1/connections/"):
                 bridge = cloud_connections[request.match_info["provider"]]
@@ -489,7 +489,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     async def asset(request):
         name = {"/privacy":"privacy.html", "/terms":"terms.html"}.get(
             request.path, request.match_info.get("name", "index.html"))
-        if name not in {"privacy.html", "terms.html", "legal.css", "index.html", "velia-sw.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "badge-96.png", "web-push.mjs", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "notebook.mjs", "notebook-ui.mjs", "pulse.mjs", "pulse-ui.mjs", "pulse-agent.mjs", "place-history.mjs", "place-card.mjs", "notebook-materials.mjs", "place-agent.mjs", "map.mjs", "map-agent.mjs", "map-result.mjs", "map-routing.mjs", "route-planner.mjs", "memory.mjs", "memory-schema.mjs", "memory-ui.mjs", "mini-app-core.mjs", "mini-apps.mjs", "mini-app-ui.mjs", "visits.mjs", "visit-ui.mjs", "visit-agent.mjs", "leaflet-vendor.js", "leaflet-vendor.css", "leaflet-LICENSE.txt", "features.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "service-icons.mjs", "document-exports.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "finance.mjs", "crm.mjs", "meetings.mjs", "meeting-ui.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
+        if name not in {"privacy.html", "terms.html", "legal.css", "index.html", "velia-sw.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "badge-96.png", "web-push.mjs", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "notebook.mjs", "notebook-ui.mjs", "pulse.mjs", "pulse-ui.mjs", "pulse-agent.mjs", "place-history.mjs", "place-card.mjs", "notebook-materials.mjs", "place-agent.mjs", "map.mjs", "map-agent.mjs", "map-result.mjs", "map-routing.mjs", "route-planner.mjs", "memory.mjs", "memory-schema.mjs", "memory-ui.mjs", "mini-app-core.mjs", "mini-apps.mjs", "mini-app-ui.mjs", "missions.mjs", "mission-ui.mjs", "visits.mjs", "visit-ui.mjs", "visit-agent.mjs", "leaflet-vendor.js", "leaflet-vendor.css", "leaflet-LICENSE.txt", "features.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "service-icons.mjs", "document-exports.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "finance.mjs", "crm.mjs", "meetings.mjs", "meeting-ui.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
             raise web.HTTPNotFound()
         response = web.FileResponse(STATIC / name, headers={"Cache-Control": "no-cache"})
         if name=="velia-sw.js":response.headers["Service-Worker-Allowed"]="/"
@@ -519,6 +519,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     app.router.add_post("/web-api/v1/meetings/plan", chat)
     app.router.add_post("/web-api/v1/memory/plan", chat)
     app.router.add_post("/web-api/v1/apps/plan", chat)
+    app.router.add_post("/web-api/v1/missions/plan", chat)
     app.router.add_post("/web-api/v1/agent/browser", browser_agent)
     app.router.add_post("/web-api/v1/agent/browser/takeover", browser_takeover_state)
     app.router.add_post("/web-api/v1/agent/browser/takeover/action", browser_takeover_action)
@@ -553,6 +554,10 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
         bridge.oauth = WorkspaceOAuth(bridge, origin, provider, upstream)
         cloud_connections[provider] = bridge
     setup_crm_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response, google=cloud_connections['google'])
+    from desktop.mission_routes import setup_mission_routes
+    setup_mission_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response,
+        upstream=upstream, upstream_stream=upstream_stream, authorize_model=authorize_model, authenticate=authenticate,
+        handlers=handlers, google=cloud_connections['google'], web_search=web_search, origin=origin)
     for provider, bridge in cloud_connections.items():
         setup_figma_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response,
             connector=bridge, oauth=bridge.oauth, provider=provider, prefix="/web-api/v1/connections/" + provider)
