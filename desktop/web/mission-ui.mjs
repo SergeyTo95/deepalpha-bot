@@ -36,7 +36,7 @@ export function mountMissionCard(parent,{client,id,signal,toast=()=>{}}){
       form.append(node('p',m.question),input,submit);let key=crypto.randomUUID(),previous='';
       form.onsubmit=async e=>{e.preventDefault();if(working||!input.value.trim())return;working=true;submit.disabled=true;if(previous!==input.value.trim()){key=crypto.randomUUID();previous=input.value.trim();}try{await client.answer(m,input.value.trim(),key);}catch(error){toast(error.message);}finally{working=false;signature='';draw();}};root.append(form);
     }
-    const done=m.steps.filter(s=>s.status==='completed').length;root.append(node('p',done+' из '+m.steps.length+' шагов · '+({'velia-flash':'Flash','velia-quantum':'Quantum','velia-pro':'PRO'}[m.model]||'VELIA'),'notebook-hint'));
+    const done=m.steps.filter(s=>s.status==='completed').length;root.append(node('p',(m.needs_plan&&!m.steps.length?'План ещё не составлен':done+' из '+m.steps.length+' шагов')+' · '+({'velia-flash':'Flash','velia-quantum':'Quantum','velia-pro':'PRO'}[m.model]||'VELIA'),'notebook-hint'));
     if(client.status?.())root.append(node('p','Не удалось обновить состояние. Показан последний полученный результат.','feature-notice'));
     const steps=node('ol',undefined,'mission-steps');
     for(const step of m.steps){
@@ -69,7 +69,7 @@ export function mountMissionCard(parent,{client,id,signal,toast=()=>{}}){
     root.append(steps);
     if(m.status==='uncertain')root.append(node('p','Проверь внешний сервис: операция могла выполниться. Автоматический повтор заблокирован.','feature-notice'));
     const actions=node('div',undefined,'feature-actions');
-    if(['draft','paused','failed','interrupted'].includes(m.status)){const b=button(m.status==='draft'?'Запустить':'Продолжить с сохранённого шага',()=>run(m,'run',b));actions.append(b);}
+    if(['draft','paused','failed','interrupted'].includes(m.status)){const b=button(m.status==='draft'?'Запустить':m.needs_plan?'Повторить планирование':'Продолжить с сохранённого шага',()=>run(m,'run',b));actions.append(b);}
     if(['queued','planning','running'].includes(m.status)){const pause=button('Приостановить',()=>run(m,'pause',pause));actions.append(pause);}
     if(!['completed','cancelled'].includes(m.status)){const cancel=button('Отменить миссию',()=>run(m,'cancel',cancel));actions.append(cancel);}
     const refresh=button('Обновить',async()=>{try{await client.refresh(id);}catch(e){if(!signal.aborted)toast(e.message);}});actions.append(refresh);

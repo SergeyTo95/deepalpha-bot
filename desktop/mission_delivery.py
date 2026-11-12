@@ -3,6 +3,7 @@ import asyncio
 from datetime import datetime,timezone
 import hashlib
 import json
+import re
 from zoneinfo import ZoneInfo
 from desktop.mission_schema import require,validate_plan,TOOLS,MissionError
 
@@ -31,6 +32,45 @@ def parse_plan(raw,goal):
     if isinstance(plan,dict) and set(plan)=={'question'}:
         require(isinstance(plan['question'],str) and 0<len(plan['question'].strip())<=600);return plan
     return validate_plan(plan,goal)
+
+
+def document_plan(goal):
+    """Compile only standalone text documents, never omit reads or external actions.
+
+    The selected model still writes the content. Returning None preserves the
+    typed planner for source-dependent work, extra formats and integrations.
+    """
+    if not isinstance(goal,str) or not 0<len(goal)<=1400:return None
+    s=goal.casefold()
+    formats=list(dict.fromkeys('pdf' if v=='пдф' else v for v in re.findall(r'\b(pdf|docx|пдф|pptx|xlsx)\b',s)))
+    if not formats or any(v not in {'pdf','docx'} for v in formats):return None
+    if not re.search(r'подготовь|составь|напиши|создай|сделай|сформируй|\b(?:prepare|write|create|draft|make)\b',s):return None
+    if not re.search(r'план|стать[яюи]|текст|инструкци|предложени|руководств|\b(?:plan|article|text|guide|proposal)\b',s):return None
+    # Conservative: source data, additional actions and permissions stay with the
+    # full planner. "Интернет-магазин" is a topic, not a web-search instruction.
+    if re.search(
+        r'https?://|@|найди|поищи|поиск|изучи|исследуй|проанализируй|собери|проверь|'
+        r'отправ|опублику|размести|назнач|запланируй|соглас|утверди|подтвер|сохрани|напомни|'
+        r'переведи|перевод|конверт|прикреп|вложени|загруж|прикладыв|'
+        r'календар|почт|контакт|заметк|памят|переписк|документ(?:ам|ов|ах|у|а)|'
+        r'счет|счёт|расход|доход|баланс|кошел|кошёл|транзак|портфел|'
+        r'актуальн|текущ|сегодня|свеж|источник|данны[ехм]|файл[аеоуы]|'
+        r'\b(?:мо(?:й|я|ё|е|и|его|ей|их|им|ем|ими|ему|ю)|наш\w*|этот|этого|этой|этих|выше|предыдущ\w*)\b|'
+        r'\b(?:search|research|find|check|send|publish|save|schedule|calendar|email|'
+        r'approve|confirm|attach|upload|convert|translate|source|data|current|latest|today|my|our|previous|above)\b|'
+        r'github|railway|vercel|notion|shopify|gmail|outlook|telegram|crm',s):return None
+    title=re.sub(r'\s+',' ',goal).strip()[:160]
+    instruction=('Подготовь полностью готовый текст по исходному запросу, который затем будет экспортирован в документ. '
+        'Начинай сразу с содержания, без обещаний, вступления о будущей работе и уточняющих вопросов. '
+        'Если нужен план на дни, распиши действия для каждого дня указанного периода, а не только диапазоны недель. '
+        'Укажи результат каждого этапа, критерии готовности и риски. '
+        'Недостающие условия обозначь как допущения. Не выдумывай факты, цены и результаты исследований. '
+        'Не утверждай, что файл уже создан: его создаёт следующий инструмент.')
+    steps=[{'id':'s1','title':'Подготовить текст документа','tool':'text.draft','arguments':{'instruction':instruction}}]
+    for index,fmt in enumerate(formats,2):
+        steps.append({'id':'s'+str(index),'title':'Создать '+fmt.upper(),'tool':'document.export',
+            'arguments':{'source_step':'s1','format':fmt,'title':title}})
+    return validate_plan({'title':title,'steps':steps},goal)
 
 
 class MissionDelivery:
