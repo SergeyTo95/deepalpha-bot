@@ -1,3 +1,4 @@
+import {mountMissionList} from './mission-ui.mjs';
 import {mountPulse} from './pulse-ui.mjs';
 import {mountPlaceCard} from './place-card.mjs';
 import {NotebookMaterials} from './notebook-materials.mjs';
@@ -227,7 +228,7 @@ function display(value, depth = 0) {
   return box;
 }
 
-export function setupFeatures({notebook,pulse,webPush,openPulseResource=()=>{},openMemorySource=()=>{},openSavedMiniApp=()=>{},previewFile=async()=>{},discussNote=()=>{},signedIn, openAuth, openIncomePlanner, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, openTopic, prepareAgentixChat=()=>{}, prepareFigmaChat=()=>{}, prepareConnectionChat=()=>{}, taskState=()=>null, prepareTask=()=>{}, onUnauthorized = () => {}}) {
+export function setupFeatures({notebook,pulse,webPush,openPulseResource=()=>{},openMemorySource=()=>{},openSavedMiniApp=()=>{},previewFile=async()=>{},discussNote=()=>{},signedIn, openAuth, openIncomePlanner, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, openTopic, prepareAgentixChat=()=>{}, prepareFigmaChat=()=>{}, prepareConnectionChat=()=>{}, missionClient=null,prepareMissionChat=()=>{}, taskState=()=>null, prepareTask=()=>{}, onUnauthorized = () => {}}) {
   const root = document.getElementById('feature-view'), nav = document.getElementById('feature-nav');
   let epoch = 0, section = null, controller = null, inlineBody = null, cleanup=()=>{};
   const close = () => {epoch++; cleanup();cleanup=()=>{};controller?.abort(); inlineBody?.remove(); inlineBody=null; root.replaceChildren(); root.hidden = true; section = null; nav.querySelectorAll('button').forEach(b=>b.removeAttribute('aria-current')); document.getElementById('conversation-scroll').hidden = false; document.querySelector('.composer-area').hidden = false;};
@@ -633,12 +634,17 @@ export function setupFeatures({notebook,pulse,webPush,openPulseResource=()=>{},o
   async function taskHub(body,draft) {
     body.replaceChildren();
     const ticket=epoch,tabs=node('div',undefined,'feature-tabs task-tabs'),panel=node('div');body.append(tabs,panel);
-    let version=0,unsubscribe=()=>{};
-    cleanup=()=>unsubscribe();
+    let version=0,unsubscribe=()=>{},missionView=null;
+    cleanup=()=>{unsubscribe();missionView?.abort();};
     async function select(key){
-      unsubscribe();unsubscribe=()=>{};
+      unsubscribe();unsubscribe=()=>{};missionView?.abort();
       const current=++version;tabs.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.tab===key)));
       const mount=node('div');panel.replaceChildren(mount);
+      if(key==='missions'){
+        if(!missionClient)return;
+        missionView=new AbortController();
+        await mountMissionList(mount,{client:missionClient,signal:missionView.signal,toast,prepare:prepareMissionChat,selectedId:draft.missionId});return;
+      }
       if(key==='schedules'){
         mount.append(node('p','Загрузка…','feature-empty'));
         try{await schedules(mount,draft);}catch(e){if(e.name!=='AbortError'&&ticket===epoch&&current===version)mount.replaceChildren(node('p',e.message,'feature-notice'),button('Повторить',()=>select(key)));}
@@ -672,10 +678,10 @@ export function setupFeatures({notebook,pulse,webPush,openPulseResource=()=>{},o
       // Reuse the chat's existing owner-scoped poller; no second polling loop.
       await state.poll();
     }
-    for(const [key,title] of [['active','Выполняются'],['schedules','Запланировано'],['finished','Завершены']]){
+    for(const [key,title] of [['missions','Миссии'],['active','Выполняются'],['schedules','Запланировано'],['finished','Завершены']]){
       const b=button(title,()=>select(key));b.dataset.tab=key;tabs.append(b);
     }
-    await select(draft.instruction?'schedules':'active');
+    await select(draft.instruction?'schedules':draft.tab||'missions');
   }
   async function schedules(body,draft) {
     const [status,core]=await Promise.all([call('agent/schedules/status'),call('agent/status')]);
