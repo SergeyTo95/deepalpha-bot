@@ -148,3 +148,107 @@ def test_gateway_wires_the_same_selected_model_generator_into_background_handler
     gateway.create_app(gateway.GatewayConfig('https://identity.example','https://browser.example'),
         check_identity=False,web_origin='https://browser.example')
     assert observed[0]['generate_background'] is generate_text
+
+
+@pytest.mark.parametrize('free_mode',[False,True])
+def test_provider_done_finishes_without_waiting_for_http_eof(monkeypatch,free_mode):
+    """Real chunked SSE response remains open after DONE, as production can."""
+    async def scenario():
+        release=asyncio.Event()
+        async def provider(request):
+            response=web.StreamResponse(headers={'Content-Type':'text/event-stream'})
+            await response.prepare(request);await response.write(wire())
+            await release.wait()  # No HTTP EOF until after the client returns.
+            return response
+        server=web.Application();server.router.add_post('/v1/chat/completions',provider)
+        async with TestServer(server) as host:
+            monkeypatch.setenv('VELIA_FREE_API_TIERS_ENABLED','true' if free_mode else 'false')
+            base=str(host.make_url('/v1'))
+            monkeypatch.setattr(quantum,'ZAI_URL',base);monkeypatch.setattr(free_models,'ZAI_URL',base)
+            monkeypatch.setenv('VELIA_ZAI_API_KEY','fixture-zai-key')
+            monkeypatch.setenv('KIMI_BASE_URL',str(host.make_url('/v1')));monkeypatch.setenv('KIMI_API_KEY','fixture-pro-key')
+            try:
+                result=await asyncio.wait_for(generate_text('velia-flash' if free_mode else 'velia-pro',[{'role':'user','content':'Подготовь план'}]),1)
+                assert result==BODY and not release.is_set()
+            finally:release.set()
+    asyncio.run(scenario())
+
+
+def test_slow_provider_timeout_is_typed_and_not_retried(monkeypatch):
+    import desktop.mission_generation as generation
+    async def scenario():
+        release=asyncio.Event();calls=[]
+        async def provider(request):
+            calls.append(1)
+            response=web.StreamResponse(headers={'Content-Type':'text/event-stream'})
+            await response.prepare(request);await release.wait();return response
+        server=web.Application();server.router.add_post('/v1/chat/completions',provider)
+        async with TestServer(server) as host:
+            monkeypatch.setenv('VELIA_FREE_API_TIERS_ENABLED','false')
+            monkeypatch.setenv('KIMI_BASE_URL',str(host.make_url('/v1')));monkeypatch.setenv('KIMI_API_KEY','fixture-pro-key')
+            monkeypatch.setattr(generation,'MODEL_TIMEOUT_SECONDS',.05)
+            try:
+                with pytest.raises(MissionError,match='mission_model_timeout'):
+                    await generate_text('velia-pro',[{'role':'user','content':'Подготовь план'}])
+                assert calls==[1]
+            finally:release.set()
+    asyncio.run(scenario())
+
+
+def test_text_heartbeat_preserves_ownership_across_old_deadline_and_stops_after_completion(tmp_path,monkeypatch):
+    import desktop.mission_runtime as runtime
+    async def scenario():
+        clock=[1000.0]
+        store=MissionStore(sqlite_path=tmp_path/'heartbeat.db',session_key='x'*48,clock=lambda:clock[0]);store.initialize()
+        t=MissionTools(upstream=None,upstream_stream=None,authorize_model=allowed,handlers={})
+        p=await t.plan(SESSION,{'goal':GOAL},allowed)
+        m=store.create(7,GOAL,p,'velia-flash','Europe/Istanbul','slow-text-test')
+        active=store.claim(7,m['id'],m['revision']);monkeypatch.setattr(runtime,'HEARTBEAT_SECONDS',.005)
+        async def slow():
+            # Advance more than the old 180s lease while polling the same task.
+            for _ in range(4):
+                clock[0]+=100
+                await asyncio.sleep(.025)
+                current=store.detail(7,m['id'])
+                assert current['status']=='running' and current['lease']==active['lease']
+                assert current['lease_until']>clock[0]
+            return BODY
+        assert await runtime.leased_text_call(store,7,m['id'],active['lease'],slow())==BODY
+        revision=store.detail(7,m['id'])['revision'];await asyncio.sleep(.025)
+        assert store.detail(7,m['id'])['revision']==revision
+    asyncio.run(scenario())
+
+
+def test_lease_loss_cancels_generation_instead_of_saving_a_stale_result(monkeypatch):
+    import desktop.mission_runtime as runtime
+    async def scenario():
+        stopped=asyncio.Event()
+        class LostStore:
+            clock=lambda _:1000
+            def checkpoint(self,*_):raise MissionError('mission_lease_lost',409)
+        async def pending():
+            try:await asyncio.Event().wait()
+            finally:stopped.set()
+        monkeypatch.setattr(runtime,'HEARTBEAT_SECONDS',.005)
+        with pytest.raises(MissionError,match='mission_lease_lost'):
+            await runtime.leased_text_call(LostStore(),7,'task','old-lease',pending())
+        assert stopped.is_set()
+    asyncio.run(scenario())
+
+
+def test_text_step_deadline_cancels_call_and_keeps_typed_timeout(monkeypatch):
+    import desktop.mission_runtime as runtime
+    async def scenario():
+        stopped=asyncio.Event()
+        class Store:
+            clock=lambda _:1000
+            def checkpoint(self,*_):pass
+        async def pending():
+            try:await asyncio.Event().wait()
+            finally:stopped.set()
+        monkeypatch.setattr(runtime,'TEXT_STEP_TIMEOUT',.03)
+        monkeypatch.setattr(runtime,'HEARTBEAT_SECONDS',.005)
+        with pytest.raises(MissionError,match='mission_model_timeout'):
+            await runtime.leased_text_call(Store(),7,'task','lease',pending())
+        assert stopped.is_set()
+    asyncio.run(scenario())
