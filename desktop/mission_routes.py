@@ -10,7 +10,7 @@ from urllib.parse import quote
 from aiohttp import web
 from desktop.mission_schema import MissionError,require,TOOLS
 from desktop.mission_store import MissionStore
-from desktop.mission_runtime import MissionTools,run_mission
+from desktop.mission_runtime import MissionTools,run_mission,leased_text_call
 from desktop.mission_delivery import MissionDelivery
 from desktop.document_exports import MIME
 from velia_desktop_routes import AuthenticationUnavailable
@@ -101,7 +101,7 @@ def setup_mission_routes(app,*,session_for,same_origin,json_response,upstream,up
             identity=await authenticated(session.access);require(identity and identity['user_id']==user,'unauthorized',401)
             if m.get('needs_plan'):
                 async def save(cid):await asyncio.to_thread(store.checkpoint,user,id,lease,lambda m:m.update(conversation_id=cid))
-                result=await asyncio.wait_for(tools.plan(session,m,save),100)
+                result=await leased_text_call(store,user,id,lease,tools.plan(session,m,save))
                 m=await asyncio.to_thread(store.planned,user,id,lease,result)
                 if m['status']!='running':return
             await run_mission(store,user,m,session,tools,authenticated)

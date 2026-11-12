@@ -11,6 +11,35 @@ from desktop.mission_schema import MissionError,require,TOOLS,digest
 from desktop.account_routes import account_events,ERRORS
 from desktop.document_exports import export_document,MIME
 
+TEXT_STEP_TIMEOUT=360
+HEARTBEAT_SECONDS=30
+
+
+async def leased_text_call(store,user,id,lease,operation):
+    """Keep a slow text/planning call owned without blocking account polling.
+
+Lease loss cancels generation. Pause/cancel requests keep their status; the
+existing dispatch barrier decides whether the next tool is allowed to run.
+"""
+    async def pulse():
+        while True:
+            await asyncio.sleep(HEARTBEAT_SECONDS)
+            await asyncio.to_thread(store.checkpoint,user,id,lease,
+                lambda m:m.update(lease_until=store.clock()+180))
+    async def run():
+        work=asyncio.create_task(operation);heartbeat=asyncio.create_task(pulse())
+        try:
+            completed,_=await asyncio.wait({work,heartbeat},return_when=asyncio.FIRST_COMPLETED)
+            if heartbeat in completed:await heartbeat
+            return await work
+        finally:
+            for task in (work,heartbeat):
+                if not task.done():task.cancel()
+            await asyncio.gather(work,heartbeat,return_exceptions=True)
+    try:return await asyncio.wait_for(run(),timeout=TEXT_STEP_TIMEOUT)
+    except asyncio.TimeoutError:raise MissionError('mission_model_timeout',504) from None
+
+
 class MissionTools:
     def __init__(self,*,upstream,upstream_stream,authorize_model,handlers,finance=None,crm=None,google=None,search=None,origin=''):
         self.upstream,self.stream,self.authorize,self.handlers=upstream,upstream_stream,authorize_model,handlers
@@ -229,7 +258,9 @@ async def run_mission(store,user,mission,session,tools,authenticate):
             async def save_conversation(cid):
                 await asyncio.to_thread(store.checkpoint,user,id,lease,lambda target:target.update(conversation_id=cid))
             # Claiming precedes every effect. No automatic replay of an uncertain write.
-            result=await asyncio.wait_for(tools.execute(session,m,current,save_conversation),timeout=100)
+            operation=tools.execute(session,m,current,save_conversation)
+            result=(await leased_text_call(store,user,id,lease,operation) if current['tool']=='text.draft'
+                else await asyncio.wait_for(operation,timeout=100))
             def finish(target):
                 step=next(s for s in target['steps'] if s['id']==current['id']);step.update(status='completed',result=result,approval=None,approved=None,error=None)
                 require(len(json.dumps(target,ensure_ascii=False).encode())<MAX_MISSION_BYTES,'mission_storage_full',413)
