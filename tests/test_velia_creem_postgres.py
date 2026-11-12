@@ -78,3 +78,30 @@ def test_postgres_failed_delivery_rolls_back_balance_ledger_and_access(postgres_
     monkeypatch.setattr(service.store,'refresh_access',original)
     deliver(service,event='evt_atomic')
     assert read_balance(connect) == 1300
+
+
+def test_postgres_concurrent_retry_claims_reuse_one_order_without_granting(postgres_billing):
+    from copy import deepcopy
+    from services.velia_creem_billing import BillingError
+    service,connect=postgres_billing
+    original=service.api.request
+    posted=[]
+    def lost_once(method,resource,**kwargs):
+        if method=='POST' and resource=='checkouts':
+            posted.append(deepcopy(kwargs['data']))
+            if len(posted)==1:raise BillingError('billing_provider_timeout',502)
+        return original(method,resource,**kwargs)
+    service.api.request=lost_once
+    with pytest.raises(BillingError):service.checkout(7,'plus',str(uuid.uuid4()))
+    def retry(_):
+        try:return service.checkout(7,'plus',str(uuid.uuid4()))
+        except BillingError as error:
+            assert error.code=='checkout_already_pending'
+            return None
+    with ThreadPoolExecutor(max_workers=8) as pool:results=list(pool.map(retry,range(16)))
+    assert len(posted)==2 and posted[0]==posted[1]
+    assert any(result and result['ok'] for result in results)
+    assert read_balance(connect)==100
+    with connect() as conn,conn.cursor() as cur:
+        cur.execute('SELECT COUNT(*) FROM velia_creem_orders');assert cur.fetchone()[0]==1
+        cur.execute('SELECT COUNT(*) FROM velia_creem_charges');assert cur.fetchone()[0]==0

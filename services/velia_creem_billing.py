@@ -83,9 +83,9 @@ class CreemAPI:
         try:
             with requests.request(method, 'https://api.creem.io/v1/' + resource,
                     params=params, json=data, headers={'x-api-key': self.key},
-                    timeout=(3, 5), allow_redirects=False, stream=True) as response:
+                    timeout=(3, 12 if method=='POST' and resource=='checkouts' else 5), allow_redirects=False, stream=True) as response:
                 if response.status_code not in (200, 201):
-                    raise BillingError('billing_provider_unavailable', 502, provider_status=response.status_code)
+                    raise BillingError('billing_provider_credentials' if response.status_code in (401,403) else 'billing_provider_unavailable', 502, provider_status=response.status_code)
                 raw = bytearray()
                 for chunk in response.iter_content(8192):
                     raw.extend(chunk)
@@ -95,6 +95,8 @@ class CreemAPI:
                 return result
         except BillingError:
             raise
+        except requests.Timeout:
+            raise BillingError('billing_provider_timeout', 502) from None
         except Exception:
             raise BillingError('billing_provider_unavailable', 502) from None
 
@@ -178,23 +180,35 @@ class BillingStore:
     def reserve(self, user, plan, attempt):
         with self.transaction() as cur:
             self.lock_user(cur, user)
+            self.execute(cur, "SELECT id FROM velia_creem_subscriptions WHERE user_id=? AND status<>'canceled'", (user,))
+            require(cur.fetchone() is None, 'subscription_exists', 409)
             self.execute(cur, 'SELECT * FROM velia_creem_orders WHERE user_id=? AND attempt=?', (user, attempt))
             previous = self.row(cur)
             if previous:
                 require(previous['plan'] == plan, 'billing_attempt_conflict', 409)
+                if previous['state']=='uncertain':
+                    self.execute(cur, "UPDATE velia_creem_orders SET state='creating' WHERE id=?", (previous['id'],))
+                    return {**previous,'state':'creating'}, True
                 return previous, False
-            self.execute(cur, "SELECT id FROM velia_creem_subscriptions WHERE user_id=? AND status<>'canceled'", (user,))
-            require(cur.fetchone() is None, 'subscription_exists', 409)
             self.execute(cur, "SELECT * FROM velia_creem_orders WHERE user_id=? AND state IN ('creating','open','uncertain') ORDER BY created_at DESC", (user,))
             pending = self.row(cur)
             if pending:
-                require(pending['plan'] == plan and pending['state'] == 'open', 'checkout_already_pending', 409)
+                require(pending['plan'] == plan and pending['state'] in {'open','uncertain'}, 'checkout_already_pending', 409)
+                if pending['state']=='uncertain':
+                    self.execute(cur, "UPDATE velia_creem_orders SET state='creating' WHERE id=?", (pending['id'],))
+                    return {**pending,'state':'creating'}, True
                 return pending, False
             doc = {'id': str(uuid.uuid4()), 'user_id': user, 'attempt': attempt, 'plan': plan,
                    'state': 'creating', 'created_at': int(self.clock()), 'checkout_id': None, 'checkout_url': None}
             self.execute(cur, 'INSERT INTO velia_creem_orders(id,user_id,attempt,plan,state,created_at) VALUES (?,?,?,?,?,?)',
                          tuple(doc[k] for k in ('id','user_id','attempt','plan','state','created_at')))
             return doc, True
+
+    def remember_checkout(self, order, provider_id):
+        with self.transaction() as cur:
+            self.lock_user(cur, order['user_id'])
+            self.execute(cur, "UPDATE velia_creem_orders SET checkout_id=? WHERE id=? AND (checkout_id IS NULL OR checkout_id=?)", (provider_id,order['id'],provider_id))
+            require(cur.rowcount==1,'billing_checkout_conflict',409)
 
     def checkout_created(self, order, provider_id, url):
         with self.transaction() as cur:
@@ -407,20 +421,34 @@ class BillingService:
         if not fresh:
             require(order['state'] == 'open' and order['checkout_url'], 'checkout_already_pending', 409)
             return {'ok': True, 'checkout_url': checkout_url(order['checkout_url'])}
+        phase='create'
         try:
-            result = self.api.request('POST', 'checkouts', data={
-                'product_id': PLANS[plan]['product_id'], 'request_id': order['id'],
-                'success_url': RETURN_URL, 'units': 1, 'metadata': {'velia_order_id': order['id']}})
+            # Reuse the durable order/request_id and identical provider payload
+            # after an ambiguous response; never invent a replacement order.
+            if order['checkout_id']:
+                phase='retrieve'
+                result=self.api.get('checkouts','checkout_id',order['checkout_id'])
+                require(result.get('status') in {'pending','processing'},'billing_checkout_completed',409)
+            else:
+                result = self.api.request('POST', 'checkouts', data={
+                    'product_id': PLANS[plan]['product_id'], 'request_id': order['id'],
+                    'success_url': RETURN_URL, 'units': 1, 'metadata': {'velia_order_id': order['id']}})
+            phase='validate'
             require(result.get('mode') == 'prod', 'billing_wrong_environment', 502)
             provider_id = identifier(result, 'ch_')
-            url = checkout_url(result.get('checkout_url'))
             require(identifier(result.get('product'), 'prod_') == PLANS[plan]['product_id']
-                    and result.get('request_id') == order['id']
-                    and urlparse(url).path.rstrip('/').split('/')[-1] == provider_id, 'billing_checkout_conflict', 502)
+                    and result.get('request_id') == order['id'], 'billing_checkout_conflict',502)
+            self.store.remember_checkout(order,provider_id)
+            url = checkout_url(result.get('checkout_url'))
+            require(urlparse(url).path.rstrip('/').split('/')[-1] == provider_id, 'billing_checkout_conflict', 502)
+            phase='persist'
             self.store.checkout_created(order, provider_id, url)
             return {'ok': True, 'checkout_url': url}
-        except BaseException:
+        except BaseException as error:
             self.store.uncertain(order)
+            code=error.code if isinstance(error,BillingError) else 'billing_checkout_failed'
+            status=error.provider_status if isinstance(error,BillingError) else None
+            logging.getLogger(__name__).warning('Creem checkout failed phase=%s code=%s provider_status=%s',phase,code,status or 0)
             raise
 
     def verified_subscription(self, sub_id, order=None):
