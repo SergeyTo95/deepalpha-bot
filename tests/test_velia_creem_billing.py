@@ -331,3 +331,43 @@ def test_known_checkout_is_recovered_by_read_only_lookup_after_validation_failur
         'checkout_url':'https://www.creem.io/checkout/prod_example/ch_example'}
     assert service.checkout(7,'plus',str(uuid.uuid4()))['ok'] is True
     assert len(service.api.posts)==1
+
+
+def test_provider_redirect_token_is_opaque_and_saved_retry_reuses_it(billing):
+    service,connect=billing
+    original=service.api.request
+    url='https://www.creem.io/checkout/'+PLANS['plus']['product_id']+'/opaqueHostedToken'
+    def opaque_url(method,resource,**kwargs):
+        result=original(method,resource,**kwargs)
+        if resource=='checkouts':result['checkout_url']=url
+        return result
+    service.api.request=opaque_url
+    assert service.checkout(7,'plus',str(uuid.uuid4()))=={'ok':True,'checkout_url':url}
+    assert service.checkout(7,'plus',str(uuid.uuid4()))=={'ok':True,'checkout_url':url}
+    assert len(service.api.posts)==1
+    with connect() as conn:
+        assert conn.execute('SELECT checkout_id,state FROM velia_creem_orders').fetchone()==('ch_example','open')
+    assert balance(connect)==(100,None)
+
+
+@pytest.mark.parametrize('field,value,phase',[
+    ('product',PLANS['max']['product_id'],'validate_product'),
+    ('request_id','another-owner-order','validate_request'),
+])
+def test_opaque_redirect_does_not_bypass_order_binding(billing,caplog,field,value,phase):
+    service,connect=billing
+    original=service.api.request
+    def mismatched(method,resource,**kwargs):
+        result=original(method,resource,**kwargs)
+        if resource=='checkouts':
+            result[field]=value
+            result['checkout_url']='https://www.creem.io/checkout/prod_other/opaqueToken'
+        return result
+    service.api.request=mismatched
+    with pytest.raises(BillingError,match='billing_checkout_conflict'):
+        service.checkout(7,'plus',str(uuid.uuid4()))
+    assert 'phase='+phase in caplog.text
+    assert value not in caplog.text and 'opaqueToken' not in caplog.text
+    assert balance(connect)==(100,None)
+    with connect() as conn:
+        assert conn.execute('SELECT checkout_id,state FROM velia_creem_orders').fetchone()==(None,'uncertain')

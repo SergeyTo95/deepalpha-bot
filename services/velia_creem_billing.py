@@ -436,11 +436,19 @@ class BillingService:
             phase='validate'
             require(result.get('mode') == 'prod', 'billing_wrong_environment', 502)
             provider_id = identifier(result, 'ch_')
-            require(identifier(result.get('product'), 'prod_') == PLANS[plan]['product_id']
-                    and result.get('request_id') == order['id'], 'billing_checkout_conflict',502)
+            phase='validate_product'
+            require(identifier(result.get('product'), 'prod_') == PLANS[plan]['product_id'],
+                    'billing_checkout_conflict',502)
+            phase='validate_request'
+            require(result.get('request_id') == order['id'], 'billing_checkout_conflict',502)
             self.store.remember_checkout(order,provider_id)
+            phase='validate_url'
+            # checkout_url is a provider-owned redirect, not a serialized API
+            # identifier. Creem documents redirecting to this returned URL;
+            # its path token need not equal the checkout object's id. Trust it
+            # only after validating the API response's mode/product/request,
+            # and retain the HTTPS/Creem-host allowlist below.
             url = checkout_url(result.get('checkout_url'))
-            require(urlparse(url).path.rstrip('/').split('/')[-1] == provider_id, 'billing_checkout_conflict', 502)
             phase='persist'
             self.store.checkout_created(order, provider_id, url)
             return {'ok': True, 'checkout_url': url}
