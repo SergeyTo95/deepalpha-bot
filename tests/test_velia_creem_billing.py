@@ -34,7 +34,11 @@ class API:
         self.posts.append((resource, deepcopy(data)))
         if resource == 'customers/billing':
             return {'customer_portal_link': 'https://www.creem.io/portal/cust_example?token=private'}
-        return {'id': 'ch_example', 'mode': 'prod', 'product':data['product_id'], 'request_id':data['request_id'], 'checkout_url': 'https://www.creem.io/checkout/prod_example/ch_example'}
+        result={'id': 'ch_example', 'mode': 'prod', 'status':'pending', 'product':data['product_id'],
+                'request_id':data['request_id'], 'metadata':deepcopy(data['metadata']),
+                'checkout_url': 'https://www.creem.io/checkout/prod_example/ch_example'}
+        self.values[('checkouts','ch_example')]=deepcopy(result)
+        return result
 
 
 @pytest.fixture
@@ -314,7 +318,8 @@ def test_readiness_returns_only_safe_reason_and_caches_provider_failures(billing
     assert set(value)=={'ok','enabled','mode','plans','unavailable_reason'}
 
 
-def test_known_checkout_is_recovered_by_read_only_lookup_after_validation_failure(billing):
+@pytest.mark.parametrize('tracking_echo',[True,False])
+def test_known_checkout_is_recovered_by_read_only_lookup_after_validation_failure(billing,tracking_echo):
     service,connect=billing
     original=service.api.request
     def bad_url(method,resource,**kwargs):
@@ -327,7 +332,8 @@ def test_known_checkout_is_recovered_by_read_only_lookup_after_validation_failur
         order=conn.execute('SELECT id,checkout_id FROM velia_creem_orders').fetchone()
     assert order[1]=='ch_example'
     service.api.values[('checkouts','ch_example')]={'id':'ch_example','mode':'prod','status':'pending',
-        'product':PLANS['plus']['product_id'],'request_id':order[0],
+        'product':PLANS['plus']['product_id'],'request_id':order[0] if tracking_echo else None,
+        'metadata':{'velia_order_id':order[0]},
         'checkout_url':'https://www.creem.io/checkout/prod_example/ch_example'}
     assert service.checkout(7,'plus',str(uuid.uuid4()))['ok'] is True
     assert len(service.api.posts)==1
@@ -352,7 +358,7 @@ def test_provider_redirect_token_is_opaque_and_saved_retry_reuses_it(billing):
 
 @pytest.mark.parametrize('field,value,phase',[
     ('product',PLANS['max']['product_id'],'validate_product'),
-    ('request_id','another-owner-order','validate_request'),
+    ('request_id','another-owner-order','validate_metadata'),
 ])
 def test_opaque_redirect_does_not_bypass_order_binding(billing,caplog,field,value,phase):
     service,connect=billing
@@ -362,6 +368,8 @@ def test_opaque_redirect_does_not_bypass_order_binding(billing,caplog,field,valu
         if resource=='checkouts':
             result[field]=value
             result['checkout_url']='https://www.creem.io/checkout/prod_other/opaqueToken'
+            service.api.values[('checkouts','ch_example')].update(
+                request_id='another-owner-order',metadata={'velia_order_id':'foreign-order'})
         return result
     service.api.request=mismatched
     with pytest.raises(BillingError,match='billing_checkout_conflict'):
@@ -371,3 +379,73 @@ def test_opaque_redirect_does_not_bypass_order_binding(billing,caplog,field,valu
     assert balance(connect)==(100,None)
     with connect() as conn:
         assert conn.execute('SELECT checkout_id,state FROM velia_creem_orders').fetchone()==(None,'uncertain')
+
+
+@pytest.mark.parametrize('tracking',[None,'provider-tracking-reference'])
+def test_checkout_without_echoed_tracking_uses_independent_metadata_lookup(billing,tracking):
+    service,connect=billing
+    original=service.api.request
+    gets=[]
+    original_get=service.api.get
+    def get(resource,key,value):
+        gets.append((resource,key,value))
+        return original_get(resource,key,value)
+    def without_tracking(method,resource,**kwargs):
+        result=original(method,resource,**kwargs)
+        if resource=='checkouts':
+            result['request_id']=tracking
+            result.pop('metadata')  # A partial create response cannot prove ownership.
+            service.api.values[('checkouts','ch_example')]['request_id']=tracking
+        return result
+    service.api.request=without_tracking
+    service.api.get=get
+    assert service.checkout(7,'plus',str(uuid.uuid4()))['ok']
+    assert ('checkouts','checkout_id','ch_example') in gets
+    assert balance(connect)==(100,None)
+    assert service.checkout(7,'plus',str(uuid.uuid4()))['ok']
+    assert len(service.api.posts)==1
+
+
+@pytest.mark.parametrize('field,value',[
+    ('id','ch_foreign'),('mode','test'),('product',PLANS['max']['product_id']),
+    ('metadata',None),('metadata',{}),('metadata',{'velia_order_id':'foreign-order'}),
+    ('status','completed'),('checkout_url','https://evil.test/checkout/ch_example'),
+])
+def test_metadata_lookup_must_match_the_exact_checkout_and_owner(billing,field,value):
+    service,connect=billing
+    original=service.api.request
+    def mismatched_lookup(method,resource,**kwargs):
+        result=original(method,resource,**kwargs)
+        if resource=='checkouts':
+            result.pop('request_id')
+            canonical=service.api.values[('checkouts','ch_example')]
+            canonical.pop('request_id')
+            canonical[field]=value
+        return result
+    service.api.request=mismatched_lookup
+    with pytest.raises(BillingError):service.checkout(7,'plus',str(uuid.uuid4()))
+    assert balance(connect)==(100,None)
+
+
+@pytest.mark.parametrize('tracking',[None,'provider-tracking-reference'])
+def test_signed_completed_checkout_uses_canonical_metadata_when_tracking_is_not_echoed(billing,tracking):
+    service,connect=billing
+    purchase(service)
+    service.api.values[('checkouts','ch_example')]['request_id']=tracking
+    deliver(service,kind='checkout.completed',obj={'id':'ch_example'})
+    deliver(service,kind='checkout.completed',event='evt_repeated',obj={'id':'ch_example'})
+    assert balance(connect)[0]==1300
+    assert balance(connect,8)==(50,None)
+
+
+def test_canonical_metadata_cannot_reassign_a_checkout_to_another_accounts_order(billing):
+    service,connect=billing
+    purchase(service)
+    other,_=service.store.reserve(8,'plus',str(uuid.uuid4()))
+    service.store.checkout_created(other,'ch_other','https://www.creem.io/checkout/prod_example/ch_other')
+    service.api.values[('checkouts','ch_example')].update(
+        request_id=None,metadata={'velia_order_id':other['id']})
+    with pytest.raises(BillingError,match='billing_owner_conflict'):
+        deliver(service,kind='checkout.completed',obj={'id':'ch_example'})
+    assert balance(connect)==(100,None)
+    assert balance(connect,8)==(50,None)
