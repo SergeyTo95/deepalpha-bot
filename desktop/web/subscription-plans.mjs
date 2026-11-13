@@ -20,12 +20,12 @@ function element(tag, text, className) {
 }
 
 export function paymentDestination(value, portal=false) {
-  if (typeof value !== 'string' || value.length > 4096) throw Error('Некорректный адрес оплаты.');
+  if (typeof value !== 'string' || value.length >= 2048 || /[\x00-\x20\\]/.test(value)) throw Error('Некорректный адрес оплаты.');
   const url = new URL(value);
   const allowed = portal
     ? ['www.creem.io','creem.io'].includes(url.hostname) && url.pathname.startsWith('/portal/')
-    : (['www.creem.io','creem.io'].includes(url.hostname) && url.pathname.startsWith('/checkout/')) ||
-      (url.hostname==='checkout.creem.io' && url.pathname.startsWith('/ch_'));
+    : (['www.creem.io','creem.io'].includes(url.hostname) && /^\/(?:checkout|payment)\/[A-Za-z0-9_/-]+$/.test(url.pathname)) ||
+      (url.hostname==='checkout.creem.io' && /^\/ch_[A-Za-z0-9_-]+\/?$/.test(url.pathname));
   if (url.protocol !== 'https:' || url.hash || url.username || url.password || url.port && url.port!=='443' || !allowed)
     throw Error('Некорректный адрес оплаты.');
   return url.href;
