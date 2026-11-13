@@ -111,11 +111,24 @@ test('an existing subscription opens only the owner portal',()=>withUI(async()=>
   assert.equal(opened.length,1);
 }));
 
-test('payment redirects reject foreign hosts, credentials, non-HTTPS and public product links',()=>{
+test('payment redirects reject foreign hosts, credentials, non-HTTPS and test checkout',()=>{
   for(const url of ['https://evil.test/checkout/ch_a','https://www.creem.io.evil.test/checkout/ch_a',
     'http://www.creem.io/checkout/ch_a','https://user@www.creem.io/checkout/ch_a',
-    CREEM_SUBSCRIPTIONS[0].productUrl,'https://www.creem.io:444/checkout/ch_a'])assert.throws(()=>paymentDestination(url));
+    'https://www.creem.io/test/payment/prod_example','https://www.creem.io:444/checkout/ch_a',
+    'https://www.creem.io/','https://www.creem.io/checkout/ch_a#fragment',
+    'https://www.creem.io/checkout/ch_a;param','https://www.creem.io/checkout/ch_a\n'])assert.throws(()=>paymentDestination(url));
 });
+
+test('server-returned payment and checkout redirect families open without rewriting the URL',()=>withUI(async()=>{
+  for(const family of ['payment','checkout']){
+    const root=new Element('div'),opened=[];
+    const url='https://www.creem.io/'+family+'/'+CREEM_SUBSCRIPTIONS[0].productId+'?checkout_id=ch_example';
+    mountTokenPurchase(root,catalog,{billing:billingReady,account:noSubscription,
+      request:async()=>({ok:true,checkout_url:url}),navigate:value=>opened.push(value)});
+    await all(root).find(node=>node.textContent==='Выбрать Plus').events.click();
+    assert.deepEqual(opened,[url]);
+  }
+}));
 
 
 test('renewal management remains available while new purchases are disabled',()=>withUI(async()=>{
