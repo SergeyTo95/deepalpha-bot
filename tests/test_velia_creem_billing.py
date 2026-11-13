@@ -535,3 +535,68 @@ def test_new_checkout_without_redirect_requires_independent_metadata_proof(billi
     result=service.checkout(7,'plus',str(uuid.uuid4()))
     assert result['checkout_url']=='https://www.creem.io/checkout/'+PLANS['plus']['product_id']+'/ch_example'
     assert len(service.api.posts)==1
+
+
+@pytest.mark.parametrize('included',['plus','pro','max','all'])
+def test_tax_included_products_enable_catalog_and_preserve_each_plans_tax_label(billing,included):
+    service,connect=billing
+    for plan,spec in PLANS.items():
+        if included in {plan,'all'}:service.api.values[('products',spec['product_id'])]['tax_mode']='inclusive'
+    catalog=service.catalog()
+    assert catalog['enabled'] is True
+    for item in catalog['plans']:
+        expected='inclusive' if included in {item['code'],'all'} else 'exclusive'
+        assert item['tax_mode']==expected
+        assert item['price']==PLANS[item['code']]['price']/100
+    assert service.checkout(7,'plus',str(uuid.uuid4()))['ok']
+    assert balance(connect)==(100,None)
+
+
+@pytest.mark.parametrize('field,value',[
+    ('price',1),('currency','EUR'),('billing_period','every-year'),
+    ('status','archived'),('mode','test'),('tax_mode','unknown'),('tax_mode',None),
+])
+def test_supporting_inclusive_tax_does_not_disable_product_validation(billing,field,value):
+    service,_=billing
+    product=service.api.values[('products',PLANS['plus']['product_id'])]
+    product['tax_mode']='inclusive'
+    product[field]=value
+    catalog=service.catalog()
+    assert catalog['enabled'] is False and catalog['unavailable_reason']=='billing_product_mismatch'
+    assert all('tax_mode' not in item for item in catalog['plans'])
+    with pytest.raises(BillingError):service.checkout(7,'plus',str(uuid.uuid4()))
+    assert not service.api.posts
+
+
+@pytest.mark.parametrize('net_amount',[False,True])
+def test_tax_inclusive_paid_invoice_and_refund_grant_and_reverse_once(billing,net_amount):
+    service,connect=billing
+    service.api.values[('products',PLANS['plus']['product_id'])]['tax_mode']='inclusive'
+    purchase(service)
+    tx=service.api.values[('transactions','tran_example')]
+    tx.update(amount=1249 if net_amount else 1499,tax_amount=250,amount_paid=1499)
+    deliver(service,kind='checkout.completed',obj={'id':'ch_example'})
+    deliver(service,event='evt_duplicate_paid')
+    assert balance(connect)[0]==1300
+    tx.update(status='partially_refunded',refunded_amount=750)
+    deliver(service,kind='refund.created',event='evt_tax_refund',obj={'subscription':'sub_example','transaction':'tran_example'})
+    after=balance(connect)[0]
+    assert 100<after<1300
+    deliver(service,kind='refund.created',event='evt_tax_refund_repeat',obj={'subscription':'sub_example','transaction':'tran_example'})
+    assert balance(connect)[0]==after
+    tx.update(status='refunded',refunded_amount=1499)
+    deliver(service,kind='refund.created',event='evt_tax_full_refund',obj={'subscription':'sub_example','transaction':'tran_example'})
+    assert balance(connect)[0]==100
+
+
+@pytest.mark.parametrize('amount,tax,paid',[
+    (1249,250,1249),(1249,249,1499),(1249,None,1499),(1249,-1,1499),
+    (1499,250,1498),(1249,True,1499),(1249,'250',1499),(True,1498,1499),
+])
+def test_inclusive_tax_never_accepts_underpaid_or_unproven_amounts(billing,amount,tax,paid):
+    service,connect=billing
+    service.api.values[('products',PLANS['plus']['product_id'])]['tax_mode']='inclusive'
+    purchase(service)
+    service.api.values[('transactions','tran_example')].update(amount=amount,tax_amount=tax,amount_paid=paid)
+    with pytest.raises(BillingError,match='billing_amount_mismatch'):deliver(service)
+    assert balance(connect)==(100,None)
