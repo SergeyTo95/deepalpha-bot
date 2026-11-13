@@ -1,5 +1,7 @@
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
 import json
+import sqlite3
 import pytest
 
 from services.velia_creem_billing import BillingError, PLANS
@@ -163,6 +165,16 @@ def test_read_only_inspection_does_not_create_invoice_or_change_product():
     assert all(call[0]=='GET' for call in transport.calls)
 
 
+def test_test_checkout_payment_keeps_missing_periods_explicit_without_inventing_an_invoice():
+    transport=Transport()
+    tx=transport.values[('transactions','tran_before')]
+    tx.update(type='payment',period_start=None,period_end=None)
+    result=snapshot(SandboxAPI(TEST_KEY,requester=transport),'sub_test')
+    assert result['last_invoice']['type']=='payment'
+    assert result['last_invoice']['period_start'] is None and result['last_invoice']['period_end'] is None
+    assert all(call[0]=='GET' for call in transport.calls)
+
+
 @pytest.mark.parametrize('case', ['subscription_mode','product_mode','customer','unpaid','units','amount'])
 def test_bad_canonical_binding_prevents_any_mutation(case):
     transport = Transport()
@@ -290,3 +302,135 @@ def test_discovery_cli_cannot_be_combined_with_a_plan_mutation(flag):
     with pytest.raises(SystemExit) as error:
         main([flag,'--apply-test-change','--target-product','prod_testpro','--behavior','proration-none'])
     assert error.value.code==2
+
+
+@pytest.fixture
+def approved_experiment(monkeypatch):
+    import services.velia_creem_plan_change as policy
+    monkeypatch.setattr(policy,'APPROVED_SANDBOX_EXPERIMENT', {
+        'run_id':'test-one-durable-experiment', 'subscription_id':'sub_test',
+        'products':{'plus':'prod_testplus','pro':'prod_testpro','max':'prod_testmax'},
+        'source':'plus','target':'pro','behavior':'proration-charge-immediately'})
+    transport = Transport()
+    transport.values[('products','prod_testmax')]=transport.product('prod_testmax',5999)
+    return SandboxAPI(TEST_KEY,requester=transport), transport
+
+
+@pytest.fixture
+def sandbox_runs(tmp_path):
+    from services.velia_creem_plan_change import SandboxRunStore
+    path = str(tmp_path/'sandbox-runs.db')
+    connect = lambda:sqlite3.connect(path,timeout=10)
+    with connect() as conn:
+        conn.execute('CREATE TABLE users(user_id BIGINT PRIMARY KEY,token_balance BIGINT)')
+        conn.execute('INSERT INTO users VALUES (7,111)')
+    return SandboxRunStore(connect,sqlite=True),connect
+
+
+def test_fixed_experiment_uses_only_the_supplied_test_products():
+    from services.velia_creem_plan_change import APPROVED_SANDBOX_EXPERIMENT as intent
+    assert intent['products']=={'plus':'prod_fvrGJW4vX4KZfzJfXBZBO',
+        'pro':'prod_7e0Yag0LFPiyVAx4OUs4IG','max':'prod_1TxrSlOznctfgTo7mBNXMq'}
+    assert set(intent['products'].values()).isdisjoint(p['product_id'] for p in PLANS.values())
+
+
+def test_approved_experiment_records_one_post_and_never_touches_user_credits(approved_experiment,sandbox_runs):
+    from services.velia_creem_plan_change import run_approved_sandbox_experiment
+    api,transport=approved_experiment
+    runs,connect=sandbox_runs
+    first=run_approved_sandbox_experiment(api,runs)
+    again=run_approved_sandbox_experiment(api,runs)
+    assert first['state']=='observed' and first['new_invoice_observed'] is False
+    assert again['reused'] is True and again['write_retried'] is False
+    assert len([call for call in transport.calls if call[0]=='POST'])==1
+    with connect() as conn:
+        assert conn.execute('SELECT token_balance FROM users WHERE user_id=7').fetchone()[0]==111
+        assert set(row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"))=={
+            'users','velia_creem_sandbox_runs'}
+
+
+def test_parallel_deploys_can_attempt_only_one_provider_write(approved_experiment,sandbox_runs):
+    from services.velia_creem_plan_change import run_approved_sandbox_experiment
+    api,transport=approved_experiment
+    runs,_=sandbox_runs
+    runs.initialize()
+    def invoke(_):
+        try:return run_approved_sandbox_experiment(api,runs)
+        except BillingError as error:
+            # Another run may change the canonical product during preflight.
+            assert error.code=='sandbox_paid_source_plan_required'
+            return None
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results=list(pool.map(invoke,range(16)))
+    assert any(r and r.get('state')=='observed' for r in results)
+    assert len([call for call in transport.calls if call[0]=='POST'])==1
+
+
+@pytest.mark.parametrize('case',['tax','price','source','paid'])
+def test_preflight_mismatch_does_not_claim_or_mutate(approved_experiment,sandbox_runs,case):
+    from services.velia_creem_plan_change import run_approved_sandbox_experiment
+    api,transport=approved_experiment
+    runs,connect=sandbox_runs
+    if case=='tax':transport.values[('products','prod_testplus')]['tax_mode']='exclusive'
+    if case=='price':transport.values[('products','prod_testmax')]['price']=399
+    if case=='source':transport.values[('subscriptions','sub_test')]['status']='past_due'
+    if case=='paid':transport.values[('transactions','tran_before')]['amount_paid']=0
+    with pytest.raises(BillingError):run_approved_sandbox_experiment(api,runs)
+    assert not any(call[0]=='POST' for call in transport.calls)
+    with connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM velia_creem_sandbox_runs').fetchone()[0]==0
+
+
+def test_ambiguous_provider_response_survives_redeploy_without_retry(approved_experiment,sandbox_runs):
+    from services.velia_creem_plan_change import run_approved_sandbox_experiment
+    api,transport=approved_experiment
+    runs,_=sandbox_runs
+    transport.timeout=True
+    first=run_approved_sandbox_experiment(api,runs)
+    assert first['state']=='uncertain' and first['error']=='sandbox_request_failed'
+    again=run_approved_sandbox_experiment(api,runs)
+    assert again['state']=='uncertain' and again['current']['product_id']=='prod_testpro'
+    assert again['write_retried'] is False
+    assert len([call for call in transport.calls if call[0]=='POST'])==1
+
+
+def test_crash_after_post_before_report_is_still_never_retried(approved_experiment,sandbox_runs,monkeypatch):
+    from services.velia_creem_plan_change import run_approved_sandbox_experiment
+    api,transport=approved_experiment
+    runs,_=sandbox_runs
+    def fail(*args):raise RuntimeError('simulated report persistence failure')
+    monkeypatch.setattr(runs,'record',fail)
+    with pytest.raises(RuntimeError):run_approved_sandbox_experiment(api,runs)
+    again=run_approved_sandbox_experiment(api,runs)
+    assert again['state']=='started' and again['write_retried'] is False
+    assert len([call for call in transport.calls if call[0]=='POST'])==1
+
+
+def test_database_failure_before_claim_prevents_provider_write(approved_experiment,sandbox_runs,monkeypatch):
+    from services.velia_creem_plan_change import run_approved_sandbox_experiment
+    api,transport=approved_experiment
+    runs,_=sandbox_runs
+    def fail(*args):raise RuntimeError('database unavailable')
+    monkeypatch.setattr(runs,'claim',fail)
+    with pytest.raises(RuntimeError):run_approved_sandbox_experiment(api,runs)
+    assert not any(call[0]=='POST' for call in transport.calls)
+
+
+def test_changed_intent_cannot_reuse_claimed_run_id(approved_experiment,sandbox_runs,monkeypatch):
+    import services.velia_creem_plan_change as policy
+    api,transport=approved_experiment
+    runs,_=sandbox_runs
+    policy.run_approved_sandbox_experiment(api,runs)
+    monkeypatch.setitem(policy.APPROVED_SANDBOX_EXPERIMENT,'behavior','proration-none')
+    with pytest.raises(BillingError,match='sandbox_intent_conflict'):
+        policy.run_approved_sandbox_experiment(api,runs)
+    assert len([call for call in transport.calls if call[0]=='POST'])==1
+
+
+def test_approved_experiment_cli_requires_test_key_before_opening_database(monkeypatch,capsys):
+    import scripts.velia_creem_plan_change_probe as cli
+    monkeypatch.delenv('VELIA_CREEM_TEST_API_KEY',raising=False)
+    monkeypatch.setenv('VELIA_CREEM_API_KEY','creem_live_not_a_real_key')
+    monkeypatch.setattr(cli,'SandboxRunStore',lambda:pytest.fail('opened database without test key'))
+    assert cli.main(['--predeploy-test-plan-change'])==0
+    assert 'test_api_key_not_configured' in capsys.readouterr().out

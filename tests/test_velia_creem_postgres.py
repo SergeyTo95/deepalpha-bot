@@ -5,6 +5,32 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from services.velia_creem_billing import BillingService, BillingStore
 from test_velia_creem_billing import API, NOW, SECRET, purchase, deliver, plan_checkout_api
+from test_velia_creem_plan_change import approved_experiment
+
+
+def test_postgres_sandbox_run_claim_prevents_duplicate_mutations_and_leaves_balance(postgres_billing,approved_experiment):
+    from services.velia_creem_plan_change import SandboxRunStore,run_approved_sandbox_experiment
+    _,connect=postgres_billing
+    api,transport=approved_experiment
+    runs=SandboxRunStore(connect)
+    def execute(_):
+        from services.velia_creem_billing import BillingError
+        try:return run_approved_sandbox_experiment(api,runs)
+        except BillingError as error:
+            assert error.code=='sandbox_paid_source_plan_required'
+            return None
+    # Include concurrent first-time schema creation as well as claim locking.
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results=list(pool.map(execute,range(16)))
+    assert any(r and r.get('state')=='observed' for r in results)
+    assert len([call for call in transport.calls if call[0]=='POST'])==1
+    with connect() as conn,conn.cursor() as cur:
+        cur.execute('SELECT token_balance FROM users WHERE user_id=7')
+        assert cur.fetchone()[0]==100
+        cur.execute('SELECT COUNT(*) FROM velia_creem_charges')
+        assert cur.fetchone()[0]==0
+        cur.execute('SELECT COUNT(*) FROM velia_creem_sandbox_runs')
+        assert cur.fetchone()[0]==1
 
 
 @pytest.fixture

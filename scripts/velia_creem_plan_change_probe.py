@@ -9,7 +9,8 @@ import os
 import sys
 
 from services.velia_creem_billing import BillingError
-from services.velia_creem_plan_change import BEHAVIORS, SandboxAPI, discover_sandbox, probe_change, snapshot
+from services.velia_creem_plan_change import (BEHAVIORS, SandboxAPI, SandboxRunStore,
+    discover_sandbox, probe_change, run_approved_sandbox_experiment, snapshot)
 
 
 def main(argv=None):
@@ -18,6 +19,7 @@ def main(argv=None):
     action.add_argument('--subscription')
     action.add_argument('--discover', action='store_true')
     action.add_argument('--predeploy-discover', action='store_true')
+    action.add_argument('--predeploy-test-plan-change', action='store_true')
     parser.add_argument('--target-product')
     parser.add_argument('--behavior', choices=sorted(BEHAVIORS))
     parser.add_argument('--apply-test-change', action='store_true')
@@ -28,14 +30,18 @@ def main(argv=None):
         parser.error('--apply-test-change requires --target-product and --behavior')
     if not args.apply_test_change and (args.target_product or args.behavior):
         parser.error('target/behavior require explicit --apply-test-change')
-    prefix = 'VELIA_CREEM_SANDBOX_DISCOVERY ' if args.predeploy_discover else ''
+    predeploy = args.predeploy_discover or args.predeploy_test_plan_change
+    prefix = ('VELIA_CREEM_SANDBOX_EXPERIMENT ' if args.predeploy_test_plan_change else
+              'VELIA_CREEM_SANDBOX_DISCOVERY ' if args.predeploy_discover else '')
     try:
         key = os.getenv('VELIA_CREEM_TEST_API_KEY', '')
-        if args.predeploy_discover and not key:
+        if predeploy and not key:
             print(prefix+json.dumps({'ok':True, 'skipped':True, 'reason':'test_api_key_not_configured'}))
             return 0
         api = SandboxAPI(key)
-        if args.discover or args.predeploy_discover:
+        if args.predeploy_test_plan_change:
+            result = run_approved_sandbox_experiment(api, SandboxRunStore())
+        elif args.discover or args.predeploy_discover:
             result = discover_sandbox(api)
         else:
             result = (probe_change(api, args.subscription, args.target_product, args.behavior)
@@ -47,10 +53,10 @@ def main(argv=None):
                                'outcome': 'inspect_subscription_before_retry' if args.apply_test_change else 'read_failed'}))
         # Optional sandbox discovery must never take down working live checkout.
         # This exit policy does not weaken any mandatory production CI check.
-        return 0 if args.predeploy_discover else 1
+        return 0 if predeploy else 1
     except Exception:
         print(prefix+json.dumps({'ok':False, 'error':'sandbox_probe_unavailable'}))
-        return 0 if args.predeploy_discover else 1
+        return 0 if predeploy else 1
 
 
 if __name__ == '__main__':

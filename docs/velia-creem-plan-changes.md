@@ -13,6 +13,33 @@ It cannot execute a plan change. Missing keys skip the probe; authentication or
 network errors are reported without blocking mandatory production checks.
 This source must be deployed manually before adding the key alone can run it.
 
+## Approved first experiment
+
+The owner supplied sandbox Pro `prod_7e0Yag0LFPiyVAx4OUs4IG` and Max
+`prod_1TxrSlOznctfgTo7mBNXMq`. Existing sandbox Plus is
+`prod_fvrGJW4vX4KZfzJfXBZBO`, with discovered active test subscription
+`sub_1zCm0jsSzizMUIagDO1oyp`. These references are separate from the live catalog.
+
+After mandatory pre-deploy checks, `--predeploy-test-plan-change` can perform
+ONE test-only Plus → Pro change with `proration-charge-immediately`. Preflight
+requires those three exact monthly USD products at $14.99/$29.99/$59.99 with
+inclusive tax, and a canonical paid active Plus subscription. A mismatch logs
+`sandbox_plan_settings_mismatch` or another sanitized code and does not charge.
+
+Before the POST, a unique run ID and intent digest are committed to a separate
+`velia_creem_sandbox_runs` audit table. It never reads or modifies user balances,
+live subscriptions or fulfillment tables. Concurrent invocations, timeouts,
+lost readbacks and redeploys cannot repeat the POST: a claimed run only performs
+read-only reconciliation. Even a crash before POST deliberately needs manual
+inspection, rather than guessing that retry is safe. No automatic Pro → Max or
+downgrade experiment is chained onto this first observation.
+
+The sanitized `VELIA_CREEM_SANDBOX_EXPERIMENT` log records the invoice amounts,
+tax and period timestamps. `state: observed` means readback was recorded, not
+that live switching is ready; `new_invoice_observed` and invoice paid status
+must be checked. An asynchronous invoice may need later read-only inspection.
+Actual execution still requires the owner to deploy this source manually.
+
 ## Customer policy to implement after provider validation
 
 | Action | Intended behavior | Credits |

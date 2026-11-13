@@ -200,4 +200,5 @@ def test_release_shell_preserves_required_checks_and_fails_before_later_checks(t
             "-m services.velia_superagent_chat_service"]
         if not superagent_exit:
             expected.append("-m scripts.velia_creem_plan_change_probe --predeploy-discover")
+            expected.append("-m scripts.velia_creem_plan_change_probe --predeploy-test-plan-change")
         assert calls[3:] == expected

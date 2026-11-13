@@ -5,12 +5,24 @@ never an authorization to debit a card or grant tokens. Provider cycle/proration
 semantics must first be measured with sandbox invoices.
 """
 from fractions import Fraction
+import hashlib
+import json
 import re
 
-from services.velia_creem_billing import BillingError, PLANS, RANK, identifier, require, timestamp
+from services.velia_creem_billing import BillingError, BillingStore, PLANS, RANK, identifier, require, timestamp
 
 
 BEHAVIORS = frozenset({'proration-charge-immediately', 'proration-charge', 'proration-none'})
+
+# One explicitly authorized experiment on the already discovered sandbox
+# subscription. These IDs are NOT live products or the live fulfillment map.
+APPROVED_SANDBOX_EXPERIMENT = {
+    'run_id':'velia-creem-plus-pro-immediate-2026-11-13-1',
+    'subscription_id':'sub_1zCm0jsSzizMUIagDO1oyp',
+    'products':{'plus':'prod_fvrGJW4vX4KZfzJfXBZBO',
+                'pro':'prod_7e0Yag0LFPiyVAx4OUs4IG',
+                'max':'prod_1TxrSlOznctfgTo7mBNXMq'},
+    'source':'plus', 'target':'pro', 'behavior':'proration-charge-immediately'}
 
 
 def change_estimate(current, target, *, period_start, period_end, now):
@@ -173,7 +185,7 @@ def snapshot(api, subscription_id):
         require(tx.get('mode') == 'test' and identifier(tx, 'tran_') == transaction_id
                 and identifier(tx.get('subscription'), 'sub_') == subscription_id
                 and identifier(tx.get('customer'), 'cust_') == customer_id
-                and tx.get('currency') == 'USD' and tx.get('type') == 'invoice',
+                and tx.get('currency') == 'USD' and tx.get('type') in {'invoice','payment'},
                 'sandbox_invoice_mismatch')
         require(all(type(tx.get(k)) is int and tx[k] >= 0 for k in ('amount', 'amount_paid')),
                 'sandbox_invoice_mismatch')
@@ -181,10 +193,13 @@ def snapshot(api, subscription_id):
                 'sandbox_invoice_mismatch')
         require(tx.get('status') in {'paid', 'pending', 'processing', 'failed', 'refunded',
                                     'partially_refunded', 'chargeback', 'canceled'}, 'sandbox_invoice_mismatch')
-        result['last_invoice'] = {'transaction_id': transaction_id, 'status': tx.get('status'),
+        result['last_invoice'] = {'transaction_id': transaction_id, 'status': tx.get('status'), 'type':tx['type'],
             'amount_cents': tx['amount'], 'paid_cents': tx['amount_paid'],
             'tax_cents': tx.get('tax_amount'),
-            'period_start': timestamp(tx.get('period_start')), 'period_end': timestamp(tx.get('period_end'))}
+            # A checkout payment can omit invoice periods. Keep absence explicit
+            # rather than fabricate dates from the subscription or grant access.
+            'period_start': timestamp(tx['period_start']) if tx.get('period_start') is not None else None,
+            'period_end': timestamp(tx['period_end']) if tx.get('period_end') is not None else None}
     return result
 
 
@@ -218,3 +233,98 @@ def probe_change(api, subscription_id, target_product_id, behavior):
             'new_invoice_observed': bool(current and current != previous),
             'target_applied': after['product_id'] == target['id'],
             'requires_webhook_and_renewal_validation': True}
+
+
+class SandboxRunStore:
+    """A separate audit table; no reads/writes to users or billing ledgers.
+
+    The durable INSERT commits before the provider POST. A process crash, timeout
+    or failed report persistence can never turn a later deploy into a retry.
+    """
+    def __init__(self, connect=None, *, sqlite=False):
+        self.db = BillingStore(connect, sqlite=sqlite)
+
+    def initialize(self):
+        with self.db.transaction() as cur:
+            if not self.db.sqlite:
+                cur.execute('SELECT pg_advisory_xact_lock(1450731742)')
+            cur.execute('''CREATE TABLE IF NOT EXISTS velia_creem_sandbox_runs (
+                id TEXT PRIMARY KEY, intent_digest TEXT NOT NULL,
+                state TEXT NOT NULL, report TEXT NOT NULL)''')
+
+    def get(self, run_id):
+        with self.db.transaction() as cur:
+            self.db.execute(cur, 'SELECT * FROM velia_creem_sandbox_runs WHERE id=?', (run_id,))
+            return self.db.row(cur)
+
+    def claim(self, run_id, digest, before):
+        report = json.dumps({'mode':'test', 'live_changes_enabled':False, 'before':before}, sort_keys=True)
+        with self.db.transaction() as cur:
+            self.db.execute(cur, '''INSERT INTO velia_creem_sandbox_runs(id,intent_digest,state,report)
+                VALUES (?,?,'started',?) ON CONFLICT DO NOTHING''', (run_id,digest,report))
+            claimed = cur.rowcount == 1
+            self.db.execute(cur, 'SELECT * FROM velia_creem_sandbox_runs WHERE id=?', (run_id,))
+            row = self.db.row(cur)
+            require(row is not None and row['intent_digest'] == digest, 'sandbox_intent_conflict', 409)
+            return claimed, row
+
+    def record(self, run_id, state, report):
+        require(state in {'observed','uncertain'}, 'sandbox_invalid_state')
+        with self.db.transaction() as cur:
+            self.db.execute(cur, '''UPDATE velia_creem_sandbox_runs SET state=?,report=?
+                WHERE id=? AND state='started' ''', (state,json.dumps(report,sort_keys=True),run_id))
+
+
+def run_approved_sandbox_experiment(api, runs):
+    """At most one attempted Plus→Pro POST across processes and redeploys.
+
+    Preflight must find all three exact test products at the approved prices,
+    inclusive tax, and the paid test Plus subscription. A resumed run only reads
+    the provider state, even if the previous process died before making a POST.
+    """
+    require(isinstance(api, SandboxAPI), 'sandbox_client_required')
+    intent = APPROVED_SANDBOX_EXPERIMENT
+    digest = hashlib.sha256(json.dumps(intent,sort_keys=True).encode()).hexdigest()
+    runs.initialize()
+
+    def resume(row):
+        require(row['intent_digest'] == digest, 'sandbox_intent_conflict', 409)
+        saved = json.loads(row['report'])
+        try:
+            current = snapshot(api, intent['subscription_id'])
+            # Read-only reconciliation is evidence, never another charge or an
+            # assertion that a target product without a new paid invoice is paid.
+            observed = {'current':current,
+                'new_invoice_observed':bool(current.get('last_invoice',{}).get('transaction_id') and
+                    current['last_invoice']['transaction_id'] != saved['before'].get('last_invoice',{}).get('transaction_id'))}
+        except BillingError as error:
+            observed = {'readback_error':error.code}
+        return {'mode':'test', 'live_changes_enabled':False, 'run_id':intent['run_id'],
+                'state':row['state'], 'reused':True, 'write_retried':False,
+                'saved_report':saved, **observed}
+
+    previous = runs.get(intent['run_id'])
+    if previous:
+        return resume(previous)
+    for plan, product_id in intent['products'].items():
+        product = _product(api, product_id)
+        require(product['price'] == PLANS[plan]['price'] and product['tax_mode'] == 'inclusive',
+                'sandbox_plan_settings_mismatch')
+    before = snapshot(api, intent['subscription_id'])
+    require(before['product_id'] == intent['products'][intent['source']]
+            and before['status'] == 'active' and before.get('last_invoice',{}).get('status') == 'paid'
+            and before['last_invoice']['paid_cents'] >= PLANS[intent['source']]['price'],
+            'sandbox_paid_source_plan_required')
+    claimed, row = runs.claim(intent['run_id'], digest, before)
+    if not claimed:
+        return resume(row)
+    try:
+        report = probe_change(api, intent['subscription_id'], intent['products'][intent['target']], intent['behavior'])
+    except Exception as error:
+        report = {'mode':'test', 'live_changes_enabled':False, 'before':before,
+                  'error':error.code if isinstance(error,BillingError) else 'sandbox_probe_unavailable',
+                  'outcome':'inspect_subscription_before_retry'}
+        runs.record(intent['run_id'], 'uncertain', report)
+        return {'run_id':intent['run_id'], 'state':'uncertain', **report}
+    runs.record(intent['run_id'], 'observed', report)
+    return {'run_id':intent['run_id'], 'state':'observed', **report}
