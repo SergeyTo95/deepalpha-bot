@@ -22,9 +22,18 @@ The owner supplied sandbox Pro `prod_7e0Yag0LFPiyVAx4OUs4IG` and Max
 
 After mandatory pre-deploy checks, `--predeploy-test-plan-change` can perform
 ONE test-only Plus → Pro change with `proration-charge-immediately`. Preflight
-requires those three exact monthly USD products at $14.99/$29.99/$59.99 with
-inclusive tax, and a canonical paid active Plus subscription. A mismatch logs
+requires the exact monthly USD Plus/Pro products at $14.99/$29.99 with inclusive
+tax, and a canonical paid active Plus subscription. Max cannot block this
+Plus → Pro experiment. A mismatch logs
 `sandbox_plan_settings_mismatch` or another sanitized code and does not charge.
+
+The observed sandbox Plus still used exclusive tax. After verifying its exact
+test identity, price and paid subscription, the runner may set only its
+`tax_mode` to `inclusive` via the documented product PATCH API and canonical GET
+readback. It cannot change a price, edit Pro/Max, or address a live product.
+This setting operation is idempotent; the separate durable subscription claim
+still guards the charge attempt. The upgrade also rechecks its expected source
+immediately before POST.
 
 Before the POST, a unique run ID and intent digest are committed to a separate
 `velia_creem_sandbox_runs` audit table. It never reads or modifies user balances,

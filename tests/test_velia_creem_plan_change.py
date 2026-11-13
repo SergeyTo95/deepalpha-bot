@@ -99,6 +99,11 @@ class Transport:
         resource = url.removeprefix('https://test-api.creem.io/v1/')
         if method == 'GET':
             return Response(deepcopy(self.values[(resource,next(iter(kwargs['params'].values())))]))
+        if method == 'PATCH':
+            assert resource=='products/prod_testplus' and kwargs['json']=={'tax_mode':'inclusive'}
+            product=self.values[('products','prod_testplus')]
+            product.update(kwargs['json'])
+            return Response(deepcopy(product))
         # Simulate Creem having acted before a dropped HTTP response.
         sub = self.values[('subscriptions','sub_test')]
         sub['product'] = kwargs['json']['product_id']
@@ -371,14 +376,69 @@ def test_preflight_mismatch_does_not_claim_or_mutate(approved_experiment,sandbox
     from services.velia_creem_plan_change import run_approved_sandbox_experiment
     api,transport=approved_experiment
     runs,connect=sandbox_runs
-    if case=='tax':transport.values[('products','prod_testplus')]['tax_mode']='exclusive'
-    if case=='price':transport.values[('products','prod_testmax')]['price']=399
+    if case=='tax':transport.values[('products','prod_testpro')]['tax_mode']='exclusive'
+    if case=='price':transport.values[('products','prod_testpro')]['price']=399
     if case=='source':transport.values[('subscriptions','sub_test')]['status']='past_due'
     if case=='paid':transport.values[('transactions','tran_before')]['amount_paid']=0
     with pytest.raises(BillingError):run_approved_sandbox_experiment(api,runs)
     assert not any(call[0]=='POST' for call in transport.calls)
     with connect() as conn:
         assert conn.execute('SELECT COUNT(*) FROM velia_creem_sandbox_runs').fetchone()[0]==0
+
+
+def test_approved_run_fixes_only_test_plus_tax_and_max_cannot_block_it(approved_experiment,sandbox_runs):
+    from services.velia_creem_plan_change import run_approved_sandbox_experiment
+    api,transport=approved_experiment
+    runs,_=sandbox_runs
+    transport.values[('products','prod_testplus')]['tax_mode']='exclusive'
+    del transport.values[('products','prod_testmax')]
+    report=run_approved_sandbox_experiment(api,runs)
+    assert report['state']=='observed'
+    assert transport.values[('products','prod_testplus')]['price']==1499
+    assert transport.values[('products','prod_testplus')]['tax_mode']=='inclusive'
+    assert [call[2] for call in transport.calls if call[0]=='PATCH']==[{'tax_mode':'inclusive'}]
+    run_approved_sandbox_experiment(api,runs)
+    assert len([call for call in transport.calls if call[0]=='PATCH'])==1
+    assert len([call for call in transport.calls if call[0]=='POST'])==1
+
+
+@pytest.mark.parametrize('product,payload', [
+    ('prod_testplus',{'price':399}), ('prod_testplus',{'tax_mode':'exclusive'}),
+    ('prod_testpro',{'tax_mode':'inclusive'}),
+    (PLANS['plus']['product_id'],{'tax_mode':'inclusive'})])
+def test_sandbox_tax_repair_rejects_any_other_product_or_field(approved_experiment,product,payload):
+    api,transport=approved_experiment
+    with pytest.raises(BillingError,match='sandbox_operation_not_allowed'):
+        api.request('PATCH','products/'+product,data=payload)
+    assert transport.calls==[]
+
+
+def test_tax_repair_never_runs_before_paid_source_ownership_is_verified(approved_experiment,sandbox_runs):
+    from services.velia_creem_plan_change import run_approved_sandbox_experiment
+    api,transport=approved_experiment
+    runs,_=sandbox_runs
+    transport.values[('products','prod_testplus')]['tax_mode']='exclusive'
+    transport.values[('transactions','tran_before')]['customer']='cust_foreign'
+    with pytest.raises(BillingError):run_approved_sandbox_experiment(api,runs)
+    assert all(call[0]=='GET' for call in transport.calls)
+
+
+def test_lost_tax_patch_reply_is_reconciled_before_a_single_charge_attempt(approved_experiment,sandbox_runs):
+    from services.velia_creem_plan_change import run_approved_sandbox_experiment
+    api,transport=approved_experiment
+    runs,_=sandbox_runs
+    transport.values[('products','prod_testplus')]['tax_mode']='exclusive'
+    def lost_patch(method,url,**kwargs):
+        response=transport(method,url,**kwargs)
+        if method=='PATCH':raise TimeoutError('lost reply after idempotent setting')
+        return response
+    api._requester=lost_patch
+    with pytest.raises(BillingError,match='sandbox_request_failed'):
+        run_approved_sandbox_experiment(api,runs)
+    assert not any(call[0]=='POST' for call in transport.calls)
+    assert run_approved_sandbox_experiment(api,runs)['state']=='observed'
+    assert len([call for call in transport.calls if call[0]=='PATCH'])==1
+    assert len([call for call in transport.calls if call[0]=='POST'])==1
 
 
 def test_ambiguous_provider_response_survives_redeploy_without_retry(approved_experiment,sandbox_runs):

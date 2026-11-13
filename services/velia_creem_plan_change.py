@@ -58,7 +58,8 @@ class SandboxAPI:
     """Fixed test origin, test-key required, narrow read/write allowlist.
 
     Never accepts a base URL or uses VELIA_CREEM_API_KEY. No retries, redirects,
-    refund/cancel operations, product edits or access to the production ledger.
+    refund/cancel operations or access to the production ledger. The only
+    product edit allowed is inclusive tax on the approved sandbox Plus.
     """
     def __init__(self, key, *, requester=None):
         require(isinstance(key, str) and key.startswith('creem_test_') and len(key) >= 20
@@ -71,7 +72,9 @@ class SandboxAPI:
         write = (method == 'POST' and re.fullmatch(r'subscriptions/sub_[A-Za-z0-9_-]+/upgrade', resource)
                  and isinstance(data, dict) and set(data) == {'product_id', 'update_behavior'}
                  and data['update_behavior'] in BEHAVIORS)
-        require(bool(read or write), 'sandbox_operation_not_allowed')
+        tax_fix = (method == 'PATCH' and resource == 'products/'+APPROVED_SANDBOX_EXPERIMENT['products']['plus']
+                   and params is None and data == {'tax_mode':'inclusive'})
+        require(bool(read or write or tax_fix), 'sandbox_operation_not_allowed')
         if write:
             identifier(data['product_id'], 'prod_')
         import requests
@@ -203,7 +206,7 @@ def snapshot(api, subscription_id):
     return result
 
 
-def probe_change(api, subscription_id, target_product_id, behavior):
+def probe_change(api, subscription_id, target_product_id, behavior, *, expected_source=None):
     """Perform ONE explicit sandbox mutation after canonical test-mode checks.
 
     A timeout or unexpected response is ambiguous: callers must inspect with
@@ -213,6 +216,7 @@ def probe_change(api, subscription_id, target_product_id, behavior):
     require(isinstance(api, SandboxAPI), 'sandbox_client_required')
     require(behavior in BEHAVIORS, 'invalid_proration_behavior')
     before = snapshot(api, subscription_id)
+    require(expected_source is None or before['product_id'] == expected_source, 'sandbox_source_changed')
     require(before['status'] == 'active' and before.get('last_invoice', {}).get('status') == 'paid',
             'sandbox_paid_subscription_required')
     target = _product(api, target_product_id)
@@ -278,8 +282,9 @@ class SandboxRunStore:
 def run_approved_sandbox_experiment(api, runs):
     """At most one attempted Plus→Pro POST across processes and redeploys.
 
-    Preflight must find all three exact test products at the approved prices,
-    inclusive tax, and the paid test Plus subscription. A resumed run only reads
+    Preflight requires the exact source/target prices and paid test Plus. It can
+    fix only that sandbox Plus's tax mode. Max does not block a Plus→Pro test.
+    A resumed run only reads
     the provider state, even if the previous process died before making a POST.
     """
     require(isinstance(api, SandboxAPI), 'sandbox_client_required')
@@ -306,20 +311,42 @@ def run_approved_sandbox_experiment(api, runs):
     previous = runs.get(intent['run_id'])
     if previous:
         return resume(previous)
-    for plan, product_id in intent['products'].items():
+    products = {}
+    for plan in (intent['source'],intent['target']):
+        product_id = intent['products'][plan]
         product = _product(api, product_id)
-        require(product['price'] == PLANS[plan]['price'] and product['tax_mode'] == 'inclusive',
+        require(product['price'] == PLANS[plan]['price']
+                and (plan == intent['source'] or product['tax_mode'] == 'inclusive'),
                 'sandbox_plan_settings_mismatch')
+        products[plan] = product
     before = snapshot(api, intent['subscription_id'])
     require(before['product_id'] == intent['products'][intent['source']]
             and before['status'] == 'active' and before.get('last_invoice',{}).get('status') == 'paid'
             and before['last_invoice']['paid_cents'] >= PLANS[intent['source']]['price'],
             'sandbox_paid_source_plan_required')
+    if products[intent['source']]['tax_mode'] == 'exclusive':
+        # Setting one known tax field is idempotent and never changes price or
+        # charges a card. Verify canonical paid ownership before this edit, then
+        # read back the product. A lost reply can safely be resolved by GET on
+        # the next run; the subscription POST still has its durable claim below.
+        product_id = intent['products'][intent['source']]
+        result = api.request('PATCH','products/'+product_id,data={'tax_mode':'inclusive'})
+        require(result.get('mode') == 'test' and identifier(result,'prod_') == product_id,
+                'sandbox_product_mismatch')
+        corrected = _product(api, product_id)
+        require(corrected['price'] == PLANS[intent['source']]['price'] and corrected['tax_mode'] == 'inclusive',
+                'sandbox_plan_settings_mismatch')
+        before = snapshot(api,intent['subscription_id'])
+        require(before['product_id'] == product_id and before['status'] == 'active'
+                and before.get('last_invoice',{}).get('status') == 'paid'
+                and before['last_invoice']['paid_cents'] >= PLANS[intent['source']]['price'],
+                'sandbox_paid_source_plan_required')
     claimed, row = runs.claim(intent['run_id'], digest, before)
     if not claimed:
         return resume(row)
     try:
-        report = probe_change(api, intent['subscription_id'], intent['products'][intent['target']], intent['behavior'])
+        report = probe_change(api, intent['subscription_id'], intent['products'][intent['target']], intent['behavior'],
+                              expected_source=intent['products'][intent['source']])
     except Exception as error:
         report = {'mode':'test', 'live_changes_enabled':False, 'before':before,
                   'error':error.code if isinstance(error,BillingError) else 'sandbox_probe_unavailable',
