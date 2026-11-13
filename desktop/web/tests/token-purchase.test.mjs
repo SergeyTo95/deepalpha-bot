@@ -130,6 +130,21 @@ test('server-returned payment and checkout redirect families open without rewrit
   }
 }));
 
+test('verified tax mode is shown per plan without assuming all prices include tax',()=>withUI(()=>{
+  const root=new Element('div');
+  const billing={...billingReady,plans:[{code:'plus',tax_mode:'inclusive'},{code:'pro',tax_mode:'exclusive'},{code:'max',tax_mode:'unknown'}]};
+  mountTokenPurchase(root,catalog,{billing,account:noSubscription,request:async()=>({ok:true})});
+  const cards=all(root).filter(node=>node.tag==='article');
+  const labels=cards.map(card=>all(card).find(node=>node.className?.includes('subscription-tax'))?.textContent);
+  assert.deepEqual(labels,['Налог включён в цену','Налог добавляется при оплате','Итоговая сумма — на странице оплаты']);
+}));
+
+test('unverified catalog never claims tax is included',()=>withUI(()=>{
+  const root=new Element('div');
+  mountTokenPurchase(root,catalog,{billing:{...billingReady,enabled:false,plans:[{code:'plus',tax_mode:'inclusive'}]},account:noSubscription,request:async()=>({ok:true})});
+  assert.equal(all(root).some(node=>node.textContent==='Налог включён в цену'),false);
+}));
+
 
 test('renewal management remains available while new purchases are disabled',()=>withUI(async()=>{
   const root=new Element('div'),calls=[];
