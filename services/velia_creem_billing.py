@@ -372,7 +372,7 @@ class BillingService:
             and type(product.get('price')) is int and product['price'] == spec['price']
             and product.get('currency') == 'USD' and product.get('billing_type') == 'recurring'
             and product.get('billing_period') == 'every-month' and product.get('status') == 'active'
-            and product.get('tax_mode') == 'exclusive', 'billing_product_mismatch', 503)
+            and product.get('tax_mode') in {'inclusive','exclusive'}, 'billing_product_mismatch', 503)
         return product
 
     def catalog(self):
@@ -380,12 +380,13 @@ class BillingService:
         if ready and self.catalog_cache and self.catalog_cache[0] > time.monotonic():
             return self.catalog_cache[1]
         reason = None if ready else 'billing_not_configured'
+        tax_modes={}
         if ready:
             try:
                 self.store.initialize()
                 self.verify_hook()
                 for plan in PLANS:
-                    self.product(plan)
+                    tax_modes[plan]=self.product(plan)['tax_mode']
             except BillingError as error:
                 ready = False
                 reason = ('billing_provider_credentials' if error.provider_status in (401,403) else error.code)
@@ -396,7 +397,8 @@ class BillingService:
             logging.getLogger(__name__).warning('Creem readiness unavailable code=%s', reason)
         result = {'ok': True, 'enabled': ready, 'mode': 'prod', 'plans': [
             {'code': key, 'name': p['name'], 'price': p['price']/100,
-             'monthly_credits': p['credits'], 'currency': 'USD'} for key, p in PLANS.items()]}
+             'monthly_credits': p['credits'], 'currency': 'USD',
+             **({'tax_mode':tax_modes[key]} if ready and key in tax_modes else {})} for key, p in PLANS.items()]}
         if reason:
             result['unavailable_reason'] = reason
         self.catalog_cache = (time.monotonic()+30, result)
@@ -542,10 +544,18 @@ class BillingService:
         require(tx.get('mode') == 'prod' and identifier(tx, 'tran_') == tx_id)
         require(identifier(tx.get('subscription'), 'sub_') == sub['id']
                 and identifier(tx.get('customer'), 'cust_') == identifier(sub.get('customer'), 'cust_'), 'billing_owner_conflict', 409)
-        require(type(tx.get('amount')) is int and tx['amount'] == PLANS[order['plan']]['price']
+        price=PLANS[order['plan']]['price']
+        amount,tax=tx.get('amount'),tx.get('tax_amount')
+        # Verify the configured price either as the transaction amount or as
+        # its canonical net + tax breakdown. In both representations the buyer
+        # must have actually paid at least the full plan price. Never accept a
+        # discounted/net-only payment because its smaller subtotal looks valid.
+        amount_matches=(type(amount) is int and amount>0 and
+            (amount==price or (type(tax) is int and tax>=0 and amount+tax==price)))
+        require(amount_matches
                 and tx.get('currency') == 'USD' and tx.get('type') == 'invoice', 'billing_amount_mismatch', 409)
         require(tx.get('status') in ({'refunded','partially_refunded','chargeback'} if refund else {'paid'}), 'billing_payment_not_paid', 503)
-        require(type(tx.get('amount_paid')) is int and tx['amount_paid'] >= tx['amount'], 'billing_amount_mismatch', 409)
+        require(type(tx.get('amount_paid')) is int and tx['amount_paid'] >= price, 'billing_amount_mismatch', 409)
         if refund and tx['status'] == 'partially_refunded':
             require(type(tx.get('refunded_amount')) is int and 0 < tx['refunded_amount'] <= tx['amount_paid'], 'billing_amount_mismatch')
         start, end = timestamp(tx.get('period_start')), timestamp(tx.get('period_end'))
