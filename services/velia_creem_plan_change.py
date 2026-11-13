@@ -54,7 +54,8 @@ class SandboxAPI:
         self._key, self._requester = key, requester
 
     def request(self, method, resource, *, params=None, data=None):
-        read = method == 'GET' and resource in {'products', 'subscriptions', 'transactions'}
+        read = method == 'GET' and resource in {
+            'products', 'subscriptions', 'transactions', 'products/search', 'subscriptions/search'}
         write = (method == 'POST' and re.fullmatch(r'subscriptions/sub_[A-Za-z0-9_-]+/upgrade', resource)
                  and isinstance(data, dict) and set(data) == {'product_id', 'update_behavior'}
                  and data['update_behavior'] in BEHAVIORS)
@@ -84,6 +85,54 @@ class SandboxAPI:
 
     def get(self, resource, field, value):
         return self.request('GET', resource, params={field: value})
+
+
+def discover_sandbox(api):
+    """Two bounded, read-only requests; return allowlisted test IDs only.
+
+    Listing is evidence that the configured key works, not proof an invoice is
+    paid. A mutation still needs the canonical ownership checks in probe_change.
+    The first-page limit is explicit so discovery never delays a release with an
+    unbounded store scan. Product names, emails, customers and URLs are omitted.
+    """
+    require(isinstance(api, SandboxAPI), 'sandbox_client_required')
+    products = api.request('GET', 'products/search', params={'page_number':1, 'page_size':25})
+    subscriptions = api.request('GET', 'subscriptions/search', params={'page_number':1, 'page_size':25})
+    for result in (products, subscriptions):
+        require(isinstance(result.get('items'), list) and len(result['items']) <= 25,
+                'sandbox_invalid_response', 502)
+        require(all(isinstance(item, dict) and item.get('mode') == 'test' for item in result['items']),
+                'sandbox_wrong_environment', 502)
+    candidates, product_plans = {plan:[] for plan in PLANS}, {}
+    for product in products['items']:
+        if (product.get('currency') != 'USD' or product.get('billing_type') != 'recurring'
+                or product.get('billing_period') != 'every-month' or product.get('status') != 'active'
+                or product.get('tax_mode') not in {'inclusive', 'exclusive'}
+                or type(product.get('price')) is not int):
+            continue
+        plan = next((key for key, value in PLANS.items() if value['price'] == product['price']), None)
+        if plan is None:
+            continue
+        product_id = identifier(product, 'prod_')
+        candidates[plan].append({'product_id':product_id, 'tax_mode':product['tax_mode']})
+        product_plans[product_id] = plan
+    summaries = []
+    for sub in subscriptions['items']:
+        product_id = identifier(sub.get('product'), 'prod_')
+        if product_id not in product_plans:
+            continue
+        status = sub.get('status')
+        require(status in {'active', 'scheduled_cancel', 'canceled', 'expired', 'unpaid',
+                           'past_due', 'paused', 'trialing'}, 'sandbox_subscription_mismatch')
+        summaries.append({'subscription_id':identifier(sub, 'sub_'),
+                          'plan':product_plans[product_id], 'status':status})
+    return {'ok':True, 'mode':'test', 'read_only':True, 'key_authenticated':True,
+            'live_changes_enabled':False, 'candidate_products':candidates,
+            'candidate_subscriptions':summaries,
+            'first_page_only':True,
+            'more_products':bool((products.get('pagination') or {}).get('next_page')),
+            'more_subscriptions':bool((subscriptions.get('pagination') or {}).get('next_page')),
+            'requires_canonical_paid_invoice_validation':True}
 
 
 def _product(api, product_id):

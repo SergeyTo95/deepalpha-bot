@@ -3,7 +3,7 @@ import json
 import pytest
 
 from services.velia_creem_billing import BillingError, PLANS
-from services.velia_creem_plan_change import SandboxAPI, change_estimate, probe_change, snapshot
+from services.velia_creem_plan_change import SandboxAPI, change_estimate, discover_sandbox, probe_change, snapshot
 from scripts.velia_creem_plan_change_probe import main
 
 
@@ -199,4 +199,94 @@ def test_cli_does_not_fall_back_to_live_key(monkeypatch, capsys):
 def test_cli_requires_explicit_test_write_acknowledgment():
     with pytest.raises(SystemExit) as error:
         main(['--subscription','sub_test','--target-product','prod_testpro','--behavior','proration-none'])
+    assert error.value.code==2
+
+
+class SearchTransport:
+    def __init__(self):
+        fixture = Transport()
+        self.products = {'items':[fixture.values[('products','prod_testplus')],
+                                  fixture.values[('products','prod_testpro')]], 'pagination':{'next_page':None}}
+        self.subscriptions = {'items':[fixture.values[('subscriptions','sub_test')]], 'pagination':{'next_page':2}}
+        self.calls = []
+
+    def __call__(self, method, url, **kwargs):
+        self.calls.append((method,url,kwargs))
+        assert method=='GET' and kwargs['json'] is None
+        assert kwargs['params']=={'page_number':1,'page_size':25}
+        assert kwargs['allow_redirects'] is False
+        return Response(deepcopy(self.products if url.endswith('/products/search') else self.subscriptions))
+
+
+def test_discovery_authenticates_test_key_with_two_reads_and_no_pii():
+    transport = SearchTransport()
+    report = discover_sandbox(SandboxAPI(TEST_KEY,requester=transport))
+    assert len(transport.calls)==2
+    assert all(call[1].startswith('https://test-api.creem.io/v1/') for call in transport.calls)
+    assert report['key_authenticated'] is True and report['read_only'] is True
+    assert report['candidate_products']['plus']==[{'product_id':'prod_testplus','tax_mode':'inclusive'}]
+    assert report['candidate_products']['max']==[]
+    assert report['candidate_subscriptions']==[{'subscription_id':'sub_test','plan':'plus','status':'active'}]
+    assert report['more_subscriptions'] is True and report['first_page_only'] is True
+    assert report['requires_canonical_paid_invoice_validation'] is True
+    encoded = json.dumps(report)
+    assert 'private@example.com' not in encoded and 'cust_test' not in encoded and TEST_KEY not in encoded
+
+
+@pytest.mark.parametrize('family', ['products','subscriptions'])
+def test_discovery_rejects_any_production_record(family):
+    transport = SearchTransport()
+    getattr(transport,family)['items'][0]['mode']='prod'
+    with pytest.raises(BillingError,match='sandbox_wrong_environment'):
+        discover_sandbox(SandboxAPI(TEST_KEY,requester=transport))
+
+
+def test_discovery_does_not_treat_unrelated_products_or_prices_as_velia_plans():
+    transport = SearchTransport()
+    transport.products['items'][0]['price']=399
+    report = discover_sandbox(SandboxAPI(TEST_KEY,requester=transport))
+    assert report['candidate_products']['plus']==[]
+    assert report['candidate_subscriptions']==[]
+
+
+def test_discovery_limits_scan_and_rejects_oversized_page():
+    transport = SearchTransport()
+    transport.products['items']*=13
+    with pytest.raises(BillingError,match='sandbox_invalid_response'):
+        discover_sandbox(SandboxAPI(TEST_KEY,requester=transport))
+    assert len(transport.calls)==2
+
+
+def test_predeploy_discovery_skips_missing_key_without_live_fallback(monkeypatch,capsys):
+    monkeypatch.delenv('VELIA_CREEM_TEST_API_KEY',raising=False)
+    monkeypatch.setenv('VELIA_CREEM_API_KEY','creem_live_not_a_real_key')
+    assert main(['--predeploy-discover'])==0
+    line = capsys.readouterr().out.removeprefix('VELIA_CREEM_SANDBOX_DISCOVERY ')
+    assert json.loads(line)=={'ok':True,'skipped':True,'reason':'test_api_key_not_configured'}
+
+
+def test_predeploy_invalid_key_is_reported_without_breaking_live_release(monkeypatch,capsys):
+    monkeypatch.setenv('VELIA_CREEM_TEST_API_KEY','creem_live_not_a_real_key')
+    assert main(['--predeploy-discover'])==0
+    line = capsys.readouterr().out.removeprefix('VELIA_CREEM_SANDBOX_DISCOVERY ')
+    assert json.loads(line)['error']=='test_api_key_required'
+    assert 'creem_live' not in line
+
+
+def test_predeploy_network_errors_are_sanitized_and_do_not_block_release(monkeypatch,capsys):
+    import scripts.velia_creem_plan_change_probe as probe
+    monkeypatch.setenv('VELIA_CREEM_TEST_API_KEY',TEST_KEY)
+    def fail(*args):
+        raise RuntimeError('sensitive response and credentials')
+    monkeypatch.setattr(probe,'discover_sandbox',fail)
+    assert probe.main(['--predeploy-discover'])==0
+    output = capsys.readouterr().out
+    assert 'sensitive' not in output and TEST_KEY not in output
+    assert json.loads(output.removeprefix('VELIA_CREEM_SANDBOX_DISCOVERY '))['error']=='sandbox_probe_unavailable'
+
+
+@pytest.mark.parametrize('flag',['--discover','--predeploy-discover'])
+def test_discovery_cli_cannot_be_combined_with_a_plan_mutation(flag):
+    with pytest.raises(SystemExit) as error:
+        main([flag,'--apply-test-change','--target-product','prod_testpro','--behavior','proration-none'])
     assert error.value.code==2

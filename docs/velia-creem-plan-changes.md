@@ -4,6 +4,15 @@ Status: **sandbox preparation, not a released subscription-change feature**.
 Existing live checkout and fulfillment are unchanged. No plan-change route,
 background scheduler, live upgrade POST or credit mutation is introduced here.
 
+The optional pre-deploy discovery now verifies `VELIA_CREEM_TEST_API_KEY` inside
+the Railway container. It makes exactly two GET requests to the test origin
+(`products/search` and `subscriptions/search`, first page of 25). The sanitized
+`VELIA_CREEM_SANDBOX_DISCOVERY` log contains matching test product/subscription
+IDs and statuses, without names, customer details, email, URLs or credentials.
+It cannot execute a plan change. Missing keys skip the probe; authentication or
+network errors are reported without blocking mandatory production checks.
+This source must be deployed manually before adding the key alone can run it.
+
 ## Customer policy to implement after provider validation
 
 | Action | Intended behavior | Credits |
@@ -50,6 +59,7 @@ webhook secret is not an API key. Provide the API key in a secret environment.
 Read-only inspection:
 
 ```bash
+python -m scripts.velia_creem_plan_change_probe --discover
 python -m scripts.velia_creem_plan_change_probe --subscription sub_TEST
 ```
 
