@@ -7,3 +7,9 @@ python -c 'from services.velia_flash_service import public_capability; print(pub
 python ci/probe-selected-model-inputs.py
 python ci/probe-velia-quantum.py --config-only
 python -m services.velia_superagent_chat_service
+# Optional, read-only test-key verification. Never runs an upgrade or grants
+# credits, and reports a sanitized result without blocking production release.
+python -m scripts.velia_creem_plan_change_probe --predeploy-discover
+# One approved test-mode Plus -> Pro experiment. A separate durable audit claim
+# is committed before its POST; every redeploy after that is read-only.
+python -m scripts.velia_creem_plan_change_probe --predeploy-test-plan-change

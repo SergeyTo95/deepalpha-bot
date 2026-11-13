@@ -196,5 +196,9 @@ def test_release_shell_preserves_required_checks_and_fails_before_later_checks(t
     else:
         assert calls[1] == "ci/probe-velia-flash.py"
         assert "public_capability" in calls[2]
-        assert calls[3:] == ["ci/probe-selected-model-inputs.py", "ci/probe-velia-quantum.py --config-only",
+        expected = ["ci/probe-selected-model-inputs.py", "ci/probe-velia-quantum.py --config-only",
             "-m services.velia_superagent_chat_service"]
+        if not superagent_exit:
+            expected.append("-m scripts.velia_creem_plan_change_probe --predeploy-discover")
+            expected.append("-m scripts.velia_creem_plan_change_probe --predeploy-test-plan-change")
+        assert calls[3:] == expected
