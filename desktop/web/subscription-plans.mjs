@@ -111,6 +111,11 @@ export function mountSubscriptionPlans(root, {billing=null, account=null, billin
     const content = element('div',undefined,'subscription-content');
     content.append(badge,element('h4',plan.name),element('p',money(plan.price),'subscription-price'),
       element('span','в месяц · USD','subscription-period'));
+    const verifiedPlan=enabled && Array.isArray(billing?.plans)
+      ? billing.plans.find(item=>item?.code===plan.code) : null;
+    const taxLabel=verifiedPlan?.tax_mode==='inclusive'?'Налог включён в цену':
+      verifiedPlan?.tax_mode==='exclusive'?'Налог добавляется при оплате':'Итоговая сумма — на странице оплаты';
+    content.append(element('p',taxLabel,'field-hint subscription-tax'));
     const list = element('ul',undefined,'subscription-benefits');
     benefits[plan.code].forEach(text=>list.append(element('li',text)));
     content.append(list);
@@ -137,7 +142,7 @@ export function mountSubscriptionPlans(root, {billing=null, account=null, billin
     controls.push(manage); section.append(manage);
   }
   controls.forEach(button=>initialDisabled.set(button,button.disabled));
-  section.append(element('p','После оплаты токены зачисляются после подтверждения платежа. Применимые налоги и итоговая сумма будут показаны на странице оплаты.','field-hint'),
+  section.append(element('p','Токены зачисляются после подтверждения платежа. Итоговая сумма и налоговая разбивка показываются на странице оплаты.','field-hint'),
     element('p','Free остаётся доступным. Разовое пополнение токенов не меняет тариф подписки.','field-hint'));
   root.append(section);
   return section;
