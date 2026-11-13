@@ -29,8 +29,9 @@ ID = re.compile(r'[A-Za-z0-9_-]{1,160}\Z')
 
 
 class BillingError(Exception):
-    def __init__(self, code, status=400, *, provider_status=None):
+    def __init__(self, code, status=400, *, provider_status=None, validation_reason=None):
         self.code, self.status, self.provider_status = code, status, provider_status
+        self.validation_reason=validation_reason
         super().__init__(code)
 
 
@@ -65,12 +66,24 @@ def epoch_or_zero(value):
 
 
 def checkout_url(value):
-    require(isinstance(value, str) and len(value) < 2048, 'invalid_checkout_url', 502)
-    url = urlparse(value)
-    require(url.scheme == 'https' and not url.username and not url.password and not url.fragment
-            and url.port in (None, 443) and
-            ((url.hostname in {'www.creem.io', 'creem.io'} and url.path.startswith('/checkout/'))
-             or (url.hostname == 'checkout.creem.io' and url.path.startswith('/ch_'))), 'invalid_checkout_url', 502)
+    def invalid(reason):
+        raise BillingError('invalid_checkout_url',502,validation_reason=reason)
+    if not isinstance(value,str) or not value:invalid('missing')
+    if len(value)>=2048 or any(ord(c)<=32 for c in value) or '\\' in value:invalid('malformed')
+    try:
+        url=urlparse(value)
+        secure=(url.scheme=='https' and not url.username and not url.password and not url.fragment
+                and url.port in (None,443))
+    except ValueError:invalid('malformed')
+    if not secure:invalid('origin')
+    if url.hostname not in {'www.creem.io','creem.io','checkout.creem.io'}:invalid('host')
+    # These are provider-returned URLs only, after checkout owner verification.
+    # Hosted checkout may use the payment family as well as the checkout family.
+    # Product constants must never substitute for an API-created session.
+    allowed=(re.fullmatch(r'/(?:checkout|payment)/[A-Za-z0-9_/-]+',url.path)
+             if url.hostname in {'www.creem.io','creem.io'}
+             else re.fullmatch(r'/ch_[A-Za-z0-9_-]+/?',url.path))
+    if not allowed or url.params:invalid('path')
     return value
 
 
@@ -422,6 +435,7 @@ class BillingService:
             require(order['state'] == 'open' and order['checkout_url'], 'checkout_already_pending', 409)
             return {'ok': True, 'checkout_url': checkout_url(order['checkout_url'])}
         phase='create'
+        created_url=None
         try:
             # Reuse the durable order/request_id and identical provider payload
             # after an ambiguous response; never invent a replacement order.
@@ -433,6 +447,7 @@ class BillingService:
                 result = self.api.request('POST', 'checkouts', data={
                     'product_id': PLANS[plan]['product_id'], 'request_id': order['id'],
                     'success_url': RETURN_URL, 'units': 1, 'metadata': {'velia_order_id': order['id']}})
+                created_url=result.get('checkout_url')
             phase='validate'
             require(result.get('mode') == 'prod', 'billing_wrong_environment', 502)
             provider_id = identifier(result, 'ch_')
@@ -469,7 +484,10 @@ class BillingService:
             # its path token need not equal the checkout object's id. Trust it
             # only after validating the API response's mode/product/owner,
             # and retain the HTTPS/Creem-host allowlist below.
-            url = checkout_url(result.get('checkout_url'))
+            # A lookup may omit the redirect that create already returned for
+            # this exact verified object. Preserve it rather than replacing it
+            # with a missing lookup field; never fabricate a session URL.
+            url = checkout_url(result.get('checkout_url') if result.get('checkout_url') is not None else created_url)
             phase='persist'
             self.store.checkout_created(order, provider_id, url)
             return {'ok': True, 'checkout_url': url}
@@ -477,7 +495,8 @@ class BillingService:
             self.store.uncertain(order)
             code=error.code if isinstance(error,BillingError) else 'billing_checkout_failed'
             status=error.provider_status if isinstance(error,BillingError) else None
-            logging.getLogger(__name__).warning('Creem checkout failed phase=%s code=%s provider_status=%s',phase,code,status or 0)
+            reason=error.validation_reason if isinstance(error,BillingError) else None
+            logging.getLogger(__name__).warning('Creem checkout failed phase=%s code=%s provider_status=%s validation_reason=%s',phase,code,status or 0,reason or 'none')
             raise
 
     def verified_subscription(self, sub_id, order=None):

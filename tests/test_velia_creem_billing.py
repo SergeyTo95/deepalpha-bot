@@ -266,7 +266,7 @@ def test_cancel_preserves_other_provider_entitlement_and_stale_events_cannot_res
     assert service.account(7)['plan_code'] == 'free'
 
 
-@pytest.mark.parametrize('url',['http://www.creem.io/checkout/ch_a','https://www.creem.io.evil.test/checkout/ch_a','https://evil.test','https://www.creem.io/payment/prod_example','https://user@www.creem.io/checkout/ch_a','https://www.creem.io:444/checkout/ch_a'])
+@pytest.mark.parametrize('url',['http://www.creem.io/checkout/ch_a','https://www.creem.io.evil.test/checkout/ch_a','https://evil.test','https://www.creem.io/test/payment/prod_example','https://user@www.creem.io/checkout/ch_a','https://www.creem.io:444/checkout/ch_a',None,'https://www.creem.io/','https://www.creem.io/checkout/ch_a#fragment','https://www.creem.io/checkout/ch_a;param','https://www.creem.io/checkout/ch_a\n'])
 def test_checkout_redirect_allowlist(url):
     with pytest.raises(BillingError):
         checkout_url(url)
@@ -449,3 +449,37 @@ def test_canonical_metadata_cannot_reassign_a_checkout_to_another_accounts_order
         deliver(service,kind='checkout.completed',obj={'id':'ch_example'})
     assert balance(connect)==(100,None)
     assert balance(connect,8)==(50,None)
+
+
+@pytest.mark.parametrize('family',['checkout','payment'])
+@pytest.mark.parametrize('lookup_has_url',[True,False])
+def test_verified_metadata_lookup_preserves_provider_redirect_contract(billing,family,lookup_has_url):
+    service,connect=billing
+    original=service.api.request
+    url='https://www.creem.io/'+family+'/'+PLANS['plus']['product_id']+'?checkout_id=ch_example'
+    def create(method,resource,**kwargs):
+        result=original(method,resource,**kwargs)
+        if resource=='checkouts':
+            result.pop('request_id')
+            result['checkout_url']=url
+            canonical=service.api.values[('checkouts','ch_example')]
+            canonical.pop('request_id')
+            canonical['checkout_url']=url if lookup_has_url else None
+        return result
+    service.api.request=create
+    assert service.checkout(7,'plus',str(uuid.uuid4()))=={'ok':True,'checkout_url':url}
+    assert service.checkout(7,'plus',str(uuid.uuid4()))=={'ok':True,'checkout_url':url}
+    assert len(service.api.posts)==1 and balance(connect)==(100,None)
+
+
+def test_url_diagnostics_do_not_log_provider_url_or_metadata(billing,caplog):
+    service,_=billing
+    original=service.api.request
+    def invalid(method,resource,**kwargs):
+        result=original(method,resource,**kwargs)
+        if resource=='checkouts':result['checkout_url']='https://foreign.test/private?token=must-not-log'
+        return result
+    service.api.request=invalid
+    with pytest.raises(BillingError):service.checkout(7,'plus',str(uuid.uuid4()))
+    assert 'validation_reason=host' in caplog.text
+    assert 'must-not-log' not in caplog.text and 'foreign.test' not in caplog.text
