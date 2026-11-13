@@ -436,12 +436,14 @@ class BillingService:
             return {'ok': True, 'checkout_url': checkout_url(order['checkout_url'])}
         phase='create'
         created_url=None
+        retrieved=False
         try:
             # Reuse the durable order/request_id and identical provider payload
             # after an ambiguous response; never invent a replacement order.
             if order['checkout_id']:
                 phase='retrieve'
                 result=self.api.get('checkouts','checkout_id',order['checkout_id'])
+                retrieved=True
                 require(result.get('status') in {'pending','processing'},'billing_checkout_completed',409)
             else:
                 result = self.api.request('POST', 'checkouts', data={
@@ -464,6 +466,7 @@ class BillingService:
                 phase='retrieve_binding'
                 if not order['checkout_id']:
                     result=self.api.get('checkouts','checkout_id',provider_id)
+                    retrieved=True
                 require(result.get('mode')=='prod' and identifier(result,'ch_')==provider_id
                         and identifier(result.get('product'),'prod_')==PLANS[plan]['product_id'],
                         'billing_checkout_conflict',502)
@@ -484,10 +487,27 @@ class BillingService:
             # its path token need not equal the checkout object's id. Trust it
             # only after validating the API response's mode/product/owner,
             # and retain the HTTPS/Creem-host allowlist below.
-            # A lookup may omit the redirect that create already returned for
-            # this exact verified object. Preserve it rather than replacing it
-            # with a missing lookup field; never fabricate a session URL.
-            url = checkout_url(result.get('checkout_url') if result.get('checkout_url') is not None else created_url)
+            # Preserve a redirect returned by create if GET omits it. Older
+            # uncertain orders may have only a saved checkout ID, with no URL.
+            # In that case, recover the *existing* hosted session using Creem's
+            # SDK route /checkout/<productId>/<checkoutId>, after an independent
+            # GET proves the exact production object, product, state and owner.
+            # https://www.npmjs.com/package/@creem_io/react
+            value=result.get('checkout_url')
+            if value in (None,''):value=created_url
+            if value in (None,''):
+                phase='recover_redirect'
+                if not retrieved:
+                    result=self.api.get('checkouts','checkout_id',provider_id)
+                metadata=result.get('metadata')
+                require(result.get('mode')=='prod' and identifier(result,'ch_')==provider_id
+                        and identifier(result.get('product'),'prod_')==PLANS[plan]['product_id']
+                        and isinstance(metadata,dict) and metadata.get('velia_order_id')==order['id'],
+                        'billing_checkout_conflict',502)
+                require(result.get('status') in {'pending','processing'},'billing_checkout_completed',409)
+                value='https://www.creem.io/checkout/'+PLANS[plan]['product_id']+'/'+provider_id
+                logging.getLogger(__name__).info('Creem checkout redirect recovered source=existing_session')
+            url=checkout_url(value)
             phase='persist'
             self.store.checkout_created(order, provider_id, url)
             return {'ok': True, 'checkout_url': url}
