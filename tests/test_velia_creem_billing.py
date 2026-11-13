@@ -203,7 +203,7 @@ def test_uncertain_checkout_reuses_exact_durable_order_and_request_id(billing):
     assert balance(connect)==(100,None)
 
 
-def test_uncertain_checkout_cannot_switch_product_or_user_binding(billing):
+def test_uncertain_checkout_attempt_cannot_switch_product_or_user_binding(billing):
     service,_=billing
     original=service.api.request
     posted=[]
@@ -213,8 +213,9 @@ def test_uncertain_checkout_cannot_switch_product_or_user_binding(billing):
             raise BillingError('billing_provider_timeout',502)
         return original(method,resource,**kwargs)
     service.api.request=lost
-    with pytest.raises(BillingError):service.checkout(7,'plus',str(uuid.uuid4()))
-    with pytest.raises(BillingError,match='checkout_already_pending'):service.checkout(7,'max',str(uuid.uuid4()))
+    attempt=str(uuid.uuid4())
+    with pytest.raises(BillingError):service.checkout(7,'plus',attempt)
+    with pytest.raises(BillingError,match='billing_attempt_conflict'):service.checkout(7,'max',attempt)
     assert len(posted)==1
 
 
@@ -600,3 +601,74 @@ def test_inclusive_tax_never_accepts_underpaid_or_unproven_amounts(billing,amoun
     service.api.values[('transactions','tran_example')].update(amount=amount,tax_amount=tax,amount_paid=paid)
     with pytest.raises(BillingError,match='billing_amount_mismatch'):deliver(service)
     assert balance(connect)==(100,None)
+
+
+def plan_checkout_api(service):
+    original=service.api.request
+    def request(method,resource,**kwargs):
+        result=original(method,resource,**kwargs)
+        if method=='POST' and resource=='checkouts':
+            plan=next(p for p,spec in PLANS.items() if spec['product_id']==kwargs['data']['product_id'])
+            result.update(id='ch_'+plan,checkout_url='https://www.creem.io/checkout/'+PLANS[plan]['product_id']+'/ch_'+plan)
+            service.api.values[('checkouts',result['id'])]=deepcopy(result)
+        return result
+    service.api.request=request
+
+
+def test_closing_plus_does_not_block_pro_or_max_and_each_plan_resumes_its_own_checkout(billing):
+    service,connect=billing
+    plan_checkout_api(service)
+    links={plan:service.checkout(7,plan,str(uuid.uuid4())) for plan in PLANS}
+    assert len({result['checkout_url'] for result in links.values()})==3
+    for plan in ['max','plus','pro','pro','max']:
+        assert service.checkout(7,plan,str(uuid.uuid4()))==links[plan]
+    assert len(service.api.posts)==3
+    assert {post[1]['product_id'] for post in service.api.posts}=={p['product_id'] for p in PLANS.values()}
+    with connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM velia_creem_orders').fetchone()[0]==3
+        assert conn.execute('SELECT COUNT(*) FROM velia_creem_charges').fetchone()[0]==0
+        assert conn.execute('SELECT COUNT(*) FROM velia_creem_subscriptions').fetchone()[0]==0
+    assert balance(connect)==(100,None)
+
+
+def test_unknown_plus_attempt_does_not_block_other_plan_but_preserves_plus_retry_identity(billing):
+    service,connect=billing
+    plan_checkout_api(service)
+    original=service.api.request
+    failed=[]
+    def lost(method,resource,**kwargs):
+        result=original(method,resource,**kwargs)
+        if resource=='checkouts' and kwargs['data']['product_id']==PLANS['plus']['product_id'] and not failed:
+            failed.append(deepcopy(kwargs['data']))
+            raise BillingError('billing_provider_timeout',502)
+        return result
+    service.api.request=lost
+    with pytest.raises(BillingError):service.checkout(7,'plus',str(uuid.uuid4()))
+    assert service.checkout(7,'pro',str(uuid.uuid4()))['ok']
+    assert service.checkout(7,'plus',str(uuid.uuid4()))['ok']
+    assert service.api.posts[0][1]==service.api.posts[2][1]==failed[0]
+    assert balance(connect)==(100,None)
+
+
+def test_actual_subscription_blocks_future_checkout_requests_even_with_old_orders(billing):
+    service,connect=billing
+    plan_checkout_api(service)
+    for plan in ['plus','pro','max']:service.checkout(7,plan,str(uuid.uuid4()))
+    # Complete the Plus purchase through the existing signed provider flow.
+    with connect() as conn:
+        order=conn.execute("SELECT id FROM velia_creem_orders WHERE plan='plus'").fetchone()[0]
+    spec=PLANS['plus']
+    service.api.values[('subscriptions','sub_example')]={
+        'id':'sub_example','mode':'prod','product':spec['product_id'],'customer':'cust_example',
+        'items':[{'product_id':spec['product_id'],'units':1}],'status':'active','updated_at':iso(NOW),
+        'current_period_end_date':iso(NOW+30*86400),'last_transaction_id':'tran_example',
+        'metadata':{'velia_order_id':order}}
+    service.api.values[('transactions','tran_example')]={
+        'id':'tran_example','mode':'prod','subscription':'sub_example','customer':'cust_example',
+        'amount':1499,'amount_paid':1499,'currency':'USD','type':'invoice','status':'paid',
+        'period_start':NOW*1000,'period_end':(NOW+30*86400)*1000}
+    deliver(service)
+    before=len(service.api.posts)
+    for plan in PLANS:
+        with pytest.raises(BillingError,match='subscription_exists'):service.checkout(7,plan,str(uuid.uuid4()))
+    assert len(service.api.posts)==before and balance(connect)[0]==1300
