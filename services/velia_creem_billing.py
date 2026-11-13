@@ -203,10 +203,14 @@ class BillingStore:
                     self.execute(cur, "UPDATE velia_creem_orders SET state='creating' WHERE id=?", (previous['id'],))
                     return {**previous,'state':'creating'}, True
                 return previous, False
-            self.execute(cur, "SELECT * FROM velia_creem_orders WHERE user_id=? AND state IN ('creating','open','uncertain') ORDER BY created_at DESC", (user,))
+            # An unpaid checkout reserves only its own plan. Closing Plus's
+            # hosted page must not block selecting Pro or Max. Per-user locking
+            # still serializes the lookup/create and each plan reuses its own
+            # durable order. A real subscription is checked above all attempts.
+            self.execute(cur, "SELECT * FROM velia_creem_orders WHERE user_id=? AND plan=? AND state IN ('creating','open','uncertain') ORDER BY created_at DESC", (user,plan))
             pending = self.row(cur)
             if pending:
-                require(pending['plan'] == plan and pending['state'] in {'open','uncertain'}, 'checkout_already_pending', 409)
+                require(pending['state'] in {'open','uncertain'}, 'checkout_already_pending', 409)
                 if pending['state']=='uncertain':
                     self.execute(cur, "UPDATE velia_creem_orders SET state='creating' WHERE id=?", (pending['id'],))
                     return {**pending,'state':'creating'}, True

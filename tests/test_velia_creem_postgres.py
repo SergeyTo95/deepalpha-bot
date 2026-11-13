@@ -4,7 +4,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 import pytest
 from services.velia_creem_billing import BillingService, BillingStore
-from test_velia_creem_billing import API, NOW, SECRET, purchase, deliver
+from test_velia_creem_billing import API, NOW, SECRET, purchase, deliver, plan_checkout_api
 
 
 @pytest.fixture
@@ -105,3 +105,23 @@ def test_postgres_concurrent_retry_claims_reuse_one_order_without_granting(postg
     with connect() as conn,conn.cursor() as cur:
         cur.execute('SELECT COUNT(*) FROM velia_creem_orders');assert cur.fetchone()[0]==1
         cur.execute('SELECT COUNT(*) FROM velia_creem_charges');assert cur.fetchone()[0]==0
+
+
+def test_postgres_plan_switching_keeps_one_session_per_plan_during_parallel_clicks(postgres_billing):
+    from services.velia_creem_billing import BillingError,PLANS
+    service,connect=postgres_billing
+    plan_checkout_api(service)
+    plans=list(PLANS)
+    def choose(i):
+        try:return service.checkout(7,plans[i%3],str(uuid.uuid4()))
+        except BillingError as error:
+            assert error.code=='checkout_already_pending'
+            return None
+    with ThreadPoolExecutor(max_workers=8) as pool:results=list(pool.map(choose,range(30)))
+    assert len(service.api.posts)==3
+    assert len({r['checkout_url'] for r in results if r})==3
+    assert len({service.checkout(7,p,str(uuid.uuid4()))['checkout_url'] for p in plans})==3
+    assert len(service.api.posts)==3 and read_balance(connect)==100
+    with connect() as conn,conn.cursor() as cur:
+        cur.execute('SELECT COUNT(*) FROM velia_creem_orders');assert cur.fetchone()[0]==3
+        cur.execute('SELECT COUNT(*) FROM velia_creem_subscriptions');assert cur.fetchone()[0]==0
