@@ -483,3 +483,55 @@ def test_url_diagnostics_do_not_log_provider_url_or_metadata(billing,caplog):
     with pytest.raises(BillingError):service.checkout(7,'plus',str(uuid.uuid4()))
     assert 'validation_reason=host' in caplog.text
     assert 'must-not-log' not in caplog.text and 'foreign.test' not in caplog.text
+
+
+@pytest.mark.parametrize('plan',list(PLANS))
+@pytest.mark.parametrize('missing_url',[None,''])
+def test_old_uncertain_checkout_without_saved_or_api_url_recovers_existing_session(billing,plan,missing_url):
+    service,connect=billing
+    order,_=service.store.reserve(7,plan,str(uuid.uuid4()))
+    service.store.remember_checkout(order,'ch_existing')
+    service.store.uncertain(order)
+    service.api.values[('checkouts','ch_existing')]={
+        'id':'ch_existing','mode':'prod','status':'pending','product':PLANS[plan]['product_id'],
+        'metadata':{'velia_order_id':order['id']},'checkout_url':missing_url}
+    expected='https://www.creem.io/checkout/'+PLANS[plan]['product_id']+'/ch_existing'
+    assert service.checkout(7,plan,str(uuid.uuid4()))=={'ok':True,'checkout_url':expected}
+    assert service.checkout(7,plan,str(uuid.uuid4()))=={'ok':True,'checkout_url':expected}
+    assert service.api.posts==[]  # Both clicks reuse the same existing session.
+    with connect() as conn:
+        assert conn.execute('SELECT id,checkout_id,state,checkout_url FROM velia_creem_orders').fetchone()==(
+            order['id'],'ch_existing','open',expected)
+    assert balance(connect)==(100,None)
+
+
+@pytest.mark.parametrize('field,value',[
+    ('id','ch_foreign'),('mode','test'),('product',PLANS['max']['product_id']),
+    ('metadata',{}),('metadata',{'velia_order_id':'foreign-order'}),('status','expired'),
+])
+def test_missing_redirect_recovery_cannot_open_an_unverified_session(billing,field,value):
+    service,connect=billing
+    order,_=service.store.reserve(7,'plus',str(uuid.uuid4()))
+    service.store.remember_checkout(order,'ch_existing')
+    service.store.uncertain(order)
+    canonical={'id':'ch_existing','mode':'prod','status':'pending','product':PLANS['plus']['product_id'],
+        'metadata':{'velia_order_id':order['id']},'request_id':None}
+    canonical[field]=value
+    service.api.values[('checkouts','ch_existing')]=canonical
+    with pytest.raises(BillingError):service.checkout(7,'plus',str(uuid.uuid4()))
+    assert service.api.posts==[] and balance(connect)==(100,None)
+
+
+def test_new_checkout_without_redirect_requires_independent_metadata_proof(billing):
+    service,_=billing
+    original=service.api.request
+    def create(method,resource,**kwargs):
+        result=original(method,resource,**kwargs)
+        if resource=='checkouts':
+            result.pop('checkout_url')
+            service.api.values[('checkouts','ch_example')].pop('checkout_url')
+        return result
+    service.api.request=create
+    result=service.checkout(7,'plus',str(uuid.uuid4()))
+    assert result['checkout_url']=='https://www.creem.io/checkout/'+PLANS['plus']['product_id']+'/ch_example'
+    assert len(service.api.posts)==1
