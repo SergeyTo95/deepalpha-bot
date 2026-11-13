@@ -439,14 +439,35 @@ class BillingService:
             phase='validate_product'
             require(identifier(result.get('product'), 'prod_') == PLANS[plan]['product_id'],
                     'billing_checkout_conflict',502)
+            require(not order['checkout_id'] or provider_id==order['checkout_id'], 'billing_checkout_conflict',502)
             phase='validate_request'
-            require(result.get('request_id') == order['id'], 'billing_checkout_conflict',502)
+            if result.get('request_id') != order['id']:
+                # request_id is provider tracking, not our only ownership key.
+                # When it isn't echoed, independently retrieve the exact API
+                # object and require the server-supplied order metadata. Never
+                # accept a browser/return-URL value or create a replacement order.
+                phase='retrieve_binding'
+                if not order['checkout_id']:
+                    result=self.api.get('checkouts','checkout_id',provider_id)
+                require(result.get('mode')=='prod' and identifier(result,'ch_')==provider_id
+                        and identifier(result.get('product'),'prod_')==PLANS[plan]['product_id'],
+                        'billing_checkout_conflict',502)
+                require(result.get('status') in {'pending','processing'},'billing_checkout_completed',409)
+                phase='validate_metadata'
+                metadata=result.get('metadata')
+                require(isinstance(metadata,dict) and metadata.get('velia_order_id')==order['id'],
+                        'billing_checkout_conflict',502)
+            else:
+                metadata=result.get('metadata')
+                require(metadata is None or (isinstance(metadata,dict)
+                        and metadata.get('velia_order_id',order['id'])==order['id']),
+                        'billing_checkout_conflict',502)
             self.store.remember_checkout(order,provider_id)
             phase='validate_url'
             # checkout_url is a provider-owned redirect, not a serialized API
             # identifier. Creem documents redirecting to this returned URL;
             # its path token need not equal the checkout object's id. Trust it
-            # only after validating the API response's mode/product/request,
+            # only after validating the API response's mode/product/owner,
             # and retain the HTTPS/Creem-host allowlist below.
             url = checkout_url(result.get('checkout_url'))
             phase='persist'
@@ -516,7 +537,10 @@ class BillingService:
             order_id = (co.get('metadata') or {}).get('velia_order_id')
             require(bool(order_id), 'billing_order_not_bound', 503)
             order = self.store.order(order_id)
-            require(order is not None and co.get('request_id') == order['id'], 'billing_owner_conflict', 409)
+            # Ownership is the exact order metadata on the authenticated GET
+            # above. request_id may not be echoed by the provider; it remains
+            # our stable create/retry tracking key, never an access grant.
+            require(order is not None, 'billing_owner_conflict', 409)
             require(order['checkout_id'] in (None, co['id']) and identifier(co.get('product'), 'prod_') == PLANS[order['plan']]['product_id'], 'billing_owner_conflict', 409)
             sub_id = identifier(co.get('subscription'), 'sub_')
             tx_id = (co.get('order') or {}).get('transaction')
