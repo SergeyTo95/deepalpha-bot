@@ -17,7 +17,7 @@ def test_auth_throttling_is_scoped_to_login_only(monkeypatch):
     for _ in range(250):
         assert guardian.incoming_decision(chat, timestamp=100.0) is None
     login = fake_request("/mobile-api/v1/auth/exchange", "POST")
-    for _ in range(30):
+    for _ in range(guardian._AUTH_BUDGETS[("POST", "/mobile-api/v1/auth/exchange")][0]):
         assert guardian.incoming_decision(login, timestamp=100.0) is None
     blocked = guardian.incoming_decision(login, timestamp=100.0)
     assert blocked["status"] == 429
