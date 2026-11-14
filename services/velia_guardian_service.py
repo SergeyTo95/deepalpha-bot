@@ -23,10 +23,10 @@ _EVENT_KINDS = {
 }
 _SEVERITIES = {"info", "warning", "critical"}
 _AUTH_BUDGETS = {
-    ("POST", "/api/auth/telegram"): (60, 60),
-    ("GET", "/api/auth/google/start"): (60, 60),
-    ("POST", "/mobile-api/v1/auth/exchange"): (30, 60),
-    ("POST", "/mobile-api/v1/auth/refresh"): (120, 60),
+    ("POST", "/api/auth/telegram"): (180, 60),
+    ("GET", "/api/auth/google/start"): (180, 60),
+    ("POST", "/mobile-api/v1/auth/exchange"): (120, 60),
+    ("POST", "/mobile-api/v1/auth/refresh"): (300, 60),
     ("POST", "/mobile-api/v1/auth/qa-pairing"): (12, 60),
     ("POST", "/admin/login"): (30, 60),
 }
@@ -206,13 +206,19 @@ def incoming_decision(request, *, timestamp=None):
     if not enabled():
         return None
     path = str(request.path or "")
+    if path.startswith("/mobile-api/v1/conversations/"):
+        return None
     if _PROBES.search(path):
         return {"status": 404, "error": "not_found", "retry_after": 0}
     budget = _AUTH_BUDGETS.get((request.method, path))
     if budget is None:
         return None
     now = time.monotonic() if timestamp is None else float(timestamp)
-    key = (_network_identity(request), request.method, path)
+    source = _network_identity(request)
+    if source == "unknown":
+        # Never impose a global shared budget when the peer address is missing.
+        return None
+    key = (source, request.method, path)
     global _COUNTER_LAST_CLEAN
     with _COUNTER_LOCK:
         if now - _COUNTER_LAST_CLEAN >= 60 or len(_COUNTERS) >= _COUNTER_LIMIT:
