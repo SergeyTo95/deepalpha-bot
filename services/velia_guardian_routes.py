@@ -1,5 +1,6 @@
 """Per-user Guardian security inbox. Independent of chats and Pulse reminders."""
 import asyncio
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from aiohttp import web
@@ -63,6 +64,20 @@ def setup_guardian_routes(app, mobile_module, web_user_resolver):
         except Exception:
             return reply({"ok": False, "error": "guardian_unavailable"}, 503)
 
+    async def security_page(request):
+        try:
+            user_id = int(web_user_resolver(request) or 0)
+        except (TypeError, ValueError):
+            user_id = 0
+        if user_id <= 0:
+            raise web.HTTPFound('/app')
+        page = Path(__file__).resolve().parent.parent / 'webapp' / 'guardian.html'
+        return web.FileResponse(page, headers={
+            'Cache-Control': 'no-store',
+            'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'self'",
+        })
+
+    app.router.add_get('/security', security_page)
     for prefix in ("/mobile-api/v1/guardian", "/api/security"):
         app.router.add_get(prefix + "/events", handle)
         app.router.add_post(prefix + "/events/read", handle)
