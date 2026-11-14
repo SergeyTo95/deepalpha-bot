@@ -16,6 +16,7 @@ from aiohttp import web
 from admin_routes import setup_admin_routes
 from services.payment_service import get_pricing_payload
 from services.web_auth_service import verify_telegram_init_data, get_cookie_secure_flag
+from services.velia_guardian_service import record as record_guardian_event
 from services.webapp_analysis_service import run_webapp_quick_analysis
 from services.webapp_bot_delivery import deliver_webapp_analysis_to_telegram
 from services.webapp_top_analysis_service import run_webapp_top_analysis
@@ -770,6 +771,7 @@ async def handle_auth_telegram(request):
         }
     })
     _set_session_cookie(response, session_token)
+    await asyncio.to_thread(record_guardian_event, user_id, "web_login", source="telegram")
     return response
 
 
@@ -1853,6 +1855,7 @@ async def handle_google_callback(request):
     redirect_url = (base_url.rstrip("/") + "/app") if base_url else "/app"
     response = web.HTTPFound(redirect_url)
     _set_session_cookie(response, session_token)
+    await asyncio.to_thread(record_guardian_event, user_id, "web_login", source="google")
     response.del_cookie("deepalpha_google_state", path="/")
     raise response
 

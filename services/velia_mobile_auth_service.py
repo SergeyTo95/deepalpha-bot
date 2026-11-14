@@ -12,6 +12,7 @@ except ModuleNotFoundError:  # pragma: no cover - minimal unit-test environment
     psycopg2 = None
 
 from db.database import get_connection
+from services.velia_guardian_service import record as record_guardian_event
 
 
 PERSISTENT_REFRESH_EXPIRES_AT = datetime(9999, 12, 31, 23, 59, 59)
@@ -443,12 +444,14 @@ def rotate_refresh_token(
         replay = cursor.fetchone()
         if replay:
             replay_session_id = replay[0] if not isinstance(replay, dict) else replay["session_id"]
+            replay_user_id = int(replay[1] if not isinstance(replay, dict) else replay["user_id"])
             cursor.execute(
                 "UPDATE velia_mobile_sessions SET revoked_at=%s, updated_at=%s "
                 "WHERE session_id=%s AND revoked_at IS NULL",
                 (now, now, replay_session_id),
             )
             conn.commit()
+            record_guardian_event(replay_user_id, "refresh_replay", source="mobile", severity="critical")
             return {"ok": False, "error": "refresh_token_reused", "session_revoked": True}
 
         cursor.execute(
@@ -489,6 +492,7 @@ def rotate_refresh_token(
                 (now, now, session_id),
             )
             conn.commit()
+            record_guardian_event(user_id, "device_mismatch", source="mobile", severity="warning")
             return {"ok": False, "error": "device_mismatch", "session_revoked": True}
 
         new_access_token = _new_access_token()

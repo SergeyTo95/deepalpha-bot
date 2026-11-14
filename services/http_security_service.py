@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from aiohttp import web
 
 from db.database import get_user_by_session
+from services.velia_guardian_service import incoming_decision
 from services.velia_admin_economy_bootstrap_service import setup_velia_admin_economy
 from services.velia_admin_user_display_service import apply_admin_users_display_fallback
 
@@ -157,6 +158,13 @@ async def _record_generic_admin_mutation(request: web.Request, response: web.Str
 
 @web.middleware
 async def deepalpha_security_middleware(request: web.Request, handler):
+    guardian_denial = incoming_decision(request)
+    if guardian_denial is not None:
+        response = _json_response({"ok": False, "error": guardian_denial["error"]}, guardian_denial["status"])
+        response.headers["Retry-After"] = str(guardian_denial["retry_after"])
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
     if request.path.startswith("/admin"):
         request["velia_request_id"] = str(request.headers.get("X-Request-ID", "") or "").strip()[:160] or uuid.uuid4().hex
         if "key" in request.query:

@@ -89,6 +89,8 @@ def main() -> None:
     from services.velia_memory_shadow_runtime_patch import install as install_velia_memory_shadow
     from services.velia_memory_shadow_service import ensure_velia_memory_shadow_tables
     from services.velia_mobile_auth_service import ensure_velia_mobile_auth_tables
+    from services.velia_guardian_service import ensure_tables as ensure_guardian_tables
+    from services.velia_guardian_routes import setup_guardian_routes
     from services.velia_mobile_commercial_routes import setup_velia_mobile_commercial_routes
     from services.velia_mobile_commercial_service import ensure_commercial_runtime_tables
     from services.velia_mobile_hardening_service import install as install_velia_mobile_hardening
@@ -275,6 +277,7 @@ def main() -> None:
     setup_notebook_routes(deepalpha_web.app, velia_mobile_routes_module)
     from services.velia_pulse_routes import setup_pulse_routes
     setup_pulse_routes(deepalpha_web.app, velia_mobile_routes_module)
+    setup_guardian_routes(deepalpha_web.app, velia_mobile_routes_module, web_user_resolver)
     install_velia_telegram_connect_page(
         deepalpha_web.app,
         web_user_resolver,
@@ -292,6 +295,7 @@ def main() -> None:
         ensure_api_commercial_tables()
         ensure_commercial_launch_tables()
         ensure_velia_mobile_auth_tables()
+        ensure_guardian_tables()
         ensure_commercial_runtime_tables()
         ensure_payment_tables()
         ensure_velia_chat_tables()
