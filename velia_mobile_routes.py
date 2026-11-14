@@ -28,6 +28,7 @@ from services.velia_chat_service import (
     send_message,
     update_conversation,
 )
+from services.velia_guardian_service import record as record_guardian_event
 from services.velia_mobile_auth_service import (
     authenticate_access_token,
     create_pairing_code,
@@ -208,6 +209,11 @@ def setup_velia_mobile_routes(
             user_agent=str(request.headers.get("User-Agent") or ""),
             ip=_request_ip(request),
         )
+        if result.get("ok"):
+            await asyncio.to_thread(
+                record_guardian_event, int(result["user_id"]), "mobile_login",
+                source="android", detail=str(data.get("device_name") or ""),
+            )
         return _json_response(result, status=200 if result.get("ok") else 401)
 
     async def handle_auth_refresh(request: web.Request) -> web.Response:
