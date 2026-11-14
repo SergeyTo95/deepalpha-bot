@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <title>VELIA · Безопасность</title>
+  <link rel="stylesheet" href="/webapp/guardian.css">
+  <script src="/webapp/guardian.js" defer></script>
+</head>
+<body>
+  <main class="container">
+    <header class="header">
+      <a class="back" href="/app" aria-label="Назад">←</a>
+      <div><div class="brand">VELIA GUARDIAN</div><h1>Безопасность</h1></div>
+    </header>
+    <p class="explain">Здесь отображаются подтверждённые входы в аккаунт и предупреждения о сессиях. Содержание разговоров с моделями не анализируется.</p>
+    <div class="controls">
+      <div role="group" aria-label="Фильтр уведомлений">
+        <button id="all" aria-pressed="true">Все</button>
+        <button id="unread" aria-pressed="false">Непрочитанные</button>
+      </div>
+      <button id="refresh">Обновить</button>
+    </div>
+    <div class="summary"><span id="count">—</span><button id="read-all" hidden>Прочитать всё</button></div>
+    <p id="status" class="status" role="status"></p>
+    <section id="events" aria-label="События безопасности"></section>
+    <footer>Попытки без подтверждённого владельца не приписываются конкретному аккаунту.</footer>
+  </main>
+</body>
+</html>
