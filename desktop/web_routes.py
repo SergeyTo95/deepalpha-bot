@@ -537,6 +537,9 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     app.router.add_get(r"/{name:velia-sw\.js|manifest\.webmanifest}", asset)
     app.router.add_get("/web-api/v1/session", current)
     app.router.add_get("/web-api/v1/notification-session", notification_session)
+    from desktop.guardian_routes import setup_guardian_routes
+    setup_guardian_routes(app, session_for=session_for, same_origin=same_origin,
+        upstream=upstream, json_response=json_response)
     app.router.add_post("/web-api/v1/auth/exchange", login)
     app.router.add_post("/web-api/v1/auth/logout", logout)
     app.router.add_post("/web-api/v1/chat/completions", chat)
