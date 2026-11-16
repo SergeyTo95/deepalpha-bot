@@ -671,6 +671,16 @@ def install(chat_module: Any) -> None:
                     conversation_id=conversation_id,
                     request_id=request_id,
                 )
+            # Text-humanization requests are chat writing, even when the pasted
+            # document mentions Python, a service, tests, or an old coding plan.
+            # Do not read GitHub projects or reserve coding-agent credits.
+            if coding_service.is_prose_edit_request(message):
+                return original_generate(
+                    prompt,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    request_id=request_id,
+                )
             projects = project_service.list_projects(int(user_id))
             if not projects:
                 if _looks_repository_request(message) or coding_service.is_coding_request(message):
