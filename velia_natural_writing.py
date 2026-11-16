@@ -65,7 +65,7 @@ _REWRITE = re.compile(
 )
 _NATURAL = re.compile(
     r"\b(?:ste[ -]?80|humaniz\w*|по[ -]человечески|естественн\w*|"
-    r"человеческ\w*|нейросет\w*|ии[ -]?клише|robotic|natural(?:ly)?|"
+    r"человеческ\w*|нейросет\w*|(?:следы|признаки|клише)\s+ии|ии[ -]?клише|robotic|natural(?:ly)?|"
     r"less\s+robotic|strict\s+ste|asd[ -]?ste[ -]?100)\b",
     re.IGNORECASE | re.UNICODE,
 )
