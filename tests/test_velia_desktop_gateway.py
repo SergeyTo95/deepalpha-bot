@@ -18,7 +18,9 @@ def test_tool_round_trip_retains_tool_call_ids(monkeypatch):
     ]
     result = validate_payload({'model': 'velia-pro', 'messages': messages, 'stream': True,
         'tools': [{'type': 'function', 'function': {'name': 'read', 'parameters': {'type': 'object'}}}]})
-    assert result['messages'][0] == {'role': 'system', 'content': REQUEST_UNDERSTANDING}
+    assert result['messages'][0]['role'] == 'system'
+    assert result['messages'][0]['content'].count(REQUEST_UNDERSTANDING) == 1
+    assert result['messages'][0]['content'].count('VELIA Natural Writing (light)') == 1
     assert result['messages'][1:] == messages
     assert result['stream'] is True
     assert result['model'] == 'test-model'
