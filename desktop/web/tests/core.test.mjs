@@ -5,6 +5,8 @@ import {
   readCompletion,
   chatPayload,
   loadChats,
+  historyRefreshDue,
+  maintenanceNotice,
   safeSearch,
   MODELS,
   apiError,
@@ -82,11 +84,11 @@ function response(text, chunkSize = 1) {
 }
 test("PRO overload remains actionable through its streamed error", async () => {
   const frames = 'data: {"error":{"message":"pro_overloaded"}}\n\n';
-  await assert.rejects(readCompletion(response(frames), () => {}), /PRO.*перегружен.*30 секунд/);
+  await assert.rejects(readCompletion(response(frames), () => {}), /VELIA PRO.*техническом обслуживании/);
   assert.doesNotMatch(apiError("pro_overloaded"), /токены|баланс|Quantum|Flash/);
   assert.match(apiError("pro_quota_exhausted"), /PRO.*ограничил запросы/);
   assert.match(apiError("pro_tokens_required"), /токены/);
-  assert.match(apiError("flash_overloaded"), /Flash.*перегружен/);
+  assert.match(apiError("flash_overloaded"), /VELIA Flash.*техническом обслуживании/);
   assert.equal(apiError("private-upstream-text"), "Не удалось выполнить запрос. Попробуй ещё раз.");
 });
 test("preparation progress is separate from answer text and rejects unknown stages", async () => {
@@ -281,4 +283,29 @@ test("continuation only offers a user-requested new turn for partial safe chat a
  const long={...basis,content:"x".repeat(5000),failed:"Прервано"};
  assert.ok(continuationPrompt(long).length<2600);
  assert.equal(continuationPrompt(long).slice(-2200),"x".repeat(2200));
+});
+
+test("only model service failures show VELIA maintenance, not personal quota or billing",()=>{
+  for(const mode of ["flash","quantum","pro"]){
+    for(const code of ["unavailable","provider_error","overloaded","timeout","invalid_response","rate_limited"]){
+      const text=apiError(mode+"_"+code);
+      assert.match(text,/VELIA (?:Flash|Quantum|PRO) сейчас на техническом обслуживании/);
+      assert.doesNotMatch(text,/DeepSeek|Z\.ai|Groq|Minimax|провайдер/);
+    }
+    assert.ok(!/техническом обслуживании/.test(apiError(mode+"_daily_user_limit_exceeded")));
+    assert.ok(!/техническом обслуживании/.test(apiError(mode+"_spend_cap_reached")));
+    assert.ok(!/техническом обслуживании/.test(apiError(mode+"_quota_exhausted")));
+  }
+  assert.equal(maintenanceNotice("unknown"),null);
+});
+test("inactive chats have no seven-day expiration; refresh only on foreground return",()=>{
+  const start=Date.parse("2026-01-01T00:00:00Z");
+  assert.equal(historyRefreshDue(start,start+9*60*1000),false);
+  assert.equal(historyRefreshDue(start,start+10*60*1000),true);
+  assert.equal(historyRefreshDue(start,start+25*24*3600*1000),true);
+  assert.equal(historyRefreshDue(start,start-1000),false);
+  const old=JSON.stringify([{id:"long-lived",title:"Осталось из января",updated:start,
+     messages:[{role:"user",content:"Поручение продолжить после месяца"}]}]);
+  assert.equal(loadChats({getItem:()=>old},"any")[0].messages[0].content,
+    "Поручение продолжить после месяца");
 });
