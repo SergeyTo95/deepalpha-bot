@@ -4,6 +4,7 @@ Access requires an authenticated account and either an explicit preview entry or
 the public-access opt-in. Harness executes tools on the user's computer.
 """
 import velia_free_models as free_models
+from desktop import model_health
 import asyncio
 import inspect
 import json
@@ -367,6 +368,10 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
         if failure is not None:
             return failure
         response = None
+        start_model = time.monotonic()
+        def health(status, code=""):
+            model_health.observe(data["model"], status=status,
+                elapsed_ms=(time.monotonic() - start_model) * 1000, code=code)
         try:
             timeout = ClientTimeout(total=360, sock_read=300) if is_flash or quantum_config else ClientTimeout(total=180, sock_read=90)
             async with ClientSession(timeout=timeout, cookie_jar=DummyCookieJar(), trust_env=False) as client:
@@ -396,6 +401,7 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                             await response.write(("data: " + json.dumps(wire, ensure_ascii=False) + "\n\n").encode())
                     await response.write(b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
                     await response.write_eof()
+                    health(200)
                     return response
                 if quantum_config:
                     await quantum.verify_zero_spend_async(client, quantum_config)
@@ -406,10 +412,13 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                         if quantum_config:
                             code, reason = await quantum.read_provider_error(upstream)
                             failure = quantum.response_error(upstream.status, provider_code=code, quota_reason=reason)
+                            health(failure.status, failure.code)
                             return error(failure.code, failure.status)
+                        health(502, "model_request_failed")
                         return error("model_request_failed", 502)
                     if payload["stream"]:
                         if "text/event-stream" not in upstream.headers.get("Content-Type", ""):
+                            health(502, "model_request_failed")
                             return error("invalid_model_stream", 502)
                         response = web.StreamResponse(headers={"Content-Type": "text/event-stream",
                             "Cache-Control": "no-store", "X-Accel-Buffering": "no"})
@@ -419,22 +428,27 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                         async for chunk in stream:
                             await response.write(chunk)
                         await response.write_eof()
+                        health(200)
                         return response
                     result = await quantum.read_result(upstream.content) if quantum_config else await upstream.json()
                     if not isinstance(result, dict) or not isinstance(result.get("choices"), list):
+                        health(502, "model_request_failed")
                         return error("invalid_model_response", 502)
                     result["model"] = data["model"]
+                    health(200)
                     return web.json_response(result, headers={"Cache-Control": "no-store"})
         except FlashContextTooLong:
             return error("flash_context_too_long", 400)
         except quantum.QuantumError as exc:
             code = free_models.error_code(exc.code, data["model"].removeprefix("velia-")) if free_models.enabled() else exc.code
+            health(exc.status, code)
             if response is not None and response.prepared:
                 await response.write(("data: " + json.dumps({"error": {"message": code}}) + "\n\n").encode())
                 await response.write_eof()
                 return response
             return error(code, exc.status)
         except (TimeoutError, OSError, ClientError, ValueError):
+            health(503, "model_request_failed")
             if response is not None and response.prepared:
                 response.force_close()
                 return response
