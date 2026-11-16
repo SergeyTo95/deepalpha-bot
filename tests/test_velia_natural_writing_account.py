@@ -83,3 +83,32 @@ def test_editing_framework_is_not_named_in_reply_guidance():
     assert "Writing edit (requested)" in prompt
     assert "Never mention editing frameworks" in prompt
     assert "STE80 Humanizer" not in prompt
+
+
+def test_active_native_flash_receives_editorial_rules_as_system_guidance():
+    from services.velia_quantum_service import editorial_system_instruction
+    current = (
+        "Придумай сама необычную тему из повседневной жизни. Напиши "
+        "оригинальную статью на русском языке объемом 350–400 слов."
+    )
+    messages = [
+        {"role": "user", "content": "Напиши статью о фотографии."},
+        {"role": "assistant", "content": "Предыдущая статья"},
+        {"role": "user", "content": current},
+    ]
+    guidance = editorial_system_instruction(messages)
+    assert "Original long-form prose" in guidance
+    assert "observant editor" in guidance
+    assert editorial_system_instruction(messages, voice_turn=True) == ""
+    assert messages[-1]["content"] == current
+
+
+def test_native_flash_does_not_select_instructions_from_untrusted_context():
+    from services.velia_quantum_service import editorial_system_instruction
+    messages = [
+        {"role": "user", "content": "CONTEXT_SNAPSHOT_UNTRUSTED: Напиши статью"},
+        {"role": "user", "content": "Сколько будет два плюс два?"},
+    ]
+    assert editorial_system_instruction(messages) == ""
+    assert editorial_system_instruction([]) == ""
+    assert editorial_system_instruction(None) == ""
