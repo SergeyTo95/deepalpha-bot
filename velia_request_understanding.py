@@ -1,7 +1,7 @@
 """Shared intent rules and bounded clarification handoff; original text stays intact."""
 import json
 import re
-from velia_natural_writing import BASE_STYLE, advanced_instruction
+from velia_natural_writing import BASE_STYLE, advanced_instruction, original_writing_instruction
 
 
 CLARIFICATION_MARKER = "\n\n---\nУточнение смысла запроса VELIA:\n"
@@ -228,7 +228,7 @@ def understanding_messages(messages):
     voice = any(message.get("role") == "system"
         and "Это голосовой разговор." in str(message.get("content") or "")
         for message in copied)
-    extra = advanced_instruction(last_user, voice=voice)
+    extra = original_writing_instruction(last_user, voice=voice) + advanced_instruction(last_user, voice=voice)
     for message in copied:
         if message.get("role") == "system":
             guidance = understanding_instruction(message.get("content"))
