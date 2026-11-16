@@ -12,7 +12,7 @@ except ModuleNotFoundError:  # pragma: no cover - minimal unit-test environment
 
 from db.database import get_connection
 from services.velia_llm_service import generate_velia_chat_result, public_generation_metadata
-from velia_natural_writing import BASE_STYLE, advanced_instruction
+from velia_natural_writing import BASE_STYLE, advanced_instruction, original_writing_instruction
 
 
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
@@ -581,7 +581,10 @@ def _build_prompt(user_id: int, conversation_id: str) -> str:
     # STE80 only changes model guidance. Store the original user text unchanged.
     last_user = next((str(_row_value(row, "content", 1, "")) for row in reversed(rows)
         if str(_row_value(row, "role", 0, "")) == "user"), "")
-    return system_prompt + BASE_STYLE + advanced_instruction(last_user) + "\n\nConversation:\n" + "\n\n".join(transcript)
+    # Editorial guidance remains a single model call, and is applied only when
+    # the current request explicitly asks for original prose.
+    return (system_prompt + BASE_STYLE + original_writing_instruction(last_user)
+        + advanced_instruction(last_user) + "\n\nConversation:\n" + "\n\n".join(transcript))
 
 
 def _existing_request_result(
