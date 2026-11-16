@@ -61,6 +61,33 @@ def test_ste80_prose_request_bypasses_developer_even_with_project_context(monkey
     assert len(seen) == 1
 
 
+def test_original_article_bypasses_developer_and_github_with_bound_project(monkeypatch):
+    prompt = (
+        "Самостоятельно выбери интересную тему из повседневной жизни, "
+        "психологии или технологий. Напиши оригинальную статью на русском "
+        "языке объёмом 350–400 слов. Выбери тему сама. Не используй "
+        "выдуманные исследования и цитаты. Выдай только готовую статью."
+    )
+    seen = []
+    def normal(prompt, **kwargs):
+        seen.append((prompt, kwargs))
+        return {"ok": True, "text": "Оригинальная статья по выбранной теме."}
+
+    module = _chat_module(normal)
+    monkeypatch.setattr(patch.project_service, "developer_enabled", lambda: True)
+    monkeypatch.setattr(patch, "_latest_request_user_message", lambda *_: prompt)
+    monkeypatch.setattr(patch.project_service, "list_projects",
+        lambda *_: pytest.fail("article writing must not query GitHub projects"))
+    monkeypatch.setattr(patch, "_bound_project",
+        lambda *_: pytest.fail("article writing must not bind a developer project"))
+    monkeypatch.setattr(patch.coding_service, "active_job",
+        lambda *_: pytest.fail("article writing must not check coding jobs"))
+    patch.install(module)
+    result = _call(module)
+    assert result["text"] == "Оригинальная статья по выбранной теме."
+    assert len(seen) == 1
+
+
 def test_general_question_stays_on_normal_chat(monkeypatch):
     calls = []
 
