@@ -25,3 +25,18 @@ def test_voice_and_non_rewrite_do_not_trigger_expensive_rules():
     assert rewrite_mode("Сделать текст более естественным") == "humanize"
     assert rewrite_mode("Перепиши в строгом STE") == "strict"
     assert rewrite_mode("Перепиши слегка") == "light"
+
+
+def test_original_article_is_written_naturally_in_single_pass_without_skill_name():
+    article = (
+        "Самостоятельно выбери интересную тему из повседневной жизни, "
+        "психологии или технологий. Напиши оригинальную статью на русском "
+        "языке объёмом 350–400 слов. Выдай только статью."
+    )
+    assert advanced_instruction(article) == ""
+    style = understanding_instruction("Ты Велия, отвечай на русском.")
+    assert "choose" in style and "original article" in style
+    assert "natural varied prose" in style
+    assert "STE80" not in style
+    assert "Humanizer" not in style
+    assert "tool or skill" in style
