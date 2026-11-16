@@ -174,6 +174,6 @@ def test_gateway_does_not_forward_provider_secret_to_redirect(monkeypatch):
                     async with client.post(server.make_url('/desktop-api/v1/chat/completions'), headers={'Authorization': 'Bearer va_test'},
                             json={'model': 'velia-pro', 'messages': [{'role': 'user', 'content': 'Hello'}]}) as response:
                         assert response.status == 502
-                        assert (await response.json())['error']['message'] == 'model_request_failed'
+                        assert (await response.json())['error']['message'] == 'pro_provider_error'
                 assert contacted == []
     asyncio.run(scenario())
