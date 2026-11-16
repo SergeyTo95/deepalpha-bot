@@ -54,7 +54,9 @@ def original_writing_instruction(user_text, *, voice=False):
     """Optional low-token editorial guidance for explicit article/story requests."""
     if voice or not isinstance(user_text, str):
         return ""
-    task = user_text[:400]
+    task = user_text[:400].strip()
+    if re.match(r"^(?:как\b|how\s+(?:to|do|can)\b|объясни\b|explain\b)", task, re.IGNORECASE):
+        return ""  # Explanation about writing is not a request to write.
     return _ORIGINAL_WRITING_STYLE if _ORIGINAL_WRITING_RE.search(task) else ""
 
 
