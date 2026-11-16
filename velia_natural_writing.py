@@ -23,16 +23,16 @@ BASE_STYLE = (
 # Expand guidance only for original prose-writing requests. This uses the same
 # selected model and introduces no extra inference, detector call, or database.
 _ORIGINAL_WRITING_RE = re.compile(
-    r"(?:\\b(?:write|draft|compose|create)\\b.{0,150}?"
-    r"\\b(?:article|essay|story|blog\\s+post|social\\s+post|letter)\\b|"
+    r"(?:\b(?:write|draft|compose|create)\b.{0,150}?"
+    r"\b(?:article|essay|story|blog\s+post|social\s+post|letter)\b|"
     r"(?:напиши|написать|создай|сочини|подготовь|придумай|составь)"
-    r"[^\\n.!?]{0,150}?"
+    r"[^\n.!?]{0,150}?"
     r"(?:статью|статьи|рассказ|эссе|пост|заметку|публикаци|письмо|"
-    r"авторск\\w*\\s+текст))",
+    r"авторск\w*\s+текст))",
     re.IGNORECASE,
 )
 _ORIGINAL_WRITING_STYLE = (
-    "\\n\\nOriginal long-form prose: Quietly choose a narrow, non-obvious "
+    "\n\nOriginal long-form prose: Quietly choose a narrow, non-obvious "
     "angle, especially if the topic is unspecified. For Russian writing, "
     "sound like an observant editor, not a generic motivational blogger. "
     "Begin with a concrete everyday tension, detail or question rather "
