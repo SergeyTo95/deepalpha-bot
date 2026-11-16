@@ -31,7 +31,7 @@ def test_request_driven_modes_are_multilingual_and_bounded():
 
 def test_keeps_facts_language_and_safety_in_instruction():
     content = advanced_instruction("Перепиши это по-человечески")
-    for field in ("facts", "dates", "units", "uncertainty", "URLs", "code"):
+    for field in ("factual", "date", "unit", "certainty", "URL", "code"):
         assert field in content
     assert "Do not translate" in content
     assert "not" in content.lower()
