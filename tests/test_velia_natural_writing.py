@@ -21,6 +21,8 @@ def test_request_driven_modes_are_multilingual_and_bounded():
     assert rewrite_mode("Сделай этот текст более естественным: ...") == "humanize"
     assert rewrite_mode("Убери признаки ИИ из текста") == "humanize"
     assert rewrite_mode("Humanize this email.") == "humanize"
+    assert rewrite_mode("Велия, перепиши это по-человечески") == "humanize"
+    assert rewrite_mode("Можешь, пожалуйста, сделать этот текст более естественным") == "humanize"
     assert rewrite_mode("Перепиши слегка, не сильно меняй") == "light"
     assert rewrite_mode("Rewrite this note, light touch") == "light"
     assert rewrite_mode("Перепиши техническую инструкцию в строгом STE") == "strict"
