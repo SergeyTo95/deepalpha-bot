@@ -50,7 +50,7 @@ _STRICT = (
 # Detection is intentionally limited to the start of an actual request. Mentions
 # inside pasted articles or a prior conversation must not silently change mode.
 _REWRITE = re.compile(
-    r"^\s*(?:пожалуйста[,! ]+)?(?:"
+    r"^\s*(?:(?:пожалуйста|велия|velia|можешь|можете|помоги|мне)[,! ]+){0,3}(?:"
     r"перепиши\b|перефразируй\b|отредактируй\b|"
     r"сделай\s+(?:(?:этот|данный|мой)\s+)?текст\b|"
     r"убери\s+(?:из\s+(?:этого\s+)?текста\s+)?(?:следы|признаки|клише)\s+(?:ии|нейросет)|"
