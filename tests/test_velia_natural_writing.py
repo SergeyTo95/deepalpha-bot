@@ -74,3 +74,13 @@ def test_vendored_skill_not_billed_or_claimed_to_be_detector():
     assert (root / "SKILL.md").exists()
     assert "MIT License" in (root / "LICENSE").read_text(encoding="utf-8")
     assert (root / "scripts" / "ste_check.py").exists()
+
+def test_spoken_turn_is_not_given_extended_rewrite_instructions():
+    voiced = [
+        {"role": "system", "content": "Ты Велия. Это голосовой разговор. Отвечай кратко."},
+        {"role": "user", "content": "Велия, перепиши это по-человечески"},
+    ]
+    result = understanding_messages(voiced)
+    assert "VELIA Natural Writing (light)" in result[0]["content"]
+    assert "STE80 Humanizer (requested)" not in result[0]["content"]
+    assert result[1] == voiced[1]
