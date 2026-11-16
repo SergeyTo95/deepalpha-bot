@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 import requests
 import velia_free_models as free_models
+from velia_natural_writing import BASE_STYLE, original_writing_instruction
 
 MODEL = "velia-flash"
 PROVIDER = "bonsai"
@@ -322,6 +323,11 @@ def _generate_once(messages, *, request_id="", on_delta=None):
             "Avoid headings, lists and filler. "
             if voice_fast else ""
         )
+        + BASE_STYLE
+        + original_writing_instruction(next((
+            m.get("content", "") for m in reversed(messages)
+            if isinstance(m, dict) and m.get("role") == "user"
+        ), ""), voice=voice_fast)
     )}
     history = [dict(m) for m in messages if m.get("role") in {"user", "assistant"}]
     if not history:
