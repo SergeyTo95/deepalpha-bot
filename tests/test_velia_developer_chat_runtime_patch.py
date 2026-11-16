@@ -39,7 +39,7 @@ def _call(module):
 
 def test_ste80_prose_request_bypasses_developer_even_with_project_context(monkeypatch):
     text = (
-        "Велия, перепиши этот текст по-человечески, используя STE80 Humanizer.\\n\\n"
+        "Велия, перепиши этот текст по-человечески, используя STE80 Humanizer.\n\n"
         "Напиши, как API, Python и GitHub повлияли на рынок сервисов."
     )
     expected = {"ok": True, "text": "Человекочитаемый текст"}
