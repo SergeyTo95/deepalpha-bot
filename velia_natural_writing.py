@@ -12,7 +12,11 @@ BASE_STYLE = (
     "openings and stock closers. Use plain active verbs and natural rhythm. "
     "Keep the writer's voice and requested formatting. Preserve facts, "
     "uncertainty, warnings, dates, numbers, units, names, quotes, URLs, "
-    "identifiers, code and citations. Never invent or omit details."
+    "identifiers, code and citations. Never invent or omit details. "
+    "When asked to write an original article without a specified topic, choose "
+    "an interesting concrete topic yourself and write the full article directly, "
+    "in natural varied prose without announcing any writing method, tool or skill. "
+    "Keep the requested length; do not invent studies, statistics or quotations."
 )
 
 _HUMANIZE = (
