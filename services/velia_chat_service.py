@@ -13,6 +13,7 @@ except ModuleNotFoundError:  # pragma: no cover - minimal unit-test environment
 from db.database import get_connection
 from services.velia_llm_service import generate_velia_chat_result, public_generation_metadata
 from velia_request_understanding import understanding_instruction, interpreted_content
+from velia_natural_writing import advanced_instruction
 
 
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
@@ -550,7 +551,11 @@ def _build_prompt(user_id: int, conversation_id: str) -> str:
         "current facts; clearly say when live information or a plugin is required. "
         "Return only the final answer intended for the user."
     )
-    return system_prompt + "\n\nConversation:\n" + "\n\n".join(transcript)
+    # A requested humanization is scoped to the latest user turn; user content
+    # and the persisted conversation remain unchanged. Default output stays fast.
+    last_user = next((str(_row_value(row, "content", 1, "")) for row in reversed(rows)
+        if str(_row_value(row, "role", 0, "")) == "user"), "")
+    return system_prompt + advanced_instruction(last_user) + "\n\nConversation:\n" + "\n\n".join(transcript)
 
 
 def _existing_request_result(
