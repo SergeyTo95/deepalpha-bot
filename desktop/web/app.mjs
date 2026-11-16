@@ -12,6 +12,7 @@ import {
   renderMarkdown,
   readCompletion,
   loadChats,
+  historyRefreshDue,
   cleanAssistantHistory,
   chatPayload,
   apiError,
@@ -132,6 +133,7 @@ function addFiles(files) {
 }
 
 const current = () => chats.find((c) => c.id === currentId);
+let lastHistorySyncAt = 0, historySyncInFlight = false;
 const historyOrder = (a, b) => Number(!!b.isPinned) - Number(!!a.isPinned) || b.updated - a.updated;
 let incomeToSave = null;
 const incomePlanner = setupIncomePlanner({
@@ -963,8 +965,9 @@ async function openChat(chat, background = false) {
   save();
   render();
 }
-async function syncHistory() {
-  if (!profile || busy) return;
+async function syncHistory({refreshActive = false} = {}) {
+  if (!profile || busy || historySyncInFlight) return;
+  historySyncInFlight = true;
   const account = profile.account;
   try {
     const data = await jsonRequest("conversations");
@@ -980,10 +983,13 @@ async function syncHistory() {
     if (currentId && !current()) currentId = null;
     $("history-state").textContent = "История в твоём аккаунте";
     save(); render();
-    if (current()?.remote && !current().loaded) await openChat(current(), true);
+    lastHistorySyncAt = Date.now();
+    if (current()?.remote && (refreshActive || !current().loaded)) await openChat(current(), true);
   } catch (error) {
     $("history-state").textContent = "Не удалось обновить историю";
     toast(error.message);
+  } finally {
+    historySyncInFlight = false;
   }
 }
 async function copyText(text) {
@@ -1872,7 +1878,27 @@ $("delete-confirm").onclick = async () => {
   } catch (error) { toast(error.message); }
   finally { button.disabled = false; }
 };
-window.addEventListener("pagehide", save);
+// A sleeping/mobile browser may discard a debounced write before pagehide.
+// Persist on backgrounding, and reconcile remote conversations upon return.
+// An expired login never deletes encrypted history; re-auth unlocks the cache.
+function resumeConversationHistory() {
+  if (!profile || busy || document.hidden || !historyRefreshDue(lastHistorySyncAt)) return;
+  syncHistory({refreshActive:true});
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    save();
+  } else {
+    resumeConversationHistory();
+  }
+});
+window.addEventListener("focus", resumeConversationHistory);
+window.addEventListener("pageshow", resumeConversationHistory);
+window.addEventListener("pagehide", () => {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  save();
+});
 setTheme(theme);
 setModel(model);
 renderHistory();
