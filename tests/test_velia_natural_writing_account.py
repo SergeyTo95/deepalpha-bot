@@ -69,6 +69,8 @@ def test_editorial_rules_do_not_spill_into_general_assistance():
         "Напиши SQL-запрос для поиска продаж",
         "Расскажи о принципах цифровой гигиены",
         "Помоги выбрать ресторан",
+        "Как мне написать статью о роботах?",
+        "How to write an article on AI",
     ):
         assert original_writing_instruction(text) == ""
     assert "Original long-form prose" not in understanding_messages([
