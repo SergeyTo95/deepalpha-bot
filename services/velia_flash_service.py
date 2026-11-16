@@ -323,7 +323,7 @@ def _generate_once(messages, *, request_id="", on_delta=None):
             "Avoid headings, lists and filler. "
             if voice_fast else ""
         )
-        + BASE_STYLE
+        + (BASE_STYLE if not voice_fast else "")
         + original_writing_instruction(next((
             m.get("content", "") for m in reversed(messages)
             if isinstance(m, dict) and m.get("role") == "user"
