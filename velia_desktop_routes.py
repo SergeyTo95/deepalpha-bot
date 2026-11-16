@@ -414,12 +414,14 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                             failure = quantum.response_error(upstream.status, provider_code=code, quota_reason=reason)
                             health(failure.status, failure.code)
                             return error(failure.code, failure.status)
-                        health(502, "model_request_failed")
-                        return error("model_request_failed", 502)
+                        code = "flash_provider_error" if is_flash else "pro_provider_error"
+                        health(502, code)
+                        return error(code, 502)
                     if payload["stream"]:
                         if "text/event-stream" not in upstream.headers.get("Content-Type", ""):
-                            health(502, "model_request_failed")
-                            return error("invalid_model_stream", 502)
+                            code = "flash_invalid_response" if is_flash else "pro_invalid_response"
+                            health(502, code)
+                            return error(code, 502)
                         response = web.StreamResponse(headers={"Content-Type": "text/event-stream",
                             "Cache-Control": "no-store", "X-Accel-Buffering": "no"})
                         await response.prepare(request)
@@ -432,8 +434,9 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                         return response
                     result = await quantum.read_result(upstream.content) if quantum_config else await upstream.json()
                     if not isinstance(result, dict) or not isinstance(result.get("choices"), list):
-                        health(502, "model_request_failed")
-                        return error("invalid_model_response", 502)
+                        code = "flash_invalid_response" if is_flash else "pro_invalid_response"
+                        health(502, code)
+                        return error(code, 502)
                     result["model"] = data["model"]
                     health(200)
                     return web.json_response(result, headers={"Cache-Control": "no-store"})
@@ -448,11 +451,12 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                 return response
             return error(code, exc.status)
         except (TimeoutError, OSError, ClientError, ValueError):
-            health(503, "model_request_failed")
+            code = "flash_provider_error" if is_flash else "pro_provider_error"
+            health(503, code)
             if response is not None and response.prepared:
                 response.force_close()
                 return response
-            return error("model_connection_failed", 502)
+            return error(code, 502)
         finally:
             active.discard(user_id)
 
