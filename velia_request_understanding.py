@@ -223,7 +223,12 @@ def understanding_messages(messages):
         if message.get("role") == "user" else dict(message) for message in messages]
     last_user = next((message.get("content") for message in reversed(copied)
         if message.get("role") == "user"), "")
-    extra = advanced_instruction(last_user)
+    # Voice chat already has a dedicated short-answer policy. Do not expand
+    # its prefill with a writing-revision skill.
+    voice = any(message.get("role") == "system"
+        and "Это голосовой разговор." in str(message.get("content") or "")
+        for message in copied)
+    extra = advanced_instruction(last_user, voice=voice)
     for message in copied:
         if message.get("role") == "system":
             guidance = understanding_instruction(message.get("content"))
