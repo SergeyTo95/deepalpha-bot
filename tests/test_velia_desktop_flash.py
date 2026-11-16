@@ -77,8 +77,12 @@ def test_flash_normalizes_template_and_preserves_correlated_tool_result():
         {"role": "tool", "tool_call_id": "read-1", "content": "текст файла"},
         {"role": "system", "content": "Без изменений файлов"},
     ]})
-    assert result["messages"][0] == {"role": "system", "content":
-        "Ты Велия\n\n" + REQUEST_UNDERSTANDING + "\n\nРабочая папка\n\nБез изменений файлов"}
+    system = result["messages"][0]
+    assert system["role"] == "system"
+    assert system["content"].startswith("Ты Велия\n\n" + REQUEST_UNDERSTANDING)
+    assert system["content"].count(REQUEST_UNDERSTANDING) == 1
+    assert system["content"].count("VELIA Natural Writing (light)") == 1
+    assert system["content"].endswith("\n\nРабочая папка\n\nБез изменений файлов")
     assert len([m for m in result["messages"] if m["role"] == "system"]) == 1
     assert "reasoning_content" not in result["messages"][2]
     assert result["messages"][2]["tool_calls"][0]["function"]["arguments"] == "{}"

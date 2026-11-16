@@ -1,6 +1,7 @@
 """Shared intent rules and bounded clarification handoff; original text stays intact."""
 import json
 import re
+from velia_natural_writing import BASE_STYLE, advanced_instruction
 
 
 CLARIFICATION_MARKER = "\n\n---\nУточнение смысла запроса VELIA:\n"
@@ -207,22 +208,33 @@ def clarification_result(content, *, provider, model, request_id="", on_delta=No
 
 
 def understanding_instruction(instruction):
-    """Append once, including when a server-generated persona already has the rules."""
+    """Keep understanding and brief natural-writing rules on every model route."""
     instruction = str(instruction or "")
-    if REQUEST_UNDERSTANDING in instruction:
-        return instruction
-    return (instruction.rstrip() + "\n\n" + REQUEST_UNDERSTANDING).lstrip()
+    if REQUEST_UNDERSTANDING not in instruction:
+        instruction = (instruction.rstrip() + "\n\n" + REQUEST_UNDERSTANDING).lstrip()
+    if BASE_STYLE not in instruction:
+        instruction += BASE_STYLE
+    return instruction
 
 
 def understanding_messages(messages):
     """Add server instructions without changing user text, history or tool payloads."""
     copied = [{**message, "content": interpreted_content(message.get("content"))}
         if message.get("role") == "user" else dict(message) for message in messages]
+    last_user = next((message.get("content") for message in reversed(copied)
+        if message.get("role") == "user"), "")
+    # Voice chat already has a dedicated short-answer policy. Do not expand
+    # its prefill with a writing-revision skill.
+    voice = any(message.get("role") == "system"
+        and "Это голосовой разговор." in str(message.get("content") or "")
+        for message in copied)
+    extra = advanced_instruction(last_user, voice=voice)
     for message in copied:
         if message.get("role") == "system":
-            message["content"] = understanding_instruction(message.get("content"))
+            guidance = understanding_instruction(message.get("content"))
+            message["content"] = guidance + (extra if extra not in guidance else "")
             return copied
-    return [{"role": "system", "content": REQUEST_UNDERSTANDING}] + copied
+    return [{"role": "system", "content": understanding_instruction("") + extra}] + copied
 
 
 def normalize_reply_language(value):

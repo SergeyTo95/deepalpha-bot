@@ -36,7 +36,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
 COPY desktop/requirements-gateway.txt /app/desktop/requirements-gateway.txt
 RUN pip install --no-cache-dir -r desktop/requirements-gateway.txt pytest==8.4.2
 COPY velia_desktop_routes.py /app/velia_desktop_routes.py
-COPY velia_request_understanding.py /app/velia_request_understanding.py
+COPY velia_request_understanding.py velia_natural_writing.py /app/
 COPY desktop/gateway.py desktop/probe_gateway.py desktop/probe_request_intent.py desktop/answer_review.py desktop/web_routes.py desktop/feature_routes.py desktop/voice_routes.py desktop/work_store.py desktop/work_runtime.py desktop/work_routes.py desktop/upwork_connector.py desktop/account_routes.py desktop/guest_routes.py desktop/guest_store.py desktop/web_search.py desktop/request_intent.py desktop/spelling_hints.py desktop/flash_worker_start.py /app/desktop/
 COPY desktop/web /app/desktop/web
 COPY tests/test_velia_desktop_gateway.py tests/test_velia_desktop_relay.py tests/test_velia_desktop_flash.py tests/test_velia_web_chat.py tests/test_velia_web_guest.py tests/test_velia_web_search.py tests/test_velia_request_understanding.py tests/test_velia_request_intent.py tests/test_velia_answer_review.py tests/test_velia_flash_worker_start.py tests/test_velia_desktop_flash_readiness.py /app/tests/
@@ -51,6 +51,7 @@ COPY --from=qualification /usr/local/bin/node /usr/local/bin/node
 COPY --from=qualification /opt/velia-qualification /opt/velia-qualification
 COPY --from=checked /app/velia_desktop_routes.py /app/velia_desktop_routes.py
 COPY --from=checked /app/velia_request_understanding.py /app/velia_request_understanding.py
+COPY --from=checked /app/velia_natural_writing.py /app/velia_natural_writing.py
 COPY --from=checked /app/desktop /app/desktop
 COPY desktop/scripts/probe-live-flash.mjs /app/desktop/scripts/probe-live-flash.mjs
 COPY desktop/src/config.mjs desktop/src/proxy.mjs /app/desktop/src/
