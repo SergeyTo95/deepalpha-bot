@@ -36,6 +36,31 @@ def _call(module):
     )
 
 
+
+def test_ste80_prose_request_bypasses_developer_even_with_project_context(monkeypatch):
+    text = (
+        "Велия, перепиши этот текст по-человечески, используя STE80 Humanizer.\\n\\n"
+        "Напиши, как API, Python и GitHub повлияли на рынок сервисов."
+    )
+    expected = {"ok": True, "text": "Человекочитаемый текст"}
+    seen = []
+
+    def normal(prompt, **kwargs):
+        seen.append((prompt, kwargs))
+        return expected
+
+    module = _chat_module(normal)
+    monkeypatch.setattr(patch.project_service, "developer_enabled", lambda: True)
+    monkeypatch.setattr(patch, "_latest_request_user_message", lambda *_: text)
+    monkeypatch.setattr(patch.project_service, "list_projects",
+        lambda *_: pytest.fail("prose rewrites must not load a GitHub project"))
+    monkeypatch.setattr(patch.coding_service, "active_job",
+        lambda *_: pytest.fail("prose rewrites must not load a coding job"))
+    patch.install(module)
+    assert _call(module) == expected
+    assert len(seen) == 1
+
+
 def test_general_question_stays_on_normal_chat(monkeypatch):
     calls = []
 
