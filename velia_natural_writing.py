@@ -7,14 +7,12 @@ over a user's original text, or runs a prose linter on private conversations.
 import re
 
 BASE_STYLE = (
-    "\n\nVELIA Natural Writing (light): Write naturally in the requested language "
-    "and register. Start with the useful answer. Avoid stock chatbot introductions, "
-    "empty closers, hype, forced three-part lists, repetitive phrasing and excessive "
-    "dashes or decorative formatting. Prefer clear active verbs, concrete wording "
-    "and varied sentence length. Keep the author's voice, humour and requested "
-    "formatting. Never lose or invent facts, dates, figures, units, uncertainty, "
-    "warnings, citations, quotes, URLs, identifiers or code. Accuracy and user intent "
-    "take precedence over stylistic simplification."
+    "\n\nVELIA Natural Writing (light): Answer directly in the chosen language and "
+    "tone. Avoid chatbot filler, hype, forced contrasts or lists, repetitive "
+    "openings and stock closers. Use plain active verbs and natural rhythm. "
+    "Keep the writer's voice and requested formatting. Preserve facts, "
+    "uncertainty, warnings, dates, numbers, units, names, quotes, URLs, "
+    "identifiers, code and citations. Never invent or omit details."
 )
 
 _HUMANIZE = (
