@@ -358,7 +358,7 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
             return failure
         key = quantum_config.api_key if quantum_config else os.getenv("VELIA_DESKTOP_FLASH_API_KEY" if is_flash else "KIMI_API_KEY", "").strip()
         if not key:
-            return error("model_unavailable", 503)
+            return error(data["model"].removeprefix("velia-") + "_unavailable", 503)
         # Body reading yields: repeat admission immediately before reserving.
         if user_id in active or len(active) >= 2 or len(queue) >= 30:
             return error("preview_capacity_exceeded", 429)
