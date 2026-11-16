@@ -4,6 +4,7 @@ Access requires an authenticated account and either an explicit preview entry or
 the public-access opt-in. Harness executes tools on the user's computer.
 """
 import velia_free_models as free_models
+from desktop import model_health
 import asyncio
 import inspect
 import json
@@ -357,7 +358,7 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
             return failure
         key = quantum_config.api_key if quantum_config else os.getenv("VELIA_DESKTOP_FLASH_API_KEY" if is_flash else "KIMI_API_KEY", "").strip()
         if not key:
-            return error("model_unavailable", 503)
+            return error(data["model"].removeprefix("velia-") + "_unavailable", 503)
         # Body reading yields: repeat admission immediately before reserving.
         if user_id in active or len(active) >= 2 or len(queue) >= 30:
             return error("preview_capacity_exceeded", 429)
@@ -367,6 +368,10 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
         if failure is not None:
             return failure
         response = None
+        start_model = time.monotonic()
+        def health(status, code=""):
+            model_health.observe(data["model"], status=status,
+                elapsed_ms=(time.monotonic() - start_model) * 1000, code=code)
         try:
             timeout = ClientTimeout(total=360, sock_read=300) if is_flash or quantum_config else ClientTimeout(total=180, sock_read=90)
             async with ClientSession(timeout=timeout, cookie_jar=DummyCookieJar(), trust_env=False) as client:
@@ -396,6 +401,7 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                             await response.write(("data: " + json.dumps(wire, ensure_ascii=False) + "\n\n").encode())
                     await response.write(b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
                     await response.write_eof()
+                    health(200)
                     return response
                 if quantum_config:
                     await quantum.verify_zero_spend_async(client, quantum_config)
@@ -406,11 +412,16 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                         if quantum_config:
                             code, reason = await quantum.read_provider_error(upstream)
                             failure = quantum.response_error(upstream.status, provider_code=code, quota_reason=reason)
+                            health(failure.status, failure.code)
                             return error(failure.code, failure.status)
-                        return error("model_request_failed", 502)
+                        code = "flash_provider_error" if is_flash else "pro_provider_error"
+                        health(502, code)
+                        return error(code, 502)
                     if payload["stream"]:
                         if "text/event-stream" not in upstream.headers.get("Content-Type", ""):
-                            return error("invalid_model_stream", 502)
+                            code = "flash_invalid_response" if is_flash else "pro_invalid_response"
+                            health(502, code)
+                            return error(code, 502)
                         response = web.StreamResponse(headers={"Content-Type": "text/event-stream",
                             "Cache-Control": "no-store", "X-Accel-Buffering": "no"})
                         await response.prepare(request)
@@ -419,26 +430,33 @@ def setup_velia_desktop_routes(app, authenticate, *, prepare_payload=None, filte
                         async for chunk in stream:
                             await response.write(chunk)
                         await response.write_eof()
+                        health(200)
                         return response
                     result = await quantum.read_result(upstream.content) if quantum_config else await upstream.json()
                     if not isinstance(result, dict) or not isinstance(result.get("choices"), list):
-                        return error("invalid_model_response", 502)
+                        code = "flash_invalid_response" if is_flash else "pro_invalid_response"
+                        health(502, code)
+                        return error(code, 502)
                     result["model"] = data["model"]
+                    health(200)
                     return web.json_response(result, headers={"Cache-Control": "no-store"})
         except FlashContextTooLong:
             return error("flash_context_too_long", 400)
         except quantum.QuantumError as exc:
             code = free_models.error_code(exc.code, data["model"].removeprefix("velia-")) if free_models.enabled() else exc.code
+            health(exc.status, code)
             if response is not None and response.prepared:
                 await response.write(("data: " + json.dumps({"error": {"message": code}}) + "\n\n").encode())
                 await response.write_eof()
                 return response
             return error(code, exc.status)
         except (TimeoutError, OSError, ClientError, ValueError):
+            code = "flash_provider_error" if is_flash else "pro_provider_error"
+            health(503, code)
             if response is not None and response.prepared:
                 response.force_close()
                 return response
-            return error("model_connection_failed", 502)
+            return error(code, 502)
         finally:
             active.discard(user_id)
 

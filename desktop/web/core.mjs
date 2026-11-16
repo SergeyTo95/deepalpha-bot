@@ -164,7 +164,15 @@ export function renderMarkdown(value, {highlight = true} = {}) {
   close();
   return html;
 }
+export function maintenanceNotice(model) {
+  const name = {"velia-flash":"VELIA Flash","velia-quantum":"VELIA Quantum","velia-pro":"VELIA PRO"}[model];
+  return name ? name + " сейчас на техническом обслуживании. Попробуй немного позже." : null;
+}
 export function apiError(code) {
+  if (typeof code === "string") {
+    const match = /^(flash|quantum|pro)_(?:unavailable|provider_error|overloaded|timeout|invalid_response|rate_limited)$/.exec(code);
+    if (match) return maintenanceNotice("velia-" + match[1]);
+  }
   return (
     {
       unauthorized: "Войди в VELIA, чтобы продолжить.",
@@ -415,6 +423,13 @@ export function cleanAssistantHistory(value) {
   const text = typeof value === "string" ? value : "";
   const cleaned = text.replace(/<tool_call>[\s\S]*?(?:<\/tool_call>|$)/gi, "");
   return cleaned === text ? text : cleaned.trim() || "Ответ не сформировался. Повтори запрос.";
+}
+// A seven-day idle gap never expires a saved conversation. This governs only
+// refresh frequency; account authentication retains its own expiry policy.
+export function historyRefreshDue(previous, current = Date.now(), intervalMs = 10 * 60 * 1000) {
+  return Number.isFinite(previous) && Number.isFinite(current) &&
+    Number.isFinite(intervalMs) && intervalMs >= 0 &&
+    current - previous >= intervalMs;
 }
 export function loadChats(storage, key) {
   try {

@@ -526,6 +526,18 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             "Permissions-Policy": "camera=(), microphone=(self), geolocation=(self)"})
         return response
     async def client_version_status(request):return json_response({'ok':True,'version':client_version})
+    async def model_health_status(request):
+        from desktop.model_health import snapshot
+        try:
+            session = await session_for(request)
+            if not session:
+                return error("unauthorized", 401)
+        except AuthenticationUnavailable:
+            return error("authentication_unavailable", 503)
+        response = json_response(snapshot())
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    app.router.add_get("/web-api/v1/models/status", model_health_status)
     app.router.add_get('/web-api/v1/client-version',client_version_status)
     app.router.add_get("/", asset)
     app.router.add_get("/privacy", asset)

@@ -9,6 +9,7 @@ import time
 from aiohttp import ClientError, web
 from velia_desktop_routes import AuthenticationUnavailable, FLASH_ID, MODEL_ID, flash_enabled
 from desktop.mission_schema import MissionError
+from desktop import model_health
 from desktop.web_search import SearchUnavailable, SearchTooLong, UnderstandingUnavailable, source_event
 from velia_quantum_provider import ERRORS as QUANTUM_ERRORS, MODEL_ID as QUANTUM_ID, QuantumError
 
@@ -58,7 +59,7 @@ def message(value):
     return result
 
 
-async def account_events(source, model):
+async def account_events(source, model, *, on_error=None):
     """Strip usage, internal plans, provider identifiers and account credentials."""
     pending = b""
     completed = False
@@ -83,7 +84,10 @@ async def account_events(source, model):
                 safe = {"reset": True}
             elif kind == "error":
                 code = event.get("error")
-                safe = {"error": {"message": code if code in ERRORS else "model_request_failed"}}
+                safe_code = code if code in ERRORS else "model_request_failed"
+                if on_error is not None:
+                    on_error(safe_code)
+                safe = {"error": {"message": safe_code}}
             elif kind == "complete":
                 result = event.get("result", {})
                 final = result.get("assistant_message", {}).get("content") if isinstance(result, dict) else None
@@ -274,15 +278,15 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
             source = upstream_stream("/mobile-api/v1/conversations/" + request.match_info["conversation_id"] + "/messages/stream",
                 token=session.access, data={"content": content, "chat_mode": "quantum" if data["model"] == QUANTUM_ID else "flash" if data["model"] == FLASH_ID else "pro",
                     "idempotency_key": data["idempotency_key"], **({"web_search": bool(data.get("web_search", web_search and web_search.available)) and not data.get("medical_no_search", False)} if native_quantum else {}), **({"voice_turn": True} if data.get("voice_turn") else {}), **({"attachment_ids": attachments} if "attachment_ids" in data else {})})
-            stream = account_events(source, data["model"])
+            def note_upstream_error(code):
+                nonlocal outcome, failure_code
+                outcome, failure_code = "model_error", code
+            stream = account_events(source, data["model"], on_error=note_upstream_error)
             if result:
                 await response.write(source_event(result))
             async for chunk in stream:
                 if first_text_at is None and b'"content":' in chunk:
                     first_text_at = time.monotonic()
-                if b'"error":' in chunk:
-                    outcome = "model_error"
-                    failure_code = "native_model_error"
                 await response.write(chunk)
             await response.write_eof()
             if outcome != "model_error":
@@ -317,6 +321,11 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
                 with suppress(asyncio.CancelledError, Exception):
                     await preparation
             finished = time.monotonic()
+            if outcome == "complete":
+                model_health.observe(data["model"], status=200, elapsed_ms=(finished-started)*1000)
+            elif outcome == "model_error" or failure_code.endswith(("_provider_error", "_timeout", "_overloaded", "_rate_limited", "_unavailable")):
+                health_status = 429 if failure_code.endswith(("_rate_limited", "_quota_exhausted", "_overloaded")) else 503
+                model_health.observe(data["model"], status=health_status, code=failure_code, elapsed_ms=(finished-started)*1000)
             LOG.info("VELIA_ACCOUNT_RESPONSE_TIMING model=%s voice=%s prepare_ms=%d first_text_ms=%d total_ms=%d outcome=%s code=%s auth_ms=%d admission_ms=%d",
                 data["model"], bool(data.get("voice_turn")), round(((prepared_at or finished) - started) * 1000),
                 round((first_text_at - started) * 1000) if first_text_at is not None else -1,
