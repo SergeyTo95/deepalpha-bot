@@ -1,7 +1,7 @@
 """VELIA Natural Writing: compact runtime adapter for the MIT STE80 Humanizer skill.
 
-The original skill, checker, references and attribution are vendored under
-desktop/skills/ste80-humanizer/. The runtime never invokes a second LLM, writes
+Inspired by Dodaios/ste80-humanizer (MIT); upstream at github.com/Dodaios/ste80-humanizer.
+The runtime never invokes a second LLM, writes
 over a user's original text, or runs a prose linter on private conversations.
 """
 import re
