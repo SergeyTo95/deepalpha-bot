@@ -48,3 +48,39 @@ def test_explicit_code_changes_still_reach_coding_agent():
     )
     assert all(not coding.is_prose_edit_request(item) for item in samples)
     assert all(coding.is_coding_request(item) for item in samples)
+
+
+def test_original_article_is_not_programming_even_with_word_napishi():
+    original = (
+        "Самостоятельно выбери интересную тему из повседневной жизни, "
+        "психологии или технологий. Напиши оригинальную статью на русском "
+        "языке объёмом 350–400 слов.\n\n"
+        "Выбери тему сама. Не используй выдуманные исследования, цифры "
+        "или цитаты. Выдай только готовую статью, без пояснений."
+    )
+    assert coding._WRITE_INTENT_RE.search(original)
+    assert not coding._CODE_SCOPE_RE.search(original), "напиши must not contain API"
+    assert coding.is_original_prose_request(original)
+    assert not coding.is_coding_request(original)
+    assert not coding.should_handle(original)
+
+    for text in [
+        "Напиши статью о Python и API, выбери тему сама.",
+        "Напиши живой пост о разработке и GitHub, без кода.",
+        "Составь письмо на русском, как обычный человек.",
+        "Write an original article about backend development.",
+        "Создай интересный рассказ на 350 слов.",
+    ]:
+        assert coding.is_original_prose_request(text), text
+        assert not coding.is_coding_request(text), text
+
+
+def test_real_technical_api_and_source_changes_still_use_coding_agent():
+    for text in [
+        "Напиши API endpoint для списка задач в Python.",
+        "Добавь авторизацию в backend и тесты.",
+        "Перепиши функцию авторизации в Python backend.",
+        "Создай файл service.py с реализацией API.",
+    ]:
+        assert coding.is_coding_request(text), text
+    assert not coding._CODE_SCOPE_RE.search("Пожалуйста, напиши просто и ясно.")
