@@ -12,6 +12,7 @@ from velia_quantum_turn import Turn, source_suffix
 from velia_quantum_transport import completion
 from velia_quantum_search import configuration as search_configuration, search as run_web_search
 from velia_request_understanding import understanding_instruction, reply_language_instruction, normalize_reply_language
+from velia_natural_writing import original_writing_instruction
 from velia_quantum_provider import (MODEL_ID, PROVIDER_ID, QuantumError,
     available as legacy_available, bounded_int, configuration, payload, groq_backup_configuration)
 
@@ -165,6 +166,25 @@ def voice_route_enabled():
     return os.getenv("VELIA_QUANTUM_GROQ_VOICE_ENABLED", "").strip().lower() in {"true", "1", "yes", "on"}
 
 
+
+def editorial_system_instruction(messages, *, voice_turn=False):
+    """Scope original-writing guidance to the latest actual user turn only.
+
+    The account prompt snapshot contains background content and is marked
+    untrusted; it must not be the sole vehicle for editorial instructions.
+    No extra model call, source-text logging, or changes to stored messages.
+    """
+    if voice_turn or not isinstance(messages, (list, tuple)):
+        return ""
+    latest = next((
+        message.get("content", "")
+        for message in reversed(messages)
+        if isinstance(message, dict) and message.get("role") == "user"
+        and not str(message.get("content", "")).startswith("CONTEXT_SNAPSHOT_UNTRUSTED")
+    ), "")
+    return original_writing_instruction(latest, voice=voice_turn)
+
+
 def generate(prompt, *, request_id="", on_delta=None, voice_turn=False, web_search=False, messages=None, account_language="", chat_mode="quantum"):
     free_tier = free_models.enabled()
     config = free_models.configuration(chat_mode, voice=voice_turn) if free_tier else configuration()
@@ -200,7 +220,8 @@ def generate(prompt, *, request_id="", on_delta=None, voice_turn=False, web_sear
                "даже если раньше в истории ошиблась. Род собеседника не меняй. "
                "Реплика пришла из распознавания речи: учитывай последние реплики, исправления "
                "и подтверждения пользователя. Если смысл понятен, отвечай сразу; при реальной "
-               "неоднозначности задай один короткий вопрос, без списка уточнений. " if voice_turn else ""))},
+               "неоднозначности задай один короткий вопрос, без списка уточнений. " if voice_turn else "")
+            + editorial_system_instruction(messages, voice_turn=voice_turn))},
             *([{"role": "user", "content": prompt}] if messages is None else messages)],
             stream=True, max_tokens=1024 if voice_turn and not free_tier else config.max_tokens)
         turn = Turn(config, body["messages"], search_enabled=bool(web_search and search_configuration()),
