@@ -37,7 +37,7 @@ def test_original_article_is_written_naturally_in_single_pass_without_skill_name
     assert advanced_instruction(article) == ""
     style = understanding_instruction("Ты Велия, отвечай на русском.")
     assert "choose" in style and "original article" in style
-    assert "natural varied prose" in style
+    assert "specific, fresh angle" in style
     assert "STE80" not in style
     assert "Humanizer" not in style
     assert "tool or skill" in style
