@@ -99,8 +99,35 @@ def coding_enabled() -> bool:
     return _env_bool("VELIA_DEVELOPER_CODING_ENABLED", False)
 
 
+_EXPLICIT_PROGRAMMING_SCOPE_RE = re.compile(
+    r"(?:\\b(?:code|python|javascript|typescript|function|class|module|backend|frontend|"
+    r"repository|github|api|endpoint|commit|pull\\s+request)\\b|"
+    r"(?:код(?:а|е|ом)?|скрипт|функци|класс|модул|бэкенд|фронтенд|"
+    r"репозитор|гитхаб|эндпоинт|коммит|пулл\\s*реквест)|"
+    r"[A-Za-z0-9_.-]+\\.(?:py|js|ts|tsx|jsx|kt|java|sql))",
+    re.IGNORECASE,
+)
+
+
+def is_prose_edit_request(message: str) -> bool:
+    """Keep prose rewriting on the chosen chat model, not the GitHub agent.
+
+    The first line is the instruction; subsequent pasted article text is
+    untrusted content and must never supply a 'code scope' for routing.
+    """
+    from velia_natural_writing import rewrite_mode
+
+    text = str(message or "").lstrip()
+    instruction = text.split("\\n", 1)[0][:250]
+    if rewrite_mode(instruction) is None:
+        return False
+    return not bool(_EXPLICIT_PROGRAMMING_SCOPE_RE.search(instruction))
+
+
 def is_coding_request(message: str) -> bool:
     text = str(message or "").strip()
+    if is_prose_edit_request(text):
+        return False
     return bool(text and _WRITE_INTENT_RE.search(text) and _CODE_SCOPE_RE.search(text))
 
 
