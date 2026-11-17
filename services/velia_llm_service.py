@@ -124,11 +124,13 @@ def generate_velia_chat_result(
     The live user request is read by request ID, not parsed from untrusted
     transcript prose. No GitHub agent, tools, or additional stored messages.
     """
-    if not request_id or not editorial._enabled() or not any(
+    from services.velia_chat_streaming_runtime_patch import _STREAM_CONTEXT
+    if (bool(getattr(_STREAM_CONTEXT, "voice_turn", False))
+            or not request_id or not editorial._enabled() or not any(
         word in str(prompt).lower()
         for word in ("стать", "рассказ", "эссе", "публикаци", "очерк",
                      "article", "essay", "story", "blog post")
-    ):
+    )):
         return _generate_velia_chat_once(prompt, user_id=user_id,
             conversation_id=conversation_id, request_id=request_id)
     try:
