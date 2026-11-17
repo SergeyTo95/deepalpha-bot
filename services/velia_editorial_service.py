@@ -121,9 +121,10 @@ def _finalize(answer, draft, revised, *, accepted):
     out["estimated_cost_usd"] = _cost(draft, revised)
     out["editorial_passes"] = 2
     out["editorial_revision_accepted"] = bool(accepted)
+    # Provider fallback remains separate from choosing the original draft
+    # when a stylistic revision fails validation.
     out["fallback_used"] = bool(draft.get("fallback_used")
-                                or revised.get("fallback_used")
-                                or not accepted)
+                                or revised.get("fallback_used"))
     return out
 
 
