@@ -236,3 +236,103 @@ def test_account_voice_never_invokes_legacy_editorial_pass(monkeypatch):
         assert len(count) == 1
     finally:
         delattr(streaming._STREAM_CONTEXT, "voice_turn")
+
+
+def test_rejection_reason_is_fixed_category_not_user_text():
+    draft = DRAFT + " Это случилось в 2026 году: https://example.org/"
+    assert edit.revision_rejection_reason(draft, draft) is None
+    assert edit.revision_rejection_reason(draft, "") == "empty_revision"
+    assert edit.revision_rejection_reason(draft, "Коротко.") == "length_ratio"
+    assert edit.revision_rejection_reason(draft, draft.replace("2026", "2025")) == "numbers_or_links"
+    assert edit.revision_rejection_reason(draft, draft.replace("https://example.org/", "https://different.org/")) == "numbers_or_links"
+    assert edit.revision_rejection_reason(DRAFT, "English text about a phone. " * 110) == "language"
+    assert edit.revision_rejection_reason(DRAFT, DRAFT[:1800], REQUEST) == "word_count"
+
+
+def test_revised_article_can_change_paragraph_organization_more_than_before():
+    base = " ".join(["Наблюдение про тихое утро и работающую кофемашину."] * 130)
+    shorter = " ".join(["Утром кофемашина шумит, когда дома ещё тихо."] * 90)
+    assert len(shorter) / len(base) < .65
+    assert len(shorter) / len(base) > .5
+    assert edit.revision_rejection_reason(base, shorter) is None
+
+
+def test_review_prompt_repeats_exact_word_target_for_short_first_draft():
+    prompt = edit._review_instructions(REQUEST, "Слова " * 207)
+    assert "от 350 до 400 слов" in prompt
+    assert "207 слов" in prompt
+    assert "Не сокращай" in prompt
+    assert "примерно на 375 слов" in prompt
+
+
+def test_short_207_word_draft_and_132_word_edit_get_one_repair(monkeypatch):
+    monkeypatch.setenv("VELIA_EDITORIAL_REPAIR_ENABLED", "true")
+    # Three distinct passes with known sizes, exactly like the observed
+    # production failure (207 -> 132), with a valid 375-word recovery.
+    original = " ".join(["Вечером телефон остался на кухне."] * 41 +
+                        ["Телефон молчал."])
+    shortened = " ".join(["Вечером телефон тихо лежал на кухне."] * 22)
+    repaired = " ".join(["Утром телефон лежал возле окна."] * 75)
+    assert len(edit._WORD.findall(original)) == 207
+    assert len(edit._WORD.findall(shortened)) == 132
+    assert len(edit._WORD.findall(repaired)) == 375
+    calls, visible = [], []
+
+    def provider(messages, *, on_delta=None):
+        calls.append(messages)
+        if len(calls) == 1:
+            return result(original, cost=.001, tokens=100)
+        if len(calls) == 2:
+            assert "от 350 до 400 слов" in messages[-1]["content"]
+            assert "207 слов" in messages[-1]["content"]
+            assert on_delta is not None
+            on_delta("Не показывать этот черновик!")
+            return result(shortened, cost=.002, tokens=150)
+        assert len(calls) == 3
+        assert "Предыдущая редактура оказалась слишком короткой" in messages[-1]["content"]
+        assert messages[-2]["content"] == original
+        return result(repaired, cost=.003, tokens=250)
+
+    final = edit.two_pass([{"role": "user", "content": REQUEST}],
+                           provider, on_delta=visible.append)
+    assert len(calls) == 3
+    assert visible == [repaired]
+    assert final["text"] == repaired
+    assert final["editorial_passes"] == 3
+    assert final["editorial_revision_accepted"] is True
+    assert final["usage"]["total_tokens"] == 750
+    assert final["estimated_cost_usd"] == pytest.approx(.006)
+    assert "Не показывать этот черновик!" not in str(visible)
+
+
+def test_bad_repair_still_returns_draft_but_accounts_for_all_three_calls(monkeypatch):
+    monkeypatch.setenv("VELIA_EDITORIAL_REPAIR_ENABLED", "true")
+    calls = []
+    original = " ".join(["Прохожий остановился возле двери."] * 50)
+    short = " ".join(["Прохожий ждал возле двери."] * 32)
+
+    def provider(messages, *, on_delta=None):
+        calls.append(1)
+        return result(original if len(calls) == 1 else short,
+                      tokens=100, cost=.001)
+    final = edit.two_pass([{"role": "user", "content": REQUEST}], provider)
+    assert len(calls) == 3
+    assert final["text"] == original
+    assert final["editorial_revision_accepted"] is False
+    assert final["editorial_passes"] == 3
+    assert final["usage"]["total_tokens"] == 450
+    assert final["estimated_cost_usd"] == pytest.approx(.003)
+
+
+def test_bounded_retry_can_be_disabled_without_disabling_two_pass(monkeypatch):
+    monkeypatch.setenv("VELIA_EDITORIAL_REPAIR_ENABLED", "false")
+    original = " ".join(["Прохожий остановился возле двери."] * 50)
+    short = " ".join(["Прохожий ждал возле двери."] * 32)
+    calls = []
+    def provider(messages, *, on_delta=None):
+        calls.append(1)
+        return result(original if len(calls) == 1 else short)
+    final = edit.two_pass([{"role": "user", "content": REQUEST}], provider)
+    assert len(calls) == 2
+    assert final["text"] == original
+    assert final["editorial_passes"] == 2
