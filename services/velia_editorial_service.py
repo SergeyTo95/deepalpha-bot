@@ -166,9 +166,10 @@ def two_pass(messages, generate, *, on_delta=None):
     # Use normal chat roles. Never reuse untrusted draft as a system directive.
     review_messages = [*messages, {"role": "assistant", "content": original},
                        {"role": "user", "content": _REVIEW}]
-    chunks = []
+    # The provider may emit partial deltas before a failure. Discard them:
+    # the client receives only the validated, completed answer.
     try:
-        reviewed = generate(review_messages, on_delta=chunks.append)
+        reviewed = generate(review_messages, on_delta=lambda _chunk: None)
     except Exception:
         LOG.warning("VELIA_EDITORIAL revision_failed exception_class=internal")
         reviewed = {"ok": False, "reason": "revision_error"}
