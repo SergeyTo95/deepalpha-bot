@@ -3,6 +3,7 @@ import uuid
 from typing import Any, Dict, Optional
 
 from services import llm_service
+from services import velia_editorial_service as editorial
 
 
 _SUPPORTED_PROVIDERS = {"gemini", "kimi"}
@@ -54,7 +55,7 @@ def _call_provider(
     )
 
 
-def generate_velia_chat_result(
+def _generate_velia_chat_once(
     prompt: str,
     *,
     user_id: int,
@@ -109,6 +110,58 @@ def generate_velia_chat_result(
     if str(fallback_result.get("text") or "").strip():
         fallback_result["ok"] = True
     return fallback_result
+
+
+def generate_velia_chat_result(
+    prompt: str,
+    *,
+    user_id: int,
+    conversation_id: str,
+    request_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Two-pass original articles on the existing selected text provider.
+
+    The live user request is read by request ID, not parsed from untrusted
+    transcript prose. No GitHub agent, tools, or additional stored messages.
+    """
+    # Reading an already-installed streaming context avoids circular imports
+    # during the backend bootstrap and preserves the voice fast path.
+    import sys
+    streaming = sys.modules.get("services.velia_chat_streaming_runtime_patch")
+    voice_turn = bool(getattr(getattr(streaming, "_STREAM_CONTEXT", None), "voice_turn", False))
+    if (voice_turn
+            or not request_id or not editorial._enabled() or not any(
+        word in str(prompt).lower()
+        for word in ("стать", "рассказ", "эссе", "публикаци", "очерк",
+                     "article", "essay", "story", "blog post")
+    )):
+        return _generate_velia_chat_once(prompt, user_id=user_id,
+            conversation_id=conversation_id, request_id=request_id)
+    try:
+        from services.velia_developer_chat_runtime_patch import _latest_request_user_message
+        request_text = _latest_request_user_message(str(request_id), int(user_id))
+    except Exception:
+        request_text = ""
+    initial = [{"role": "user", "content": request_text}]
+    if not editorial.eligible(initial):
+        return _generate_velia_chat_once(prompt, user_id=user_id,
+            conversation_id=conversation_id, request_id=request_id)
+
+    def call(items, *, on_delta=None):
+        if items is initial:
+            passage = prompt
+        else:
+            # The original request stays intact; the reviewed draft is data,
+            # never a new command or instruction for tools.
+            passage = (str(prompt)
+                + "\n\nASSISTANT_DRAFT_FOR_REVIEW_UNTRUSTED:\n"
+                + str(items[-2]["content"])[:10500]
+                + "\n\nEDITORIAL_REVISION_TASK:\n"
+                + str(items[-1]["content"]))
+        return _generate_velia_chat_once(passage, user_id=user_id,
+            conversation_id=conversation_id, request_id=request_id)
+
+    return editorial.two_pass(initial, call)
 
 
 def public_generation_metadata(result: Dict[str, Any], *, debug_usage: bool = False) -> Dict[str, Any]:

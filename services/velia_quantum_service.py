@@ -13,6 +13,7 @@ from velia_quantum_transport import completion
 from velia_quantum_search import configuration as search_configuration, search as run_web_search
 from velia_request_understanding import understanding_instruction, reply_language_instruction, normalize_reply_language
 from velia_natural_writing import original_writing_instruction
+from services import velia_editorial_service as editorial
 from velia_quantum_provider import (MODEL_ID, PROVIDER_ID, QuantumError,
     available as legacy_available, bounded_int, configuration, payload, groq_backup_configuration)
 
@@ -185,7 +186,20 @@ def editorial_system_instruction(messages, *, voice_turn=False):
     return original_writing_instruction(latest, voice=voice_turn)
 
 
-def generate(prompt, *, request_id="", on_delta=None, voice_turn=False, web_search=False, messages=None, account_language="", chat_mode="quantum"):
+def generate(prompt, *, request_id="", on_delta=None, voice_turn=False, web_search=False, messages=None, account_language="", chat_mode="quantum", _editorial_internal=False):
+    # Editorial Mode makes two calls to this SAME configured VELIA mode. The
+    # private first draft is never streamed to, or saved by, the client.
+    if not _editorial_internal and editorial.eligible(messages, voice=voice_turn):
+        def create(candidate_messages, *, on_delta=None):
+            return generate(
+                prompt, request_id=request_id, on_delta=on_delta,
+                voice_turn=False,
+                web_search=bool(web_search and candidate_messages is messages),
+                messages=candidate_messages,
+                account_language=account_language, chat_mode=chat_mode,
+                _editorial_internal=True,
+            )
+        return editorial.two_pass(messages, create, on_delta=on_delta)
     free_tier = free_models.enabled()
     config = free_models.configuration(chat_mode, voice=voice_turn) if free_tier else configuration()
     public_id = "velia-" + chat_mode if free_tier else MODEL_ID
