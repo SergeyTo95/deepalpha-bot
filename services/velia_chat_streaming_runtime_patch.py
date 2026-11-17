@@ -73,7 +73,8 @@ def _should_stream_message(message: str) -> bool:
         return False
     # Legacy PRO/Kimi must finish draft and private editorial pass before the
     # client sees a final answer; normal messages retain live streaming.
-    if editorial.eligible([{"role": "user", "content": normalized}]):
+    if (not bool(getattr(_STREAM_CONTEXT, "voice_turn", False))
+            and editorial.eligible([{"role": "user", "content": normalized}])):
         return False
     if resolve_velia_provider() != "kimi":
         return False
