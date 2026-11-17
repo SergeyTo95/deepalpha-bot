@@ -236,3 +236,22 @@ def test_account_voice_never_invokes_legacy_editorial_pass(monkeypatch):
         assert len(count) == 1
     finally:
         delattr(streaming._STREAM_CONTEXT, "voice_turn")
+
+
+def test_rejection_reason_is_fixed_category_not_user_text():
+    draft = DRAFT + " Это случилось в 2026 году: https://example.org/"
+    assert edit.revision_rejection_reason(draft, draft) is None
+    assert edit.revision_rejection_reason(draft, "") == "empty_revision"
+    assert edit.revision_rejection_reason(draft, "Коротко.") == "length_ratio"
+    assert edit.revision_rejection_reason(draft, draft.replace("2026", "2025")) == "numbers_or_links"
+    assert edit.revision_rejection_reason(draft, draft.replace("https://example.org/", "https://different.org/")) == "numbers_or_links"
+    assert edit.revision_rejection_reason(DRAFT, "English text about a phone. " * 110) == "language"
+    assert edit.revision_rejection_reason(DRAFT, DRAFT[:1100], REQUEST) == "word_count"
+
+
+def test_revised_article_can_change_paragraph_organization_more_than_before():
+    base = " ".join(["Наблюдение про тихое утро и работающую кофемашину."] * 130)
+    shorter = " ".join(["Утром кофемашина шумит, когда дома ещё тихо."] * 90)
+    assert len(shorter) / len(base) < .65
+    assert len(shorter) / len(base) > .5
+    assert edit.revision_rejection_reason(base, shorter) is None
