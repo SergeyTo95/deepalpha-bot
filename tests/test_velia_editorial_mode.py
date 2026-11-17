@@ -23,6 +23,10 @@ REVISED = (
     "мы так часто заполняем чужими новостями."
 )
 
+# Simulate a real 350-400-word article in the acceptance checks.
+DRAFT = " ".join([DRAFT] * 9)
+REVISED = " ".join([REVISED] * 9)
+
 
 def result(text, *, cost=0.0003, tokens=120, ok=True, provider="velia-flash"):
     return {"ok": ok, "text": text, "provider": provider,
@@ -123,6 +127,9 @@ def test_revision_does_not_drop_numbers_links_or_rewrite_to_one_sentence():
     assert not edit._faithful(original, original.replace(
         "https://example.org/report", "https://example.org/other"))
     assert not edit._faithful(original, "Коротко.")
+    assert not edit._faithful(DRAFT, "English text about phones. " * 145, REQUEST)
+    assert not edit._faithful(DRAFT, REVISED[:180], REQUEST)
+    assert edit._faithful(DRAFT, REVISED, REQUEST)
     assert not edit._faithful(original, " ")
 
 
