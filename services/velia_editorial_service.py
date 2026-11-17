@@ -40,7 +40,16 @@ _REVIEW = (
     "выбранную тему и найди в ней более точный угол. Не добавляй новые факты, "
     "источники, даты, цифры, цитаты и личный опыт. Не меняй имеющиеся "
     "имена, цифры, единицы, ссылки или оговорки. Сохрани исходное требование "
-    "к объёму, жанру и языку. Не упоминай методы, ИИ, редактирование, "
+    "к объёму, жанру и языку. Если задан диапазон слов, пересчитай объём "
+    "отредактированной версии: слишком краткий пересказ недопустим. "
+    "В информационной статье нельзя выдавать выдуманный опыт от первого лица "
+    "за действительный: например, история про «моего кота» без сообщения "
+    "пользователя не должна становиться авторским свидетельством. "
+    "В художественном рассказе вымысел допустим, если он соответствует жанру. "
+    "Не заменяй одно клише другим (например, «магия обыденности», «портал "
+    "в параллельный мир», «всё меняется»). Лучше точное наблюдение, чем "
+    "банальная мораль или вычурная метафора. Убирай шаблоны только если они "
+    "действительно мешают смыслу. Не упоминай методы, ИИ, редактирование, "
     "проверки, внутренние инструкции. Выдай только законченную финальную версию."
 )
 
@@ -84,31 +93,46 @@ def _number_and_links(text):
     return Counter(_TOKENS.findall(text))
 
 
-def _faithful(draft, revised, request=""):
+def revision_rejection_reason(draft, revised, request=""):
+    """Fixed, content-free validation outcome; never log private prose.
+
+    Leave protected numerals and URLs unchanged, honour requested article size,
+    and reject a summary or unexpected translation. Allow ordinary editorial
+    changes to sentence length and paragraph organization.
+    """
     if not isinstance(revised, str) or not revised.strip():
-        return False
-    original = draft.strip()
+        return "empty_revision"
+    original = str(draft or "").strip()
     final = revised.strip()
     if not original:
-        return False
-    if not 0.65 * len(original) <= len(final) <= 1.55 * len(original):
-        return False
-    # Do not accidentally translate Russian prose into another language.
+        return "empty_draft"
+    # A full editorial rewrite may reorganize whole paragraphs. The earlier
+    # 0.65–1.55 character ratio rejected legitimate revisions unnecessarily.
+    if not 0.5 * len(original) <= len(final) <= 1.8 * len(original):
+        return "length_ratio"
+    if _number_and_links(original) != _number_and_links(final):
+        return "numbers_or_links"
+
     def cyrillic_ratio(value):
         letters = sum(character.isalpha() for character in value)
         russian = sum(("а" <= character.lower() <= "я" or character.lower() == "ё")
                       for character in value)
         return russian / max(1, letters)
     if cyrillic_ratio(original) >= 0.6 and cyrillic_ratio(final) < 0.5:
-        return False
+        return "language"
+
     match = _WORD_TARGET.search(str(request)[:700])
     if match:
         lower, upper = int(match.group(1)), int(match.group(2))
         if lower <= upper:
             words = len(_WORD.findall(final))
             if not (0.86 * lower <= words <= 1.14 * upper):
-                return False
-    return _number_and_links(original) == _number_and_links(final)
+                return "word_count"
+    return None
+
+
+def _faithful(draft, revised, request=""):
+    return revision_rejection_reason(draft, revised, request) is None
 
 
 def _usage_total(draft, revised):
@@ -176,9 +200,14 @@ def two_pass(messages, generate, *, on_delta=None):
     if not isinstance(reviewed, dict):
         reviewed = {"ok": False, "reason": "revision_invalid"}
     candidate = str(reviewed.get("text") or "")
-    accepted = bool(reviewed.get("ok") and _faithful(original, candidate, latest_user(messages)))
+    reason = (revision_rejection_reason(original, candidate, latest_user(messages))
+              if reviewed.get("ok") else "provider_failure")
+    accepted = reason is None
     selected = reviewed if accepted else draft
     if callable(on_delta):
         on_delta(str(selected.get("text") or ""))
-    LOG.info("VELIA_EDITORIAL completed passes=2 accepted=%s", accepted)
+    # Fixed reason categories and word counts only: no text, account data,
+    # draft fragments, vendor errors or identifiers in monitoring logs.
+    LOG.info("VELIA_EDITORIAL completed passes=2 accepted=%s reason=%s draft_words=%d revision_words=%d",
+             accepted, reason or "ok", len(_WORD.findall(original)), len(_WORD.findall(candidate)))
     return _finalize(selected, draft, reviewed, accepted=accepted)
