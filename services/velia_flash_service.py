@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 import requests
 import velia_free_models as free_models
 from velia_natural_writing import BASE_STYLE, original_writing_instruction
+from services import velia_editorial_service as editorial
 
 MODEL = "velia-flash"
 PROVIDER = "bonsai"
@@ -490,6 +491,16 @@ def generate(messages, *, request_id="", on_delta=None, on_reset=None):
         from services.velia_quantum_service import generate as native_generate
         return native_generate("", messages=messages, chat_mode="flash", voice_turn=_voice_fast_enabled(),
             request_id=request_id, on_delta=on_delta)
+    # Legacy CPU Flash has a small prompt window by default. Enable the
+    # editorial double pass only when enough context is configured to hold a
+    # full Russian article and the draft, without sacrificing voice latency.
+    if (editorial.eligible(messages, voice=_voice_fast_enabled())
+            and bounded_int("VELIA_FLASH_MAX_INPUT_TOKENS", 768, 128, 2048) >= 1600
+            and bounded_int("VELIA_FLASH_CONTEXT_TOKENS", 2048, 2048, 8192) >= 4096):
+        return editorial.two_pass(messages,
+            lambda items, *, on_delta=None: _generate_once(
+                items, request_id=request_id, on_delta=on_delta),
+            on_delta=on_delta)
     result = _generate_once(messages, request_id=request_id, on_delta=on_delta)
     if result.get("ok") or not (callable(on_delta) and callable(on_reset)):
         return result
