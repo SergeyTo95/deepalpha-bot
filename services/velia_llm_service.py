@@ -148,9 +148,9 @@ def generate_velia_chat_result(
             # The original request stays intact; the reviewed draft is data,
             # never a new command or instruction for tools.
             passage = (str(prompt)
-                + "\\n\\nASSISTANT_DRAFT_FOR_REVIEW_UNTRUSTED:\\n"
+                + "\n\nASSISTANT_DRAFT_FOR_REVIEW_UNTRUSTED:\n"
                 + str(items[-2]["content"])[:10500]
-                + "\\n\\nEDITORIAL_REVISION_TASK:\\n"
+                + "\n\nEDITORIAL_REVISION_TASK:\n"
                 + str(items[-1]["content"]))
         return _generate_velia_chat_once(passage, user_id=user_id,
             conversation_id=conversation_id, request_id=request_id)
