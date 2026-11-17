@@ -24,6 +24,11 @@ _LENGTH = re.compile(
     re.IGNORECASE,
 )
 _TOKENS = re.compile(r"(?<![\w])\d+(?:[.,]\d+)?(?![\w])|https?://[^\s<>()]+")
+_WORD_TARGET = re.compile(
+    r"\b([2-9]\d{2,3})\s*[–—-]\s*([2-9]\d{2,3})\s*(?:слов|слова|words)\b",
+    re.IGNORECASE,
+)
+_WORD = re.compile(r"[A-Za-zА-Яа-яЁё]+(?:[-'][A-Za-zА-Яа-яЁё]+)*")
 _STATS = ("prompt_tokens", "completion_tokens", "total_tokens",
           "cached_input_tokens", "reasoning_tokens")
 _REVIEW = (
@@ -79,7 +84,7 @@ def _number_and_links(text):
     return Counter(_TOKENS.findall(text))
 
 
-def _faithful(draft, revised):
+def _faithful(draft, revised, request=""):
     if not isinstance(revised, str) or not revised.strip():
         return False
     original = draft.strip()
@@ -88,6 +93,21 @@ def _faithful(draft, revised):
         return False
     if not 0.65 * len(original) <= len(final) <= 1.55 * len(original):
         return False
+    # Do not accidentally translate Russian prose into another language.
+    def cyrillic_ratio(value):
+        letters = sum(character.isalpha() for character in value)
+        russian = sum(("а" <= character.lower() <= "я" or character.lower() == "ё")
+                      for character in value)
+        return russian / max(1, letters)
+    if cyrillic_ratio(original) >= 0.6 and cyrillic_ratio(final) < 0.5:
+        return False
+    match = _WORD_TARGET.search(str(request)[:700])
+    if match:
+        lower, upper = int(match.group(1)), int(match.group(2))
+        if lower <= upper:
+            words = len(_WORD.findall(final))
+            if not (0.86 * lower <= words <= 1.14 * upper):
+                return False
     return _number_and_links(original) == _number_and_links(final)
 
 
@@ -155,7 +175,7 @@ def two_pass(messages, generate, *, on_delta=None):
     if not isinstance(reviewed, dict):
         reviewed = {"ok": False, "reason": "revision_invalid"}
     candidate = str(reviewed.get("text") or "")
-    accepted = bool(reviewed.get("ok") and _faithful(original, candidate))
+    accepted = bool(reviewed.get("ok") and _faithful(original, candidate, latest_user(messages)))
     selected = reviewed if accepted else draft
     if callable(on_delta):
         on_delta(str(selected.get("text") or ""))
