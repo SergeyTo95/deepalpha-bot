@@ -269,11 +269,10 @@ def test_short_207_word_draft_and_132_word_edit_get_one_repair(monkeypatch):
     monkeypatch.setenv("VELIA_EDITORIAL_REPAIR_ENABLED", "true")
     # Three distinct passes with known sizes, exactly like the observed
     # production failure (207 -> 132), with a valid 375-word recovery.
-    original = " ".join(["Вечером телефон остался на кухне."] * 34 +
-                        ["Утром экран оказался совсем не нужен."] * 1)
-    original = " ".join(original.split()[:207])
+    original = " ".join(["Вечером телефон остался на кухне."] * 41 +
+                        ["Телефон молчал."])
     shortened = " ".join(["Вечером телефон тихо лежал на кухне."] * 22)
-    repaired = " ".join(["Вечером телефон спокойно лежал на кухне."] * 75)
+    repaired = " ".join(["Утром телефон лежал возле окна."] * 75)
     assert len(edit._WORD.findall(original)) == 207
     assert len(edit._WORD.findall(shortened)) == 132
     assert len(edit._WORD.findall(repaired)) == 375
