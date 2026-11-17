@@ -124,8 +124,12 @@ def generate_velia_chat_result(
     The live user request is read by request ID, not parsed from untrusted
     transcript prose. No GitHub agent, tools, or additional stored messages.
     """
-    from services.velia_chat_streaming_runtime_patch import _STREAM_CONTEXT
-    if (bool(getattr(_STREAM_CONTEXT, "voice_turn", False))
+    # Reading an already-installed streaming context avoids circular imports
+    # during the backend bootstrap and preserves the voice fast path.
+    import sys
+    streaming = sys.modules.get("services.velia_chat_streaming_runtime_patch")
+    voice_turn = bool(getattr(getattr(streaming, "_STREAM_CONTEXT", None), "voice_turn", False))
+    if (voice_turn
             or not request_id or not editorial._enabled() or not any(
         word in str(prompt).lower()
         for word in ("стать", "рассказ", "эссе", "публикаци", "очерк",
