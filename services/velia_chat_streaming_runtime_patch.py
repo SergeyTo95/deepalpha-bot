@@ -5,6 +5,7 @@ import time
 from typing import Any, Callable, Dict, Optional
 
 from services import kimi_gateway, llm_service
+from services import velia_editorial_service as editorial
 from services.kimi_streaming_gateway import call_kimi_stream
 from services.velia_chat_latency_runtime_patch import (
     _casual_intent,
@@ -69,6 +70,10 @@ def _latest_request_user_message(request_id: str, user_id: int) -> str:
 def _should_stream_message(message: str) -> bool:
     normalized = str(message or "").strip()
     if not normalized:
+        return False
+    # Legacy PRO/Kimi must finish draft and private editorial pass before the
+    # client sees a final answer; normal messages retain live streaming.
+    if editorial.eligible([{"role": "user", "content": normalized}]):
         return False
     if resolve_velia_provider() != "kimi":
         return False
