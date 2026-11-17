@@ -192,3 +192,47 @@ def test_legacy_provider_without_user_message_remains_single_pass(monkeypatch):
         user_id=42, conversation_id="conversation", request_id=None)
     assert len(calls) == 1
     assert result_value["text"] == DRAFT
+
+
+def test_legacy_pro_uses_two_inference_calls_without_mutating_original(monkeypatch):
+    from services import velia_llm_service as llm
+    from services import velia_developer_chat_runtime_patch as developer
+    monkeypatch.setenv("VELIA_EDITORIAL_MODE_ENABLED", "true")
+    monkeypatch.setattr(developer, "_latest_request_user_message", lambda *_: REQUEST)
+    calls = []
+
+    def make(prompt, **kwargs):
+        calls.append(prompt)
+        return result(DRAFT if len(calls) == 1 else REVISED,
+                      cost=.002, tokens=100, provider="kimi")
+
+    monkeypatch.setattr(llm, "_generate_velia_chat_once", make)
+    source = "You are VELIA.\\n\\nConversation:\\nUSER: " + REQUEST
+    answer = llm.generate_velia_chat_result(source, user_id=7,
+                  conversation_id="conversation", request_id="request")
+    assert len(calls) == 2
+    assert calls[0] == source
+    assert "ASSISTANT_DRAFT_FOR_REVIEW_UNTRUSTED" in calls[1]
+    assert answer["text"] == REVISED
+    assert answer["usage"]["total_tokens"] == 300
+    assert answer["estimated_cost_usd"] == pytest.approx(.004)
+
+
+def test_account_voice_never_invokes_legacy_editorial_pass(monkeypatch):
+    from services import velia_llm_service as llm
+    from services import velia_chat_streaming_runtime_patch as streaming
+    from services import velia_developer_chat_runtime_patch as developer
+    monkeypatch.setenv("VELIA_EDITORIAL_MODE_ENABLED", "true")
+    monkeypatch.setattr(developer, "_latest_request_user_message", lambda *_: REQUEST)
+    count = []
+    monkeypatch.setattr(llm, "_generate_velia_chat_once", lambda prompt, **kwargs:
+                        count.append(1) or result(DRAFT))
+    streaming._STREAM_CONTEXT.voice_turn = True
+    try:
+        text = llm.generate_velia_chat_result(
+            "Conversation:\\nUSER: " + REQUEST,
+            user_id=7, conversation_id="conversation", request_id="request")
+        assert text["text"] == DRAFT
+        assert len(count) == 1
+    finally:
+        delattr(streaming._STREAM_CONTEXT, "voice_turn")
