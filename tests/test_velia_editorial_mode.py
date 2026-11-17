@@ -246,7 +246,7 @@ def test_rejection_reason_is_fixed_category_not_user_text():
     assert edit.revision_rejection_reason(draft, draft.replace("2026", "2025")) == "numbers_or_links"
     assert edit.revision_rejection_reason(draft, draft.replace("https://example.org/", "https://different.org/")) == "numbers_or_links"
     assert edit.revision_rejection_reason(DRAFT, "English text about a phone. " * 110) == "language"
-    assert edit.revision_rejection_reason(DRAFT, DRAFT[:1100], REQUEST) == "word_count"
+    assert edit.revision_rejection_reason(DRAFT, DRAFT[:1800], REQUEST) == "word_count"
 
 
 def test_revised_article_can_change_paragraph_organization_more_than_before():
