@@ -14,6 +14,7 @@ import {mountFigma} from './figma.mjs';
 import {mountConnections,mountGithubRepositories} from './connections.mjs';
 import {mountTokenPurchase} from './token-purchase.mjs';
 import {mountBalanceOverview} from './balance-overview.mjs';
+import {mountSandboxBilling} from './sandbox-billing.mjs';
 
 export const SECTIONS = Object.freeze([
   ['studio', 'Studio'], ['projects', 'Проекты'], ['research', 'Исследования'],
@@ -392,11 +393,18 @@ export function setupFeatures({notebook,pulse,webPush,openPulseResource=()=>{},o
         const results = await Promise.allSettled([call('economy/me'),call('usage'),call('economy/catalog'),call('economy/creem/catalog'),call('economy/creem/account')]);
         if(ticket!==epoch)return;
         body.replaceChildren();
-        mountBalanceOverview(body, {
+        const liveBalance=node('div'),livePurchases=node('div');body.append(liveBalance);
+        mountBalanceOverview(liveBalance, {
           account:results[0].status==='fulfilled'?results[0].value.account:null,
           usage:results[1].status==='fulfilled'?results[1].value.usage:null,
         });
-        mountTokenPurchase(body,results[2].status==='fulfilled'?results[2].value:null, {
+        if(results[3].status==='fulfilled'&&results[3].value?.can_test_billing===true){
+          mountSandboxBilling(body,{request:call,autoOpen:draft.testBilling===true,
+            onModeChange:active=>{liveBalance.hidden=active;livePurchases.hidden=active;},
+            isCurrent:()=>ticket===epoch&&section==='balance'&&signedIn()});
+        }
+        body.append(livePurchases);
+        mountTokenPurchase(livePurchases,results[2].status==='fulfilled'?results[2].value:null, {
           billing:results[3].status==='fulfilled'?results[3].value:null,
           account:results[4].status==='fulfilled'?results[4].value:null,
           billingError:results[3].status==='rejected'?results[3].reason:null,

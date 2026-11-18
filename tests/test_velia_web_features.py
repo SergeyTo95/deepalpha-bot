@@ -221,14 +221,15 @@ def test_creem_writes_require_origin_and_session_and_never_expose_webhook_relay(
             same_origin=lambda r:r.headers.get('Origin')=='https://velyoncore.ai' and r.headers.get('X-Velia-Request')=='1',
             upstream=upstream,json_response=lambda data,status=200:web.json_response(data,status=status))
         async with TestServer(app) as server,ClientSession() as client:
-            url=server.make_url('/web-api/v1/features/economy/creem/checkout')
-            body={'plan':'plus','attempt':'opaque'}
-            assert (await client.post(url,json=body)).status==403
-            headers={'Origin':'https://velyoncore.ai','X-Velia-Request':'1'}
-            assert (await client.post(url,headers=headers,json=body)).status==401
-            assert not seen
-            headers['X-Test']='yes'
-            assert (await client.post(url,headers=headers,json=body)).status==200
-            assert seen.pop()==('POST','/mobile-api/v1/economy/creem/checkout',{'token':'owner-session','data':body})
-            assert not route_allowed('POST','economy/creem/webhook')
+            for namespace in ('creem','creem-test'):
+                url=server.make_url('/web-api/v1/features/economy/'+namespace+'/checkout')
+                body={'plan':'plus','attempt':'opaque'}
+                assert (await client.post(url,json=body)).status==403
+                headers={'Origin':'https://velyoncore.ai','X-Velia-Request':'1'}
+                assert (await client.post(url,headers=headers,json=body)).status==401
+                assert not seen
+                headers['X-Test']='yes'
+                assert (await client.post(url,headers=headers,json=body)).status==200
+                assert seen.pop()==('POST','/mobile-api/v1/economy/'+namespace+'/checkout',{'token':'owner-session','data':body})
+                assert not route_allowed('POST','economy/'+namespace+'/webhook')
     asyncio.run(scenario())

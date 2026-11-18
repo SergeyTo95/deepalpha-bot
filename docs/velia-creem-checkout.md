@@ -169,3 +169,23 @@ Checkout feedback is rendered beside the clicked plan, with a loading button
 label and an explicit retry message. Provider failures log only a safe phase,
 reason code and HTTP status; no URLs, tokens, customer data or response bodies
 are logged.
+
+
+## Owner-only account-bound sandbox checkout
+
+The Balance section now shows a separate “Тестовая оплата” panel only when the
+authenticated backend catalog returns `can_test_billing: true`. Its checkout
+route is `economy/creem-test/checkout`; it never uses the static product URLs or
+the live checkout route. The backend owns the order metadata and verifies the
+canonical test checkout/subscription/customer/paid invoice on return or refresh.
+The test plan and credits appear in the same signed-in account's test panel;
+real balances and feature access remain unchanged.
+
+The fixed success URL's `velia_test_payment=1` flag reopens Balance and its test
+panel after login; it cannot grant a purchase or enable owner permissions. The
+backend routes still require the authenticated `ADMIN_ID`. Old static test
+purchases cannot be retrospectively assigned by email or a browser query.
+
+Deploy the account backend first, then this gateway. No new Railway services
+or secret copies are needed. This is a purchase-preview test, not a completed
+paid upgrade/downgrade or production webhook acceptance test.

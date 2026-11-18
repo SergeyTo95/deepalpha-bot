@@ -1064,6 +1064,11 @@ async function applyProfile(value) {
   render();
   syncHistory();
   const taskId=new URL(location.href).searchParams.get('task');
+  const testPaymentReturn=new URL(location.href);
+  if(testPaymentReturn.searchParams.get('velia_test_payment')==='1'){
+    features.open('balance',{testBilling:true});
+    testPaymentReturn.searchParams.delete('velia_test_payment');history.replaceState(null,'',testPaymentReturn);
+  }
   if(taskId&&/^[0-9a-f-]{36}$/u.test(taskId)){
     features.open('autopilot',{tab:'missions',missionId:taskId});const target=new URL(location.href);target.searchParams.delete('task');history.replaceState(null,'',target);
   }
