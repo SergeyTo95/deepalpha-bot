@@ -33,7 +33,7 @@ PATTERNS += [
     ('GET', re.compile(r'economy/creem/(?:catalog|account)\Z')),
     ('POST', re.compile(r'economy/creem/(?:checkout|portal)\Z')),
     ('GET', re.compile(r'economy/creem-test/(?:catalog|account)\Z')),
-    ('POST', re.compile(r'economy/creem-test/checkout\Z')),
+    ('POST', re.compile(r'economy/creem-test/(?:checkout|upgrade-plus)\Z')),
 ]
 QUERY_KEYS = {"offset", "limit", "conversation_id", "mode", "kind", "project_id", "before_revision", "unread_only", "client_request_id", "user_id", "expires", "signature", "installation_id"}
 SENSITIVE = {"access_token", "refresh_token", "api_key", "provider_api_key", "authorization", "worker_url", "worker_token"}

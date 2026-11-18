@@ -43,10 +43,31 @@ test('refresh displays only server-verified test purchase and balance',()=>withU
   await all(root).find(n=>n.textContent==='Тестовая оплата').events.click();
   assert.equal(all(root).find(n=>n.className==='sandbox-plan').textContent,'Тестовый тариф: Free');
   paid=true;
-  await all(root).find(n=>n.textContent==='Проверить тестовую покупку').events.click();
+  await all(root).find(n=>n.textContent==='Обновить тестовый статус').events.click();
   assert.equal(all(root).find(n=>n.className==='sandbox-plan').textContent,'Тестовый тариф: Pro');
   assert.match(all(root).find(n=>n.className==='sandbox-balance').textContent,/3\s000/);
   assert.equal(all(root).find(n=>n.tag==='button'&&n.textContent.includes('Pro · тестовая покупка подтверждена')).disabled,true);
+}));
+
+test('the Plus-to-Pro button upgrades only on click and refresh reads status',()=>withUI(async()=>{
+  const root=new Element('div'),calls=[];
+  let current={...account,plan_code:'plus',test_token_balance:4200,plus_to_pro:{status:'ready'}};
+  mountSandboxBilling(root,{request:async(path,options)=>{
+    calls.push([path,options]);
+    if(path.endsWith('/catalog'))return catalog;
+    if(path.endsWith('/upgrade-plus'))current={...current,plan_code:'pro',plus_to_pro:{status:'applied'}};
+    return current;
+  }});
+  await all(root).find(n=>n.textContent==='Тестовая оплата').events.click();
+  assert.equal(all(root).find(n=>n.className==='sandbox-plan').textContent,'Тестовый тариф: Plus');
+  assert.equal(calls.filter(([,options])=>options?.method==='POST').length,0);
+  await all(root).find(n=>n.textContent==='Перейти с Plus на Pro в тесте').events.click();
+  assert.deepEqual(calls.filter(([,options])=>options?.method==='POST'),
+    [['economy/creem-test/upgrade-plus',{method:'POST',data:{}}]]);
+  assert.equal(all(root).find(n=>n.className==='sandbox-plan').textContent,'Тестовый тариф: Pro');
+  assert.match(all(root).find(n=>n.className==='subscription-feedback').textContent,/доплату ещё проверяем/);
+  await all(root).find(n=>n.textContent==='Обновить тестовый статус').events.click();
+  assert.equal(calls.filter(([,options])=>options?.method==='POST').length,1);
 }));
 
 test('a production catalog cannot activate test controls',()=>withUI(async()=>{
