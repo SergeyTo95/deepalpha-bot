@@ -13,6 +13,7 @@ from services.velia_creem_billing import BillingError, BillingStore, PLANS, RANK
 
 
 BEHAVIORS = frozenset({'proration-charge-immediately', 'proration-charge', 'proration-none'})
+SANDBOX_RETURN_URL = 'https://velyoncore.ai/?velia_test_payment=1'
 
 # One explicitly authorized experiment on the already discovered sandbox
 # subscription. These IDs are NOT live products or the live fulfillment map.
@@ -68,13 +69,19 @@ class SandboxAPI:
 
     def request(self, method, resource, *, params=None, data=None):
         read = method == 'GET' and resource in {
-            'products', 'subscriptions', 'transactions', 'products/search', 'subscriptions/search'}
+            'products', 'subscriptions', 'transactions', 'checkouts', 'products/search', 'subscriptions/search'}
         write = (method == 'POST' and re.fullmatch(r'subscriptions/sub_[A-Za-z0-9_-]+/upgrade', resource)
                  and isinstance(data, dict) and set(data) == {'product_id', 'update_behavior'}
                  and data['update_behavior'] in BEHAVIORS)
         tax_fix = (method == 'PATCH' and resource == 'products/'+APPROVED_SANDBOX_EXPERIMENT['products']['plus']
                    and params is None and data == {'tax_mode':'inclusive'})
-        require(bool(read or write or tax_fix), 'sandbox_operation_not_allowed')
+        checkout = (method == 'POST' and resource == 'checkouts' and isinstance(data,dict)
+                    and set(data) == {'product_id','request_id','success_url','units','metadata'}
+                    and data['product_id'] in APPROVED_SANDBOX_EXPERIMENT['products'].values()
+                    and data['success_url'] == SANDBOX_RETURN_URL and type(data['units']) is int and data['units'] == 1
+                    and isinstance(data['request_id'],str) and re.fullmatch(r'[0-9a-f-]{36}',data['request_id'])
+                    and data['metadata'] == {'velia_sandbox_order_id':data['request_id']})
+        require(bool(read or write or tax_fix or checkout), 'sandbox_operation_not_allowed')
         if write:
             identifier(data['product_id'], 'prod_')
         import requests
