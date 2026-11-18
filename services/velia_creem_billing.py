@@ -26,6 +26,8 @@ REQUIRED_EVENTS = {'checkout.completed','subscription.active','subscription.paid
     'subscription.scheduled_cancel','subscription.expired','subscription.unpaid','subscription.update',
     'subscription.past_due','subscription.paused','subscription.trialing','refund.created','dispute.created'}
 ID = re.compile(r'[A-Za-z0-9_-]{1,160}\Z')
+UPGRADE_DIFFERENCE = PLANS['pro']['price'] - PLANS['plus']['price']
+UPGRADE_CREDITS = PLANS['pro']['credits'] - PLANS['plus']['credits']
 
 
 class BillingError(Exception):
@@ -96,7 +98,8 @@ class CreemAPI:
         try:
             with requests.request(method, 'https://api.creem.io/v1/' + resource,
                     params=params, json=data, headers={'x-api-key': self.key},
-                    timeout=(3, 12 if method=='POST' and resource=='checkouts' else 5), allow_redirects=False, stream=True) as response:
+                    timeout=(3, 12 if method=='POST' and (resource=='checkouts' or resource.endswith('/upgrade')) else 5),
+                    allow_redirects=False, stream=True) as response:
                 if response.status_code not in (200, 201):
                     raise BillingError('billing_provider_credentials' if response.status_code in (401,403) else 'billing_provider_unavailable', 502, provider_status=response.status_code)
                 raw = bytearray()
@@ -176,6 +179,12 @@ class BillingStore:
                     managed_until BIGINT NOT NULL)''')
                 cur.execute('''CREATE TABLE IF NOT EXISTS velia_creem_deliveries (
                     id TEXT PRIMARY KEY, digest TEXT NOT NULL, received_at BIGINT NOT NULL)''')
+                cur.execute('''CREATE TABLE IF NOT EXISTS velia_creem_upgrades (
+                    subscription_id TEXT PRIMARY KEY, user_id BIGINT NOT NULL,
+                    source_transaction TEXT NOT NULL, period_start BIGINT NOT NULL, period_end BIGINT NOT NULL,
+                    confirmed_at BIGINT NOT NULL, estimate_cents BIGINT NOT NULL, tax_included BOOLEAN NOT NULL,
+                    credits BIGINT NOT NULL, transaction_id TEXT UNIQUE, paid_cents BIGINT,
+                    revoked BIGINT NOT NULL DEFAULT 0, unrecovered BIGINT NOT NULL DEFAULT 0)''')
             self.ready = True
 
     def lock_user(self, cur, user):
@@ -242,6 +251,31 @@ class BillingStore:
             self.execute(cur, 'SELECT * FROM velia_creem_subscriptions WHERE id=?', (sub_id,))
             return self.row(cur)
 
+    def upgrade(self, sub_id):
+        with self.transaction() as cur:
+            self.execute(cur, 'SELECT * FROM velia_creem_upgrades WHERE subscription_id=?', (sub_id,))
+            return self.row(cur)
+
+    def upgrade_source(self, cur, user):
+        self.execute(cur, """SELECT s.*,c.id AS source_transaction,c.period_start
+            FROM velia_creem_subscriptions s JOIN velia_creem_charges c ON c.subscription_id=s.id
+            WHERE s.user_id=? AND s.plan='plus' AND s.status='active' AND s.period_end>?
+            AND c.period_end=s.period_end AND c.revoked=0
+            AND (SELECT COUNT(*) FROM velia_creem_subscriptions live
+                 WHERE live.user_id=s.user_id AND live.status<>'canceled')=1""", (user, int(self.clock())))
+        return self.row(cur)
+
+    def reserve_upgrade(self, user, source, quote):
+        with self.transaction() as cur:
+            self.lock_user(cur, user)
+            require(self.upgrade_source(cur, user)==source, 'billing_upgrade_changed', 409)
+            self.execute(cur, '''INSERT INTO velia_creem_upgrades
+                (subscription_id,user_id,source_transaction,period_start,period_end,confirmed_at,estimate_cents,tax_included,credits)
+                VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING''',
+                (source['id'],user,source['source_transaction'],source['period_start'],source['period_end'],
+                 int(self.clock()),quote['estimate_cents'],quote['tax_included'],quote['credits']))
+            return cur.rowcount==1
+
     def effective(self, cur, user):
         self.execute(cur, '''SELECT s.id,s.plan,s.status,s.period_end,MAX(c.period_end) AS until
             FROM velia_creem_subscriptions s JOIN velia_creem_charges c ON c.subscription_id=s.id
@@ -258,11 +292,25 @@ class BillingStore:
             active = self.effective(cur, user)
             self.execute(cur, 'SELECT id,status FROM velia_creem_subscriptions WHERE user_id=? ORDER BY version DESC', (user,))
             latest = self.row(cur)
+            change = None
+            if active or latest:
+                self.execute(cur, '''SELECT paid_cents,credits,revoked,period_end FROM velia_creem_upgrades
+                    WHERE user_id=? AND subscription_id=?''', (user, (active or latest)['id']))
+                change = self.row(cur)
+            available = not change and self.upgrade_source(cur, user) is not None
+            upgrade_status = None
+            if change and change['period_end'] > self.clock():
+                upgrade_status = {'status': ('pending' if change['paid_cents'] is None else
+                                  'applied' if change['revoked'] < change['credits'] else 'refunded')}
+                if change['paid_cents'] is not None:
+                    upgrade_status.update(paid_cents=change['paid_cents'], credits=change['credits']-change['revoked'])
             return {'plan_code': active['plan'] if active else 'free',
                     'subscription_until': iso(active['until']) if active else None,
                     'status': active['status'] if active else (latest['status'] if latest else None),
                     'has_subscription': bool(latest),
-                    'has_active_subscription': bool(latest and latest['status'] != 'canceled')}
+                    'has_active_subscription': bool(latest and latest['status'] != 'canceled'),
+                    **({'can_upgrade_plus': True} if available else {}),
+                    **({'plus_upgrade': upgrade_status} if upgrade_status else {})}
 
     def portal_customer(self, user):
         with self.transaction() as cur:
@@ -295,7 +343,7 @@ class BillingStore:
                 return {'ok': True, 'duplicate': True}
             self.execute(cur, 'SELECT * FROM velia_creem_subscriptions WHERE id=?', (sub_id,))
             previous = self.row(cur)
-            require(not previous or (previous['user_id'] == user and previous['order_id'] == order['id'] and previous['plan'] == order['plan']), 'billing_owner_conflict', 409)
+            require(not previous or (previous['user_id'] == user and previous['order_id'] == order['id']), 'billing_owner_conflict', 409)
             customer = identifier(sub.get('customer'), 'cust_')
             require(not previous or previous['customer_id'] == customer, 'billing_owner_conflict', 409)
             version, end = timestamp(sub.get('updated_at')), timestamp(sub.get('current_period_end_date'))
@@ -304,7 +352,9 @@ class BillingStore:
                     VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,period_end=excluded.period_end,version=excluded.version''',
                     (sub_id, user, order['id'], order['plan'], customer, sub['status'], end, version))
             granted = 0
-            if transaction is not None:
+            if transaction is not None and transaction.get('_upgrade'):
+                granted = self.settle_upgrade(cur, account, sub_id, transaction, refund)
+            elif transaction is not None:
                 tx_id, start, end = transaction['id'], transaction['_start'], transaction['_end']
                 self.execute(cur, 'SELECT * FROM velia_creem_charges WHERE id=?', (tx_id,))
                 charge = self.row(cur)
@@ -312,7 +362,7 @@ class BillingStore:
                 if charge is None:
                     # A refund can arrive before the paid event. Keep a tombstone;
                     # never issue fresh credits for already refunded transactions.
-                    credits = PLANS[order['plan']]['credits']
+                    credits = PLANS[transaction.get('_plan', order['plan'])]['credits']
                     revoked = (credits if transaction['status'] in {'refunded','chargeback'} else
                                math.ceil(credits * transaction['refunded_amount'] / transaction['amount_paid'])
                                if transaction['status'] == 'partially_refunded' else 0)
@@ -330,9 +380,41 @@ class BillingStore:
                     self.execute(cur, 'UPDATE velia_creem_charges SET revoked=?,unrecovered=unrecovered+? WHERE id=?', (target, delta-recovered, tx_id))
                 if transaction['status'] == 'paid':
                     self.execute(cur, "UPDATE velia_creem_orders SET state='paid' WHERE id=?", (order['id'],))
+                    if transaction.get('_plan')=='pro':
+                        self.execute(cur, """UPDATE velia_creem_subscriptions SET plan='pro'
+                            WHERE id=? AND period_end=? AND status<>'canceled'
+                            AND EXISTS (SELECT 1 FROM velia_creem_charges
+                                WHERE id=? AND revoked<credits)""", (sub_id,end,tx_id))
             self.refresh_access(cur, user, account)
             self.execute(cur, 'INSERT INTO velia_creem_deliveries(id,digest,received_at) VALUES (?,?,?)', (event_id, digest, int(self.clock())))
             return {'ok': True, 'credits_granted': granted}
+
+    def settle_upgrade(self, cur, account, sub_id, tx, refund):
+        user = account['user_id']
+        self.execute(cur, 'SELECT * FROM velia_creem_upgrades WHERE subscription_id=? AND user_id=?', (sub_id,user))
+        upgrade = self.row(cur)
+        require(upgrade and upgrade['transaction_id'] in (None,tx['id'])
+                and tx['id']!=upgrade['source_transaction'] and tx['_end']==upgrade['period_end'],
+                'billing_charge_conflict', 409)
+        if upgrade['transaction_id'] and not refund:
+            return 0
+        credits = upgrade['credits']
+        revoked = (credits if tx['status'] in {'refunded','chargeback'} else
+                   math.ceil(credits*tx['refunded_amount']/tx['amount_paid']) if refund else 0)
+        revoked = max(revoked,upgrade['revoked'])
+        granted = credits-revoked if not upgrade['transaction_id'] else 0
+        delta = revoked-upgrade['revoked'] if upgrade['transaction_id'] else 0
+        recovered = min(max(0,int(account['token_balance'] or 0)),delta)
+        self.execute(cur, '''UPDATE velia_creem_upgrades SET transaction_id=?,paid_cents=?,revoked=?,
+            unrecovered=unrecovered+? WHERE subscription_id=?''',
+            (tx['id'],tx['amount_paid'],revoked,delta-recovered,sub_id))
+        if granted or recovered:
+            self.execute(cur, 'UPDATE users SET token_balance=COALESCE(token_balance,0)+?,updated_at=? WHERE user_id=?',
+                         (granted-recovered,iso(int(self.clock())),user))
+        self.execute(cur, """UPDATE velia_creem_subscriptions SET plan=?
+            WHERE id=? AND period_end=? AND status<>'canceled'""",
+            ('pro' if revoked<credits else 'plus',sub_id,upgrade['period_end']))
+        return granted
 
 
 def config_ready():
@@ -411,7 +493,83 @@ class BillingService:
     def account(self, user):
         self.store.initialize()
         state = self.store.state(user)
+        if self.ready() and (state.get('plus_upgrade') or {}).get('status')=='pending':
+            with self.store.transaction() as cur:
+                self.store.execute(cur, '''SELECT u.subscription_id FROM velia_creem_upgrades u
+                    JOIN velia_creem_subscriptions s ON s.id=u.subscription_id
+                    WHERE u.user_id=? AND u.paid_cents IS NULL AND u.period_end>? AND s.status<>'canceled' ''',
+                    (user,int(self.store.clock())))
+                row = cur.fetchone()
+            if row:
+                self.reconcile_upgrade(row[0])
+                state = self.store.state(user)
         return {'ok': True, **state, 'can_manage': bool(state['has_subscription'] and (self.ready() or getattr(self.api, 'key', '')))}
+
+    def upgrade_offer(self, user):
+        require(self.ready(), 'billing_not_configured', 503)
+        self.store.initialize()
+        with self.store.transaction() as cur:
+            source = self.store.upgrade_source(cur, user)
+        require(source and not self.store.upgrade(source['id']), 'billing_upgrade_unavailable', 409)
+        sub, order = self.verified_subscription(source['id'])
+        require(order['user_id']==user and identifier(sub.get('customer'),'cust_')==source['customer_id']
+                and sub['status']=='active' and not sub.get('discount')
+                and sub.get('collection_method','charge_automatically')=='charge_automatically'
+                and timestamp(sub.get('current_period_start_date'))==source['period_start']
+                and timestamp(sub.get('current_period_end_date'))==source['period_end']
+                and sub.get('last_transaction_id')==source['source_transaction'], 'billing_upgrade_changed', 409)
+        self.verified_transaction(source['source_transaction'],sub,order)
+        target = self.product('pro')
+        require(not target.get('trial_period'), 'billing_product_mismatch', 503)
+        duration = source['period_end']-source['period_start']
+        remaining = min(duration,source['period_end']-int(self.store.clock()))
+        require(remaining>0, 'billing_upgrade_changed', 409)
+        return source, {
+            'ok': True, 'period_end': source['period_end'],
+            'estimate_cents': (UPGRADE_DIFFERENCE*remaining+duration-1)//duration,
+            'credits': (UPGRADE_CREDITS*remaining+duration-1)//duration,
+            'monthly_cents': target['price'], 'tax_included': target['tax_mode']=='inclusive',
+        }
+
+    def preview_upgrade(self, user):
+        return self.upgrade_offer(user)[1]
+
+    def upgrade_plus(self, user, period_end, estimate_cents, tax_included):
+        require(type(period_end) is int and type(estimate_cents) is int and type(tax_included) is bool,
+                'invalid_billing_request')
+        source, quote = self.upgrade_offer(user)
+        require(period_end==quote['period_end'] and quote['estimate_cents']<=estimate_cents<=UPGRADE_DIFFERENCE
+                and tax_included==quote['tax_included'], 'billing_upgrade_changed', 409)
+        self.verify_hook()
+        require(self.store.reserve_upgrade(user,source,{**quote,'estimate_cents':estimate_cents}),
+                'billing_upgrade_unavailable', 409)
+        try:
+            self.api.request('POST','subscriptions/'+source['id']+'/upgrade',data={
+                'product_id': PLANS['pro']['product_id'], 'update_behavior': 'proration-charge-immediately',
+            })
+        except BillingError as error:
+            # A lost response may follow a successful charge. The reserved
+            # record prevents another POST, even from a different tab.
+            logging.getLogger(__name__).warning('Creem upgrade awaiting reconciliation code=%s',error.code)
+        self.reconcile_upgrade(source['id'])
+        return {'ok': True, **self.store.state(user)}
+
+    def reconcile_upgrade(self, sub_id):
+        try:
+            change = self.store.upgrade(sub_id)
+            if not change or change['transaction_id']:
+                return
+            sub, order = self.verified_subscription(sub_id)
+            tx_id = sub.get('last_transaction_id')
+            if sub.get('_provider_plan')!='pro' or sub['status']!='active' or not tx_id or tx_id==change['source_transaction']:
+                return
+            tx = self.verified_transaction(identifier(tx_id,'tran_'),sub,order,change=change)
+            if not tx.get('_upgrade'):
+                return
+            self.store.apply(order=order,sub=sub,transaction=tx,event_id='readback_'+tx['id'],digest='creem_paid_upgrade')
+        except BillingError:
+            # The signed webhook or the next account refresh can finish it.
+            return
 
     def portal(self, user):
         require(self.ready() or bool(getattr(self.api, 'key', '')), 'billing_not_configured', 503)
@@ -536,19 +694,38 @@ class BillingService:
         if order is None:
             order = self.store.order(known['order_id'] if known else order_id) if known or order_id else None
         require(order is not None, 'billing_order_not_bound', 503)
-        require(order['plan'] == spec_plan and (not order_id or order_id == order['id']), 'billing_owner_conflict', 409)
+        require(not order_id or order_id == order['id'], 'billing_owner_conflict', 409)
+        if order['plan'] != spec_plan:
+            change = self.store.upgrade(sub_id)
+            require(order['plan']=='plus' and spec_plan=='pro' and change and known
+                    and change['user_id']==known['user_id']==order['user_id'] and known['order_id']==order['id']
+                    and identifier(sub.get('customer'),'cust_')==known['customer_id'], 'billing_owner_conflict', 409)
         items = sub.get('items')
-        require(isinstance(items, list) and len(items) == 1 and items[0].get('units') == 1
+        require(isinstance(items, list) and len(items) == 1 and type(items[0].get('units')) is int and items[0]['units'] == 1
                 and items[0].get('product_id') == product_id, 'billing_product_mismatch', 409)
         require(sub.get('status') in {'active','scheduled_cancel','canceled','expired','unpaid','past_due','paused','trialing'}, 'invalid_subscription_state')
-        return sub, order
+        return {**sub, '_provider_plan':spec_plan}, order
 
-    def verified_transaction(self, tx_id, sub, order, *, refund=False):
+    def verified_transaction(self, tx_id, sub, order, *, refund=False, change=None):
         tx = self.api.get('transactions', 'transaction_id', tx_id)
         require(tx.get('mode') == 'prod' and identifier(tx, 'tran_') == tx_id)
         require(identifier(tx.get('subscription'), 'sub_') == sub['id']
                 and identifier(tx.get('customer'), 'cust_') == identifier(sub.get('customer'), 'cust_'), 'billing_owner_conflict', 409)
-        price=PLANS[order['plan']]['price']
+        start, end = timestamp(tx.get('period_start')), timestamp(tx.get('period_end'))
+        require(0 < end - start <= 35 * 86400, 'invalid_billing_period')
+        plan = order['plan']
+        adjustment = False
+        if change and sub.get('_provider_plan')=='pro' and tx_id!=change['source_transaction']:
+            if end==change['period_end'] and start>=change['period_start']:
+                # The original Plus invoice has its own durable transaction.
+                # An adjustment must be the canonical latest invoice until
+                # its exact transaction ID is committed to the ledger.
+                require(tx_id==(change['transaction_id'] or sub.get('last_transaction_id')),
+                        'billing_upgrade_invoice_mismatch',409)
+                adjustment = True
+            elif start>=change['period_end']:
+                plan = 'pro'
+        price=PLANS[plan]['price']
         amount,tax=tx.get('amount'),tx.get('tax_amount')
         # Verify the configured price either as the transaction amount or as
         # its canonical net + tax breakdown. In both representations the buyer
@@ -556,15 +733,19 @@ class BillingService:
         # discounted/net-only payment because its smaller subtotal looks valid.
         amount_matches=(type(amount) is int and amount>0 and
             (amount==price or (type(tax) is int and tax>=0 and amount+tax==price)))
+        paid = tx.get('amount_paid')
+        if adjustment:
+            additional_tax = tax if not change['tax_included'] and type(tax) is int and tax>=0 else 0
+            limit = UPGRADE_DIFFERENCE + additional_tax
+            amount_matches = (type(amount) is int and 0<amount<=limit and type(paid) is int and 0<paid<=limit
+                              and (tax is None or (type(tax) is int and 0<=tax<=paid)))
         require(amount_matches
                 and tx.get('currency') == 'USD' and tx.get('type') == 'invoice', 'billing_amount_mismatch', 409)
         require(tx.get('status') in ({'refunded','partially_refunded','chargeback'} if refund else {'paid'}), 'billing_payment_not_paid', 503)
-        require(type(tx.get('amount_paid')) is int and tx['amount_paid'] >= price, 'billing_amount_mismatch', 409)
+        require(adjustment or (type(paid) is int and paid>=price), 'billing_amount_mismatch', 409)
         if refund and tx['status'] == 'partially_refunded':
             require(type(tx.get('refunded_amount')) is int and 0 < tx['refunded_amount'] <= tx['amount_paid'], 'billing_amount_mismatch')
-        start, end = timestamp(tx.get('period_start')), timestamp(tx.get('period_end'))
-        require(0 < end - start <= 35 * 86400, 'invalid_billing_period')
-        return {**tx, '_start': start, '_end': end}
+        return {**tx, '_start': start, '_end': end, '_upgrade':adjustment, '_plan':plan}
 
     def webhook(self, raw, signature, secret):
         require(bool(secret), 'billing_not_configured', 503)
@@ -612,6 +793,7 @@ class BillingService:
         if kind in {'checkout.completed','subscription.paid'}:
             require(bool(tx_id), 'billing_transaction_not_ready', 503)
         refund = kind in {'refund.created','dispute.created'}
-        tx = self.verified_transaction(identifier(tx_id, 'tran_'), sub, order, refund=refund) if tx_id else None
+        change = self.store.upgrade(sub_id) if tx_id and order['plan']=='plus' else None
+        tx = self.verified_transaction(identifier(tx_id, 'tran_'), sub, order, refund=refund,change=change) if tx_id else None
         return self.store.apply(order=order, sub=sub, transaction=tx, refund=refund,
                                 event_id=event_id, digest=hashlib.sha256(raw).hexdigest())

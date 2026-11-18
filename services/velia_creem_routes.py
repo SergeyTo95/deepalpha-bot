@@ -47,6 +47,13 @@ def setup_creem_routes(app, *, require_auth, api_available, billing=None, sandbo
                     callback, args = billing.catalog, ()
                 elif request.method == 'GET' and action == 'account':
                     callback, args = billing.account, (user,)
+                elif request.method == 'GET' and action == 'upgrade-plus':
+                    callback, args = billing.preview_upgrade, (user,)
+                elif request.method == 'POST' and action == 'upgrade-plus':
+                    quote = await request.clone(client_max_size=4096).json()
+                    if not isinstance(quote,dict) or set(quote)!={'period_end','estimate_cents','tax_included'}:
+                        raise BillingError('invalid_billing_request')
+                    callback, args = billing.upgrade_plus, (user,quote['period_end'],quote['estimate_cents'],quote['tax_included'])
                 elif request.method == 'POST' and action in {'checkout','portal'}:
                     data = await request.clone(client_max_size=4096).json()
                     if not isinstance(data, dict) or set(data) != ({'plan','attempt'} if action == 'checkout' else set()):
@@ -70,7 +77,7 @@ def setup_creem_routes(app, *, require_auth, api_available, billing=None, sandbo
             logger.warning('Creem billing temporarily unavailable')
             return response({'ok': False, 'error': 'billing_temporarily_unavailable'}, 503)
 
-    app.router.add_route('*', '/mobile-api/v1/economy/creem/{action:catalog|account|checkout|portal|webhook}', handle)
+    app.router.add_route('*', '/mobile-api/v1/economy/creem/{action:catalog|account|checkout|portal|upgrade-plus|webhook}', handle)
 
     async def test_handle(request):
         nonlocal sandbox

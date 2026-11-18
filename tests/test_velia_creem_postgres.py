@@ -4,7 +4,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 import pytest
 from services.velia_creem_billing import BillingService, BillingStore
-from test_velia_creem_billing import API, NOW, SECRET, purchase, deliver, plan_checkout_api
+from test_velia_creem_billing import API, NOW, SECRET, purchase, deliver, plan_checkout_api, live_upgrade, confirm_upgrade
 from test_velia_creem_plan_change import approved_experiment
 
 
@@ -88,6 +88,18 @@ def read_balance(connect, user=7):
     with connect() as conn, conn.cursor() as cur:
         cur.execute('SELECT token_balance FROM users WHERE user_id=%s', (user,))
         return cur.fetchone()[0]
+
+
+def test_postgres_live_upgrade_grants_one_adjustment_despite_webhook_replays(postgres_billing,monkeypatch):
+    service,connect,apply,_=live_upgrade(postgres_billing,monkeypatch)
+    assert confirm_upgrade(service,service.preview_upgrade(7))['plus_upgrade']['status']=='pending'
+    apply()
+    obj={'id':'sub_example','last_transaction_id':'tran_upgrade'}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results=list(pool.map(lambda i:deliver(service,event='evt_pg_upgrade_'+str(i),obj=obj),range(10)))
+    assert sum(x['credits_granted'] for x in results)==900
+    assert read_balance(connect)==2200 and read_balance(connect,8)==50
+    assert service.account(7)['plan_code']=='pro'
 
 
 def test_postgres_parallel_payments_refunds_and_account_isolation(postgres_billing):
