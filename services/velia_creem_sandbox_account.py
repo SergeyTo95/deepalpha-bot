@@ -1,8 +1,8 @@
 """Owner-only account-bound test checkout and isolated purchase preview.
 
 All payment evidence comes from canonical test API reads. Browser redirects and
-static product links cannot grant anything. Only the two sandbox tables below
-are written; real balances, subscriptions and feature access are never changed.
+static product links cannot grant anything. Writes are isolated to sandbox
+tables and the Creem test API.
 Account refresh reconciles saved orders, independently of webhook delivery.
 """
 import math
@@ -13,7 +13,7 @@ import uuid
 from urllib.parse import urlparse
 
 from services.velia_creem_billing import BillingError, BillingStore, PLANS, RANK, identifier, require, timestamp, iso
-from services.velia_creem_plan_change import (APPROVED_SANDBOX_EXPERIMENT, SANDBOX_RETURN_URL, SandboxAPI, _product)
+from services.velia_creem_plan_change import (APPROVED_SANDBOX_EXPERIMENT, SANDBOX_RETURN_URL, SandboxAPI, _product, snapshot)
 
 TEST_PLANS = {code:{**spec,'product_id':APPROVED_SANDBOX_EXPERIMENT['products'][code]}
               for code,spec in PLANS.items()}
@@ -62,6 +62,10 @@ class SandboxAccountStore:
                 transaction_id TEXT PRIMARY KEY,order_id TEXT NOT NULL UNIQUE,
                 user_id BIGINT NOT NULL,plan TEXT NOT NULL,credits BIGINT NOT NULL,
                 revoked BIGINT NOT NULL,period_start BIGINT NOT NULL,period_end BIGINT NOT NULL)''')
+            cur.execute('''CREATE TABLE IF NOT EXISTS velia_creem_sandbox_upgrades (
+                user_id BIGINT PRIMARY KEY, order_id TEXT NOT NULL UNIQUE,
+                subscription_id TEXT NOT NULL UNIQUE, previous_transaction TEXT NOT NULL,
+                source_period_end BIGINT NOT NULL)''')
 
     def lock(self,cur,user):
         if not self.db.sqlite:
@@ -128,12 +132,35 @@ class SandboxAccountStore:
                     VALUES (?,?,?,?,?,?,?,?)''',(tx['id'],order['id'],user,order['plan'],credits,revoked,start,end))
             self.db.execute(cur,"UPDATE velia_creem_sandbox_orders SET state='paid' WHERE id=? AND user_id=?",(order['id'],user))
 
-    def account(self,user):
+    def upgrade_for(self,user):
+        with self.db.transaction() as cur:
+            self.db.execute(cur,'SELECT * FROM velia_creem_sandbox_upgrades WHERE user_id=?',(user,))
+            return self.db.row(cur)
+
+    def reserve_upgrade(self,user,order_id,subscription_id,previous_transaction,source_period_end):
+        with self.db.transaction() as cur:
+            self.lock(cur,user)
+            self.db.execute(cur,'''INSERT INTO velia_creem_sandbox_upgrades
+                (user_id,order_id,subscription_id,previous_transaction,source_period_end) VALUES (?,?,?,?,?)
+                ON CONFLICT DO NOTHING''',(user,order_id,subscription_id,previous_transaction,source_period_end))
+            return cur.rowcount==1
+
+    def active_plus(self,user):
+        with self.db.transaction() as cur:
+            self.db.execute(cur,'''SELECT order_id FROM velia_creem_sandbox_receipts WHERE user_id=?
+                AND plan='plus' AND revoked=0 AND period_end>? ORDER BY period_end DESC LIMIT 1''',
+                (user,int(self.clock())))
+            row=self.db.row(cur)
+            return row['order_id'] if row else None
+
+    def account(self,user,*,preferred=None):
         with self.db.transaction() as cur:
             self.db.execute(cur,'SELECT plan,credits,revoked,period_end FROM velia_creem_sandbox_receipts WHERE user_id=?',(user,))
             rows=[dict(zip([d[0] for d in cur.description],row)) for row in cur.fetchall()]
         active=[r for r in rows if r['revoked']<r['credits'] and r['period_end']>self.clock()]
-        selected=max(active,key=lambda r:RANK[r['plan']]) if active else None
+        selected=next((r for r in active if r['plan']==preferred),None)
+        if selected is None and active:
+            selected=max(active,key=lambda r:RANK[r['plan']])
         return {'ok':True,'mode':'test','preview_only':True,'real_access_granted':False,
                 'plan_code':selected['plan'] if selected else 'free',
                 'subscription_until':iso(selected['period_end']) if selected else None,
@@ -209,17 +236,20 @@ class SandboxAccountService:
             self.store.uncertain(order)
             raise
 
-    def reconcile(self,order):
+    def reconcile(self,order,upgrade=None):
         if not order['checkout_id']:return
         co=self.bound_checkout(order,order['checkout_id'])
         if co.get('status')!='completed':return
         sub_id=identifier(co.get('subscription'),'sub_')
         sub=self.api.get('subscriptions','subscription_id',sub_id)
         product_id=TEST_PLANS[order['plan']]['product_id']
+        current_product=identifier(sub.get('product'),'prod_')
+        upgraded=bool(upgrade and order['plan']=='plus' and upgrade['order_id']==order['id']
+                      and upgrade['subscription_id']==sub_id and current_product==TEST_PLANS['pro']['product_id'])
         require(sub.get('mode')=='test' and identifier(sub,'sub_')==sub_id
-                and identifier(sub.get('product'),'prod_')==product_id,'billing_owner_conflict',409)
+                and (current_product==product_id or upgraded),'billing_owner_conflict',409)
         items=sub.get('items')
-        require(isinstance(items,list) and len(items)==1 and items[0].get('product_id')==product_id
+        require(isinstance(items,list) and len(items)==1 and items[0].get('product_id')==current_product
                 and type(items[0].get('units')) is int and items[0]['units']==1,'billing_product_mismatch',409)
         customer=identifier(sub.get('customer'),'cust_')
         require(identifier(co.get('customer'),'cust_')==customer,'billing_owner_conflict',409)
@@ -242,13 +272,66 @@ class SandboxAccountService:
         start,end=timestamp(tx.get('period_start')),timestamp(tx.get('period_end'))
         require(0<end-start<=35*86400,'invalid_billing_period')
         self.store.settle(order,tx,start,end)
+        return sub_id if sub.get('status')=='active' and tx['status']=='paid' else None
+
+    def upgrade_plus(self,user):
+        self.store.initialize()
+        if self.store.upgrade_for(user):
+            return self.account(user)
+        orders=self.store.orders(user)
+        source=self.store.active_plus(user)
+        order=next((o for o in orders if o['id']==source and o['plan']=='plus'),None)
+        require(order is not None,'test_plus_required',409)
+        sub_id=self.reconcile(order)
+        require(sub_id and self.store.active_plus(user)==source,'test_plus_required',409)
+        before=snapshot(self.api,sub_id)
+        invoice=before.get('last_invoice',{})
+        require(before['status']=='active' and before['product_id']==TEST_PLANS['plus']['product_id']
+                and before['price_cents']==TEST_PLANS['plus']['price']
+                and before['period_end']>self.store.clock()
+                and invoice.get('status')=='paid','test_plus_required',409)
+        product=self.product('pro')
+        if self.store.reserve_upgrade(user,source,sub_id,invoice['transaction_id'],before['period_end']):
+            try:
+                self.api.request('POST','subscriptions/'+sub_id+'/upgrade',
+                                 data={'product_id':product['id'],'update_behavior':'proration-charge-immediately'})
+            except BillingError:
+                # The request may have been applied. Account reads reconcile it.
+                pass
+        return self.account(user)
 
     def account(self,user):
         self.store.initialize()
+        upgrade=self.store.upgrade_for(user)
         errors=[]
+        verified={}
         for order in self.store.orders(user):
-            try:self.reconcile(order)
+            try:verified[order['id']]=self.reconcile(order,upgrade)
             except BillingError as error:errors.append(error.code)
-        result=self.store.account(user)
+        source=self.store.active_plus(user)
+        current='plus' if source and verified.get(source) else None
+        change={'status':'ready'} if current=='plus' else None
+        if upgrade:
+            change={'status':'pending'}
+            if verified.get(upgrade['order_id'])==upgrade['subscription_id']:
+                try:
+                    latest=snapshot(self.api,upgrade['subscription_id'])
+                    if latest['product_id']==TEST_PLANS['pro']['product_id'] and latest['status']=='active':
+                        current='pro'
+                        change={'status':'applied'}
+                        invoice=latest.get('last_invoice',{})
+                        if (invoice.get('status')=='paid' and invoice['type']=='invoice'
+                                and invoice['transaction_id']!=upgrade['previous_transaction']
+                                and invoice['period_end']==latest['period_end']==upgrade['source_period_end']
+                                and invoice['period_start'] is not None
+                                and latest['period_start']<=invoice['period_start']<latest['period_end']):
+                            change['paid_cents']=invoice['paid_cents']
+                except BillingError as error:errors.append(error.code)
+        result=self.store.account(user,preferred=current)
+        if change:
+            result['plus_to_pro']=change
+            if current=='pro':
+                result['plan_code']='pro'
+                result['subscription_until']=iso(latest['period_end'])
         if errors:result['sync_error']='test_payment_verification_pending'
         return result
