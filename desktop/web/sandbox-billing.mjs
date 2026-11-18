@@ -23,7 +23,7 @@ export function mountSandboxBilling(root,{request,isCurrent=()=>true,autoOpen=fa
   const note=node('p','Режим владельца: покупка появится в тестовом балансе этого аккаунта. Тестовые токены не дают реальный платный доступ.','subscription-notice');
   const content=node('div');
   const status=node('p','','subscription-feedback');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
-  const refresh=node('button','Проверить тестовую покупку','subscription-manage');refresh.type='button';
+  const refresh=node('button','Обновить тестовый статус','subscription-manage');refresh.type='button';
   const close=node('button','Вернуться к рабочим тарифам','subscription-manage');close.type='button';
   panel.append(node('h3','Проверка покупки в аккаунте'),note,content,status,refresh,close);
   section.append(open,panel);root.append(section);
@@ -44,16 +44,18 @@ export function mountSandboxBilling(root,{request,isCurrent=()=>true,autoOpen=fa
       navigate(testPaymentDestination(result.checkout_url));
     }catch(error){
       if(current())status.textContent=error.code==='test_purchase_already_completed'?
-        'Этот тестовый тариф уже куплен. Нажми «Проверить тестовую покупку».':
+        'Этот тестовый тариф уже куплен. Нажми «Обновить тестовый статус».':
         'Не удалось открыть тестовую оплату. Проверь статус покупки и повтори тот же тариф.';
     }finally{busy=false;if(current())lock(false);}
   }
 
-  async function load(){
+  async function load(upgrade=false){
     if(!current()||busy)return;
-    busy=true;lock(true);status.textContent='Проверяю покупку на сервере…';
+    busy=true;lock(true);status.textContent=upgrade?'Передаю тестовый переход в Creem…':'Проверяю тестовый статус…';
     try{
-      const [catalog,account]=await Promise.all([request('economy/creem-test/catalog'),request('economy/creem-test/account')]);
+      const accountRequest=upgrade?
+        request('economy/creem-test/upgrade-plus',{method:'POST',data:{}}):request('economy/creem-test/account');
+      const [catalog,account]=await Promise.all([request('economy/creem-test/catalog'),accountRequest]);
       if(!current())return;
       if(!safe(catalog)||!safe(account)||account.real_access_granted!==false)throw Error('Неверный режим проверки.');
       content.replaceChildren();controls=[];
@@ -66,24 +68,42 @@ export function mountSandboxBilling(root,{request,isCurrent=()=>true,autoOpen=fa
       if(Number.isFinite(until))content.append(node('p','Тестовый период до '+
         new Intl.DateTimeFormat('ru-RU',{dateStyle:'long'}).format(until),'field-hint'));
       const grid=node('div',undefined,'sandbox-plan-grid');
+      const change=account.plus_to_pro;
+      if(change?.status==='ready'&&catalog.plans?.some(p=>p?.code==='pro'&&p.enabled===true)){
+        const button=node('button','Перейти с Plus на Pro в тесте','subscription-manage');
+        button.type='button';
+        button.disabled=true;
+        button.addEventListener('click',()=>load(true));
+        controls.push(button);
+        content.append(node('p','Creem рассчитает тестовую доплату за оставшийся период действующего Plus.','field-hint'),button);
+      }
       for(const plan of CREEM_SUBSCRIPTIONS){
         const verified=Array.isArray(catalog.plans)?catalog.plans.find(p=>p?.code===plan.code):null;
         const bought=Array.isArray(account.purchases)&&account.purchases.some(p=>p?.plan===plan.code&&p.credits>0);
+        if(change&&plan.code==='pro'&&!bought)continue;
         const button=node('button',bought?plan.name+' · тестовая покупка подтверждена':
           'Тест '+plan.name+' · '+new Intl.NumberFormat('ru-RU',{style:'currency',currency:'USD'}).format(plan.price),'subscription-manage');
         button.type='button';button.unavailable=bought||verified?.enabled!==true;button.disabled=true;
         button.addEventListener('click',()=>buy(plan.code));controls.push(button);grid.append(button);
       }
       content.append(grid);
-      status.textContent=account.sync_error?'Подтверждение ещё не получено. Повтори проверку после завершения оплаты.':
+      const paid=change?.paid_cents;
+      status.textContent=change?.status==='applied'?
+        (Number.isSafeInteger(paid)&&paid>=0?
+          'Creem подтвердил переход на Pro и тестовый платёж '+new Intl.NumberFormat('ru-RU',{style:'currency',currency:'USD'}).format(paid/100)+'.':
+          'Creem подтвердил переход на Pro. Тестовую доплату ещё проверяем.'):
+        change?.status==='pending'?'Creem ещё не подтвердил переход. Нажми «Обновить тестовый статус».':
+        account.sync_error?'Подтверждение ещё не получено. Обнови тестовый статус после завершения оплаты.':
         account.purchases?.length?'Покупка подтверждена сервером и отображается в тестовом балансе.':
         'Выбери тестовый тариф. После оплаты вернись сюда — покупка будет проверена и показана в аккаунте.';
-    }catch(error){if(current())status.textContent='Тестовая проверка недоступна. Убедись, что вошёл в аккаунт владельца, и повтори.';}
+    }catch(error){if(current())status.textContent=upgrade?
+      'Не удалось подтвердить переход. Нажми «Обновить тестовый статус».':
+      'Тестовая проверка недоступна. Убедись, что вошёл в аккаунт владельца, и повтори.';}
     finally{busy=false;if(current())lock(false);}
   }
   const show=()=>{if(!isCurrent()||typeof request!=='function')return;active=true;panel.hidden=false;open.hidden=true;onModeChange(true);return load();};
   close.addEventListener('click',()=>{if(busy||!isCurrent())return;active=false;panel.hidden=true;open.hidden=false;onModeChange(false);});
-  open.addEventListener('click',show);refresh.addEventListener('click',load);
+  open.addEventListener('click',show);refresh.addEventListener('click',()=>load());
   if(autoOpen)show();
   return section;
 }

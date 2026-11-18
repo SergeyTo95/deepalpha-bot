@@ -232,4 +232,8 @@ def test_creem_writes_require_origin_and_session_and_never_expose_webhook_relay(
                 assert (await client.post(url,headers=headers,json=body)).status==200
                 assert seen.pop()==('POST','/mobile-api/v1/economy/'+namespace+'/checkout',{'token':'owner-session','data':body})
                 assert not route_allowed('POST','economy/'+namespace+'/webhook')
+            upgrade=server.make_url('/web-api/v1/features/economy/creem-test/upgrade-plus')
+            assert (await client.post(upgrade,headers={'X-Test':'yes'},json={})).status==403
+            assert (await client.post(upgrade,headers=headers,json={})).status==200
+            assert seen.pop()==('POST','/mobile-api/v1/economy/creem-test/upgrade-plus',{'token':'owner-session','data':{}})
     asyncio.run(scenario())
