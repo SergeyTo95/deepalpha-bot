@@ -30,8 +30,8 @@ BINARY_ROUTES = [
     ("GET", re.compile(r"media/(?:images|videos|music)/[A-Za-z0-9_-]{1,128}/content\Z")),
 ]
 PATTERNS += [
-    ('GET', re.compile(r'economy/creem/(?:catalog|account)\Z')),
-    ('POST', re.compile(r'economy/creem/(?:checkout|portal)\Z')),
+    ('GET', re.compile(r'economy/creem/(?:catalog|account|upgrade-plus)\Z')),
+    ('POST', re.compile(r'economy/creem/(?:checkout|portal|upgrade-plus)\Z')),
     ('GET', re.compile(r'economy/creem-test/(?:catalog|account)\Z')),
     ('POST', re.compile(r'economy/creem-test/(?:checkout|upgrade-plus)\Z')),
 ]

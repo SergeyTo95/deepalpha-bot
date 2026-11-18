@@ -42,6 +42,8 @@ const errors = {
   billing_provider_timeout:'Страница оплаты создаётся дольше обычного. Повтори тот же тариф — сохранённый заказ будет продолжен.',
   billing_not_configured:'Оплата ещё подключается. Попробуй позже.',
   billing_product_mismatch:'Параметры тарифа изменились. Обнови раздел перед оплатой.',
+  billing_upgrade_changed:'Условия смены тарифа изменились. Обнови статус и проверь новый расчёт.',
+  billing_upgrade_unavailable:'Переход сейчас недоступен. Проверь статус подписки.',
 };
 
 export function mountSubscriptionPlans(root, {billing=null, account=null, billingError=null, accountError=null, onRefresh=null, request=null,
@@ -80,6 +82,73 @@ export function mountSubscriptionPlans(root, {billing=null, account=null, billin
   const money = value => new Intl.NumberFormat('ru-RU',{style:'currency',currency:'USD'}).format(value);
   const controls = [], initialDisabled = new Map(), attempts = new Map(), statusSlots=[];
   let busy = false;
+  const showUpgradeStatus = (change, region, status) => {
+    region.replaceChildren();
+    if (change?.status==='applied' && Number.isSafeInteger(change.paid_cents)) {
+      status.textContent='Переход на Pro подтверждён. Списано '+money(change.paid_cents/100)+
+        '. Начислено '+new Intl.NumberFormat('ru-RU').format(change.credits)+' токенов за остаток периода.';
+    } else if (change?.status==='refunded') {
+      status.textContent='Creem подтвердил возврат доплаты за переход.';
+    } else {
+      status.textContent='Проверяем платёж в Creem. Обнови статус, чтобы увидеть результат.';
+    }
+    if (typeof onRefresh==='function') {
+      const refresh = element('button','Обновить статус подписки','subscription-manage');
+      refresh.type='button';
+      refresh.addEventListener('click',()=>{if(isCurrent())onRefresh();});
+      region.append(refresh);
+    }
+  };
+
+  const reviewUpgrade = async (region,status,trigger) => {
+    if (busy || !isCurrent()) return;
+    busy=true;
+    trigger.disabled=true;
+    status.textContent='Проверяю условия перехода…';
+    try {
+      const quote=await request('economy/creem/upgrade-plus');
+      if (!isCurrent()) return;
+      if (!quote?.ok || !['period_end','estimate_cents','monthly_cents','credits'].every(key=>Number.isSafeInteger(quote[key])&&quote[key]>0) ||
+          typeof quote.tax_included!=='boolean') throw Error('billing_upgrade_unavailable');
+      status.textContent='';
+      const tax=quote.tax_included?' с учётом налога':' без учёта применимого налога';
+      const confirmation=element('button','Подтвердить переход и оплатить','feature-primary');
+      const cancel=element('button','Отмена','subscription-manage');
+      confirmation.type=cancel.type='button';
+      cancel.addEventListener('click',()=>{
+        if(busy||!isCurrent())return;
+        region.replaceChildren();
+        trigger.hidden=false;
+        trigger.focus?.();
+      });
+      confirmation.addEventListener('click',async()=>{
+        if(busy||!isCurrent())return;
+        busy=confirmation.disabled=cancel.disabled=true;
+        status.textContent='Отправляю подтверждение в Creem…';
+        try {
+          const {period_end,estimate_cents,tax_included}=quote;
+          const result=await request('economy/creem/upgrade-plus',{method:'POST',data:{period_end,estimate_cents,tax_included}});
+          if(!isCurrent())return;
+          if(!result?.ok)throw Error(result?.error);
+          showUpgradeStatus(result.plus_upgrade,region,status);
+        } catch(error) {
+          if(isCurrent()) {
+            showUpgradeStatus(null,region,status);
+            status.textContent=errors[error.code]||errors[error.message]||status.textContent;
+          }
+        } finally {busy=false;}
+      });
+      region.replaceChildren(
+        element('p','Расчётная доплата сейчас — '+money(quote.estimate_cents/100)+tax+'.','field-hint'),
+        element('p','Creem рассчитает точную сумму и спишет её с привязанного способа оплаты. После подтверждения платежа будут доступны Pro и около '+new Intl.NumberFormat('ru-RU').format(quote.credits)+' дополнительных токенов за остаток периода.','field-hint'),
+        element('p','Следующее продление — '+money(quote.monthly_cents/100)+' в месяц'+tax+'.','field-hint'),
+        confirmation,cancel);
+      trigger.hidden=true;
+      confirmation.focus?.();
+    } catch(error) {
+      if(isCurrent())status.textContent=errors[error.code]||errors[error.message]||'Не удалось проверить условия перехода. Попробуй обновить статус подписки.';
+    } finally {busy=false;if(isCurrent())trigger.disabled=false;}
+  };
   const transact = async (plan, portal=false, status=feedback, trigger=null) => {
     if (!(portal?canManage:enabled) || busy || !isCurrent()) return;
     busy = true;
@@ -122,16 +191,23 @@ export function mountSubscriptionPlans(root, {billing=null, account=null, billin
     const current = account?.plan_code===plan.code;
     const button = element('button',current?'Управлять подпиской':'Выбрать '+plan.name,'feature-primary');
     const existing = account?.has_active_subscription===true;
+    const canUpgrade=enabled&&existing&&plan.code==='pro'&&account?.can_upgrade_plus===true;
     if (!enabled && !existing) button.textContent='Оплата недоступна';
     if (existing && !current) button.textContent='Подписка уже оформлена';
     button.type = 'button'; button.disabled = existing ? (!current || !canManage) : !enabled;
+    if (canUpgrade) {button.textContent='Перейти с Plus на Pro';button.disabled=false;}
     button.setAttribute('aria-label',current?'Управлять подпиской '+plan.name:'Оформить подписку '+plan.name);
     // Only server-created, owner-bound checkouts can be opened. Public product
     // links above remain identifiers for configuration, never a payment fallback.
     const status=element('p','','subscription-feedback');status.id='velia-payment-status-'+plan.code;status.setAttribute('role','status');status.setAttribute('aria-live','polite');
     button.setAttribute('aria-describedby',status.id);statusSlots.push(status);
-    if (!button.disabled) button.addEventListener('click',()=>transact(plan.code,existing,status,button));
-    controls.push(button); content.append(button,status);
+    const upgradeRegion=element('div');
+    if (canUpgrade) {
+      button.setAttribute('aria-label','Перейти с Plus на Pro');
+      button.addEventListener('click',()=>reviewUpgrade(upgradeRegion,status,button));
+    } else if (!button.disabled) button.addEventListener('click',()=>transact(plan.code,existing,status,button));
+    controls.push(button); content.append(button,upgradeRegion,status);
+    if (plan.code==='pro'&&account?.plus_upgrade)showUpgradeStatus(account.plus_upgrade,upgradeRegion,status);
     card.append(art,content); grid.append(card);
   }
   section.append(grid,feedback);
@@ -142,7 +218,7 @@ export function mountSubscriptionPlans(root, {billing=null, account=null, billin
     controls.push(manage); section.append(manage);
   }
   controls.forEach(button=>initialDisabled.set(button,button.disabled));
-  section.append(element('p','Токены зачисляются после подтверждения платежа. Итоговая сумма и налоговая разбивка показываются на странице оплаты.','field-hint'),
+  section.append(element('p','Токены зачисляются после подтверждения платежа. При оформлении новой подписки итог и налоги видны на странице Creem.','field-hint'),
     element('p','Free остаётся доступным. Разовое пополнение токенов не меняет тариф подписки.','field-hint'));
   root.append(section);
   return section;

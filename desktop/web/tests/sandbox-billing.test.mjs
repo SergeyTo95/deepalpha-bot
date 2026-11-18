@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mountSandboxBilling,testPaymentDestination} from '../sandbox-billing.mjs';
+import {mountSubscriptionPlans} from '../subscription-plans.mjs';
 
 class Element{
   constructor(tag){this.tag=tag;this.children=[];this.textContent='';this.events={};}
@@ -92,6 +93,33 @@ test('test destination rejects production and foreign URLs',()=>{
     'https://evil.example/test/checkout/x','https://www.creem.io/test/payment/x#fake'])
     assert.throws(()=>testPaymentDestination(value));
 });
+
+test('live upgrades require a price review and explicit consent without a second checkout',()=>withUI(async()=>{
+  const root=new Element('div'),calls=[],navigations=[];
+  const quote={ok:true,estimate_cents:750,period_end:1797000000,monthly_cents:2999,tax_included:true,credits:900};
+  mountSubscriptionPlans(root,{
+    billing:{ok:true,enabled:true,mode:'prod'},account:{ok:true,plan_code:'plus',has_active_subscription:true,can_upgrade_plus:true},
+    navigate:url=>navigations.push(url),
+    request:async(path,options)=>{
+      calls.push([path,options]);
+      return options?.method==='POST'?{ok:true,plus_upgrade:{status:'applied',paid_cents:749,credits:900}}:quote;
+    },
+  });
+  const find=text=>all(root).find(node=>node.tag==='button'&&node.textContent===text);
+  const trigger=find('Перейти с Plus на Pro');
+  await trigger.events.click();
+  assert.deepEqual(calls,[['economy/creem/upgrade-plus',undefined]]);
+  assert(all(root).some(n=>/Расчётная доплата сейчас.*7,50/.test(n.textContent)));
+  find('Отмена').events.click();
+  assert.equal(find('Подтвердить переход и оплатить'),undefined);
+  await trigger.events.click();
+  await find('Подтвердить переход и оплатить').events.click();
+  assert.deepEqual(calls.at(-1),['economy/creem/upgrade-plus',{method:'POST',data:{
+    period_end:quote.period_end,estimate_cents:750,tax_included:true,
+  }}]);
+  assert(all(root).some(n=>/Списано 7,49/.test(n.textContent)));
+  assert.deepEqual(navigations,[]);
+}));
 
 test('entering and leaving test view explicitly toggles the real-payment panels',()=>withUI(async()=>{
   const root=new Element('div'),modes=[];
