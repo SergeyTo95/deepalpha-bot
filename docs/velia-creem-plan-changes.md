@@ -70,7 +70,11 @@ and `proration-none`. An older official reference states immediate mode starts
 a new cycle; current endpoint docs do not resolve that accounting detail.
 Neither the current subscription SDK nor the endpoint inventory exposes an
 invoice-preview operation. Customer-portal documentation describes cancellation
-and invoices, without confirming a hosted plan-change confirmation screen.
+and invoices. A subsequently checked official FAQ confirms self-service upgrades
+when plans belong to a product bundle with self-service upgrades enabled. That
+hosted flow needs separate validation and plan-aware fulfillment; it must not be
+treated as absent merely because the basic portal page omits it.
+Source: https://docs.creem.io/guides/faq (Products & Pricing).
 
 Sources checked 2026-11-13:
 

@@ -33,6 +33,26 @@ def test_postgres_sandbox_run_claim_prevents_duplicate_mutations_and_leaves_bala
         assert cur.fetchone()[0]==1
 
 
+def test_postgres_account_bound_test_purchase_is_isolated_and_idempotent(postgres_billing):
+    from services.velia_creem_sandbox_account import SandboxAccountStore,SandboxAccountService
+    from test_velia_creem_sandbox_account import AccountAPI
+    _,connect=postgres_billing
+    service=SandboxAccountService(SandboxAccountStore(connect),AccountAPI())
+    service.checkout(7,'pro',str(uuid.uuid4()))
+    service.api.complete()
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results=list(pool.map(lambda _:service.account(7),range(12)))
+    assert all(r['test_token_balance']==3000 for r in results)
+    assert service.account(8)['test_token_balance']==0
+    with connect() as conn,conn.cursor() as cur:
+        cur.execute('SELECT token_balance FROM users WHERE user_id=7')
+        assert cur.fetchone()[0]==100
+        cur.execute('SELECT COUNT(*) FROM velia_creem_charges')
+        assert cur.fetchone()[0]==0
+        cur.execute('SELECT COUNT(*) FROM velia_creem_sandbox_receipts')
+        assert cur.fetchone()[0]==1
+
+
 @pytest.fixture
 def postgres_billing(monkeypatch):
     dsn = os.getenv('VELIA_CREEM_TEST_DATABASE_URL')
