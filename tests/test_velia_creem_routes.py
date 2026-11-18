@@ -18,6 +18,10 @@ def test_checkout_identity_and_webhook_body_boundary():
                 calls.append(('checkout',args)); return {'ok':True}
             def portal(self,*args):
                 calls.append(('portal',args)); return {'ok':True}
+            def preview_upgrade(self,*args):
+                calls.append(('preview_upgrade',args)); return {'ok':True}
+            def upgrade_plus(self,*args):
+                calls.append(('upgrade_plus',args)); return {'ok':True}
             def webhook(self,*args):
                 calls.append(('webhook',args)); return {'ok':True}
         app=web.Application()
@@ -40,6 +44,16 @@ def test_checkout_identity_and_webhook_body_boundary():
             assert (await client.post(server.make_url(prefix+'portal'),headers=headers,json={'customer_id':'cust_other'})).status==400
             assert (await client.post(server.make_url(prefix+'portal'),headers=headers,json={})).status==200
             assert calls.pop()==('portal',(7,))
+            upgrade=server.make_url(prefix+'upgrade-plus')
+            quote={'period_end':1797000000,'estimate_cents':750,'tax_included':True}
+            assert (await client.get(upgrade)).status==401
+            assert (await client.post(upgrade,json=quote)).status==401
+            assert (await client.get(upgrade,headers=headers)).status==200
+            assert calls.pop()==('preview_upgrade',(7,))
+            assert (await client.post(upgrade,headers=headers,json={**quote,'subscription_id':'sub_other'})).status==400
+            assert not calls
+            assert (await client.post(upgrade,headers=headers,json=quote)).status==200
+            assert calls.pop()==('upgrade_plus',(7,1797000000,750,True))
             raw=b'{ "id": "evt_signed" }\n'
             envelope={'raw_body':base64.b64encode(raw).decode(),'signature':'a'*64}
             assert (await client.post(server.make_url(prefix+'webhook'),json=envelope)).status==200

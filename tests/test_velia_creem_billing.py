@@ -67,7 +67,7 @@ def purchase(service, *, plan='plus'):
     service.api.values[('subscriptions','sub_example')] = {
         'id':'sub_example','mode':'prod','product':spec['product_id'],'customer':{'id':'cust_example','email':'private@example.com'},
         'items':[{'product_id':spec['product_id'],'units':1}], 'status':'active', 'updated_at':iso(NOW),
-        'current_period_end_date':iso(NOW+30*86400),'last_transaction_id':'tran_example',
+        'current_period_start_date':iso(NOW),'current_period_end_date':iso(NOW+30*86400),'last_transaction_id':'tran_example',
         'metadata':{'velia_order_id':order_id}}
     service.api.values[('transactions','tran_example')] = {
         'id':'tran_example','mode':'prod','subscription':'sub_example','customer':'cust_example',
@@ -86,6 +86,120 @@ def deliver(service, *, kind='subscription.paid', event='evt_example', obj=None)
     raw = json.dumps({'id':event,'eventType':kind,'object':obj}).encode()
     signature = hmac.new(SECRET.encode(),raw,hashlib.sha256).hexdigest()
     return service.webhook(raw, signature, SECRET)
+
+
+def live_upgrade(billing, monkeypatch, *, apply_on_request=False):
+    service, connect = billing
+    purchase(service)
+    deliver(service)
+    halfway = NOW+15*86400
+    service.store.clock = lambda: halfway
+    service.api.values[('products',PLANS['pro']['product_id'])]['tax_mode'] = 'inclusive'
+    original = service.api.request
+    sub=service.api.values[('subscriptions','sub_example')]
+    paid=deepcopy(service.api.values[('transactions','tran_example')])
+    paid.update(id='tran_upgrade', amount=625, amount_paid=750, tax_amount=125, period_start=halfway*1000)
+    service.api.values[('transactions',paid['id'])]=paid
+    def apply():
+        sub.update(product=PLANS['pro']['product_id'],last_transaction_id='tran_upgrade',updated_at=iso(halfway),
+                   items=[{'product_id':PLANS['pro']['product_id'],'units':1}])
+    def request(method,resource,**kwargs):
+        if resource=='subscriptions/sub_example/upgrade':
+            service.api.posts.append((resource,kwargs['data']))
+            if apply_on_request:
+                apply()
+            raise BillingError('billing_provider_timeout',502)
+        return original(method,resource,**kwargs)
+    monkeypatch.setattr(service.api,'request',request)
+    return service,connect,apply,paid
+
+
+def confirm_upgrade(service, quote):
+    return service.upgrade_plus(7,quote['period_end'],quote['estimate_cents'],quote['tax_included'])
+
+
+def test_live_upgrade_preview_is_read_only_and_timeout_reconciles_once(billing,monkeypatch):
+    service,connect,_,_=live_upgrade(billing,monkeypatch,apply_on_request=True)
+    assert service.account(7)['can_upgrade_plus'] is True
+    with pytest.raises(BillingError,match='billing_upgrade_unavailable'):
+        service.preview_upgrade(8)
+    quote=service.preview_upgrade(7)
+    assert quote=={'ok':True,'period_end':NOW+30*86400,'estimate_cents':750,'monthly_cents':2999,
+                   'tax_included':True,'credits':900}
+    assert len(service.api.posts)==1
+    with pytest.raises(BillingError,match='billing_upgrade_changed'):
+        confirm_upgrade(service,{**quote,'estimate_cents':749})
+    result=confirm_upgrade(service,quote)
+    assert result['plan_code']=='pro'
+    assert result['plus_upgrade']=={'status':'applied','paid_cents':750,'credits':900}
+    assert balance(connect)==(2200,iso(NOW+30*86400))
+    assert service.api.posts[-1]==('subscriptions/sub_example/upgrade',
+                                  {'product_id':PLANS['pro']['product_id'],'update_behavior':'proration-charge-immediately'})
+    with pytest.raises(BillingError,match='billing_upgrade_unavailable'):
+        confirm_upgrade(service,quote)
+    assert len(service.api.posts)==2
+    event={'id':'sub_example','last_transaction_id':'tran_upgrade'}
+    assert deliver(service,event='evt_upgrade_paid',obj=event)['credits_granted']==0
+    assert deliver(service,event='evt_late_plus')['credits_granted']==0
+    assert balance(connect)[0]==2200
+
+
+def test_live_upgrade_waits_for_the_actual_invoice_and_refund_reverses_delta(billing,monkeypatch):
+    service,connect,apply,paid=live_upgrade(billing,monkeypatch)
+    quote=service.preview_upgrade(7)
+    result=confirm_upgrade(service,quote)
+    assert result['plus_upgrade']=={'status':'pending'} and result['plan_code']=='plus'
+    apply()
+    paid['status']='pending'
+    deliver(service,kind='subscription.update',event='evt_product_changed')
+    assert service.account(7)['plan_code']=='plus' and balance(connect)[0]==1300
+    paid['status']='paid'
+    result=service.account(7)
+    assert result['plan_code']=='pro' and balance(connect)[0]==2200
+    paid.update(status='refunded',refunded_amount=750)
+    refund={'subscription':'sub_example','transaction':'tran_upgrade'}
+    deliver(service,kind='refund.created',event='evt_upgrade_refund',obj=refund)
+    deliver(service,kind='refund.created',event='evt_upgrade_refund_retry',obj=refund)
+    assert service.account(7)['plan_code']=='plus'
+    assert service.account(7)['plus_upgrade']['status']=='refunded'
+    assert balance(connect)[0]==1300
+
+
+def test_parallel_live_upgrade_confirmations_only_send_one_provider_request(billing,monkeypatch):
+    service,connect,_,_=live_upgrade(billing,monkeypatch)
+    quote=service.preview_upgrade(7)
+    def confirm(_):
+        try:
+            return confirm_upgrade(service,quote)['plus_upgrade']['status']
+        except BillingError as error:
+            return error.code
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        outcomes=list(pool.map(confirm,range(10)))
+    assert outcomes.count('pending')==1
+    assert outcomes.count('billing_upgrade_unavailable')==9
+    assert len(service.api.posts)==2 and balance(connect)[0]==1300
+
+
+def test_upgraded_subscription_renews_as_pro_and_ignores_late_upgrade_refund_for_new_cycle(billing,monkeypatch):
+    service,connect,_,paid=live_upgrade(billing,monkeypatch,apply_on_request=True)
+    confirm_upgrade(service,service.preview_upgrade(7))
+    start=NOW+30*86400
+    end=start+30*86400
+    service.store.clock=lambda:start
+    sub=service.api.values[('subscriptions','sub_example')]
+    sub.update(last_transaction_id='tran_renewal',current_period_start_date=iso(start),
+               current_period_end_date=iso(end),updated_at=iso(start))
+    renewal={**paid,'id':'tran_renewal','amount':2999,'amount_paid':2999,'tax_amount':0,
+             'period_start':start*1000,'period_end':end*1000}
+    service.api.values[('transactions','tran_renewal')]=renewal
+    obj={'id':'sub_example','last_transaction_id':'tran_renewal'}
+    assert deliver(service,event='evt_full_pro',obj=obj)['credits_granted']==3000
+    assert deliver(service,event='evt_full_pro_repeat',obj=obj)['credits_granted']==0
+    assert balance(connect)==(5200,iso(end))
+    paid['status']='refunded'
+    deliver(service,kind='refund.created',event='evt_delayed_refund',
+            obj={'subscription':'sub_example','transaction':'tran_upgrade'})
+    assert service.account(7)['plan_code']=='pro' and balance(connect)==(4300,iso(end))
 
 
 @pytest.mark.parametrize('plan', list(PLANS))
