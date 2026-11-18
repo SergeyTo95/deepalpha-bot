@@ -84,6 +84,10 @@ def setup_creem_routes(app, *, require_auth, api_available, billing=None, sandbo
             action=request.match_info['action']
             if request.method=='GET' and action=='catalog':callback,args=sandbox.catalog,()
             elif request.method=='GET' and action=='account':callback,args=sandbox.account,(user,)
+            elif request.method=='POST' and action=='upgrade-plus':
+                data=await request.clone(client_max_size=4096).json()
+                if data!={}:raise BillingError('invalid_billing_request')
+                callback,args=sandbox.upgrade_plus,(user,)
             elif request.method=='POST' and action=='checkout':
                 data=await request.clone(client_max_size=4096).json()
                 if not isinstance(data,dict) or set(data)!={'plan','attempt'}:
@@ -97,5 +101,5 @@ def setup_creem_routes(app, *, require_auth, api_available, billing=None, sandbo
         except (ValueError,TypeError,json.JSONDecodeError):return response({'ok':False,'error':'invalid_billing_request'},400)
         except Exception:return response({'ok':False,'error':'billing_test_unavailable'},503)
 
-    app.router.add_route('*','/mobile-api/v1/economy/creem-test/{action:catalog|account|checkout}',test_handle)
+    app.router.add_route('*','/mobile-api/v1/economy/creem-test/{action:catalog|account|checkout|upgrade-plus}',test_handle)
     return billing
