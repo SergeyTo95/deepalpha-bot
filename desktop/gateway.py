@@ -6,7 +6,6 @@ adapter uses encrypted, HttpOnly cookies; authority cookies are ignored.
 Only a fixed identity authority receives account tokens; model keys stay here.
 """
 import velia_free_models as free_models
-from collections import deque
 import asyncio
 from dataclasses import dataclass
 from velia_code_quality import spec_guidance
@@ -23,6 +22,7 @@ from velia_desktop_routes import (AuthenticationUnavailable, setup_velia_desktop
                                  account_allowed as allowed, public_access_enabled)
 from desktop.web_routes import prepare_web_payload, public_web_stream, setup_web_routes, WEB_CHAT, WEB_MODEL, WEB_SESSION
 from desktop.admin_proxy import setup_owner_admin_proxy
+from desktop.auth_admission import AuthAdmission
 from velia_quantum_provider import MODEL_ID as QUANTUM_ID
 
 MAX_AUTH_BODY = 16 * 1024
@@ -92,7 +92,8 @@ def valid_session(data):
 def create_app(config=None, *, check_identity=True, web_origin=None, guest_store=None, web_search=None):
     config = config or GatewayConfig.from_env()
     app = web.Application(client_max_size=MAX_AUTH_BODY)
-    exchanges = deque()
+    exchanges = AuthAdmission(attempts=60, concurrent=4)
+    refreshes = AuthAdmission(attempts=60, concurrent=4)
     if web_search is not None or os.getenv("VELIA_WEB_SEARCH_ENABLED") == "true":
         import asyncio
         from desktop.guest_store import GuestStore
@@ -428,12 +429,6 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
     async def relay_session(request):
         if os.getenv("VELIA_DESKTOP_API_ENABLED", "").lower() not in {"true", "1"}:
             return json_response({"ok": False, "error": "desktop_api_disabled"}, 503)
-        now = time.monotonic()
-        while exchanges and exchanges[0] < now - 60:
-            exchanges.popleft()
-        if len(exchanges) >= 60:
-            return json_response({"ok": False, "error": "auth_rate_limit"}, 429)
-        exchanges.append(now)
         try:
             data = await request.json()
         except web.HTTPRequestEntityTooLarge:
@@ -454,8 +449,15 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
                 return json_response({"ok": False, "error": "invalid_pairing_request"}, 400)
         elif not isinstance(data.get("refresh_token"), str) or not REFRESH.fullmatch(data["refresh_token"]):
             return json_response({"ok": False, "error": "invalid_refresh_token"}, 400)
+        admissions = exchanges if exchange else refreshes
+        if not admissions.admit(request):
+            return json_response({"ok": False, "error": "auth_rate_limit"}, 429)
+        async with admissions.slots:
+            return await complete_auth_relay(request.path, data, exchange=exchange)
+
+    async def complete_auth_relay(path, data, *, exchange):
         try:
-            status, result = await upstream("POST", request.path, data=data)
+            status, result = await upstream("POST", path, data=data)
             if status != 200 or result.get("ok") is not True:
                 return json_response({"ok": False, "error": "pairing_failed" if exchange else "refresh_failed"}, 401)
             if not valid_session(result):

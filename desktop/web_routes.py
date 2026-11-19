@@ -1,7 +1,6 @@
 """Same-origin browser chat; opaque cookies, server-only device credentials."""
 import asyncio
 import velia_free_models as free_models
-from collections import deque
 from dataclasses import dataclass, field
 import hashlib
 import hmac
@@ -17,12 +16,14 @@ from velia_desktop_routes import AuthenticationUnavailable, FLASH_ID, MODEL_ID, 
 from velia_quantum_provider import MODEL_ID as QUANTUM_ID
 from velia_request_understanding import understanding_instruction, normalize_reply_language, reply_language_instruction
 from desktop.web_search import SEARCH, SOURCES, source_event
+from desktop.auth_admission import AuthAdmission
 
 WEB_CHAT = web.RequestKey("velia_browser_chat", bool)
 WEB_VOICE = web.RequestKey("velia_browser_voice", bool)
 WEB_FIGMA = web.RequestKey("velia_browser_figma", bool)
 WEB_MODEL = web.RequestKey("velia_browser_model", str)
 WEB_SESSION = web.RequestKey("velia_browser_session", object)
+WEB_REFRESH_COOKIE = web.RequestKey("velia_browser_refresh_cookie", bool)
 COOKIE = "__Host-velia-web"
 LIFETIME = 7 * 24 * 3600
 STATIC = Path(__file__).parent / "web"
@@ -162,15 +163,16 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
         client_digest.update(path.name.encode()+b'\0'+path.read_bytes())
     client_version=client_digest.hexdigest()
     cipher = Fernet(os.environ["VELIA_WEB_SESSION_KEY"].encode())
-    sessions, exchanges, revoked = {}, deque(), {}
-    def decode(request):
+    sessions, revoked = {}, {}
+    exchanges = AuthAdmission(attempts=30, concurrent=4)
+    def decode(request, *, include_revoked=False):
         value = request.cookies.get(COOKIE, "")
         if not value or len(value) > 4096:
             return None
         try:
             data = json.loads(cipher.decrypt(value.encode(), ttl=LIFETIME))
             session = Session(**data)
-            if session.expires <= time.time() or session.id in revoked:
+            if session.expires <= time.time() or (session.id in revoked and not include_revoked):
                 return None
             return session
         except (InvalidToken, ValueError, TypeError, KeyError):
@@ -182,7 +184,8 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             secure=True, httponly=True, samesite="Lax", path="/")
     async def prepare_response(request, response):
         session = request.get(WEB_SESSION)
-        if session is not None:
+        if (session is not None and request.get(WEB_REFRESH_COOKIE)
+                and session.id not in revoked and sessions.get(session.id) is session):
             # This hook also runs before SSE headers are sent by the shared relay.
             set_cookie(response, session)
             # aiohttp has serialized response.cookies before this hook; set the
@@ -204,24 +207,30 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
         for key, expires in list(revoked.items()):
             if expires <= now:
                 del revoked[key]
+    def make_session_room():
+        if len(sessions) < 256:
+            return True
+        # Idle sessions can be restored from their authenticated cookies.
+        evict = next((key for key, session in sessions.items()
+                      if key not in revoked and not session.lock.locked() and not session.background_jobs), None)
+        if evict is None:
+            return False
+        del sessions[evict]
+        return True
     async def session_for(request):
         prune()
         incoming = decode(request)
         if incoming is None:
             return None
+        cookie_credentials = incoming.access, incoming.refresh
         key = incoming.id
-        if key not in sessions and len(sessions) >= 256:
-            # Credentials remain encrypted in the cookie after cache eviction.
-            # Never evict a record while its refresh rotation is in progress.
-            evict = next((k for k, v in sessions.items() if not v.lock.locked() and not v.background_jobs), None)
-            if evict is None:
-                raise AuthenticationUnavailable()
-            del sessions[evict]
+        if key not in sessions and not make_session_room():
+            raise AuthenticationUnavailable()
         session = sessions.setdefault(key, incoming)
         if session is None:
             return None
         async with session.lock:
-            if sessions.get(key) is not session:
+            if sessions.get(key) is not session or key in revoked:
                 return None
             if session.access_until <= time.time() + 60:
                 status, result = await upstream("POST", "/mobile-api/v1/auth/refresh", data={
@@ -234,6 +243,8 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
                 session.access, session.refresh = result["access_token"], result["refresh_token"]
                 session.access_until = time.time() + result["access_expires_in"]
             identity = await authenticate(session.access)
+            if key in revoked:
+                return None
             if not identity or identity["user_id"] != session.user_id or not allowed(session.user_id):
                 sessions.pop(key, None)
                 return None
@@ -246,6 +257,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             session.quantum_attachments = identity.get("quantum_attachments") is True
             session.quantum_native_tools = identity.get("quantum_native_tools") is True
             session.selected_model_inputs = identity.get("selected_model_inputs") is True
+            request[WEB_REFRESH_COOKIE] = cookie_credentials != (session.access, session.refresh)
         request[WEB_SESSION] = session
         return session
     async def mission_identity(session):
@@ -260,7 +272,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
                 session.access,session.refresh=result['access_token'],result['refresh_token']
                 session.access_until=time.time()+result['access_expires_in']
             identity=await authenticate(session.access)
-            if not identity or identity['user_id']!=session.user_id or not allowed(session.user_id):return None
+            if session.id in revoked or not identity or identity['user_id']!=session.user_id or not allowed(session.user_id):return None
             return identity
     async def profile(session):
         account = hashlib.sha256((origin + ":" + str(session.user_id)).encode()).hexdigest()[:24]
@@ -300,15 +312,6 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     async def login(request):
         if not same_origin(request):
             return error("invalid_origin", 403)
-        now = time.monotonic()
-        while exchanges and exchanges[0] < now - 60:
-            exchanges.popleft()
-        if len(exchanges) >= 30:
-            return error("auth_rate_limit", 429)
-        exchanges.append(now)
-        prune()
-        if len(sessions) >= 256:
-            return error("session_capacity_exceeded", 503)
         try:
             data = await request.json()
         except web.HTTPRequestEntityTooLarge:
@@ -323,6 +326,13 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
         code = re.sub(r"[\s._-]", "", code.upper())
         if not re.fullmatch(r"[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{16}", code):
             return error("invalid_pairing_request", 400)
+        if not exchanges.admit(request):
+            return error("auth_rate_limit", 429)
+        async with exchanges.slots:
+            return await exchange_code(request, code)
+
+    async def exchange_code(request, code):
+        prune()
         device = "velia-web:" + secrets.token_hex(16)
         try:
             status, result = await upstream("POST", "/mobile-api/v1/auth/exchange", data={
@@ -351,6 +361,9 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
                 disconnect_connections(previous)
                 sessions.pop(previous.id, None)
                 revoked[previous.id] = previous.expires
+            if not make_session_room():
+                await upstream("POST", "/mobile-api/v1/auth/logout", token=session.access)
+                return error("session_capacity_exceeded", 503)
             sessions[session.id] = session
             response = json_response(await profile(session))
             set_cookie(response, session)
@@ -360,17 +373,20 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     async def logout(request):
         if not same_origin(request):
             return error("invalid_origin", 403)
-        incoming = decode(request)
+        prune()
+        incoming = decode(request, include_revoked=True)
         session = sessions.get(incoming.id, incoming) if incoming else None
         if session:
             disconnect_connections(session)
+            revoked[session.id] = session.expires
             async with session.lock:
-                sessions.pop(session.id, None)
-                revoked[session.id] = session.expires
                 try:
-                    await upstream("POST", "/mobile-api/v1/auth/logout", token=session.access)
+                    status, result = await upstream("POST", "/mobile-api/v1/auth/logout", token=session.access)
+                    if status != 200 or result.get("ok") is not True:
+                        raise AuthenticationUnavailable()
                 except AuthenticationUnavailable:
-                    pass
+                    return error("authentication_unavailable", 503)
+                sessions.pop(session.id, None)
         response = json_response({"ok": True})
         response.del_cookie(COOKIE, path="/", secure=True, httponly=True, samesite="Lax")
         return response

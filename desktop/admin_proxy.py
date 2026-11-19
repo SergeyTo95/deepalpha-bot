@@ -4,7 +4,8 @@ The browser stays on the gateway origin while Velyon Core remains the authority
 for owner authentication, CSRF checks, research jobs and downloadable datasets.
 No Desktop/Web session is translated into an admin session.
 """
-from urllib.parse import urlsplit
+from http.cookies import CookieError, SimpleCookie
+from urllib.parse import unquote, urlsplit
 
 from aiohttp import ClientError, ClientTimeout, web
 
@@ -14,31 +15,56 @@ _HOP_BY_HOP = {
     "te", "trailer", "transfer-encoding", "upgrade",
 }
 _MAX_REQUEST_BODY = 256 * 1024
+_ADMIN_SESSION = "velia_admin_session"
+_ADMIN_COOKIES = (_ADMIN_SESSION, "velia_admin_csrf")
 
 
 def _request_headers(request: web.Request) -> dict[str, str]:
     allowed = {
-        "accept", "accept-language", "content-type", "cookie", "referer",
+        "accept", "accept-language", "content-type", "referer",
         "user-agent", "x-request-id",
     }
-    return {name: value for name, value in request.headers.items()
-            if name.lower() in allowed}
+    headers = {name: value for name, value in request.headers.items()
+               if name.lower() in allowed}
+    cookies = SimpleCookie({name: request.cookies[name] for name in _ADMIN_COOKIES if name in request.cookies})
+    if cookies:
+        headers["Cookie"] = "; ".join(item.OutputString() for item in cookies.values())
+    return headers
 
 
 def _redirect_location(value: str, upstream_origin: str) -> str:
-    if not value:
-        return value
     parsed = urlsplit(value)
-    if not parsed.scheme and not parsed.netloc:
-        return value
-    upstream = urlsplit(upstream_origin)
-    if parsed.scheme == upstream.scheme and parsed.netloc == upstream.netloc:
-        return parsed.path + (("?" + parsed.query) if parsed.query else "")
-    raise ValueError("external_admin_redirect")
+    if parsed.scheme or parsed.netloc:
+        upstream = urlsplit(upstream_origin)
+        if (parsed.scheme, parsed.netloc) != (upstream.scheme, upstream.netloc):
+            raise ValueError("external_admin_redirect")
+    path = unquote(parsed.path)
+    if (path != "/admin" and not path.startswith("/admin/")) or (
+        any(ord(char) < 32 or ord(char) == 127 or char == "\\" for char in path)
+        or any(part in {".", ".."} for part in path.split("/"))
+    ):
+        raise ValueError("invalid_admin_redirect")
+    return parsed.path + (("?" + parsed.query) if parsed.query else "")
 
 
-def _secure_cookie(value: str) -> str:
-    return value if "secure" in {part.strip().lower() for part in value.split(";")} else value + "; Secure"
+def _admin_response_cookie(value: str):
+    cookies = SimpleCookie()
+    try:
+        cookies.load(value)
+    except CookieError:
+        return None
+    if len(cookies) != 1:
+        return None
+    name, cookie = next(iter(cookies.items()))
+    if name not in _ADMIN_COOKIES:
+        return None
+    cookie["path"] = "/admin"
+    cookie["domain"] = ""
+    cookie["secure"] = True
+    cookie["samesite"] = "Strict"
+    if name == _ADMIN_SESSION:
+        cookie["httponly"] = True
+    return cookie.OutputString()
 
 
 def setup_owner_admin_proxy(app: web.Application, *, upstream_origin: str, client_key) -> None:
@@ -79,8 +105,10 @@ def setup_owner_admin_proxy(app: web.Application, *, upstream_origin: str, clien
                                             headers={"Cache-Control": "no-store"})
                 response = web.StreamResponse(status=upstream.status, reason=upstream.reason, headers=headers)
                 for cookie in upstream.headers.getall("Set-Cookie", []):
-                    response.headers.add("Set-Cookie", _secure_cookie(cookie))
-                response.headers["Cache-Control"] = upstream.headers.get("Cache-Control", "no-store")
+                    safe_cookie = _admin_response_cookie(cookie)
+                    if safe_cookie:
+                        response.headers.add("Set-Cookie", safe_cookie)
+                response.headers["Cache-Control"] = "private, no-store"
                 await response.prepare(request)
                 if request.method != "HEAD":
                     async for chunk in upstream.content.iter_chunked(65536):

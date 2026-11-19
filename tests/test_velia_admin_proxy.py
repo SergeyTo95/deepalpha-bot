@@ -18,10 +18,13 @@ def test_admin_proxy_keeps_owner_auth_on_core_and_gateway_origin():
                 response = web.HTTPFound("/admin/research")
                 response.set_cookie("velia_admin_session", "owner-session", path="/admin",
                                     httponly=True, samesite="Strict")
-                return response
+                response.set_cookie("velia_admin_csrf", "owner-csrf", path="/admin")
+                response.set_cookie("__Host-velia-web", "ignored")
+                raise response
             if request.path == "/admin/research/dataset.jsonl":
                 return web.Response(text='{"prompt":"x"}\n', content_type="application/x-ndjson",
-                                    headers={"Content-Disposition": 'attachment; filename="velia-flash-train.jsonl"'})
+                                    headers={"Content-Disposition": 'attachment; filename="velia-flash-train.jsonl"',
+                                             "Cache-Control": "public, max-age=300"})
             raise web.HTTPNotFound()
 
         core = web.Application()
@@ -44,18 +47,23 @@ def test_admin_proxy_keeps_owner_auth_on_core_and_gateway_origin():
                                        data={"code": "ABCD-EFGH-IJKL-MNOP"}, allow_redirects=False) as response:
                     assert response.status == 302
                     assert response.headers["Location"] == "/admin/research"
-                    cookie = response.headers.getall("Set-Cookie")[0]
+                    cookies = response.headers.getall("Set-Cookie")
+                    assert len(cookies) == 2
+                    cookie = cookies[0]
                     assert "velia_admin_session=owner-session" in cookie
                     assert "Path=/admin" in cookie
                     assert "Secure" in cookie
+                    assert "velia_admin_csrf=owner-csrf" in cookies[1]
+                    assert "SameSite=Strict" in cookies[1]
                 async with client.get(gateway_server.make_url("/admin/research/dataset.jsonl"),
-                                      headers={"Cookie": "velia_admin_session=owner-session"}) as response:
+                                      headers={"Cookie": "velia_admin_session=owner-session; __Host-velia-web=web-session"}) as response:
                     assert response.status == 200
+                    assert response.headers["Cache-Control"] == "private, no-store"
                     assert response.headers["Content-Disposition"] == 'attachment; filename="velia-flash-train.jsonl"'
                     assert await response.text() == '{"prompt":"x"}\n'
                 async with client.put(gateway_server.make_url("/admin/research"), data=b"x") as response:
                     assert response.status == 405
-        assert any(path == "/admin/research/dataset.jsonl" and "owner-session" in cookie
+        assert any(path == "/admin/research/dataset.jsonl" and cookie == "velia_admin_session=owner-session"
                    for _, path, cookie, _ in seen)
 
     asyncio.run(scenario())

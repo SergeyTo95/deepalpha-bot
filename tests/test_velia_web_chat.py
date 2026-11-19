@@ -80,6 +80,8 @@ async def fixture(monkeypatch, **state):
         return response
     async def logout(request):
         state["revoked"].append(request.headers.get("Authorization"))
+        if state.get("logout_unavailable"):
+            return web.json_response({"ok": False}, status=503)
         return web.json_response({"ok": True})
     async def economy(request):
         if state.get("economy_unavailable"):
@@ -607,6 +609,52 @@ def test_logout_revokes_cookie_and_upstream_device(monkeypatch):
                 assert response.status == 401
             assert state["revoked"] == ["Bearer " + TOKEN]
     asyncio.run(run())
+
+
+def test_logout_waits_for_authority_and_can_be_retried(monkeypatch):
+    async def run():
+        async with fixture(monkeypatch, logout_unavailable=True) as (server, client, state):
+            cookie, _, _ = await login(server, client)
+            async with client.post(server.make_url("/web-api/v1/auth/logout"), headers=headers(cookie), json={}) as response:
+                assert response.status == 503
+                assert "Set-Cookie" not in response.headers
+            async with client.get(server.make_url("/web-api/v1/session"), headers=headers(cookie)) as response:
+                assert response.status == 401
+            state["logout_unavailable"] = False
+            async with client.post(server.make_url("/web-api/v1/auth/logout"), headers=headers(cookie), json={}) as response:
+                assert response.status == 200
+                assert response.cookies[COOKIE]["max-age"] == "0"
+            assert state["revoked"] == ["Bearer " + TOKEN] * 2
+    asyncio.run(run())
+
+
+def test_active_cookie_is_only_sent_again_when_credentials_change(monkeypatch):
+    async def run():
+        async with fixture(monkeypatch) as (server, client, _):
+            cookie, _, _ = await login(server, client)
+            async with client.get(server.make_url("/web-api/v1/session"), headers=headers(cookie)) as response:
+                assert response.status == 200
+                assert "Set-Cookie" not in response.headers
+    asyncio.run(run())
+
+
+def test_pairing_budget_is_scoped_to_the_canonical_network(monkeypatch):
+    from types import SimpleNamespace
+    from multidict import CIMultiDict
+    from desktop.auth_admission import AuthAdmission
+
+    monkeypatch.setenv("VELIA_WEB_GUEST_TRUST_RAILWAY_IP", "true")
+    budget = AuthAdmission(attempts=1, concurrent=1)
+
+    def request(address):
+        return SimpleNamespace(headers=CIMultiDict({"X-Real-IP": address}), remote="127.0.0.1")
+
+    assert budget.admit(request("2001:db8:cafe::1"))
+    assert not budget.admit(request("2001:db8:cafe::2"))
+    assert budget.admit(request("2001:db8:beef::1"))
+    monkeypatch.delenv("VELIA_WEB_GUEST_TRUST_RAILWAY_IP")
+    assert budget.admit(request("192.0.2.100"))
+    assert not budget.admit(request("192.0.2.101"))
 
 
 def test_refresh_is_serialized_for_parallel_tabs(monkeypatch):
