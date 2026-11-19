@@ -141,6 +141,10 @@ def setup_velia_mobile_routes(
     app: web.Application,
     web_user_resolver: Callable[[web.Request], Optional[int]],
 ) -> None:
+    from services.velia_web_signin_routes import setup_web_signin_authority
+    setup_web_signin_authority(app, json_response=_json_response, available=_mobile_api_available,
+                               read_json=_read_json, bearer_token=_bearer_token)
+
     async def handle_mobile_connect(request: web.Request) -> web.Response:
         if not _mobile_api_available():
             return _html_response(

@@ -1,7 +1,6 @@
 import os
 import json
 import hmac
-import hashlib
 import secrets
 import asyncio
 import time
@@ -62,7 +61,7 @@ from db.database import (
     get_all_authors, get_author_profile, get_author_post, list_public_articles, get_public_article,
     is_author, create_donation, add_pending, create_donation_with_payment_intent, find_package_by_amount,
     create_web_session, get_user_by_session, delete_web_session,
-    link_web_account, get_web_account,
+    link_web_account,
     add_web_analysis_history, get_web_analysis_history, get_web_analysis_history_item,
     create_web_analysis_job, update_web_analysis_job, get_web_analysis_job,
     add_tokens, get_connection,
@@ -1760,13 +1759,6 @@ def _oauth_html(message):
     ), content_type="text/html")
 
 
-def _google_user_id(provider_sub):
-    # Stable high-range BIGINT namespace to avoid collisions with Telegram numeric IDs.
-    digest = hashlib.sha256(("google:" + provider_sub).encode("utf-8")).digest()
-    value = int.from_bytes(digest[:8], "big") & ((1 << 62) - 1)
-    return (1 << 61) + value
-
-
 async def handle_google_callback(request):
     cid = os.getenv("GOOGLE_CLIENT_ID", "")
     secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
@@ -1817,22 +1809,9 @@ async def handle_google_callback(request):
     name = str(profile.get("name", "") or "").strip()
     picture = str(profile.get("picture", "") or "").strip()
 
-    account = get_web_account("google", provider_sub)
-    if account and account.get("user_id"):
-        user_id = int(account.get("user_id"))
-    else:
-        user_id = _google_user_id(provider_sub)
-        username = email.split("@", 1)[0] if email and "@" in email else ""
-        ensure_user(user_id, username, name)
-
-    link_web_account(
-        user_id,
-        provider="google",
-        provider_sub=provider_sub,
-        email=email,
-        name=name,
-        avatar_url=picture,
-    )
+    from services.velia_web_signin_store import resolve_identity
+    user_id = await asyncio.to_thread(resolve_identity, "google", provider_sub,
+                                      email=email, name=name, avatar_url=picture)
 
     session_token = create_web_session(
         user_id=user_id,

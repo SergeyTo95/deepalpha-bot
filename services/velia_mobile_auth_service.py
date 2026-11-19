@@ -248,6 +248,59 @@ def _session_payload(
     }
 
 
+def _insert_session(cursor, user_id, normalized_device_id, device_name, user_agent, ip, now):
+    access_ttl = _env_int("VELIA_MOBILE_ACCESS_TTL_SECONDS", 900, 60)
+    access_expires_at = now + timedelta(seconds=access_ttl)
+    refresh_expires_at = _resolve_refresh_expiry(now)
+    raw_access_token = _new_access_token()
+    raw_refresh_token = _new_refresh_token()
+    session_id = str(uuid.uuid4())
+
+    cursor.execute(
+        """
+        INSERT INTO velia_mobile_sessions (
+            session_id, user_id, access_token_hash, refresh_token_hash,
+            device_id_hash, device_name, refresh_generation,
+            created_at, updated_at, access_expires_at, refresh_expires_at,
+            last_seen_at, user_agent, ip_hash
+        ) VALUES (%s, %s, %s, %s, %s, %s, 0, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            session_id,
+            user_id,
+            _hash_secret(raw_access_token),
+            _hash_secret(raw_refresh_token),
+            _hash_secret(normalized_device_id),
+            str(device_name or "")[:200],
+            now,
+            now,
+            access_expires_at,
+            refresh_expires_at,
+            now,
+            str(user_agent or "")[:500],
+            _hash_optional(ip),
+        ),
+    )
+    return _session_payload(
+        session_id=session_id,
+        user_id=user_id,
+        access_token=raw_access_token,
+        refresh_token=raw_refresh_token,
+        access_expires_at=access_expires_at,
+        refresh_expires_at=refresh_expires_at,
+        refresh_generation=0,
+    )
+
+
+def issue_web_identity_session(user_id, *, device_id):
+    # Called only after the authority has verified Google or the email code.
+    if not isinstance(device_id, str) or not 8 <= len(device_id) <= 256:
+        raise ValueError("invalid_device_id")
+    from contextlib import closing
+    with closing(get_connection()) as conn, conn, conn.cursor() as cursor:
+        return _insert_session(cursor, user_id, device_id, "VELIA Web", "", "", _utcnow())
+
+
 def exchange_pairing_code(
     pairing_code: str,
     *,
@@ -263,14 +316,7 @@ def exchange_pairing_code(
     if len(normalized_device_id) < 8 or len(normalized_device_id) > 256:
         return {"ok": False, "error": "invalid_device_id"}
 
-    access_ttl = _env_int("VELIA_MOBILE_ACCESS_TTL_SECONDS", 900, 60)
     now = _utcnow()
-    access_expires_at = now + timedelta(seconds=access_ttl)
-    refresh_expires_at = _resolve_refresh_expiry(now)
-    raw_access_token = _new_access_token()
-    raw_refresh_token = _new_refresh_token()
-    session_id = str(uuid.uuid4())
-
     conn = get_connection()
     cursor = conn.cursor()
     try:
@@ -302,41 +348,9 @@ def exchange_pairing_code(
             "UPDATE velia_mobile_pairing_codes SET consumed_at=%s WHERE code_hash=%s",
             (now, _hash_secret(normalized_code)),
         )
-        cursor.execute(
-            """
-            INSERT INTO velia_mobile_sessions (
-                session_id, user_id, access_token_hash, refresh_token_hash,
-                device_id_hash, device_name, refresh_generation,
-                created_at, updated_at, access_expires_at, refresh_expires_at,
-                last_seen_at, user_agent, ip_hash
-            ) VALUES (%s, %s, %s, %s, %s, %s, 0, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                session_id,
-                user_id,
-                _hash_secret(raw_access_token),
-                _hash_secret(raw_refresh_token),
-                _hash_secret(normalized_device_id),
-                str(device_name or "")[:200],
-                now,
-                now,
-                access_expires_at,
-                refresh_expires_at,
-                now,
-                str(user_agent or "")[:500],
-                _hash_optional(ip),
-            ),
-        )
+        result = _insert_session(cursor, user_id, normalized_device_id, device_name, user_agent, ip, now)
         conn.commit()
-        return _session_payload(
-            session_id=session_id,
-            user_id=user_id,
-            access_token=raw_access_token,
-            refresh_token=raw_refresh_token,
-            access_expires_at=access_expires_at,
-            refresh_expires_at=refresh_expires_at,
-            refresh_generation=0,
-        )
+        return result
     except Exception:
         conn.rollback()
         raise
