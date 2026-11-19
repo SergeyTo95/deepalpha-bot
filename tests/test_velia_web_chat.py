@@ -231,6 +231,8 @@ async def fixture(monkeypatch, **state):
         return web.json_response({"ok": True, "attachment": {"id": "legacy"}})
     authority.router.add_post("/mobile-api/v1/conversations/{conversation_id}/attachments", legacy_upload)
     authority.router.add_post("/mobile-api/v1/auth/exchange", auth)
+    if state.get("signin_authority"):
+        authority.router.add_post("/mobile-api/v1/auth/web-signin", state["signin_authority"])
     authority.router.add_post("/mobile-api/v1/auth/refresh", auth)
     authority.router.add_post("/mobile-api/v1/auth/logout", logout)
     authority.router.add_post("/v1/chat/completions", model)
@@ -330,6 +332,73 @@ def test_public_account_can_pair_and_chat_without_preview_entry(monkeypatch):
                     json={'model':'velia-pro','messages':[{'role':'user','content':'Hello'}]}) as response:
                 assert response.status == 401
             assert len(state['payloads']) == 1
+    asyncio.run(scenario())
+
+
+def test_web_signin_google_and_email_use_existing_session_and_link_only_in_account(monkeypatch):
+    from urllib.parse import parse_qs, urlsplit
+    from desktop.signin_routes import CALLBACK, EMAIL_COOKIE, GOOGLE_COOKIE
+
+    async def scenario():
+        key = "K" * 43
+        calls = []
+        monkeypatch.setenv("VELIA_WEB_SIGNIN_KEY", key)
+
+        async def authority(request):
+            assert request.headers["Authorization"] == "Bearer " + key
+            assert "Cookie" not in request.headers
+            data = await request.json()
+            calls.append(data)
+            if data["action"] == "options":
+                return web.json_response({"ok": True, "email": True, "google": {
+                    "client_id": "fixture.apps.googleusercontent.com", "redirect_uri": ORIGIN + CALLBACK}})
+            if data["action"] == "email_start":
+                return web.json_response({"ok": True, "challenge": "C" * 43})
+            if "link_token" in data:
+                assert data["link_token"] == TOKEN
+                return web.json_response({"ok": True, "linked": True})
+            return web.json_response({"ok": True, "access_token": TOKEN, "refresh_token": REFRESH,
+                                      "access_expires_in": 900})
+
+        async with fixture(monkeypatch, signin_authority=authority) as (server, client, _):
+            def url(suffix):
+                return server.make_url("/web-api/v1/auth/" + suffix)
+
+            response = await client.get(url("methods"))
+            assert await response.json() == {"ok": True, "email": True, "google": True}
+            response = await client.post(url("google/start"), json={"link": False})
+            assert response.status == 403
+            response = await client.post(url("google/start"), headers=headers(), json={"link": False})
+            data = await response.json()
+            state = parse_qs(urlsplit(data["url"]).query)
+            assert state["code_challenge_method"] == ["S256"]
+            assert "code_verifier" not in state
+            flow = response.cookies[GOOGLE_COOKIE]
+            assert flow["httponly"] and flow["secure"] and flow["samesite"] == "Lax"
+            request_headers = {"Cookie": f"{GOOGLE_COOKIE}={flow.value}"}
+            response = await client.get(url("google/callback"), headers=request_headers,
+                params={"state": "B" * 43, "code": "test"}, allow_redirects=False)
+            assert response.headers["Location"] == "/?signin=signin_google_failed"
+            assert not any(entry["action"] == "google_verify" for entry in calls)
+            response = await client.get(url("google/callback"), headers=request_headers,
+                params={"state": state["state"][0], "code": "test"}, allow_redirects=False)
+            assert response.headers["Location"] == "/?signin=signed_in"
+            cookie = response.cookies[COOKIE].value
+            assert TOKEN not in cookie
+            assert calls[-1]["action"] == "google_verify"
+
+            response = await client.post(url("email/start"), headers=headers(cookie),
+                json={"email": "sample@example.com", "link": True})
+            assert await response.json() == {"ok": True}
+            email_flow = response.cookies[EMAIL_COOKIE].value
+            request_headers = headers(Cookie=f"{COOKIE}={cookie}; {EMAIL_COOKIE}={email_flow}")
+            response = await client.post(url("email/verify"), headers=request_headers, json={"code":"12345678"})
+            assert await response.json() == {"ok": True, "linked": True}
+            assert COOKIE not in response.cookies
+            assert calls[-1]["challenge"] == "C" * 43
+            assert calls[-1]["link_token"] == TOKEN
+            assert response.cookies[EMAIL_COOKIE]["max-age"] == "0"
+
     asyncio.run(scenario())
 
 

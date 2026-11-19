@@ -338,7 +338,13 @@
         <span data-icon="close"></span></button
       ><img src="/web/favicon.svg" alt="" width="48" height="48" />
       <div class="eyebrow">ТВОЁ ПРОСТРАНСТВО VELIA</div>
-      <h2 id="auth-title">Давай начнём.</h2>
+      <h2 id="auth-title">Вход и регистрация</h2>
+      <div id="auth-methods" class="auth-methods" hidden>
+        <button id="auth-google" type="button" class="pairing-link" hidden>Продолжить с Google</button>
+        <button id="auth-email" type="button" class="pairing-link" hidden>Продолжить по почте</button>
+        <button id="auth-telegram-option" type="button" class="pairing-link" hidden>Продолжить через Telegram</button>
+      </div>
+      <div id="auth-telegram">
       <p id="auth-help">
         Получи одноразовый код в Telegram и вставь его сюда. История подтянется из твоего аккаунта.
       </p>
@@ -361,11 +367,24 @@
           maxlength="64"
           required
         />
-        <div class="auth-error" id="auth-error" role="alert"></div>
         <button type="submit" class="auth-submit" id="auth-submit">
           Войти в VELIA<span>→</span>
         </button>
       </form>
+      </div>
+      <form id="email-start-form" hidden>
+        <label for="auth-email-address">Электронная почта</label>
+        <input id="auth-email-address" type="email" autocomplete="email" maxlength="254" required />
+        <button id="email-start-submit" type="submit" class="auth-submit">Отправить код<span>→</span></button>
+      </form>
+      <form id="email-verify-form" hidden>
+        <p id="auth-email-hint"></p>
+        <label for="auth-email-code">Код из письма</label>
+        <input id="auth-email-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" pattern="[0-9]{8}" required />
+        <button id="email-verify-submit" type="submit" class="auth-submit">Подтвердить<span>→</span></button>
+        <button id="email-change" type="button" class="code-ready">Отправить новый код или сменить адрес</button>
+      </form>
+      <div class="auth-error" id="auth-error" role="status"></div>
     </dialog>
     <dialog class="takeover-dialog" id="takeover-dialog" aria-labelledby="takeover-title">
       <div class="takeover-header">
@@ -419,6 +438,7 @@
       <p>История на устройстве будет заблокирована до следующего входа в этот аккаунт.</p>
       <label><input type="checkbox" id="logout-clear"> Удалить историю чатов с этого устройства</label>
       <p>Облачные диалоги сохранятся. Диалоги, существующие только в браузере, будут удалены без восстановления.</p>
+      <button id="auth-manage" type="button" class="code-ready" hidden>Добавить способ входа</button>
       <div class="dialog-actions"><button id="logout-cancel">Отмена</button><button id="logout-confirm" class="primary-button">Выйти</button></div>
     </dialog>
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>

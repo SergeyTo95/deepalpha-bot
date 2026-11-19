@@ -960,6 +960,18 @@ dialog::backdrop {
 .pairing-link:hover {
   background: var(--hover);
 }
+.auth-methods > button {
+  width: 100%;
+  margin-bottom: 10px;
+}
+#auth-email-address {
+  text-transform: none;
+  letter-spacing: normal;
+}
+#email-start-form > .auth-submit,
+#email-verify-form > .auth-submit {
+  margin-top: 12px;
+}
 .auth-dialog label {
   display: block;
   font-size: 11px;

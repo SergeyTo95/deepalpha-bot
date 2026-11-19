@@ -332,44 +332,48 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
             return await exchange_code(request, code)
 
     async def exchange_code(request, code):
-        prune()
         device = "velia-web:" + secrets.token_hex(16)
         try:
             status, result = await upstream("POST", "/mobile-api/v1/auth/exchange", data={
                 "pairing_code": code, "device_id": device, "device_name": "VELIA Web"})
             if status != 200 or result.get("ok") is not True:
                 return error("pairing_failed", 401)
-            if not valid_session(result):
-                raise AuthenticationUnavailable()
-            identity = await authenticate(result["access_token"])
-            if not identity or not allowed(identity["user_id"]):
-                await upstream("POST", "/mobile-api/v1/auth/logout", token=result["access_token"])
-                return error("preview_access_required", 403)
-            session = Session(secrets.token_urlsafe(32), result["access_token"], result["refresh_token"], device,
-                identity["user_id"], time.time() + result["access_expires_in"], time.time() + LIFETIME)
-            session.name = identity.get("name", "Аккаунт VELIA")
-            session.language = normalize_reply_language(identity.get("language"))
-            session.quantum = identity.get("quantum") is True
-            session.free_api = identity.get("free_api") is True
-            session.background_tasks = identity.get("background_tasks") is True
-            session.background_agent = identity.get("background_agent") is True
-            session.quantum_attachments = identity.get("quantum_attachments") is True
-            session.quantum_native_tools = identity.get("quantum_native_tools") is True
-            session.selected_model_inputs = identity.get("selected_model_inputs") is True
-            previous = decode(request)
-            if previous:
-                disconnect_connections(previous)
-                sessions.pop(previous.id, None)
-                revoked[previous.id] = previous.expires
-            if not make_session_room():
-                await upstream("POST", "/mobile-api/v1/auth/logout", token=session.access)
-                return error("session_capacity_exceeded", 503)
-            sessions[session.id] = session
-            response = json_response(await profile(session))
-            set_cookie(response, session)
-            return response
+            return await complete_signin(request, result, device)
         except AuthenticationUnavailable:
             return error("authentication_unavailable", 503)
+
+    async def complete_signin(request, result, device, response=None):
+        prune()
+        if not valid_session(result):
+            raise AuthenticationUnavailable()
+        identity = await authenticate(result["access_token"])
+        if not identity or not allowed(identity["user_id"]):
+            await upstream("POST", "/mobile-api/v1/auth/logout", token=result["access_token"])
+            return error("preview_access_required", 403)
+        session = Session(secrets.token_urlsafe(32), result["access_token"], result["refresh_token"], device,
+            identity["user_id"], time.time() + result["access_expires_in"], time.time() + LIFETIME)
+        session.name = identity.get("name", "Аккаунт VELIA")
+        session.language = normalize_reply_language(identity.get("language"))
+        session.quantum = identity.get("quantum") is True
+        session.free_api = identity.get("free_api") is True
+        session.background_tasks = identity.get("background_tasks") is True
+        session.background_agent = identity.get("background_agent") is True
+        session.quantum_attachments = identity.get("quantum_attachments") is True
+        session.quantum_native_tools = identity.get("quantum_native_tools") is True
+        session.selected_model_inputs = identity.get("selected_model_inputs") is True
+        previous = decode(request)
+        if previous:
+            disconnect_connections(previous)
+            sessions.pop(previous.id, None)
+            revoked[previous.id] = previous.expires
+        if not make_session_room():
+            await upstream("POST", "/mobile-api/v1/auth/logout", token=session.access)
+            return error("session_capacity_exceeded", 503)
+        sessions[session.id] = session
+        if response is None:
+            response = json_response(await profile(session))
+        set_cookie(response, session)
+        return response
     async def logout(request):
         if not same_origin(request):
             return error("invalid_origin", 403)
@@ -569,6 +573,10 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     setup_guardian_routes(app, session_for=session_for, same_origin=same_origin,
         upstream=upstream, json_response=json_response)
     app.router.add_post("/web-api/v1/auth/exchange", login)
+    from desktop.signin_routes import setup_signin_routes
+    setup_signin_routes(app, origin=origin, cipher=cipher, same_origin=same_origin,
+                        session_for=session_for, upstream=upstream, json_response=json_response,
+                        complete_signin=complete_signin)
     app.router.add_post("/web-api/v1/auth/logout", logout)
     app.router.add_post("/web-api/v1/chat/completions", chat)
     app.router.add_post("/web-api/v1/figma/plan", chat)

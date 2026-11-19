@@ -795,10 +795,55 @@ function newChat() {
   sidebar(false);
   $("prompt").focus();
 }
-function openAuth() {
+const signinMessages = {
+  signin_rate_limit: "Слишком много попыток. Подожди минуту и попробуй ещё раз.",
+  signin_invalid_email: "Проверь адрес электронной почты.",
+  signin_invalid_code: "Код неверный или срок истёк. Проверь письмо или запроси новый код.",
+  signin_delivery_failed: "Не удалось отправить письмо. Попробуй позже.",
+  signin_identity_in_use: "Этот способ входа уже связан с другим аккаунтом VELIA.",
+  signin_unavailable: "Способ входа временно недоступен. Попробуй позже.",
+  signin_google_failed: "Вход через Google не завершился. Попробуй ещё раз.",
+  unauthorized: "Сессия изменилась. Снова открой окно входа.",
+};
+let authLinking = false;
+let authView = 0;
+function authSection(section) {
+  $("auth-telegram").hidden = section !== "telegram";
+  $("email-start-form").hidden = section !== "email";
+  $("email-verify-form").hidden = section !== "code";
   $("auth-error").textContent = "";
-  $("auth-dialog").showModal();
-  setTimeout(() => $("pairing-code").focus(), 0);
+}
+async function signinMethods() {
+  try {
+    const response = await request("auth/methods", undefined, AbortSignal.timeout(7000));
+    if (response.ok) return await response.json();
+  } catch {}
+  return {};
+}
+function openAuth(linking = false) {
+  const dialog = $("auth-dialog");
+  if (dialog.open) return;
+  authLinking = linking === true;
+  const view = ++authView;
+  $("auth-title").textContent = authLinking ? "Добавить способ входа" : "Вход и регистрация";
+  $("auth-methods").hidden = true;
+  $("auth-email-address").value = "";
+  $("auth-email-code").value = "";
+  authSection(authLinking ? "" : "telegram");
+  dialog.showModal();
+  signinMethods().then(methods => {
+    if (!dialog.open || view !== authView) return;
+    $("auth-google").hidden = !methods.google;
+    $("auth-email").hidden = !methods.email;
+    $("auth-methods").hidden = !methods.google && !methods.email;
+    $("auth-telegram-option").hidden = authLinking;
+    if (!authLinking && !$("auth-methods").hidden && !$("pairing-code").value &&
+        !$("auth-telegram").hidden && !$("auth-error").textContent) {
+      try { if (sessionStorage.getItem("velia-auth-pending") !== "1") authSection(""); } catch {}
+    }
+    if (authLinking && $("auth-methods").hidden)
+      $("auth-error").textContent = signinMessages.signin_unavailable;
+  });
 }
 async function jsonRequest(path, data) {
   const response = await request(path, data, AbortSignal.timeout(25000));
@@ -1782,7 +1827,7 @@ $("takeover-screen-button").onclick = (e) => {
 };
 $("takeover-continue").onclick = continueAfterTakeover;
 $("auth-close").onclick = () => $("auth-dialog").close();
-$("auth-dialog").addEventListener("close", () => { incomeToSave = null; });
+$("auth-dialog").addEventListener("close", () => { incomeToSave = null; authView++; });
 $("guest-login").onclick = openAuth;
 $("pairing-link").onclick = () => {
   try { sessionStorage.setItem("velia-auth-pending", "1"); } catch {}
@@ -1794,11 +1839,23 @@ function resumeAuth() {
   if (profile || document.visibilityState === "hidden") return;
   try { if (sessionStorage.getItem("velia-auth-pending") !== "1") return; } catch { return; }
   if (!$("auth-dialog").open) openAuth();
+  authSection("telegram");
   $("pairing-code").focus();
 }
 window.addEventListener("focus", resumeAuth);
 window.addEventListener("pageshow", resumeAuth);
 document.addEventListener("visibilitychange", resumeAuth);
+async function finishBrowserSignin(data) {
+  const plan = incomeToSave;
+  notifyAuthChange();
+  await applyProfile(data);
+  try { sessionStorage.removeItem("velia-auth-pending"); } catch {}
+  $("auth-dialog").close();
+  $("pairing-code").value = "";
+  if (plan) await saveIncomePlan(plan);
+  else toast("Ты в VELIA. Можно начинать.");
+  $("prompt").focus();
+}
 $("auth-form").onsubmit = async (e) => {
   e.preventDefault();
   const button = $("auth-submit");
@@ -1812,15 +1869,7 @@ $("auth-form").onsubmit = async (e) => {
       ),
       data = await response.json();
     if (!response.ok) throw new Error(apiError(data.error));
-    const plan = incomeToSave;
-    notifyAuthChange();
-    await applyProfile(data);
-    try { sessionStorage.removeItem("velia-auth-pending"); } catch {}
-    $("auth-dialog").close();
-    $("pairing-code").value = "";
-    if (plan) await saveIncomePlan(plan);
-    else toast("Ты в VELIA. Можно начинать.");
-    $("prompt").focus();
+    await finishBrowserSignin(data);
   } catch (error) {
     $("auth-error").textContent =
       error.message || "Не удалось войти. Попробуй ещё раз.";
@@ -1828,13 +1877,72 @@ $("auth-form").onsubmit = async (e) => {
     button.disabled = false;
   }
 };
+async function signinAction(button, path, body, complete) {
+  const view = authView;
+  button.disabled = true;
+  $("auth-error").textContent = "";
+  try {
+    const response = await request(path, body, AbortSignal.timeout(25000));
+    const data = await response.json();
+    if (!response.ok) throw new Error(signinMessages[data.error] || signinMessages.signin_unavailable);
+    if (view === authView && $("auth-dialog").open) await complete(data);
+  } catch (error) {
+    if (view === authView) $("auth-error").textContent = error.message || signinMessages.signin_unavailable;
+  } finally {
+    button.disabled = false;
+  }
+}
+$("auth-google").onclick = () => signinAction($("auth-google"), "auth/google/start", {link: authLinking}, data => {
+  const url = new URL(data.url);
+  if (url.origin !== "https://accounts.google.com" || url.pathname !== "/o/oauth2/v2/auth")
+    throw new Error(signinMessages.signin_google_failed);
+  try { sessionStorage.removeItem("velia-auth-pending"); } catch {}
+  window.location.assign(url.href);
+});
+$("auth-email").onclick = () => {
+  try { sessionStorage.removeItem("velia-auth-pending"); } catch {}
+  authSection("email");
+  $("auth-email-address").focus();
+};
+$("auth-telegram-option").onclick = () => {
+  authSection("telegram");
+  $("pairing-code").focus();
+};
+$("email-change").onclick = $("auth-email").onclick;
+$("email-start-form").onsubmit = event => {
+  event.preventDefault();
+  const email = $("auth-email-address").value.trim();
+  return signinAction($("email-start-submit"), "auth/email/start", {email, link: authLinking}, () => {
+    if ($("email-start-form").hidden) return;
+    authSection("code");
+    $("auth-email-hint").textContent = "Введи восьмизначный код из письма на " + email + ". Он действует 10 минут.";
+    $("auth-email-code").value = "";
+    $("auth-email-code").focus();
+  });
+};
+$("email-verify-form").onsubmit = event => {
+  event.preventDefault();
+  return signinAction($("email-verify-submit"), "auth/email/verify", {code: $("auth-email-code").value}, async data => {
+    if (data.linked) {
+      $("auth-dialog").close();
+      toast("Почта добавлена к твоему аккаунту.");
+    } else await finishBrowserSignin(data);
+  });
+};
+$("auth-manage").onclick = () => {
+  $("logout-dialog").close();
+  openAuth(true);
+};
 $("account").onclick = async () => {
   if (!profile) {
     openAuth();
     return;
   }
   $('logout-clear').checked = false;
+  $("auth-manage").hidden = true;
   $('logout-dialog').showModal();
+  const methods = await signinMethods();
+  $("auth-manage").hidden = !methods.google && !methods.email;
 };
 $('logout-cancel').onclick = () => $('logout-dialog').close();
 $('logout-confirm').onclick = async () => {
@@ -1933,6 +2041,20 @@ try {
 }
 ready = true;
 resizePrompt();
+const signinReturn = new URL(location.href);
+if (signinReturn.searchParams.has("signin")) {
+  const outcome = signinReturn.searchParams.get("signin");
+  signinReturn.searchParams.delete("signin");
+  window.history.replaceState(null, "", signinReturn.pathname + signinReturn.search + signinReturn.hash);
+  if (profile && outcome === "linked") toast("Google добавлен к твоему аккаунту.");
+  else if (profile && outcome === "signed_in") {
+    notifyAuthChange();
+    toast("Ты в VELIA. Можно начинать.");
+  } else if (Object.hasOwn(signinMessages, outcome)) {
+    openAuth(!!profile);
+    $("auth-error").textContent = signinMessages[outcome];
+  }
+}
 const figmaReturn = new URL(location.href);
 if (figmaReturn.searchParams.has('figma')) {
   const outcome = figmaReturn.searchParams.get('figma');
