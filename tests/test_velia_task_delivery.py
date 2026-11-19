@@ -101,8 +101,18 @@ def test_simultaneous_duplicate_submits_execute_once(store):
     asyncio.run(scenario())
 
 
-def test_question_is_not_completion_and_answer_is_owned_idempotent(store):
+def test_question_is_not_completion_and_answer_is_owned_idempotent(store,monkeypatch):
     async def scenario():
+        finish_previous=asyncio.Event();answer_saved=asyncio.Event()
+        to_thread=asyncio.to_thread
+        async def hold_question_worker(fn,*args,**kwargs):
+            result=await to_thread(fn,*args,**kwargs)
+            if fn==store.planned and result['status']=='waiting_input':
+                await finish_previous.wait()
+            if fn==store.answer:
+                answer_saved.set()
+            return result
+        monkeypatch.setattr(asyncio,'to_thread',hold_question_worker)
         t=Planner();t.question=True
         async with fixture(store,t) as (client,t,_):
             m=(await (await client.post('/web-api/v1/missions/submit',json=payload(),headers=HEAD)).json())['mission'];m=await wait_for(store,m['id'],'waiting_input')
@@ -113,7 +123,13 @@ def test_question_is_not_completion_and_answer_is_owned_idempotent(store):
             assert (await client.post('/web-api/v1/missions/inbox/'+id+'/read',json={},headers=HEAD)).status==200
             assert store.inbox(7)[0]['status']=='read'
             t.question=False;data={'revision':m['revision'],'answer':'Ноябрь 2026','request_id':'fixture-answer'}
-            url='/web-api/v1/missions/'+m['id']+'/answer';r=await client.post(url,json=data,headers=HEAD);assert r.status==200,await r.text()
+            url='/web-api/v1/missions/'+m['id']+'/answer'
+            reply=asyncio.create_task(client.post(url,json=data,headers=HEAD))
+            try:
+                await asyncio.wait_for(answer_saved.wait(),2)
+            finally:
+                finish_previous.set()
+            r=await reply;assert r.status==200,await r.text()
             done=await wait_for(store,m['id'],'completed');assert 'Ноябрь 2026' in done['goal'] and done['plan_generation']==1
             r=await client.post(url,json=data,headers=HEAD);assert r.status==200 and len([c for c in t.calls if c[0]=='execute'])==1
             assert (await client.post(url,json={**data,'answer':'Другое'},headers=HEAD)).status==409

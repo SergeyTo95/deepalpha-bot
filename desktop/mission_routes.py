@@ -173,9 +173,20 @@ def setup_mission_routes(app,*,session_for,same_origin,json_response,upstream,up
         return json_response({'ok':True})
     async def answer(request):
         configured();data=request[BODY];require(set(data)=={'revision','answer','request_id'},'mission_invalid_request')
-        m=await asyncio.to_thread(store.answer,request[SESSION].user_id,request.match_info['mission_id'],revision(request),data['answer'],data['request_id'])
-        if m['status']=='paused':await start(request[SESSION],m['id'],m['revision'])
-        m=await asyncio.to_thread(store.detail,request[SESSION].user_id,m['id'])
+        session=request[SESSION]
+        mission_id=request.match_info['mission_id']
+        task_key=(session.user_id,mission_id)
+        previous_worker=tasks.get(task_key)
+        m=await asyncio.to_thread(store.answer,session.user_id,mission_id,revision(request),data['answer'],data['request_id'])
+        if m['status']=='paused':
+            # The question can be visible while its worker is still shutting down.
+            # Wait only for that worker, never for a concurrent resumption.
+            if previous_worker is not None:
+                await asyncio.shield(previous_worker)
+                if tasks.get(task_key) is previous_worker:
+                    tasks.pop(task_key)
+            await start(session,mission_id,m['revision'])
+        m=await asyncio.to_thread(store.detail,session.user_id,mission_id)
         return json_response({'ok':True,'mission':store.public(m)})
     async def action(request):
         configured();data=request[BODY];name=request.match_info['action'];expected=revision(request)
