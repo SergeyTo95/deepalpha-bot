@@ -209,7 +209,6 @@ export function setupVoice({send, busy, toast, interrupt = () => {}, modelName =
   const record=node('button','Записать реплику','voice-record');record.hidden=true;
   const nativeInput=node('button','Автоматическое распознавание','voice-native');nativeInput.hidden=true;
   nativeInput.onclick=()=>{if(pending||currentUtterance)return;recordingMode=false;stop();if(dialog.open)begin();};
-  const recordNotice=node('p','Запись обрабатывается облачным распознаванием. До 45 секунд.','voice-record-notice');recordNotice.hidden=true;
   const capture=createVoiceCapture({
     changed:recording=>{record.textContent=recording?'Отправить реплику':'Записать реплику';record.disabled=micMuted||pending||!!currentUtterance||captureBusy&&!recording;},
     ready:text=>{captureBusy=false;if(!active||micMuted)return;showTranscript({final:text});acceptTurn(text,epoch);},
@@ -378,11 +377,10 @@ export function setupVoice({send, busy, toast, interrupt = () => {}, modelName =
   function voiceControl(){const label=node('label','Голос Велии','voice-profile'), select=node('select');select.setAttribute('aria-label','Голос');voiceSelectors.add(select);select.onchange=()=>{const reopen=dialog.open;stop();voiceURI=select.value;save();refreshVoices();if(reopen)begin();};label.append(select);return label;}
   const callActions=node('div','','voice-call-actions');
   callActions.append(mute,interruptButton,record,nativeInput,resumeSpeech,reconnect);
-  dialog.append(close,title,modelLabel,orb,state,transcript,callActions,recordNotice);
+  dialog.append(close,title,modelLabel,orb,state,transcript,callActions);
   document.body.append(dialog);refreshVoices();synth?.addEventListener('voiceschanged',refreshVoices);
   function syncInputControls(){
     record.hidden=!recordingEnabled||!recordingMode;
-    recordNotice.hidden=record.hidden;
     record.disabled=micMuted||pending||!!currentUtterance;
     nativeInput.hidden=!Recognition||!recordingMode;
     nativeInput.disabled=pending||!!currentUtterance;
@@ -518,7 +516,7 @@ export function setupVoice({send, busy, toast, interrupt = () => {}, modelName =
   function failure(force=false,detail=''){clearTimeout(waitingTimer);if(pending||force){reportFlow('error');pending=false;deferredAnswer=null;speechPaused=false;resumeSpeech.hidden=true;active=false;speechEpoch++;cancelAudio();clearTimeout(speechTimer);currentUtterance=null;synth?.cancel();status(typeof detail==='string'&&detail.trim()?detail.slice(0,500):'Ответ не получен. Проверь диалог и повтори подключение.','error');}}
   function settings(parent){
     syncLanguage();loadCatalog();
-    parent.append(node('p','Распознавание работает через браузер. Для озвучивания доступны голоса устройства и подключённые онлайн-голоса; онлайн-озвучивание передаёт текст ответа сервису речи.','feature-notice'));
+    parent.append(node('p','Автоматическое распознавание работает через браузер. Ручная запись до 45 секунд отправляется в облачный сервис распознавания. Онлайн-озвучивание передаёт текст ответа сервису речи.','feature-notice'));
     parent.append(node('p','В режиме «Автоматически» язык берётся из аккаунта, а локальный голос устройства выбирается первым для меньшей задержки. Если его нет, используется доступный голос для этого языка. Голос можно выбрать вручную; тембр зависит от устройства. Чтобы получить ответ на другом языке, попроси об этом в разговоре.','feature-notice'));
     const panel=node('div','','feature-form');parent.append(panel);panel.append(voiceControl());refreshVoices();
     const speed=node('label','Скорость речи'), select=node('select');select.setAttribute('aria-label','Скорость речи');for(const [value,name] of [[.8,'Медленнее'],[1,'Обычная'],[1.2,'Быстрее']]){const o=node('option',name);o.value=value;select.append(o);}select.value=String(rate);select.onchange=()=>{const reopen=dialog.open;stop();rate=Number(select.value);save();if(reopen)begin();};speed.append(select);panel.append(speed);

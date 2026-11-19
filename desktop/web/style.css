@@ -1564,7 +1564,6 @@ dialog::backdrop {
 .voice-dialog h2 { font-size: 20px; margin: 0; }
 .voice-call-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 .voice-call-actions button { min-height: 44px; margin: 0; }
-.voice-dialog .voice-record-notice { font-size: 12px; margin: 10px 0 0; }
 .voice-orb { margin: 24px auto 16px; width: 96px; height: 96px; }
 .voice-status { min-height: 40px; margin: 12px 0; font-size: 15px; line-height: 1.4; }
 .voice-controls { margin-top: 8px; }
@@ -1637,7 +1636,6 @@ dialog::backdrop {
 
 .voice-transcript { overflow-wrap: anywhere; max-height: 7em; overflow-y: auto; text-align: left; padding: 10px 12px; border-left: 2px solid var(--border); }
 .voice-transcript[data-interim="true"] { opacity: .8; }
-.voice-dialog .voice-record-notice { font-size: 12px; line-height: 1.4; }
 
 
 /* Agentix architecture preview: static and accessible in all themes. */
