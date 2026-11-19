@@ -1,7 +1,7 @@
 import {canStreamAudio,attachAudioStream,trackPlaybackStatus,createPreparedAudioPlayer} from './speech-audio.mjs';
 import {createSpeechChannel,prefetchDepth} from './voice-channel.mjs';
 import {canRecord,createVoiceCapture} from './voice-capture.mjs';
-import {pronounceSpeech,sentenceBoundary,speechIdentity} from './voice-text.mjs';
+import {polishVoiceReply,preferVoiceTranscript,pronounceSpeech,sentenceBoundary,speechIdentity} from './voice-text.mjs';
 // Every choice represents an actual engine voice, never a renamed pitch alias.
 const REMOTE_FIRST_AUDIO_MS = 4500;
 const RECOGNITION_FINAL_GRACE_MS = 450;
@@ -59,11 +59,11 @@ export function bindRecognitionTurn(r,{valid,finish,incomplete,speechEnded=()=>{
     // Keep them all; collapse only a demonstrably cumulative revision.
     const results=Array.from(e.results);
     for(const [index,result] of results.entries()){
-      const text=String(result[0]?.transcript||'').trim();
+      const text=preferVoiceTranscript(result);
       if(!text)continue;
       if(result.isFinal){
         const previous=final.trim();
-        const expandedLater=text===previous&&results.slice(index+1).some(next=>next.isFinal&&String(next[0]?.transcript||'').trim().startsWith(previous+' '));
+        const expandedLater=text===previous&&results.slice(index+1).some(next=>next.isFinal&&preferVoiceTranscript(next).startsWith(previous+' '));
         if(r.continuous===false&&previous&&(expandedLater||text.startsWith(previous+' ')))final=text+' ';
         else final+=text+' ';
       }else interim+=text+' ';
@@ -105,14 +105,17 @@ export function automaticVoice(voices, language) {
 export function voiceChoice(voices, language, uri) {
  return voices.find(v=>v.voiceURI===uri)||availableVoices(voices,language)[0]||null;
 }
-export function speechReady(text, final=false) {
+export function speechReady(text, final=false, first=false) {
  if(final)return text.length;
  if(text.includes('```'))return 0;
  const boundary=sentenceBoundary(text);
  if(boundary)return boundary;
  // Start at a complete clause/word rather than wait for a long sentence.
  const clause=/[,;:](?=\s)/g;let next;
- while((next=clause.exec(text)))if(next.index>=40)return next.index+1;
+ while((next=clause.exec(text))){
+  if(first&&next.index>=28&&next[0]===','&&!/\d$/u.test(text.slice(0,next.index)))return next.index+1;
+  if(next.index>=40)return next.index+1;
+ }
  if(text.length>=120){const cut=text.lastIndexOf(' ',120);if(cut>=40)return cut+1;}
  return 0;
 }
@@ -194,10 +197,10 @@ export function setupVoice({send, busy, toast, interrupt = () => {}, modelName =
   const orb = node('div', 'V', 'voice-orb'); orb.setAttribute('aria-hidden','true');
   const close = node('button','×','voice-close');close.setAttribute('aria-label','Закрыть разговор');
   const reconnect=node('button','Повторить подключение','voice-reconnect');reconnect.hidden=true;reconnect.onclick=()=>begin();
-  const mute=node('button','Выключить микрофон','voice-mute');mute.hidden=true;mute.setAttribute('aria-pressed','false');
+  const mute=node('button','Микрофон','voice-mute');mute.hidden=true;mute.setAttribute('aria-pressed','false');
   mute.onclick=()=>{
     if(!active)return;
-    micMuted=!micMuted;mute.textContent=micMuted?'Включить микрофон':'Выключить микрофон';mute.setAttribute('aria-pressed',String(micMuted));
+    micMuted=!micMuted;mute.textContent=micMuted?'Включить микрофон':'Микрофон';mute.setAttribute('aria-pressed',String(micMuted));
     if(micMuted){
       clearTimeout(timer);capture.cancel();captureBusy=false;showTranscript({});cancelRecognitionTurn();const old=recognition;recognition=null;old?.abort();
       if(!pending&&!currentUtterance)status('Микрофон выключен. Нажми «Включить микрофон», чтобы продолжить.','paused');
@@ -206,7 +209,7 @@ export function setupVoice({send, busy, toast, interrupt = () => {}, modelName =
   const record=node('button','Записать реплику','voice-record');record.hidden=true;
   const nativeInput=node('button','Автоматическое распознавание','voice-native');nativeInput.hidden=true;
   nativeInput.onclick=()=>{if(pending||currentUtterance)return;recordingMode=false;stop();if(dialog.open)begin();};
-  const recordNotice=node('p','Запись отправляется на облачное распознавание речи. Нажми ещё раз, когда закончишь говорить. До 45 секунд.','voice-record-notice');recordNotice.hidden=true;
+  const recordNotice=node('p','Запись обрабатывается облачным распознаванием. До 45 секунд.','voice-record-notice');recordNotice.hidden=true;
   const capture=createVoiceCapture({
     changed:recording=>{record.textContent=recording?'Отправить реплику':'Записать реплику';record.disabled=micMuted||pending||!!currentUtterance||captureBusy&&!recording;},
     ready:text=>{captureBusy=false;if(!active||micMuted)return;showTranscript({final:text});acceptTurn(text,epoch);},
@@ -250,9 +253,6 @@ export function setupVoice({send, busy, toast, interrupt = () => {}, modelName =
     listen();
   };
   const voiceSelectors=new Set(), speechTests=new Set();
-  const fastVoice=node('button','Быстрый голос телефона','voice-fast');fastVoice.hidden=true;
-  fastVoice.onclick=()=>{const selected=fastDeviceVoice(synth?.getVoices()||[],language);if(!selected)return;const reopen=dialog.open;stop();voiceURI='';save();refreshVoices();if(reopen)begin();};
-  const voiceHint=node('p','','voice-hint');
   const choices = () => availableVoices([...remoteVoices,...(synth?.getVoices()||[])],language);
   const effectiveURI = () => voiceURI || automaticVoice([...remoteVoices,...(synth?.getVoices()||[])],language)?.voiceURI || '';
   function syncLanguage(){const next=recognitionLanguage('',document.documentElement.lang,navigator.language,accountLanguage());if(next!==language){const reopen=dialog.open;stop();language=next;refreshVoices();if(reopen)begin();}else refreshVoices();}
@@ -262,15 +262,8 @@ export function setupVoice({send, busy, toast, interrupt = () => {}, modelName =
     if(voiceURI&&!list.some(v=>v.voiceURI===voiceURI)&&(!isRemoteVoice(voiceURI)||catalogLoaded))voiceURI='';
     for(const select of voiceSelectors){if(!select.isConnected&&select.dataset.mounted){voiceSelectors.delete(select);continue;}select.replaceChildren();const def=node('option','Автоматически'+(automaticVoice(list,language)?' — '+automaticVoice(list,language).name:''));def.value='';select.append(def);for(const v of list){const o=node('option',v.name+' · '+(v.languages?'Мультиязычный':v.lang)+(isRemoteVoice(v.voiceURI)?' · Онлайн':'')+(v.gender==='female'?' · Женский':''));o.value=v.voiceURI;select.append(o);}select.value=voiceURI;select.dataset.mounted='true';}
     for(const b of speechTests) b.disabled=!canSpeak();
-    const deviceVoice=fastDeviceVoice(synth?.getVoices()||[],language);
-    const selectedVoice=list.find(v=>v.voiceURI===effectiveURI());
-    fastVoice.hidden=!deviceVoice||selectedVoice?.localService===true&&!isRemoteVoice(selectedVoice.voiceURI);
-    fastVoice.textContent=deviceVoice?'Быстрый голос телефона · '+deviceVoice.name:'Быстрый голос телефона';
-    fastVoice.title=deviceVoice?.name||'';
-    voiceHint.textContent=list.length===0?'Для этого языка браузер не сообщил подходящий голос. Распознавание и озвучка зависят от устройства.':remoteVoices.length?'Онлайн-голоса дают одинаковый тембр на разных устройствах. Голос телефона обычно запускается быстрее.':list.length===1?'Для выбранного языка доступен один голос.':'';
-    voiceHint.hidden=!voiceHint.textContent;
   }
-  async function loadCatalog(){if(catalogRequest)return catalogRequest;catalogRequest=(async()=>{try{const response=await fetch('/web-api/v1/voice/voices',{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(5000)});if(!response.ok)return;const data=await response.json();catalogLoaded=true;channelEnabled=data.channel===true;recordingEnabled=data.transcription===true&&canRecord();record.hidden=!recordingEnabled;recordNotice.hidden=!recordingEnabled;if(!Recognition&&recordingEnabled&&!active)status('Нажми «Записать реплику», чтобы начать.','idle');remoteVoices=Array.isArray(data.voices)?data.voices.filter(v=>isRemoteVoice(v.voiceURI)):[];refreshVoices();}catch{}finally{catalogRequest=null;}})();return catalogRequest;}
+  async function loadCatalog(){if(catalogRequest)return catalogRequest;catalogRequest=(async()=>{try{const response=await fetch('/web-api/v1/voice/voices',{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(5000)});if(!response.ok)return;const data=await response.json();catalogLoaded=true;channelEnabled=data.channel===true;recordingEnabled=data.transcription===true&&canRecord();syncInputControls();if(!Recognition&&recordingEnabled&&!active)status('Нажми «Записать реплику», чтобы начать.','idle');remoteVoices=Array.isArray(data.voices)?data.voices.filter(v=>isRemoteVoice(v.voiceURI)):[];refreshVoices();}catch{}finally{catalogRequest=null;}})();return catalogRequest;}
   function releasePlayback(){playbackSerial++;playingPart=null;releasePlaybackStatus?.();releasePlaybackStatus=null;remoteStream?.cancel();remoteStream=null;preparedPlayer.release();remoteAudio=null;if(remoteURL){URL.revokeObjectURL(remoteURL);remoteURL=null;}}
   function prepareMedia(){
     preparedPlayer.warm();
@@ -383,12 +376,21 @@ export function setupVoice({send, busy, toast, interrupt = () => {}, modelName =
     }catch(error){if(error.name!=='AbortError')remoteFailed();}
   }
   function voiceControl(){const label=node('label','Голос Велии','voice-profile'), select=node('select');select.setAttribute('aria-label','Голос');voiceSelectors.add(select);select.onchange=()=>{const reopen=dialog.open;stop();voiceURI=select.value;save();refreshVoices();if(reopen)begin();};label.append(select);return label;}
-  dialog.append(close,title,modelLabel,orb,state,transcript,interruptButton,voiceControl(),mute,record,nativeInput,recordNotice,fastVoice,resumeSpeech,reconnect,node('p','Ответы сохраняются в диалоге.','voice-hint'));
+  const callActions=node('div','','voice-call-actions');
+  callActions.append(mute,interruptButton,record,nativeInput,resumeSpeech,reconnect);
+  dialog.append(close,title,modelLabel,orb,state,transcript,callActions,recordNotice);
   document.body.append(dialog);refreshVoices();synth?.addEventListener('voiceschanged',refreshVoices);
-  const status = (text, phase='idle') => {if(active&&micMuted&&phase==='listening'){text='Микрофон выключен. Нажми «Включить микрофон», чтобы продолжить.';phase='paused';}state.textContent=text;dialog.dataset.phase=phase;reconnect.hidden=active||phase!=='error';mute.hidden=!active;interruptButton.hidden=!active||!(pending||currentSpeech||currentUtterance||speechPaused);record.disabled=micMuted||pending||!!currentUtterance;nativeInput.hidden=!Recognition||!recordingMode;nativeInput.disabled=pending||!!currentUtterance;};
+  function syncInputControls(){
+    record.hidden=!recordingEnabled||!recordingMode;
+    recordNotice.hidden=record.hidden;
+    record.disabled=micMuted||pending||!!currentUtterance;
+    nativeInput.hidden=!Recognition||!recordingMode;
+    nativeInput.disabled=pending||!!currentUtterance;
+  }
+  const status = (text, phase='idle') => {if(active&&micMuted&&phase==='listening'){text='Микрофон выключен. Нажми «Включить микрофон», чтобы продолжить.';phase='paused';}state.textContent=text;dialog.dataset.phase=phase;reconnect.hidden=active||phase!=='error';mute.hidden=!active;interruptButton.hidden=!active||!(pending||currentSpeech||currentUtterance||speechPaused);syncInputControls();};
   const save=()=>{try {localStorage.setItem('velia-voice-mode',voiceURI?'manual':'auto');localStorage.setItem('velia-voice-uri',voiceURI);localStorage.setItem('velia-voice-rate',String(rate));}catch{}};
   let streamText='',streamCursor=0,streamQueue=[],streamDone=false,streamBlocked=false,completedSpeech=[],currentSpeech='';
-  function stop(){reportFlow('cancelled');speechFlow=null;deviceFallback=null;capture.cancel();captureBusy=false;showTranscript({});resumeWhenVisible=false;micMuted=false;mute.textContent='Выключить микрофон';mute.setAttribute('aria-pressed','false');speechPaused=false;resumeSpeech.hidden=true;recognitionFailures=0;lastSpeechEnd=null;latency=null;cancelAudio();streamText='';streamCursor=0;streamQueue=[];streamDone=false;streamBlocked=false;completedSpeech=[];currentSpeech='';clearTimeout(waitingTimer);cancelRecognitionTurn();deferredAnswer=null;active=false;pending=false;epoch++;speechEpoch++;clearTimeout(timer);clearTimeout(speechTimer);currentUtterance=null;const old=recognition;recognition=null;old?.abort();synth?.cancel();status('Разговор завершён.');}
+  function stop(){reportFlow('cancelled');speechFlow=null;deviceFallback=null;capture.cancel();captureBusy=false;showTranscript({});resumeWhenVisible=false;micMuted=false;mute.textContent='Микрофон';mute.setAttribute('aria-pressed','false');speechPaused=false;resumeSpeech.hidden=true;recognitionFailures=0;lastSpeechEnd=null;latency=null;cancelAudio();streamText='';streamCursor=0;streamQueue=[];streamDone=false;streamBlocked=false;completedSpeech=[];currentSpeech='';clearTimeout(waitingTimer);cancelRecognitionTurn();deferredAnswer=null;active=false;pending=false;epoch++;speechEpoch++;clearTimeout(timer);clearTimeout(speechTimer);currentUtterance=null;const old=recognition;recognition=null;old?.abort();synth?.cancel();status('Разговор завершён.');}
   close.onclick=()=>{stop();dialog.close();};dialog.addEventListener('cancel',stop);dialog.addEventListener('close',stop);
   function later(token, delay=400){clearTimeout(timer);timer=setTimeout(()=>{if(active&&token===epoch)listen();},delay);}
   function listen(){
@@ -399,7 +401,7 @@ export function setupVoice({send, busy, toast, interrupt = () => {}, modelName =
     if(recordingMode){status('Нажми «Записать реплику», чтобы продолжить.','listening');return;}
     if(!Recognition)return;
     showTranscript({});
-    const token=epoch, r=new Recognition();recognition=r;r.lang=language;r.interimResults=true;r.continuous=false;r.maxAlternatives=1;
+    const token=epoch, r=new Recognition();recognition=r;r.lang=language;r.interimResults=true;r.continuous=false;r.maxAlternatives=3;
     if(recognitionHintsEnabled)addRecognitionHints(r,language);
     lastSpeechEnd=null;
     status('Слушаю тебя…','listening');
@@ -421,6 +423,11 @@ export function setupVoice({send, busy, toast, interrupt = () => {}, modelName =
         headers:{'Content-Type':'application/json','X-Velia-Request':'1'},
         body:JSON.stringify({event:'recognition_error',code,attempt:Math.min(attempt,3)})}).catch(()=>{});
       if(recoverable&&attempt<=2){status('Восстанавливаю распознавание. Повтори фразу после подключения…','thinking');later(token,attempt*750);return;}
+      if(recordingEnabled&&(recoverable||['language-not-supported','service-not-allowed'].includes(e.error))){
+        recordingMode=true;
+        listen();
+        return;
+      }
       active=false;status(({ 'not-allowed':'Разреши микрофон в настройках сайта и повтори подключение.', 'service-not-allowed':'Браузер запретил распознавание речи.', 'audio-capture':'Микрофон не найден или занят другим приложением.', network:'Сервис распознавания недоступен. Проверь соединение и повтори подключение.', 'language-not-supported':'Браузер не поддерживает распознавание языка аккаунта. Напиши сообщение текстом.' })[e.error]||'Не удалось распознать речь. Повтори подключение.','error');
     };
     function finishTurn(text){if(!valid())return;recognition=null;acceptTurn(text,token);}
@@ -461,7 +468,7 @@ export function setupVoice({send, busy, toast, interrupt = () => {}, modelName =
   }
   function update(text,final=false){
     if(!active||(!pending&&!final)||streamBlocked)return;
-    text=String(text||'');
+    text=polishVoiceReply(text);
     if(text.trim()&&latency&&latency.firstText===null)latency.firstText=performance.now();
     if(streamCursor&&text.slice(0,streamCursor)!==streamText.slice(0,streamCursor)){
       // A replacement may only change unsaid text. Keep the matching phrase
@@ -475,7 +482,7 @@ export function setupVoice({send, busy, toast, interrupt = () => {}, modelName =
       status('Уточняю ответ…','thinking');return;
     }
     streamText=text;if(document.hidden)return;
-    let cut;while((cut=speechReady(streamText.slice(streamCursor),final))>0){
+    let cut;while((cut=speechReady(streamText.slice(streamCursor),final,streamCursor===0))>0){
       const raw=streamText.slice(streamCursor,streamCursor+cut);streamCursor+=cut;
       streamQueue.push(...speechChunks(raw));
     }
@@ -485,6 +492,7 @@ export function setupVoice({send, busy, toast, interrupt = () => {}, modelName =
   }
   function complete(text){
     clearTimeout(waitingTimer);if(!pending||!active)return;
+    text=polishVoiceReply(text);
     if(document.hidden){deferredAnswer=text;status('Ответ готов','thinking');return;}
     if(streamBlocked||streamCursor&&String(text||'').slice(0,streamCursor)!==streamText.slice(0,streamCursor)){
       const plan=reconcileSpeech(text,completedSpeech,currentSpeech);

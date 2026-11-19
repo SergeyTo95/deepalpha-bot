@@ -1,6 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {sentenceBoundary,pronounceSpeech} from '../voice-text.mjs';
+import {polishVoiceReply,preferVoiceTranscript,sentenceBoundary,pronounceSpeech} from '../voice-text.mjs';
+
+test('speech alternatives can repair known names without changing surrounding words, numbers or negation',()=>{
+ const slot=(...variants)=>Object.assign(variants.map(transcript=>({transcript})),{isFinal:true});
+ assert.equal(preferVoiceTranscript(slot('Не трогай рейлвей до 21','Не трогай Railway до 21')),'Не трогай Railway до 21');
+ assert.equal(preferVoiceTranscript(slot('Не трогай рейлвей до 21','Трогай Railway до 20')),'Не трогай рейлвей до 21');
+ assert.equal(preferVoiceTranscript(slot('Проверь крем','Проверь Creem')),'Проверь крем');
+});
+
+test('the spoken reply uses feminine self-reference and preserves quotations',()=>{
+ assert.equal(polishVoiceReply('Поняла. Радо слышать!'),'Поняла. Рада слышать!');
+ assert.equal(polishVoiceReply('Рад слышать, что всё получилось.'),'Рада слышать, что всё получилось.');
+ const quote='Он сказал: «Рад слышать!»';
+ assert.equal(polishVoiceReply(quote),quote);
+});
 test('streaming speech does not pause at abbreviations, initials or decimals',()=>{
  for(const text of ['Это т. е. пример. Дальше','Ул. Ленина, д. 12. Дальше','Dr. Smith is here. Next','Цена 125.50. Дальше','А. С. Пушкин. Дальше']){
   const cut=sentenceBoundary(text);assert.equal(text.slice(cut).trim(),text.endsWith('Next')?'Next':'Дальше');

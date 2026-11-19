@@ -15,6 +15,30 @@ export function sentenceBoundary(text) {
  return 0;
 }
 
+const voiceNames = new Map([
+ ['агентикс','Agentix'], ['рейлвей','Railway'], ['рейлвэй','Railway'],
+ ['криим','Creem'], ['гитхаб','GitHub'],
+]);
+
+export function preferVoiceTranscript(result) {
+ const original=String(result?.[0]?.transcript||'').trim();
+ if(!result?.isFinal||result.length<2)return original;
+ const candidate=original.replace(/\p{L}+/gu,word=>voiceNames.get(word.toLowerCase())||word);
+ if(candidate===original)return original;
+ const expected=candidate.toLowerCase().replace(/\s+/g,' ');
+ for(let i=1;i<Math.min(result.length,3);i++){
+  if(String(result[i]?.transcript||'').trim().toLowerCase().replace(/\s+/g,' ')===expected)return candidate;
+ }
+ return original;
+}
+
+export function polishVoiceReply(text) {
+ const value=String(text??'');
+ if(!/[Рр]адо?\s+слышать/u.test(value))return value;
+ return value.replace(/(```[\s\S]*?(?:```|$)|`[^`\n]*(?:`|$)|«[^»]*(?:»|$)|"[^"\n]*(?:"|$))|(^|[.!?]\s+)([Рр]адо?)\s+(слышать)(?=[\s,.!?…:]|$)/gu,
+  (match,protectedText,start,form,verb)=>protectedText?match:start+(form[0]==='Р'?'Рада':'рада')+' '+verb);
+}
+
 // Ignore only validated thousands-group whitespace for speech reconciliation.
 // Keep every digit, decimal separator, sign, word and punctuation mark. Offsets
 // map the matched key back to the canonical source so its tail stays exact.

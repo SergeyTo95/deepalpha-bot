@@ -2,6 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {speechChunks,availableVoices,voiceChoice,speechReady,isRemoteVoice,recognitionLanguage,isVoiceEndCommand,conversationLanguages,fastDeviceVoice,automaticVoice,reconcileSpeech} from '../voice.mjs';
 
+test('the first spoken clause can start earlier without splitting money amounts',()=>{
+ const phrase='Проверю настройку голосового режима, и ';
+ assert.equal(speechReady(phrase,false,true),phrase.indexOf(',')+1);
+ assert.equal(speechReady(phrase,false,false),0);
+ assert.equal(speechReady('Получилась итоговая сумма 125, ',false,true),0);
+});
+
 test('canonical speech reconciliation keeps full matching phrases and preserves changed numbers and negation',()=>{
  for(const greeting of ['Привет!','Merhaba!','مرحبا!','こんにちは！']){
   const plan=reconcileSpeech(greeting+' Новый факт.',[],greeting);

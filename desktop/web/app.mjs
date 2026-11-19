@@ -25,6 +25,7 @@ import {setupFeatures, featureRequest, chatSpecialty} from "./features.mjs";
 import {isAgentixBusinessBrief,businessContinuationReminder} from "./agentix-business-builder.mjs";
 import {prepareFile, fileSize, setupFileTools} from "./files.mjs";
 import {setupVoice} from "./voice.mjs";
+import {polishVoiceReply} from "./voice-text.mjs";
 import {setupBackgroundTasks, taskAcknowledgement} from "./background-tasks.mjs";
 import {setupAutoloop, parseAutoloop} from './autoloop.mjs';
 import {setupIncomePlanner} from './income-planner.mjs';
@@ -1597,9 +1598,9 @@ async function generate(retry = false, voiceTurn = false) {
       renderGuestCounter();
     }
     const result = await readCompletion(response, (content) => {
-      answer.content = content;
+      answer.content = voiceTurn ? polishVoiceReply(content) : content;
       if (content) clearTimeout(slowTimer);
-      if (voiceTurn) voice.update(content);
+      if (voiceTurn) voice.update(answer.content);
       $("generation-status").textContent = "";
       queuePaint();
       scheduleSave();

@@ -71,12 +71,13 @@ function fixture(t,{responder,speech=false,remote=false,remoteProblem=()=>null,r
  const voice=setupVoice({send:text=>{sent.push(text);return completion=responder?responder(voice):Promise.resolve(voice.complete(''));},busy,interrupt,toast(){},accountLanguage:()=> 'ru',modelName:()=>model});
  t.after(()=>{voice.stop();for(const [key,descriptor] of previous){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];}});
  voice.open();
+ const action=className=>body.children[0].children.find(n=>n.className==='voice-call-actions').children.find(n=>n.className===className);
  return {voice,recognizers,sent,events,spoken,preparations,media,sockets,httpSpeech,recorders,tracks,transcriptions,
   transcript:()=>body.children[0].children.find(n=>n.className==='voice-transcript'),
-  record:()=>body.children[0].children.find(n=>n.className==='voice-record'),
-  native:()=>body.children[0].children.find(n=>n.className==='voice-native'),
-  interrupt:()=>body.children[0].children.find(n=>n.className==='voice-interrupt'),
-  mute:()=>body.children[0].children.find(n=>n.className==='voice-mute'),get completion(){return completion;},tick:ms=>t.mock.timers.tick(ms),status:()=>body.children[0].children.find(n=>n.tag==='p'&&n.className==='voice-status')?.textContent};
+  record:()=>action('voice-record'),
+  native:()=>action('voice-native'),
+  interrupt:()=>action('voice-interrupt'),
+  mute:()=>action('voice-mute'),get completion(){return completion;},tick:ms=>t.mock.timers.tick(ms),status:()=>body.children[0].children.find(n=>n.tag==='p'&&n.className==='voice-status')?.textContent};
 }
 
 test('Safari prefixed recognition displays revisions but sends only the final complete phrase once',t=>{
@@ -135,7 +136,10 @@ test('muting during a fallback recording discards captured audio and late record
 
 test('switching from manual recording back to native recognition cancels captured audio',async t=>{
  const s=fixture(t,{recognition:'webkit',recording:true});await flush();
- const old=s.recognizers[0];s.record().onclick();await flush();assert.equal(s.native().hidden,false);
+ const old=s.recognizers[0];assert.equal(s.record().hidden,true);assert.equal(s.native().hidden,true);
+ old.onerror({error:'language-not-supported'});
+ assert.equal(s.record().hidden,false);assert.equal(s.native().hidden,false);
+ s.record().onclick();await flush();
  s.native().onclick();await flush();assert.equal(s.recognizers.length,2);assert.equal(s.native().hidden,true);
  old.onresult({results:[Object.assign([{transcript:'Старая реплика'}],{isFinal:true})]});old.onend();
  assert.deepEqual(s.sent,[]);assert.deepEqual(s.transcriptions,[]);assert.ok(s.tracks.every(track=>track.stopped));
@@ -186,7 +190,7 @@ test('muting during an answer preserves playback and does not automatically reop
 test('muting cancels pending network recovery and a new conversation starts with microphone enabled',t=>{
  const s=fixture(t);s.recognizers[0].onerror({error:'network'});s.mute().onclick();s.tick(10000);
  assert.equal(s.recognizers.length,1);s.voice.stop();s.voice.open();
- assert.equal(s.recognizers.length,2);assert.equal(s.mute().textContent,'Выключить микрофон');
+ assert.equal(s.recognizers.length,2);assert.equal(s.mute().textContent,'Микрофон');
 });
 
 test('non-speech result markers never send a model request or end the conversation',t=>{
