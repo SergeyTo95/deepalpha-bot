@@ -44,6 +44,17 @@ def test_irina_preview_requires_the_configured_owner_and_keeps_cloud_voices(monk
             assert response.headers.get('X-Velia-Audio-Stream') is None
             assert await response.read() == b'fixture-mp3'
             assert calls == [('Привет!', 1.2)]
+
+            def deny_file_access(path, *args, **kwargs):
+                raise PermissionError(13, 'Permission denied', path)
+
+            with monkeypatch.context() as unreadable:
+                unreadable.setattr(type(model), 'is_file', deny_file_access)
+                response = await client.get(catalog, headers=owner)
+                assert response.status == 200
+                assert (await response.json())['voices'] == routes.EDGE_VOICES
+                assert (await client.post(speak, headers=owner, json=body)).status == 400
+
             monkeypatch.delenv('VELIA_WEB_IRINA_OWNER_ID')
             assert (await client.post(speak, headers=owner, json=body)).status == 400
     asyncio.run(scenario())

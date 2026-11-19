@@ -118,11 +118,13 @@ COPY --from=checked /app/velia_request_understanding.py /app/velia_request_under
 COPY --from=checked /app/velia_natural_writing.py /app/velia_natural_writing.py
 COPY --from=checked /app/velia_code_quality.py /app/velia_code_quality.py
 COPY --from=checked /app/desktop /app/desktop
-COPY --from=irina-model --chmod=0444 /irina.onnx /irina.onnx.json /opt/velia/voice/
+COPY --from=irina-model /irina.onnx /irina.onnx.json /opt/velia/voice/
+RUN chmod 0755 /opt/velia /opt/velia/voice && chmod 0444 /opt/velia/voice/irina.onnx /opt/velia/voice/irina.onnx.json
 COPY --from=checked /app/services/velia_structured_output.py /app/services/velia_structured_output.py
 COPY desktop/scripts/probe-live-flash.mjs /app/desktop/scripts/probe-live-flash.mjs
 COPY desktop/src/config.mjs desktop/src/proxy.mjs desktop/src/engineering-policy.json /app/desktop/src/
 USER velia
+RUN test -r /opt/velia/voice/irina.onnx && test -r /opt/velia/voice/irina.onnx.json
 RUN node /opt/velia-qualification/harness/node_modules/@deepseek-ai/dsh/lib/bin.js --version
 EXPOSE 8080
 CMD ["python", "-m", "desktop.gateway"]

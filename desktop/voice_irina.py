@@ -1,6 +1,7 @@
 """Opt-in, CPU-only Russian speech for the VELIA owner."""
 import asyncio
 import json
+import logging
 import os
 from pathlib import Path
 import subprocess
@@ -10,6 +11,7 @@ VOICE = {"voiceURI": "piper:irina", "name": "Ирина · быстрая", "lan
 MODEL_PATH = Path("/opt/velia/voice/irina.onnx")
 SAMPLE_RATE = 22050
 MAX_PCM_BYTES = SAMPLE_RATE * 2 * 90
+LOG = logging.getLogger(__name__)
 
 
 class IrinaVoice:
@@ -21,8 +23,14 @@ class IrinaVoice:
 
     def available_to(self, user_id):
         owner = os.getenv("VELIA_WEB_IRINA_OWNER_ID", "").strip()
-        return (type(user_id) is int and user_id > 0 and owner == str(user_id)
-                and self.path.is_file() and self.config_path.is_file())
+        if type(user_id) is not int or user_id <= 0 or owner != str(user_id):
+            return False
+        try:
+            return all(path.is_file() and os.access(path, os.R_OK)
+                       for path in (self.path, self.config_path))
+        except OSError as exc:
+            LOG.warning("Irina voice assets unavailable (errno=%s)", exc.errno)
+            return False
 
     def _load(self):
         from onnxruntime import InferenceSession, SessionOptions
