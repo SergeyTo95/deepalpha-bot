@@ -12,6 +12,11 @@ from velia_desktop_routes import AuthenticationUnavailable
 LOG = logging.getLogger(__name__)
 MAX_AUDIO = 1024 * 1024
 TYPES = {"audio/webm": "webm", "audio/mp4": "mp4", "audio/ogg": "ogg"}
+WEB_VOICE_PROMPTS = {
+    "ru": "Названия: Велия, Velyon Core, Agentix, Railway, Creem, GitHub.",
+    "en": "Names: Velia, Velyon Core, Agentix, Railway, Creem, GitHub.",
+    "tr": "İsimler: Velia, Velyon Core, Agentix, Railway, Creem, GitHub.",
+}
 
 class TranscriptionLimited(RuntimeError):
     pass
@@ -29,7 +34,7 @@ def audio_type(data, mime):
         return mime
     raise ValueError("invalid_audio")
 
-async def transcribe(data, mime, language, *, timeout=15, max_text=12000):
+async def transcribe(data, mime, language, *, timeout=15, max_text=12000, prompt=""):
     form = FormData()
     extension={**TYPES,'audio/mpeg':'mp3','audio/wav':'wav','audio/flac':'flac'}[mime]
     form.add_field("file", data, filename="utterance." + extension, content_type=mime)
@@ -37,6 +42,8 @@ async def transcribe(data, mime, language, *, timeout=15, max_text=12000):
     form.add_field("response_format", "json")
     form.add_field("temperature", "0")
     if language:form.add_field("language", language)
+    if prompt:
+        form.add_field("prompt", prompt)
     async with ClientSession(timeout=ClientTimeout(total=timeout, connect=4)) as client:
         async with client.post("https://api.groq.com/openai/v1/audio/transcriptions", data=form,
                 headers={"Authorization": "Bearer " + os.environ["GROQ_API_KEY"]}, allow_redirects=False) as response:
@@ -92,7 +99,7 @@ def setup_transcription(app, *, session_for, same_origin, json_response):
                     if len(data) > MAX_AUDIO:
                         return json_response({"error": "request_too_large"}, 413)
                 mime = audio_type(data, request.content_type)
-                text = await transcribe(bytes(data), mime, language)
+                text = await transcribe(bytes(data), mime, language, prompt=WEB_VOICE_PROMPTS.get(language, ""))
             LOG.info("VELIA_VOICE_STT provider=groq total_ms=%d", round((time.monotonic()-now)*1000))
             return json_response({"text": text})
         except AuthenticationUnavailable:

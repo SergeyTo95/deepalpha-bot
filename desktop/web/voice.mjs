@@ -4,6 +4,8 @@ import {canRecord,createVoiceCapture} from './voice-capture.mjs';
 import {pronounceSpeech,sentenceBoundary,speechIdentity} from './voice-text.mjs';
 // Every choice represents an actual engine voice, never a renamed pitch alias.
 const REMOTE_FIRST_AUDIO_MS = 4500;
+const RECOGNITION_FINAL_GRACE_MS = 450;
+const RECOGNITION_IDLE_MS = 1000;
 const REMOTE_VOICES = new Set(['speechkit:jane','speechkit:omazh','speechkit:marina',
  'edge:ru-RU-SvetlanaNeural','edge:en-US-EmmaMultilingualNeural','edge:en-US-AvaMultilingualNeural']);
 export const isRemoteVoice = uri => REMOTE_VOICES.has(uri);
@@ -36,18 +38,19 @@ export function hasRecognizedSpeech(text) {
 // Keep accepting final results after stop(): the browser may finalize captured
 // audio asynchronously. Never submit an interim hypothesis or a truncated turn.
 export function bindRecognitionTurn(r,{valid,finish,incomplete,speechEnded=()=>{},transcript=()=>{},setTimer=setTimeout,clearTimer=clearTimeout}) {
-  let final='',interim='',idleTimer=null,endTimer=null,stopping=false,closed=false,speaking=false;
+  let final='',interim='',idleTimer=null,endTimer=null,stopping=false,closed=false,speaking=false,ended=false;
   const alive=()=>!closed&&valid();
   function cancel(){closed=true;clearTimer(idleTimer);clearTimer(endTimer);}
   function scheduleStop(){
     clearTimer(idleTimer);
     if(!alive()||stopping||speaking||!final.trim()||interim.trim())return;
+    // Older recognizers may return final text before signalling the end of speech.
     idleTimer=setTimer(()=>{
       if(!alive())return;
       stopping=true;
       endTimer=setTimer(()=>{if(!alive())return;cancel();incomplete();r.abort?.();},2000);
       try{r.stop();}catch{cancel();incomplete();r.abort?.();}
-    },1000);
+    },ended?RECOGNITION_FINAL_GRACE_MS:RECOGNITION_IDLE_MS);
   }
   r.onresult=e=>{
     if(!alive())return;
@@ -68,10 +71,20 @@ export function bindRecognitionTurn(r,{valid,finish,incomplete,speechEnded=()=>{
     transcript({final:final.trim(),interim:interim.trim()});
     scheduleStop();
   };
-  r.onspeechstart=()=>{if(alive()){speaking=true;clearTimer(idleTimer);}};
-  r.onspeechend=()=>{if(alive()){speaking=false;speechEnded();scheduleStop();}};
+  r.onspeechstart=()=>{if(alive()){speaking=true;ended=false;clearTimer(idleTimer);}};
+  r.onspeechend=()=>{if(alive()){speaking=false;ended=true;speechEnded();scheduleStop();}};
   r.onend=()=>{if(!alive())return;cancel();if(interim.trim())incomplete();else finish(final.trim());};
   return cancel;
+}
+function addRecognitionHints(recognizer, language) {
+  if (!('phrases' in recognizer) || typeof window.SpeechRecognitionPhrase !== 'function') return;
+  const assistant = language.split('-')[0] === 'ru' ? 'Велия' : 'Velia';
+  try {
+    recognizer.phrases = [assistant, 'Velyon Core', 'Agentix', 'Railway', 'Creem', 'GitHub']
+      .map(phrase => new window.SpeechRecognitionPhrase(phrase, 3));
+  } catch {
+    // Browser recognition remains available without contextual biasing.
+  }
 }
 export function isVoiceEndCommand(text) {
   const phrase=String(text||'').toLowerCase().replace(/ё/g,'е').replace(/[^\p{L}\p{N}\s]/gu,' ').replace(/\s+/g,' ').trim()
@@ -136,7 +149,7 @@ export function reconcileSpeech(text, completed=[], current='') {
  return {canonical,completed:retained,keepCurrent,remaining:canonical.slice(cursor?identity.ends[cursor-1]:0).trim()};
 }
 
-export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH', accountLanguage = () => ''}) {
+export function setupVoice({send, busy, toast, interrupt = () => {}, modelName = () => 'VELIA FLASH', accountLanguage = () => ''}) {
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const synth = window.speechSynthesis;
   let recognition = null, active = false, pending = false, epoch = 0, timer = null, speechEpoch = 0, recognitionFailures = 0, micMuted=false;
@@ -145,6 +158,7 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH', 
   const audioJobs=new Set();
   const preparedPlayer=createPreparedAudioPlayer();let playbackSerial=0,channelEnabled=false,answerChannel=null,readyMs=1000,playingPart=null;
   let lastSpeechEnd=null,latency=null,speechFlow=null,deviceFallback=null,recordingMode=!Recognition,recordingEnabled=false,captureBusy=false;
+  let recognitionHintsEnabled=true;
   function reportFlow(outcome){
     if(!speechFlow||speechFlow.reported)return;
     speechFlow.reported=true;
@@ -208,6 +222,33 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH', 
   };
   const resumeSpeech=node('button','Продолжить озвучку','voice-resume');resumeSpeech.hidden=true;
   resumeSpeech.onclick=()=>{if(!active||!speechPaused)return;speechPaused=false;resumeSpeech.hidden=true;speechEpoch++;pumpStream();};
+  const interruptButton=node('button','Перебить','voice-interrupt');interruptButton.hidden=true;
+  interruptButton.onclick=()=>{
+    if(!active||interruptButton.hidden)return;
+    const requestPending=pending;
+    pending=false;
+    epoch++;
+    speechEpoch++;
+    if(speechFlow)speechFlow.interruptions++;
+    reportFlow('cancelled');
+    speechFlow=null;
+    latency=null;
+    deferredAnswer=null;
+    streamQueue=[];
+    streamDone=false;
+    streamBlocked=false;
+    speechPaused=false;
+    resumeSpeech.hidden=true;
+    currentSpeech='';
+    currentUtterance=null;
+    clearTimeout(waitingTimer);
+    clearTimeout(speechTimer);
+    cancelAudio();
+    synth?.cancel();
+    if(requestPending)interrupt();
+    if(busy())status('Завершаю текущий ответ…','thinking');
+    listen();
+  };
   const voiceSelectors=new Set(), speechTests=new Set();
   const fastVoice=node('button','Быстрый голос телефона','voice-fast');fastVoice.hidden=true;
   fastVoice.onclick=()=>{const selected=fastDeviceVoice(synth?.getVoices()||[],language);if(!selected)return;const reopen=dialog.open;stop();voiceURI='';save();refreshVoices();if(reopen)begin();};
@@ -342,9 +383,9 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH', 
     }catch(error){if(error.name!=='AbortError')remoteFailed();}
   }
   function voiceControl(){const label=node('label','Голос Велии','voice-profile'), select=node('select');select.setAttribute('aria-label','Голос');voiceSelectors.add(select);select.onchange=()=>{const reopen=dialog.open;stop();voiceURI=select.value;save();refreshVoices();if(reopen)begin();};label.append(select);return label;}
-  dialog.append(close,title,modelLabel,orb,state,transcript,voiceControl(),mute,record,nativeInput,recordNotice,fastVoice,resumeSpeech,reconnect,node('p','Ответы сохраняются в диалоге.','voice-hint'));
+  dialog.append(close,title,modelLabel,orb,state,transcript,interruptButton,voiceControl(),mute,record,nativeInput,recordNotice,fastVoice,resumeSpeech,reconnect,node('p','Ответы сохраняются в диалоге.','voice-hint'));
   document.body.append(dialog);refreshVoices();synth?.addEventListener('voiceschanged',refreshVoices);
-  const status = (text, phase='idle') => {if(active&&micMuted&&phase==='listening'){text='Микрофон выключен. Нажми «Включить микрофон», чтобы продолжить.';phase='paused';}state.textContent=text;dialog.dataset.phase=phase;reconnect.hidden=active||phase!=='error';mute.hidden=!active;record.disabled=micMuted||pending||!!currentUtterance;nativeInput.hidden=!Recognition||!recordingMode;nativeInput.disabled=pending||!!currentUtterance;};
+  const status = (text, phase='idle') => {if(active&&micMuted&&phase==='listening'){text='Микрофон выключен. Нажми «Включить микрофон», чтобы продолжить.';phase='paused';}state.textContent=text;dialog.dataset.phase=phase;reconnect.hidden=active||phase!=='error';mute.hidden=!active;interruptButton.hidden=!active||!(pending||currentSpeech||currentUtterance||speechPaused);record.disabled=micMuted||pending||!!currentUtterance;nativeInput.hidden=!Recognition||!recordingMode;nativeInput.disabled=pending||!!currentUtterance;};
   const save=()=>{try {localStorage.setItem('velia-voice-mode',voiceURI?'manual':'auto');localStorage.setItem('velia-voice-uri',voiceURI);localStorage.setItem('velia-voice-rate',String(rate));}catch{}};
   let streamText='',streamCursor=0,streamQueue=[],streamDone=false,streamBlocked=false,completedSpeech=[],currentSpeech='';
   function stop(){reportFlow('cancelled');speechFlow=null;deviceFallback=null;capture.cancel();captureBusy=false;showTranscript({});resumeWhenVisible=false;micMuted=false;mute.textContent='Выключить микрофон';mute.setAttribute('aria-pressed','false');speechPaused=false;resumeSpeech.hidden=true;recognitionFailures=0;lastSpeechEnd=null;latency=null;cancelAudio();streamText='';streamCursor=0;streamQueue=[];streamDone=false;streamBlocked=false;completedSpeech=[];currentSpeech='';clearTimeout(waitingTimer);cancelRecognitionTurn();deferredAnswer=null;active=false;pending=false;epoch++;speechEpoch++;clearTimeout(timer);clearTimeout(speechTimer);currentUtterance=null;const old=recognition;recognition=null;old?.abort();synth?.cancel();status('Разговор завершён.');}
@@ -359,6 +400,7 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH', 
     if(!Recognition)return;
     showTranscript({});
     const token=epoch, r=new Recognition();recognition=r;r.lang=language;r.interimResults=true;r.continuous=false;r.maxAlternatives=1;
+    if(recognitionHintsEnabled)addRecognitionHints(r,language);
     lastSpeechEnd=null;
     status('Слушаю тебя…','listening');
     const valid=()=>active&&!micMuted&&token===epoch&&recognition===r;
@@ -367,6 +409,11 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH', 
     r.onerror=e=>{
       if(!valid()||e.error==='no-speech')return;
       cancelRecognitionTurn();recognition=null;r.abort();
+      if(e.error==='phrases-not-supported'&&recognitionHintsEnabled){
+        recognitionHintsEnabled=false;
+        later(token,0);
+        return;
+      }
       const recoverable=['network','aborted'].includes(e.error), attempt=++recognitionFailures;
       // Report only a bounded error code; never send speech or audio diagnostics.
       const code=['network','aborted','not-allowed','service-not-allowed','audio-capture','language-not-supported'].includes(e.error)?e.error:'unknown';
@@ -456,6 +503,7 @@ export function setupVoice({send, busy, toast, modelName = () => 'VELIA FLASH', 
   }
   function backgroundAccepted(text=''){
     modelLabel.textContent=modelName();
+    if(!pending||!active)return;
     if(text){complete(text);return;}
     clearTimeout(waitingTimer);pending=false;streamDone=true;if(active)pumpStream();
   }

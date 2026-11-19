@@ -4,7 +4,7 @@ import {setupVoice} from '../voice.mjs';
 import {readCompletion} from '../core.mjs';
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 
-function fixture(t,{responder,speech=false,remote=false,remoteProblem=()=>null,recognition='standard',recording=false,model='VELIA FLASH'}={}) {
+function fixture(t,{responder,speech=false,remote=false,remoteProblem=()=>null,recognition='standard',recording=false,model='VELIA FLASH',contextualHints=false,interrupt=()=>{},busy=()=>false}={}) {
  t.mock.timers.enable({apis:['setTimeout']});
  const recognizers=[],sent=[],events=[],spoken=[],preparations=[],media=[],sockets=[],httpSpeech=[],recorders=[],tracks=[],transcriptions=[];let completion;
  class Element {
@@ -17,7 +17,7 @@ function fixture(t,{responder,speech=false,remote=false,remoteProblem=()=>null,r
   close(){this.open=false;this.listeners.close?.();}
  }
  class Recognition {
-  constructor(){recognizers.push(this);}
+  constructor(){if(contextualHints)this.phrases=[];recognizers.push(this);}
   start(){this.started=true;}
   abort(){this.onend?.();}
   stop(){this.onend?.();}
@@ -65,15 +65,17 @@ function fixture(t,{responder,speech=false,remote=false,remoteProblem=()=>null,r
   SpeechSynthesisUtterance:class {constructor(text){this.text=text;}},
   navigator:{language:'ru-RU',...(recording?{mediaDevices:{getUserMedia:async()=>{const track={stopped:false,stop(){this.stopped=true;}};tracks.push(track);return {getTracks:()=>[track]};}}}:{})},localStorage:{getItem:key=>remote&&speech?({'velia-voice-mode':'manual','velia-voice-uri':'edge:ru-RU-SvetlanaNeural'}[key]||null):null},
   fetch:async(url,options)=>{if(url.includes('/transcribe?')){transcriptions.push(options);return {ok:true,json:async()=>({text:'Не отправляй 125 рублей'})};}if(url.endsWith('/events'))events.push(JSON.parse(options.body));if(url.endsWith('/prepare'))preparations.push(JSON.parse(options.body));if(url.includes('/speech')){httpSpeech.push(url);throw Error('unexpected HTTP speech');}return {ok:true,json:async()=>remote?{voices:[{voiceURI:'edge:ru-RU-SvetlanaNeural',lang:'ru-RU',name:'Светлана'}],channel:true}:{voices:[],transcription:recording}};}};
+ if(contextualHints)globals.window.SpeechRecognitionPhrase=class{constructor(phrase,boost){this.phrase=phrase;this.boost=boost;}};
  const previous=new Map();
  for(const [key,value] of Object.entries(globals)){previous.set(key,Object.getOwnPropertyDescriptor(globalThis,key));Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});}
- const voice=setupVoice({send:text=>{sent.push(text);return completion=responder?responder(voice):Promise.resolve(voice.complete(''));},busy:()=>false,toast(){},accountLanguage:()=> 'ru',modelName:()=>model});
+ const voice=setupVoice({send:text=>{sent.push(text);return completion=responder?responder(voice):Promise.resolve(voice.complete(''));},busy,interrupt,toast(){},accountLanguage:()=> 'ru',modelName:()=>model});
  t.after(()=>{voice.stop();for(const [key,descriptor] of previous){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];}});
  voice.open();
  return {voice,recognizers,sent,events,spoken,preparations,media,sockets,httpSpeech,recorders,tracks,transcriptions,
   transcript:()=>body.children[0].children.find(n=>n.className==='voice-transcript'),
   record:()=>body.children[0].children.find(n=>n.className==='voice-record'),
   native:()=>body.children[0].children.find(n=>n.className==='voice-native'),
+  interrupt:()=>body.children[0].children.find(n=>n.className==='voice-interrupt'),
   mute:()=>body.children[0].children.find(n=>n.className==='voice-mute'),get completion(){return completion;},tick:ms=>t.mock.timers.tick(ms),status:()=>body.children[0].children.find(n=>n.tag==='p'&&n.className==='voice-status')?.textContent};
 }
 
@@ -83,6 +85,36 @@ test('Safari prefixed recognition displays revisions but sends only the final co
  assert.equal(s.transcript().textContent,'Не от');assert.deepEqual(s.sent,[]);
  r.onresult({results:[Object.assign([{transcript:'Не отправляй 125 рублей'}],{isFinal:true})]});r.onend();r.onend();
  assert.deepEqual(s.sent,['Не отправляй 125 рублей']);
+});
+
+test('confirmed speech end lowers the final-text grace to 450 ms and preserves a resumed phrase',t=>{
+ const s=fixture(t,{speech:true}),r=s.recognizers[0];
+ const result=(text,isFinal)=>r.onresult({results:[Object.assign([{transcript:text}],{isFinal})]});
+ r.onspeechstart();result('Не отправляй',true);r.onspeechend();s.tick(400);
+ r.onspeechstart();result('Не отправляй 125',false);s.tick(1000);
+ assert.deepEqual(s.sent,[]);
+ r.onspeechend();result('Не отправляй 125 рублей',true);s.tick(449);
+ assert.deepEqual(s.sent,[]);
+ s.tick(1);assert.deepEqual(s.sent,['Не отправляй 125 рублей']);
+});
+
+test('recognition without an end-of-speech signal keeps the one-second grace',t=>{
+ const s=fixture(t),r=s.recognizers[0];
+ r.onresult({results:[Object.assign([{transcript:'Да'}],{isFinal:true})]});s.tick(999);
+ assert.deepEqual(s.sent,[]);
+ s.tick(1);assert.deepEqual(s.sent,['Да']);
+});
+
+test('contextual phrase hints fall back on unsupported recognition without rewriting the transcript',t=>{
+ const s=fixture(t,{contextualHints:true}),old=s.recognizers[0];
+ assert.ok(old.phrases.some(p=>p.phrase==='Велия'&&p.boost===3));
+ assert.ok(old.phrases.some(p=>p.phrase==='Creem'));
+ old.onerror({error:'phrases-not-supported'});s.tick(1);
+ assert.equal(s.recognizers.length,2);
+ const current=s.recognizers[1];
+ assert.deepEqual(current.phrases,[]);
+ current.onresult({results:[Object.assign([{transcript:'Не трогай Creem'}],{isFinal:true})]});current.onend();
+ assert.deepEqual(s.sent,['Не трогай Creem']);
 });
 
 test('without native recognition the Safari recording fallback waits for a gesture and returns to manual listening after an answer',async t=>{
@@ -176,6 +208,30 @@ test('permission denial never retries and stopping cancels a scheduled recovery'
 });
 
 function submit(s){const r=s.recognizers.at(-1);r.onresult({results:[Object.assign([{transcript:'Привет'}],{isFinal:true})]});r.onend();}
+
+test('interruption cancels a pending reply, ignores stale speech and reopens the microphone',async t=>{
+ let busy=false,release,interrupted,interruptions=0;
+ const s=fixture(t,{speech:true,busy:()=>busy,interrupt:()=>{interruptions++;interrupted.failure();},responder:voice=>{
+  busy=true;interrupted=voice;voice.update('Первый ответ.');
+  return new Promise(resolve=>{release=()=>{voice.update('Первый ответ. Запоздалый фрагмент.');voice.complete('Первый ответ. Запоздалый финал.');resolve();};});
+ }});
+ submit(s);assert.equal(s.interrupt().hidden,false);
+ const old=s.spoken[0];s.interrupt().onclick();old.onend();
+ assert.equal(s.recognizers.length,1);assert.equal(s.interrupt().hidden,true);
+ release();await s.completion;busy=false;s.tick(400);
+ assert.equal(interruptions,1);assert.equal(s.interrupt().hidden,true);assert.equal(s.recognizers.length,2);
+ assert.deepEqual(s.spoken.map(u=>u.text),['Первый ответ.']);assert.equal(s.status(),'Слушаю тебя…');
+});
+
+test('interruption of finished playback respects a muted microphone and does not cancel an already finished request',async t=>{
+ let interruptions=0;
+ const s=fixture(t,{speech:true,interrupt:()=>interruptions++,responder:async voice=>voice.complete('Ответ готов. Ещё предложение.')});
+ submit(s);await s.completion;s.mute().onclick();
+ assert.equal(s.interrupt().hidden,false);
+ s.interrupt().onclick();s.spoken[0].onend();s.tick(1000);
+ assert.equal(interruptions,0);assert.equal(s.recognizers.length,1);assert.equal(s.spoken.length,1);
+ assert.match(s.status(),/Микрофон выключен/);
+});
 
 test('split canonical reset keeps speech running and returns to the microphone',async t=>{
  const s=fixture(t,{speech:true,responder:async voice=>{

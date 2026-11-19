@@ -82,6 +82,7 @@ let profile = null,
   currentId = null,
   storageKey = null,
   abort = null,
+  interruptibleVoiceRequest = null,
   busy = false,
   deleteId = null,
   takeoverState = null,
@@ -186,7 +187,11 @@ async function saveIncomePlan(plan) {
   if (profile?.account === owner) toast(saved ? 'План сохранён в истории этого браузера.' :
     'План открыт. Сохранение на устройстве недоступно. Его можно скачать в меню диалога.');
 }
-const voice = setupVoice({accountLanguage:()=>profile?.language||'', busy:()=>busy, toast, modelName:()=>MODELS[model], send:text=>{if(agentMode&&model==='velia-flash')setAgentMode(false);$("prompt").value=text;return generate(false, true);}});
+const voice = setupVoice({
+  accountLanguage:()=>profile?.language||'', busy:()=>busy, toast, modelName:()=>MODELS[model],
+  interrupt:()=>{if(interruptibleVoiceRequest===abort)abort?.abort();},
+  send:text=>{if(agentMode&&model==='velia-flash')setAgentMode(false);$("prompt").value=text;return generate(false, true);},
+});
 const pulse=setupPulse({taskInbox:()=>missions.notifications(),readTask:id=>missions.readNotice(id),request:featureRequest,profile:()=>profile,toast,accountChanged:()=>resetOtherTab(),changed:()=>{const b=document.querySelector('[data-section="pulse"]');if(b){const count=pulse.state().notifications.filter(n=>n.status==='unread').length;b.setAttribute('aria-label','Пульс'+(count?' · непрочитанных '+count:''));b.dataset.unread=count||'';const bell=$('pulse-open');if(bell){bell.dataset.unread=count||'';bell.setAttribute('aria-label','Пульс'+(count?' · непрочитанных '+count:' — напоминания'));}}}});
 const webPush=setupWebPush({profile:()=>profile,pulse});
 async function openPulseResource(resource){
@@ -1494,7 +1499,9 @@ async function generate(retry = false, voiceTurn = false) {
   chat.messages.push(answer);
   chat.updated = Date.now();
   abort = new AbortController();
-  const voiceTimeout=voiceTurn?setTimeout(()=>abort?.abort(),90000):null;
+  const replyController = abort;
+  if(voiceTurn&&!agentMode&&!privateTurn)interruptibleVoiceRequest=replyController;
+  const voiceTimeout=voiceTurn?setTimeout(()=>replyController.abort(),90000):null;
   setBusy(true);
   render();
   scrollDown(true);
@@ -1650,6 +1657,7 @@ async function generate(retry = false, voiceTurn = false) {
     clearTimeout(saveTimer);
     saveTimer = null;
     answer.pending = false;
+    if(interruptibleVoiceRequest===replyController)interruptibleVoiceRequest=null;
     abort = null;
     setBusy(false);
     $("generation-status").textContent = "";

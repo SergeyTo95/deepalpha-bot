@@ -27,8 +27,8 @@ def test_free_account_guard(monkeypatch):
 def test_authenticated_bounded_transcription_rejects_origin_bad_audio_and_overload(monkeypatch,caplog):
     async def scenario():
         calls=[]
-        async def transcribe(data,mime,language):
-            calls.append((data,mime,language))
+        async def transcribe(data,mime,language,*,prompt):
+            calls.append((data,mime,language,prompt))
             return 'Нет, 125,5 рублей'
         monkeypatch.setattr(stt,'transcribe',transcribe)
         monkeypatch.setenv('GROQ_API_KEY','private key must not appear')
@@ -56,7 +56,7 @@ def test_authenticated_bounded_transcription_rejects_origin_bad_audio_and_overlo
             response=await client.post(url,data=data,headers=headers)
             assert response.status==200 and await response.json()=={'text':'Нет, 125,5 рублей'}
             assert response.headers['Cache-Control']=='no-store'
-            assert calls==[(data,'audio/mp4','ru')]
+            assert calls==[(data,'audio/mp4','ru',stt.WEB_VOICE_PROMPTS['ru'])]
             for _ in range(5):
                 assert (await client.post(url,data=data,headers=headers)).status==200
             assert (await client.post(url,data=data,headers=headers)).status==429
@@ -66,7 +66,7 @@ def test_authenticated_bounded_transcription_rejects_origin_bad_audio_and_overlo
 def test_cancellation_releases_capacity_without_replaying_the_provider(monkeypatch):
     async def scenario():
         entered=asyncio.Event();calls=[]
-        async def blocked(*args):
+        async def blocked(*args,**kwargs):
             calls.append(args);entered.set();await asyncio.Event().wait()
         monkeypatch.setattr(stt,'transcribe',blocked)
         monkeypatch.setattr(stt,'enabled',lambda:True)
@@ -80,7 +80,7 @@ def test_cancellation_releases_capacity_without_replaying_the_provider(monkeypat
         request=SimpleNamespace(query={'language':'ru'},content_type='audio/mp4',content=Content())
         task=asyncio.create_task(handler(request));await entered.wait();task.cancel()
         with pytest.raises(asyncio.CancelledError):await task
-        monkeypatch.setattr(stt,'transcribe',lambda *args:asyncio.sleep(0,result='да'))
+        monkeypatch.setattr(stt,'transcribe',lambda *args,**kwargs:asyncio.sleep(0,result='да'))
         response=await handler(request)
         assert response.status==200 and len(calls)==1
     asyncio.run(scenario())
@@ -107,7 +107,10 @@ def test_provider_multipart_fixed_model_url_no_redirects_and_bounded_results(mon
         assert request['allow_redirects'] is False
         fields={field[0]['name']:field[2] for field in request['data']._fields}
         assert fields['model']=='whisper-large-v3-turbo' and fields['language']=='tr'
-        assert fields['file']==b'OggS' and 'url' not in fields
+        assert fields['file']==b'OggS' and 'url' not in fields and 'prompt' not in fields
+        assert await stt.transcribe(b'OggS','audio/ogg','tr',prompt=stt.WEB_VOICE_PROMPTS['tr'])=='hello'
+        hinted={field[0]['name']:field[2] for field in seen[-1][1]['data']._fields}
+        assert hinted['prompt']==stt.WEB_VOICE_PROMPTS['tr']
         Response.status=502
         with pytest.raises(RuntimeError):await stt.transcribe(b'OggS','audio/ogg','tr')
         Response.status=429
