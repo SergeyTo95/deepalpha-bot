@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM node:24.19.0-bookworm-slim AS qualification
 # Published CLI and all transitive artifacts are integrity-pinned in the lock.
 # Operator diagnostics retain the CLI without an expired Windows ZIP dependency.
@@ -43,6 +44,7 @@ RUN python -m pytest -q -p no:cacheprovider tests/test_velia_creem_webhook_relay
 COPY tests/test_velia_creem_test_webhook.py /app/tests/test_velia_creem_test_webhook.py
 RUN python -m pytest -q -p no:cacheprovider tests/test_velia_creem_test_webhook.py
 COPY desktop/voice_transport.py /app/desktop/voice_transport.py
+COPY desktop/voice_irina.py /app/desktop/voice_irina.py
 COPY desktop/voice_channel.py /app/desktop/voice_channel.py
 COPY desktop/voice_transcription.py /app/desktop/voice_transcription.py
 COPY desktop/figma_connector.py desktop/figma_routes.py desktop/figma_oauth.py /app/desktop/
@@ -100,6 +102,10 @@ RUN find /app/desktop/web -maxdepth 1 -type f \( -name '*.mjs' -o -name '*.map' 
     && rm -rf /app/desktop/web/tests
 COPY --from=qualification /opt/velia-web/dist/ /app/desktop/web/
 
+FROM scratch AS irina-model
+ADD --checksum=sha256:8ff38212d23da300bbe3705c645e6e5b9475f0bfde01558eb17813e22acaaaaa https://huggingface.co/rhasspy/piper-voices/resolve/04ca88f5685ca5253c701af3687e155b113bd512/ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx /irina.onnx
+ADD --checksum=sha256:c2ec28bb38e2b59e93b959b3e40348c1afebbd272f30fed5d41205d08e98a9d7 https://huggingface.co/rhasspy/piper-voices/resolve/04ca88f5685ca5253c701af3687e155b113bd512/ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx.json /irina.onnx.json
+
 FROM python:3.12-slim-bookworm
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
@@ -112,6 +118,7 @@ COPY --from=checked /app/velia_request_understanding.py /app/velia_request_under
 COPY --from=checked /app/velia_natural_writing.py /app/velia_natural_writing.py
 COPY --from=checked /app/velia_code_quality.py /app/velia_code_quality.py
 COPY --from=checked /app/desktop /app/desktop
+COPY --from=irina-model --chmod=0444 /irina.onnx /irina.onnx.json /opt/velia/voice/
 COPY --from=checked /app/services/velia_structured_output.py /app/services/velia_structured_output.py
 COPY desktop/scripts/probe-live-flash.mjs /app/desktop/scripts/probe-live-flash.mjs
 COPY desktop/src/config.mjs desktop/src/proxy.mjs desktop/src/engineering-policy.json /app/desktop/src/

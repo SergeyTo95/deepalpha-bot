@@ -6,7 +6,8 @@ import {polishVoiceReply,preferVoiceTranscript,pronounceSpeech,sentenceBoundary,
 const REMOTE_FIRST_AUDIO_MS = 4500;
 const RECOGNITION_FINAL_GRACE_MS = 450;
 const RECOGNITION_IDLE_MS = 1000;
-const REMOTE_VOICES = new Set(['speechkit:jane','speechkit:omazh','speechkit:marina',
+const IRINA_VOICE = 'piper:irina';
+const REMOTE_VOICES = new Set([IRINA_VOICE,'speechkit:jane','speechkit:omazh','speechkit:marina',
  'edge:ru-RU-SvetlanaNeural','edge:en-US-EmmaMultilingualNeural','edge:en-US-AvaMultilingualNeural']);
 export const isRemoteVoice = uri => REMOTE_VOICES.has(uri);
 const LANGUAGES=[['ru-RU','Русский'],['en-US','English'],['tr-TR','Türkçe'],['de-DE','Deutsch'],['fr-FR','Français'],['es-ES','Español']];
@@ -100,7 +101,7 @@ export function fastDeviceVoice(voices,language) {
  return availableVoices(voices,language).find(v=>!isRemoteVoice(v.voiceURI)&&v.localService===true)||null;
 }
 export function automaticVoice(voices, language) {
- return fastDeviceVoice(voices,language)||availableVoices(voices,language)[0]||null;
+ return fastDeviceVoice(voices,language)||availableVoices(voices,language).find(v=>v.voiceURI!==IRINA_VOICE)||null;
 }
 export function voiceChoice(voices, language, uri) {
  return voices.find(v=>v.voiceURI===uri)||availableVoices(voices,language)[0]||null;
@@ -266,6 +267,7 @@ export function setupVoice({send, busy, toast, interrupt = () => {}, modelName =
   function releasePlayback(){playbackSerial++;playingPart=null;releasePlaybackStatus?.();releasePlaybackStatus=null;remoteStream?.cancel();remoteStream=null;preparedPlayer.release();remoteAudio=null;if(remoteURL){URL.revokeObjectURL(remoteURL);remoteURL=null;}}
   function prepareMedia(){
     preparedPlayer.warm();
+    if(effectiveURI()===IRINA_VOICE)return;
     // Starts only after a user opens voice mode; no speech text or synthesis.
     fetch('/web-api/v1/voice/prepare',{method:'POST',credentials:'same-origin',
       headers:{'Content-Type':'application/json','X-Velia-Request':'1'},body:'{}',
@@ -273,7 +275,7 @@ export function setupVoice({send, busy, toast, interrupt = () => {}, modelName =
   }
   function closeChannel(){answerChannel?.close();answerChannel=null;}
   function cancelPrefetch(){for(const job of [...audioJobs])if(job.controller!==remoteAbort){job.controller.abort();audioJobs.delete(job);}}
-  function prepareAnswerChannel(){if(channelEnabled&&globalThis.WebSocket&&isRemoteVoice(effectiveURI())){answerChannel??=createSpeechChannel({fallback:fetchAudio});answerChannel.prepare();}}
+  function prepareAnswerChannel(){const uri=effectiveURI();if(channelEnabled&&globalThis.WebSocket&&isRemoteVoice(uri)&&uri!==IRINA_VOICE){answerChannel??=createSpeechChannel({fallback:fetchAudio});answerChannel.prepare();}}
   function cancelAudio(){for(const job of audioJobs)job.controller.abort();audioJobs.clear();remoteAbort?.abort();remoteAbort=null;closeChannel();releasePlayback();}
   async function fetchAudio(fields,signal){const response=await fetch('/web-api/v1/voice/speech'+(canStreamAudio()?'?stream=1':''),{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Velia-Request':'1','X-Velia-Voice-Client':'playback-clock-v1'},body:JSON.stringify(fields),signal});if(!response.ok)throw Error('tts_unavailable');if(canStreamAudio()&&response.headers?.get('X-Velia-Audio-Stream')==='1'&&response.body?.getReader)return {response};const blob=await response.blob();if(blob.size>2*1024*1024)throw Error('tts_unavailable');return {blob};}
   function downloadPart(part,uri){
@@ -282,7 +284,7 @@ export function setupVoice({send, busy, toast, interrupt = () => {}, modelName =
     const job={part,uri,rate,epoch:speechEpoch,controller:new AbortController()};audioJobs.add(job);
     job.ready=(async()=>{try{
       const fields={text:pronounceSpeech(part,language),voice:uri,rate:job.rate},started=performance.now();let audio;
-      if(channelEnabled&&globalThis.WebSocket){answerChannel??=createSpeechChannel({fallback:fetchAudio});audio=await answerChannel.request(fields,{signal:job.controller.signal,streaming:canStreamAudio()});}
+      if(channelEnabled&&globalThis.WebSocket&&uri!==IRINA_VOICE){answerChannel??=createSpeechChannel({fallback:fetchAudio});audio=await answerChannel.request(fields,{signal:job.controller.signal,streaming:canStreamAudio()});}
       else audio=await fetchAudio(fields,job.controller.signal);
       if(audio)readyMs=.7*readyMs+.3*(performance.now()-started);
       return audio;

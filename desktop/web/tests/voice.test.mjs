@@ -2,6 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {speechChunks,availableVoices,voiceChoice,speechReady,isRemoteVoice,recognitionLanguage,isVoiceEndCommand,conversationLanguages,fastDeviceVoice,automaticVoice,reconcileSpeech} from '../voice.mjs';
 
+test('the owner preview voice is available only as a manual online voice choice',()=>{
+ const irina={voiceURI:'piper:irina',name:'Ирина',lang:'ru-RU',localService:false};
+ const svetlana={voiceURI:'edge:ru-RU-SvetlanaNeural',name:'Светлана',lang:'ru-RU',localService:false};
+ assert.ok(isRemoteVoice(irina.voiceURI));
+ assert.deepEqual(availableVoices([irina],'ru-RU'),[irina]);
+ assert.equal(automaticVoice([irina],'ru-RU'),null);
+ assert.equal(automaticVoice([irina,svetlana],'ru-RU'),svetlana);
+ assert.deepEqual(availableVoices([irina],'en-US'),[]);
+});
+
 test('the first spoken clause can start earlier without splitting money amounts',()=>{
  const phrase='Проверю настройку голосового режима, и ';
  assert.equal(speechReady(phrase,false,true),phrase.indexOf(',')+1);

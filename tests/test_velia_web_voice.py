@@ -7,6 +7,47 @@ from aiohttp.test_utils import TestServer
 from aiohttp import ClientPayloadError
 from desktop import voice_routes as routes
 
+def test_irina_preview_requires_the_configured_owner_and_keeps_cloud_voices(monkeypatch, tmp_path):
+    async def scenario():
+        monkeypatch.setenv('VELIA_WEB_IRINA_OWNER_ID', '7')
+        monkeypatch.setenv('VELIA_WEB_TTS_PROVIDER', 'edge')
+        model = tmp_path / 'irina.onnx'
+        model.touch()
+        model.with_suffix('.onnx.json').touch()
+        engine = routes.IrinaVoice(model)
+        calls = []
+        def render(text, rate):
+            calls.append((text, rate))
+            return b'fixture-mp3'
+        monkeypatch.setattr(engine, '_render', render)
+        monkeypatch.setattr(routes, 'IrinaVoice', lambda: engine)
+        async def session_for(request):
+            uid = request.headers.get('X-Test-Session')
+            return SimpleNamespace(user_id=int(uid)) if uid else None
+        app = web.Application()
+        routes.setup_voice_routes(app, session_for=session_for,
+            same_origin=lambda request: request.headers.get('X-Velia-Request') == '1',
+            json_response=lambda body,status=200:web.json_response(body,status=status))
+        async with TestServer(app) as server, ClientSession() as client:
+            catalog = server.make_url('/web-api/v1/voice/voices')
+            speak = server.make_url('/web-api/v1/voice/speech?stream=1')
+            owner = {'X-Test-Session':'7','X-Velia-Request':'1'}
+            non_owner = {**owner,'X-Test-Session':'8'}
+            body = {'text':'Привет!', 'voice':'piper:irina', 'rate':1.2}
+            assert (await client.get(catalog)).status == 401
+            assert (await (await client.get(catalog, headers=non_owner)).json())['voices'] == routes.EDGE_VOICES
+            assert (await (await client.get(catalog, headers=owner)).json())['voices'] == [*routes.EDGE_VOICES, routes.IRINA_VOICE]
+            assert (await client.post(speak, headers=non_owner, json=body)).status == 400
+            assert calls == []
+            response = await client.post(speak, headers=owner, json=body)
+            assert response.status == 200 and response.content_type == 'audio/mpeg'
+            assert response.headers.get('X-Velia-Audio-Stream') is None
+            assert await response.read() == b'fixture-mp3'
+            assert calls == [('Привет!', 1.2)]
+            monkeypatch.delenv('VELIA_WEB_IRINA_OWNER_ID')
+            assert (await client.post(speak, headers=owner, json=body)).status == 400
+    asyncio.run(scenario())
+
 @pytest.mark.parametrize('data', [None, {}, {'text':'','voice':'speechkit:jane','rate':1},
     {'text':'... —','voice':'speechkit:jane','rate':1},
     {'text':'hello','voice':'speechkit:unknown','rate':1},

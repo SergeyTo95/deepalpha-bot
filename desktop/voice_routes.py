@@ -8,6 +8,7 @@ from collections import deque
 from contextlib import aclosing
 from aiohttp import ClientSession, ClientTimeout, ClientError, ClientConnectionError, ClientResponseError, web
 from velia_desktop_routes import AuthenticationUnavailable
+from desktop.voice_irina import IrinaVoice, VOICE as IRINA_VOICE
 
 VOICES = [{"voiceURI": "speechkit:" + key, "name": name, "lang": "ru-RU", "localService": False}
           for key, name in [("jane", "Джейн"), ("omazh", "Омаж"), ("marina", "Марина")]]
@@ -31,14 +32,18 @@ def voice_catalog():
         return []
     return EDGE_VOICES if os.getenv("VELIA_WEB_TTS_PROVIDER") == "edge" else VOICES
 
-def validate(data):
+def validate(data, *, allow_irina=False):
     if not isinstance(data, dict) or set(data) != {"text", "voice", "rate"}:
         raise ValueError()
     text, voice, rate = data["text"], data["voice"], data["rate"]
     if (not isinstance(text, str) or not any(c.isalnum() for c in text) or len(text) > 500
-            or voice not in {v["voiceURI"] for v in voice_catalog()}
+            or not isinstance(voice, str)
+            or (voice not in {v["voiceURI"] for v in voice_catalog()}
+                and not (allow_irina and voice == IRINA_VOICE["voiceURI"]))
             or type(rate) not in {int, float} or not math.isfinite(rate) or not .7 <= rate <= 1.4):
         raise ValueError()
+    if voice == IRINA_VOICE["voiceURI"]:
+        return {"text": text, "irina_rate": rate}
     if voice.startswith("edge:"):
         return {"text": text, "edge_voice": voice.split(":", 1)[1], "edge_rate": f"{round((rate-1)*100):+d}%"}
     return {"text": text, "voice": voice.split(":", 1)[1], "speed": str(rate), "lang": "ru-RU", "format": "mp3"}
@@ -160,6 +165,7 @@ def setup_voice_routes(app, *, session_for, same_origin, json_response, origin=N
     event_requests = {}
     preparations = {}
     slots = asyncio.Semaphore(4)
+    irina = IrinaVoice()
     def reserve(owner):
         now = time.monotonic()
         for key in list(requests):
@@ -271,9 +277,13 @@ def setup_voice_routes(app, *, session_for, same_origin, json_response, origin=N
             return json_response({"error": "invalid_voice_event"}, 400)
     async def catalog(request):
         try:
-            if not await session_for(request):
+            session = await session_for(request)
+            if not session:
                 return json_response({"error": "unauthorized"}, 401)
-            return json_response({"voices": voice_catalog(), **({"transcription": True} if transcription_enabled() else {}), **({'channel': True} if channel_enabled else {})})
+            voices = voice_catalog()
+            if irina.available_to(session.user_id):
+                voices = [*voices, IRINA_VOICE]
+            return json_response({"voices": voices, **({"transcription": True} if transcription_enabled() else {}), **({'channel': True} if channel_enabled else {})})
         except AuthenticationUnavailable:
             return json_response({"error": "authentication_unavailable"}, 503)
     async def speech(request):
@@ -283,14 +293,22 @@ def setup_voice_routes(app, *, session_for, same_origin, json_response, origin=N
             session = await session_for(request)
             if not session:
                 return json_response({"error": "unauthorized"}, 401)
-            if not enabled():
+            allow_irina = irina.available_to(session.user_id)
+            if not enabled() and not allow_irina:
                 return json_response({"error": "tts_not_configured"}, 503)
             if request.content_length and request.content_length > 8192:
                 return json_response({"error": "request_too_large"}, 413)
-            fields = validate(await request.json())
+            fields = validate(await request.json(), allow_irina=allow_irina)
             if slots.locked() or not reserve(session.user_id):
                 return json_response({"error": "tts_rate_limit"}, 429)
             async with slots:
+                if "irina_rate" in fields:
+                    started = time.monotonic()
+                    audio = await irina.synthesize(fields["text"], fields["irina_rate"])
+                    elapsed = round((time.monotonic()-started)*1000)
+                    LOG.info("VELIA_WEB_TTS_TIMING provider=piper voice=irina first_audio_ms=%d total_ms=%d attempts=1",
+                        elapsed, elapsed)
+                    return web.Response(body=audio, content_type="audio/mpeg", headers={"Cache-Control": "no-store"})
                 LOG.info("VELIA_WEB_TTS_DELIVERY mode=%s client=%s",
                     "progressive" if request.query.get("stream") == "1" and "edge_voice" in fields else "buffered",
                     "playback-clock-v1" if request.headers.get("X-Velia-Voice-Client") == "playback-clock-v1" else "legacy")
