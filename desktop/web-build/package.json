@@ -1,0 +1,7 @@
+{
+  "name": "velia-web-build",
+  "private": true,
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}

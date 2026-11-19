@@ -1,15 +1,7 @@
-// Owner-supplied live product references, not account-bound checkout sessions.
-// Publishing these references must not enable payment before server fulfillment.
 export const CREEM_SUBSCRIPTIONS = Object.freeze([
-  Object.freeze({code:'plus', name:'Plus', price:14.99, monthlyCredits:1200,
-    productId:'prod_3YUMifrIso3U0JEvAJEl3o',
-    productUrl:'https://www.creem.io/payment/prod_3YUMifrIso3U0JEvAJEl3o'}),
-  Object.freeze({code:'pro', name:'Pro', price:29.99, monthlyCredits:3000,
-    productId:'prod_1E2KmHCJDzxC3nMraYc1iB',
-    productUrl:'https://www.creem.io/payment/prod_1E2KmHCJDzxC3nMraYc1iB'}),
-  Object.freeze({code:'max', name:'Max', price:59.99, monthlyCredits:6500,
-    productId:'prod_QM6adegRzqFXCFL6lyO6a',
-    productUrl:'https://www.creem.io/payment/prod_QM6adegRzqFXCFL6lyO6a'}),
+  Object.freeze({code:'plus', name:'Plus', price:14.99, monthlyCredits:1200}),
+  Object.freeze({code:'pro', name:'Pro', price:29.99, monthlyCredits:3000}),
+  Object.freeze({code:'max', name:'Max', price:59.99, monthlyCredits:6500}),
 ]);
 
 function element(tag, text, className) {
@@ -197,8 +189,7 @@ export function mountSubscriptionPlans(root, {billing=null, account=null, billin
     button.type = 'button'; button.disabled = existing ? (!current || !canManage) : !enabled;
     if (canUpgrade) {button.textContent='Перейти с Plus на Pro';button.disabled=false;}
     button.setAttribute('aria-label',current?'Управлять подпиской '+plan.name:'Оформить подписку '+plan.name);
-    // Only server-created, owner-bound checkouts can be opened. Public product
-    // links above remain identifiers for configuration, never a payment fallback.
+    // Only server-created, owner-bound checkouts can be opened.
     const status=element('p','','subscription-feedback');status.id='velia-payment-status-'+plan.code;status.setAttribute('role','status');status.setAttribute('aria-live','polite');
     button.setAttribute('aria-describedby',status.id);statusSlots.push(status);
     const upgradeRegion=element('div');

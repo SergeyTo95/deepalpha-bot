@@ -36,11 +36,16 @@ PATTERNS += [
     ('POST', re.compile(r'economy/creem-test/(?:checkout|upgrade-plus)\Z')),
 ]
 QUERY_KEYS = {"offset", "limit", "conversation_id", "mode", "kind", "project_id", "before_revision", "unread_only", "client_request_id", "user_id", "expires", "signature", "installation_id"}
-SENSITIVE = {"access_token", "refresh_token", "api_key", "provider_api_key", "authorization", "worker_url", "worker_token"}
+SENSITIVE = {
+    "accesstoken", "refreshtoken", "idtoken", "apikey", "apitoken", "providerapikey",
+    "authorization", "clientsecret", "webhooksecret", "privatekey",
+    "workerurl", "workertoken", "workerapikey",
+}
 
 def safe_result(value):
     if isinstance(value, dict):
-        return {k: safe_result(v) for k, v in value.items() if k.lower() not in SENSITIVE}
+        return {key: safe_result(item) for key, item in value.items()
+                if key.lower().replace("_", "").replace("-", "") not in SENSITIVE}
     if isinstance(value, list):
         return [safe_result(v) for v in value]
     return value

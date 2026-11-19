@@ -29,7 +29,12 @@ def test_feature_paths_are_exact_and_do_not_expose_auth_or_admin():
         assert not route_allowed('POST', path)
 
 def test_credentials_are_removed_recursively():
-    assert safe_result({'ok': True, 'access_token': 'secret', 'nested': [{'api_key':'secret','title':'Keep'}]}) == {'ok':True,'nested':[{'title':'Keep'}]}
+    payload = {
+        'ok': True, 'access_token': 'secret', 'Authorization': 'secret',
+        'nested': [{'api_key': 'secret', 'clientSecret': 'secret', 'worker-url': 'private',
+                    'webhook_secret': 'secret', 'public_key': 'public', 'title': 'Keep'}],
+    }
+    assert safe_result(payload) == {'ok': True, 'nested': [{'public_key': 'public', 'title': 'Keep'}]}
 
 
 def test_token_catalog_and_balance_require_session_and_expose_no_payment_writes():

@@ -311,6 +311,7 @@ def test_public_account_can_pair_and_chat_without_preview_entry(monkeypatch):
             monkeypatch.setenv('VELIA_DESKTOP_PREVIEW_USER_IDS', '')
             async with client.get(server.make_url('/health')) as response:
                 assert response.status == 200
+                assert await response.json() == {"ok": True, "service": "velia-desktop-gateway"}
             cookie, profile, _ = await login(server, client)
             async with client.get(server.make_url('/web-api/v1/session'), headers=headers(cookie)) as response:
                 assert response.status == 200
@@ -771,8 +772,10 @@ def test_unauthenticated_browser_cannot_use_models_or_read_assets(monkeypatch):
                 async with client.get(server.make_url(path)) as response:
                     assert response.status == 200
                     assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
-            async with client.get(server.make_url("/web/web_routes.py")) as response:
-                assert response.status == 404
+            for path in ("/web/web_routes.py", "/web/app.mjs.map", "/web/leaflet.js.map",
+                         "/web/tests/core.test.mjs"):
+                async with client.get(server.make_url(path)) as response:
+                    assert response.status == 404
             assert state["payloads"] == []
     asyncio.run(run())
 

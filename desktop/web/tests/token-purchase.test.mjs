@@ -48,7 +48,7 @@ test('unavailable catalog shows no invented prices and no active payment control
   assert.equal(all(root).find(e=>e.tag==='button').disabled,true);
 }));
 
-test('subscription references cannot activate payment or replace prices through the remote catalog',()=>withUI(()=>{
+test('the public plan display cannot enable payment or accept prices from an unverified catalog',()=>withUI(()=>{
   const root=new Element('div');
   const forged={ok:true,billing_enabled:true,creem_enabled:true,checkout_url:'https://evil.example',
     plans:[{id:'plus',store_price_usd:0.01,monthly_credits:999999,checkout_url:'https://evil.example'}],topups:[]};
@@ -67,10 +67,7 @@ test('subscription references cannot activate payment or replace prices through 
   assert.ok(Object.isFrozen(CREEM_SUBSCRIPTIONS));
   for(const plan of CREEM_SUBSCRIPTIONS) {
     assert.ok(Object.isFrozen(plan));
-    const url=new URL(plan.productUrl);
-    assert.equal(url.origin,'https://www.creem.io');
-    assert.equal(url.pathname,`/payment/${plan.productId}`);
-    assert.equal(url.search,'');assert.equal(url.hash,'');
+    assert.deepEqual(Object.keys(plan),['code','name','price','monthlyCredits']);
   }
 }));
 
@@ -122,7 +119,7 @@ test('payment redirects reject foreign hosts, credentials, non-HTTPS and test ch
 test('server-returned payment and checkout redirect families open without rewriting the URL',()=>withUI(async()=>{
   for(const family of ['payment','checkout']){
     const root=new Element('div'),opened=[];
-    const url='https://www.creem.io/'+family+'/'+CREEM_SUBSCRIPTIONS[0].productId+'?checkout_id=ch_example';
+    const url='https://www.creem.io/'+family+'/prod_example?checkout_id=ch_example';
     mountTokenPurchase(root,catalog,{billing:billingReady,account:noSubscription,
       request:async()=>({ok:true,checkout_url:url}),navigate:value=>opened.push(value)});
     await all(root).find(node=>node.textContent==='Выбрать Plus').events.click();
