@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "job_id": "velia-quantum-rco-v1",
+  "model_id": "velia-quantum",
+  "objective": "Select a multilingual/agentic/vision-safe 256-of-512 expert mask from original Qwen3.8-Flash-Next, then materialize the mask against the original base checkpoint.",
+  "base_model": {
+    "repo": "Qwen/Qwen3.8-Flash-Next",
+    "revision": "de4b8e4d43b917e7706784d8bb445c9af86a3540",
+    "license": "Qwen Community License 1.0"
+  },
+  "software": {
+    "rco_repo": "IST-DASLab/RCO",
+    "rco_revision": "9a1e09c07d468109cbe60a1b87d5036034a79d10",
+    "transformers_revision": "cbde22f4c7b5cd1cef4e63c22c1200890696d522",
+    "llama_cpp_revision_for_runtime_validation": "abeada335e2e78bd3fe63febafab7e900ce75810"
+  },
+  "hardware": {
+    "faithful_bf16_search_preferred": {
+      "gpu_count": 8,
+      "gpu_memory_gb_each": 80,
+      "system_ram_gb_min": 512,
+      "local_nvme_gb_min": 1000,
+      "note": "Planning target, not yet measured. Chosen to leave headroom for the ~125B language model plus large PLE/MTP/vision components and RCO reference-cache/activations."
+    },
+    "smoke_search": {
+      "gpu_count": 8,
+      "gpu_memory_gb_each": 80,
+      "system_ram_gb_min": 512,
+      "local_nvme_gb_min": 1000,
+      "note": "Same model-memory requirement, lower token/step count. Reduce compute time, not checkpoint footprint."
+    }
+  },
+  "stages": [
+    {
+      "name": "smoke",
+      "calibration_samples": 256,
+      "sequence_length": 512,
+      "steps": 20,
+      "batch_size": 1,
+      "gumbel_samples": 2,
+      "require_vision_profile": true,
+      "require_exact_256_per_layer": true
+    },
+    {
+      "name": "search",
+      "calibration_samples": 4096,
+      "sequence_length": 2048,
+      "steps": 300,
+      "batch_size": 1,
+      "gumbel_samples": 4,
+      "require_vision_profile": true,
+      "require_exact_256_per_layer": true
+    }
+  ],
+  "outputs": {
+    "prune_mask": "quantum-prune-mask.pt",
+    "search_report": "quantum-prune-search.json",
+    "provenance": "quantum-provenance.json",
+    "pruned_checkpoint_marker": "VELIA_QUANTUM_TEXT_BACKBONE_PRUNED.json"
+  },
+  "fail_closed": [
+    "base revision mismatch",
+    "RCO revision mismatch",
+    "Qwen4Exp topology mismatch",
+    "calibration plan violation",
+    "vision routing profile missing",
+    "CUDA unavailable",
+    "mask does not prune exactly 256 experts per layer",
+    "top-k routing changes from 10"
+  ]
+}

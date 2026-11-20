@@ -193,7 +193,7 @@ def run_streaming_send(
         if attachment_ids is not None:
             send_kwargs["attachment_ids"] = attachment_ids
         if chat_mode != "pro":
-            from services.velia_flash_service import dispatch_send
+            from services.velia_model_router import dispatch_send
             return dispatch_send(send_message, int(user_id), str(conversation_id),
                                  str(content), chat_mode=chat_mode, voice_turn=bool(voice_turn),
                                  on_delta=on_delta, on_reset=on_reset, **send_kwargs)
