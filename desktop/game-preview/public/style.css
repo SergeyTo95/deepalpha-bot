@@ -10,7 +10,7 @@ h1 { font-size: clamp(1.6rem, 5vw, 2.8rem); line-height: 1.06; overflow-wrap: an
 .hud { margin: 0 0 8px; color: #dbefc9; font-size: .88rem; font-variant-numeric: tabular-nums; gap: 4px; }
 .arena { position: relative; border: 1px solid #557354; background: #0f2622; border-radius: 16px; overflow: hidden; }
 #game { aspect-ratio: 4 / 3; }
-#game canvas { display: block; width: 100%; height: auto; }
+#game canvas { display: block; width: 100%; height: auto; touch-action: none; }
 #overlay { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 13px; background: #071511d9; text-align: center; padding: 18px; }
 #overlay[hidden] { display: none; }
 #status { font-size: clamp(1.15rem, 4vw, 1.7rem); font-weight: 750; }

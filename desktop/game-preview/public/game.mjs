@@ -93,6 +93,7 @@ function launch(spec) {
       this.started = false;
       this.ended = false;
       this.collected = 0;
+      this.destination = null;
       const field = this.add.graphics().fillStyle(theme.ground).fillRect(0, 0, width, height);
       field.lineStyle(1, theme.path, 0.7);
       for (let x = 0; x < width; x += 24) field.lineBetween(x, 0, x, height);
@@ -133,6 +134,17 @@ function launch(spec) {
       });
       this.cursors = this.input.keyboard.createCursorKeys();
       this.wasd = this.input.keyboard.addKeys('W,A,S,D');
+      const canvas = this.sys.game.canvas;
+      const pointAt = event => {
+        if (!this.started || this.ended || event.button !== 0) return;
+        const rect = canvas.getBoundingClientRect();
+        this.destination = {
+          x: (event.clientX - rect.left) * width / rect.width,
+          y: (event.clientY - rect.top) * height / rect.height,
+        };
+      };
+      canvas.addEventListener('pointerdown', pointAt);
+      this.events.once('shutdown', () => canvas.removeEventListener('pointerdown', pointAt));
       play.onclick = () => {
         if (this.ended) this.scene.restart({startAgain: true});
         else this.startRound();
@@ -161,11 +173,20 @@ function launch(spec) {
         if (until > performance.now()) held.push(direction);
         else taps.delete(direction);
       }
-      const x = +(this.cursors.right.isDown || this.wasd.D.isDown || held.includes('right')) -
+      let x = +(this.cursors.right.isDown || this.wasd.D.isDown || held.includes('right')) -
         +(this.cursors.left.isDown || this.wasd.A.isDown || held.includes('left'));
-      const y = +(this.cursors.down.isDown || this.wasd.S.isDown || held.includes('down')) -
+      let y = +(this.cursors.down.isDown || this.wasd.S.isDown || held.includes('down')) -
         +(this.cursors.up.isDown || this.wasd.W.isDown || held.includes('up'));
-      const speed = spec.speed / (x && y ? Math.SQRT2 : 1);
+      if (x || y) this.destination = null;
+      if (this.destination) {
+        x = this.destination.x - this.player.x;
+        y = this.destination.y - this.player.y;
+        if (Math.hypot(x, y) < 5) {
+          this.destination = null;
+          x = y = 0;
+        }
+      }
+      const speed = spec.speed / (Math.hypot(x, y) || 1);
       this.player.body.setVelocity(x * speed, y * speed);
       if (x || y) this.player.rotation = Math.atan2(y, x);
     }
