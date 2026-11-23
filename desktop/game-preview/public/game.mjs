@@ -69,7 +69,15 @@ function launch(spec) {
   frame('Управляй гекконом', 'Играть');
   score.textContent = spec.pickup+' · 0 / '+spec.count;
   clock.textContent = spec.seconds+' с';
-  const scene = {
+  class GameScene extends Phaser.Scene {
+    init({startAgain = false} = {}) {
+      this.startAgain = startAgain;
+    }
+    startRound() {
+      this.started = true;
+      this.deadline = this.time.now + spec.seconds * 1000;
+      overlay.hidden = true;
+    }
     create() {
       this.started = false;
       this.ended = false;
@@ -89,9 +97,11 @@ function launch(spec) {
       const pickups = this.physics.add.staticGroup();
       const positions = [...cells];
       rng.shuffle(positions);
-      for (const [x, y] of positions.slice(0, spec.count)) {
-        this.add.circle(x, y, 13, theme.item, 0.12);
-        pickups.add(this.add.star(x, y, 4, 3, 8, theme.item));
+      for (const [x, y] of [[36, 281], ...positions.slice(0, spec.count - 1)]) {
+        const glow = this.add.circle(x, y, 13, theme.item, 0.12);
+        const item = this.add.star(x, y, 4, 3, 8, theme.item);
+        item.setData('glow', glow);
+        pickups.add(item);
       }
       this.player = this.add.container(36, 324, [
         this.add.ellipse(-12, 4, 15, 5, theme.player).setRotation(-0.45),
@@ -105,6 +115,7 @@ function launch(spec) {
       this.physics.add.collider(this.player, walls);
       this.physics.add.overlap(this.player, pickups, (_, pickup) => {
         if (!this.started || this.ended) return;
+        pickup.getData('glow').destroy();
         pickup.destroy();
         score.textContent = spec.pickup+' · '+(++this.collected)+' / '+spec.count;
         if (this.collected === spec.count) this.finish('Все предметы собраны!');
@@ -112,24 +123,23 @@ function launch(spec) {
       this.cursors = this.input.keyboard.createCursorKeys();
       this.wasd = this.input.keyboard.addKeys('W,A,S,D');
       play.onclick = () => {
-        if (this.ended) { this.scene.restart(); return; }
-        this.started = true;
-        this.deadline = this.time.now + spec.seconds * 1000;
-        overlay.hidden = true;
+        if (this.ended) this.scene.restart({startAgain: true});
+        else this.startRound();
       };
       element('restart').onclick = () => this.scene.restart();
       clearInput();
       score.textContent = spec.pickup+' · 0 / '+spec.count;
       clock.textContent = spec.seconds+' с';
       frame('Собери предметы', 'Играть');
+      if (this.startAgain) this.startRound();
       document.documentElement.dataset.gameReady = 'true';
-    },
+    }
     finish(message) {
       this.ended = true;
       this.player.body.setVelocity(0);
       clearInput();
       frame(message, 'Сыграть снова');
-    },
+    }
     update(now) {
       if (!this.started || this.ended) return;
       const seconds = Math.max(0, Math.ceil((this.deadline - now) / 1000));
@@ -143,11 +153,11 @@ function launch(spec) {
       const speed = spec.speed / (x && y ? Math.SQRT2 : 1);
       this.player.body.setVelocity(x * speed, y * speed);
       if (x || y) this.player.rotation = Math.atan2(y, x);
-    },
-  };
+    }
+  }
   new Phaser.Game({
     type: Phaser.CANVAS, parent: 'game', width, height,
-    physics: { default: 'arcade' }, scene, banner: false,
+    physics: { default: 'arcade' }, scene: GameScene, banner: false,
     render: { antialias: true },
   });
 }

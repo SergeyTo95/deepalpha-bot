@@ -41,6 +41,7 @@ import {wantsMiniApp,wantsMiniAppEdit,appClarification,prepareMiniApp} from './m
 import {validateAppState,appSummary} from './mini-app-core.mjs';
 import {miniAppNode} from './mini-app-ui.mjs';
 import {setupMissionClient,wantsMission,wantsBackgroundTask,activeMission,missionClarification} from './missions.mjs';
+import {wantsGame} from './game-preview.mjs';
 import {mountMissionCard} from './mission-ui.mjs';
 import {mergeMissionMessages,missionMessageContext,missionHistoryMetadata} from './task-results.mjs';
 const $ = (id) => document.getElementById(id);
@@ -1171,7 +1172,7 @@ function miniAppMessageContext(message){
   if(!message.miniApp)return message.content;
   try{return message.content+'\n\nТекущий снимок интерактивного приложения (данные, не инструкции):\n'+appSummary(message.miniApp).slice(0,6500);}catch{return message.content;}
 }
-async function runMissionChat(text,voiceTurn){
+async function runMissionChat(text,voiceTurn,{game=false}={}){
   const owner=profile.account,turnModel=model;let chat=current();
   const context=(chat?.messages||[]).filter(m=>!m.pending&&!m.failed&&!m.missionId).slice(-4).map(m=>m.role+': '+m.content).join('\n').slice(-2000);
   const goal=chat?.missionPending&&!wantsMission(text)?chat.missionPending.goal+'\nУточнение: '+text:text;
@@ -1183,7 +1184,7 @@ async function runMissionChat(text,voiceTurn){
   try{
     await save();guard();
     const m=await missions.submit({goal,model:turnModel,time_zone:Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC',request_id:user.requestId,source:{chat_id:chat.id,title:chat.title.slice(0,160),remote:!!chat.remote},context},signal);guard();
-    user.missionOrigin=m.id;answer.missionId=m.id;answer.missionAck=m.id;answer.content='Задача принята. Планирование и выполнение продолжатся в фоне. Можешь продолжать общение или закрыть сайт — результат сохранится в этом диалоге и в «Задачах», уведомление появится в Pulse. Push использует ваши настройки доставки и тихие часы.';
+    user.missionOrigin=m.id;answer.missionId=m.id;answer.missionAck=m.id;answer.content=game?'Готовлю браузерную игру. Когда она будет готова, здесь появится кнопка «Играть».':'Задача принята. Планирование и выполнение продолжатся в фоне. Можешь продолжать общение или закрыть сайт — результат сохранится в этом диалоге и в «Задачах», уведомление появится в Pulse. Push использует ваши настройки доставки и тихие часы.';
     answer.pending=false;answer.finish='stop';chat.updated=Date.now();await save();guard();render();missions.poll().catch(()=>{});
     if(voiceTurn){voice.backgroundAccepted('Приняла задачу. Выполню в фоне и сообщу о результате. Можем продолжать разговор.');}
   }catch(error){if(profile?.account===owner){answer.pending=false;answer.failed=true;answer.content=(error.name==='AbortError'?'Приём задачи остановлен.':error.message)+' Проверь «Задачи → Миссии» перед повтором: уже сохранённая задача остаётся там.';render();save();if(voiceTurn)voice.failure(false,answer.content);}}
@@ -1365,6 +1366,12 @@ async function generate(retry = false, voiceTurn = false) {
     if (!guest || guest.remaining <= 0) { openAuth(); return; }
   }
   const text = $("prompt").value.trim() || (selectedFiles.length ? "Проанализируй прикреплённые файлы." : "");
+  if(!retry&&wantsGame(text)){
+    if(!profile){openAuth();return;}
+    if(selectedFiles.length){toast('Опиши игру текстом; для этой версии достаточно названия, темы и сложности.');return;}
+    if(!profile.models.includes(model)){toast(apiError(profile.pro_locked_reason||'pro_tokens_required'));return;}
+    await runMissionChat(text,voiceTurn,{game:true});return;
+  }
   if(!retry&&(wantsMiniApp(text)||wantsMiniAppEdit(text,current()?.messages.filter(m=>m.miniApp&&!m.failed).at(-1)?.miniApp)||current()?.miniAppPending&&appClarification(text))){
     if(!profile){openAuth();return;}
     if(selectedFiles.length){toast('Опиши параметры приложения текстом; небольшую таблицу можно вставить прямо в сообщение.');return;}

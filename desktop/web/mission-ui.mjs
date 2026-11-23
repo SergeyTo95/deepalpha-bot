@@ -1,4 +1,5 @@
 import {MISSION_LABELS,missionError,activeMission} from './missions.mjs';
+import {gamePreviewLink} from './game-preview.mjs';
 import {financeReport} from './finance.mjs';
 const node=(tag,text,className)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(className)e.className=className;return e;};
 const button=(text,action)=>{const e=node('button',text);e.type='button';e.onclick=action;return e;};
@@ -44,7 +45,13 @@ export function mountMissionCard(parent,{client,id,signal,toast=()=>{}}){
       row.append(node('strong',step.title),node('small',label));
       if(step.error)row.append(node('p',missionError(step.error),'feature-notice'));
       if(step.result){
-        if(step.result.kind==='file'){
+        if(step.result.kind==='game'){
+          const url=gamePreviewLink(step.result.data?.url);
+          if(url){
+            const a=node('a','Играть','mission-file');a.href=url;a.target='_blank';a.rel='noopener noreferrer';
+            row.append(node('p',step.result.data.title,'mission-text'),a);
+          }else row.append(node('p','Ссылка на игру недоступна.','feature-notice'));
+        }else if(step.result.kind==='file'){
           const a=node('a','Скачать '+step.result.data.format.toUpperCase()+' · '+Math.ceil(step.result.data.bytes/1024)+' КБ');a.href='/web-api/v1/missions/'+encodeURIComponent(id)+'/files/'+encodeURIComponent(step.id);a.className='mission-file';row.append(a);
         }else{
           const details=node('details'),summary=node('summary',step.result.kind==='draft'?'Проверить текст':'Результат шага');details.append(summary);
