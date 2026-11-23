@@ -30,6 +30,8 @@ function launch(spec) {
     [132, 157], [48, 151], [58, 291], [310, 298], [421, 303], [459, 218],
     [280, 246], [161, 237], [114, 287], [356, 205]];
   const directions = new Map();
+  const pointerStarted = new Map();
+  const taps = new Map();
   const score = element('score'), clock = element('clock'), overlay = element('overlay'),
     status = element('status'), play = element('play');
   element('world').textContent = location.hash ? theme.label : 'GECKOSHI';
@@ -43,6 +45,8 @@ function launch(spec) {
   }
   function clearInput() {
     directions.clear();
+    pointerStarted.clear();
+    taps.clear();
     for (const control of document.querySelectorAll('[data-direction]')) control.removeAttribute('data-pressed');
   }
   for (const control of document.querySelectorAll('[data-direction]')) {
@@ -51,10 +55,17 @@ function launch(spec) {
       event.preventDefault();
       control.setPointerCapture(event.pointerId);
       directions.set(event.pointerId, control.dataset.direction);
+      pointerStarted.set(event.pointerId, performance.now());
       control.setAttribute('data-pressed', '');
     });
     for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) control.addEventListener(event, pointer => {
+      const start = pointerStarted.get(pointer.pointerId);
+      const now = performance.now();
+      if (event === 'pointerup' && start !== undefined && now - start < 125) {
+        taps.set(control.dataset.direction, start + 125);
+      }
       directions.delete(pointer.pointerId);
+      pointerStarted.delete(pointer.pointerId);
       if (![...directions.values()].includes(control.dataset.direction)) control.removeAttribute('data-pressed');
     });
     control.addEventListener('keydown', event => {
@@ -146,6 +157,10 @@ function launch(spec) {
       clock.textContent = seconds+' с';
       if (seconds === 0) { this.finish('Время вышло'); return; }
       const held = [...directions.values()];
+      for (const [direction, until] of taps) {
+        if (until > performance.now()) held.push(direction);
+        else taps.delete(direction);
+      }
       const x = +(this.cursors.right.isDown || this.wasd.D.isDown || held.includes('right')) -
         +(this.cursors.left.isDown || this.wasd.A.isDown || held.includes('left'));
       const y = +(this.cursors.down.isDown || this.wasd.S.isDown || held.includes('down')) -
