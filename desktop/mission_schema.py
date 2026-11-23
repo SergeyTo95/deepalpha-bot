@@ -11,6 +11,7 @@ TOOLS={
  'notebook.search':('Заметки и память','read',{'query':'text to search saved records'}),
  'web.search':('Поиск открытых источников','read',{'query':'public search text'}),
  'calendar.list':('События календаря','read',{'time_min':'RFC3339 with offset','time_max':'RFC3339 with offset'}),
+ 'game.build':('Собрать игру Phaser','draft',{}),
  'text.draft':('Подготовить черновик','draft',{'instruction':'what to write using earlier step results'}),
  'document.export':('Создать файл','file',{'source_step':'earlier text.draft step id','format':'pdf|docx|pptx|xlsx','title':'file title'}),
  'notebook.save':('Сохранить в заметки','idempotent',{'source_step':'earlier text.draft step id','title':'note title'}),
@@ -54,6 +55,9 @@ def validate_plan(plan,goal):
             from desktop.workspace_connections import calendar_window
             try:calendar_window(a,default=False)
             except Exception:raise MissionError('mission_calendar_invalid') from None
+        elif name=='game.build':
+            from desktop.game_missions import wants_game
+            require(not a and len(steps)==1 and wants_game(goal))
         elif name=='text.draft':require(set(a)=={'instruction'} and text(a['instruction'],2000))
         elif name=='calendar.create':
             require(set(a)=={'title','start','end','time_zone'} and text(a['title'],300))

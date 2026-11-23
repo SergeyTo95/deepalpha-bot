@@ -1,0 +1,26 @@
+:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #0a151a; color: #eef9e8; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100svh; background: radial-gradient(ellipse at top, #223c30, #0a151a 65%); }
+main { max-width: 640px; margin: auto; padding: 24px 16px max(20px, env(safe-area-inset-bottom)); }
+header, .hud, .controls { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+h1, p { margin: 0; }
+h1 { font-size: clamp(1.6rem, 5vw, 2.8rem); line-height: 1.06; overflow-wrap: anywhere; }
+.heading p { margin-bottom: 7px; font-weight: 800; font-size: .68rem; letter-spacing: .19em; color: #d6f466; }
+.objective { margin: 12px 0 17px; color: #c2d6c7; font-size: .91rem; overflow-wrap: anywhere; }
+.hud { margin: 0 0 8px; color: #dbefc9; font-size: .88rem; font-variant-numeric: tabular-nums; gap: 4px; }
+.arena { position: relative; border: 1px solid #557354; background: #0f2622; border-radius: 16px; overflow: hidden; }
+#game { aspect-ratio: 4 / 3; }
+#game canvas { display: block; width: 100%; height: auto; touch-action: none; }
+#overlay { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 13px; background: #071511d9; text-align: center; padding: 18px; }
+#overlay[hidden] { display: none; }
+#status { font-size: clamp(1.15rem, 4vw, 1.7rem); font-weight: 750; }
+button { color: inherit; border: 1px solid #6c8869; background: #20382e; border-radius: 10px; font: inherit; min-width: 44px; min-height: 44px; font-weight: 700; cursor: pointer; }
+button:focus-visible { outline: 2px solid #d6f466; outline-offset: 2px; }
+#play { padding: 0 25px; background: #d6f466; color: #142015; border-color: #d6f466; }
+.controls { margin-top: 12px; }
+.controls p { font-size: .74rem; color: #c2d6c7; text-align: right; }
+.directions { display: grid; grid-template-columns: repeat(3, 44px); gap: 4px; touch-action: none; user-select: none; }
+.directions button:first-child { grid-column: 2; }
+.directions button:nth-child(2) { grid-column: 1; }
+.directions button:active, .directions button[data-pressed] { background: #d6f466; color: #142015; }
+@media (max-height: 700px) and (orientation: portrait) { main { padding-top: 12px; } }

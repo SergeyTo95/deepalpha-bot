@@ -1,0 +1,8 @@
+{
+  "name": "velia-game-preview",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"build": "node build.mjs", "start": "node server.mjs"},
+  "dependencies": {"phaser": "3.90.0"}
+}

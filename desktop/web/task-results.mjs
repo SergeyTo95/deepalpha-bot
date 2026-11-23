@@ -8,6 +8,7 @@ export function missionResultText(m,notice){
   for(const s of m.steps.filter(s=>s.status==='completed')){
     const r=s.result;if(!r)continue;
     if(r.kind==='draft')parts.push(r.data.text);
+    else if(r.kind==='game')parts.push('Игра «'+r.data.title+'» готова. Нажми «Играть» в карточке.');
     else if(r.kind==='file')parts.push('Файл готов: '+r.data.title+'.'+r.data.format+'. Скачать можно в карточке задачи.');
     else if(s.tool==='calendar.create')parts.push('Событие создано: '+r.data.event.title+'.');
     else if(s.tool==='gmail.draft')parts.push('Черновик сохранён в Gmail. Письмо не отправлено.');
