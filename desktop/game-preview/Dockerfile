@@ -9,7 +9,8 @@ RUN npm run build
 FROM node:24-bookworm-slim
 WORKDIR /app
 COPY --from=build /app/dist ./dist
-COPY server.mjs ./
+COPY --from=build /app/node_modules/fflate ./node_modules/fflate
+COPY server.mjs exports.mjs ./
 USER node
 EXPOSE 8080
 CMD ["node", "server.mjs"]
