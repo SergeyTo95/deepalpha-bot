@@ -319,7 +319,9 @@ def _portable_game_sources(spec: Dict[str, Any]) -> Dict[str, str]:
         raw = json.dumps(spec, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
         if len(raw.encode("utf-8")) > 1000:
             raise ValueError("oversize")
+        token = os.getenv("VELIA_GAME_PREVIEW_INTERNAL_TOKEN", "").strip()
         with requests.get(_GAME_SOURCE, params={"spec": raw}, stream=True,
+                          headers={"X-Velia-Game-Internal": token},
                           allow_redirects=False, timeout=(4, 6)) as response:
             if response.status_code != 200:
                 raise DeveloperWriteError("game_source_invalid" if response.status_code == 400
