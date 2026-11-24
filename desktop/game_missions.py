@@ -1,4 +1,4 @@
-"""Create Phaser game specifications. Model output never becomes executable code."""
+"""Build validated specifications for the supported browser game genres."""
 import hashlib
 import json
 import re
@@ -21,13 +21,14 @@ def saved_game_spec(url):
     require(isinstance(url, str) and len(url) <= 1800, 'mission_game_invalid', 400)
     parts = urlsplit(url)
     require(parts.scheme == 'https' and parts.path == PREVIEW_PATHS.get(parts.netloc)
-            and not parts.query and parts.fragment.startswith('v1='), 'mission_game_invalid', 400)
+            and not parts.query and parts.fragment[:3] in {'v1=', 'v2='}, 'mission_game_invalid', 400)
     try:
         spec = json.loads(unquote(parts.fragment[3:], errors='strict'))
     except (UnicodeError, ValueError):
         raise MissionError('mission_game_invalid', 400) from None
-    require(isinstance(spec, dict) and set(spec) == {'v','title','pickup','theme','count','seconds','speed','seed'},
-            'mission_game_invalid', 400)
+    require(isinstance(spec, dict) and type(spec.get('v')) is int
+            and parts.fragment.startswith(f"v{spec['v']}="), 'mission_game_invalid', 400)
+    game_link(spec)
     return spec
 
 
@@ -39,6 +40,39 @@ GAME_INTENT = re.compile(
 )
 GAME_PLAN_ONLY = re.compile(r'\b(?:план|концепци\w*|иде[яию]|сценари[йя]|plan|concept|idea)\b', re.IGNORECASE)
 GAME_WORD = re.compile(r'\b(?:игру|мини[- ]?игру|игрушку|game|mini[- ]?game)\b', re.IGNORECASE)
+
+FPS_GOAL = re.compile(
+    r'\b(?:doom|wolfenstein|fps|дум(?:а|е|ом)?|boomer\s+shooter)\b|'
+    r'от\s+первого\s+лица|first[- ]person|шутер\w*|\bshooter\b', re.IGNORECASE,
+)
+UNSUPPORTED_GENRE = re.compile(
+    r'платформер|метроидвани|карточн|шахмат|шашк|покер|гонк[аиу]|гонки|'
+    r'градостро|визуальн\w+\s+новелл|tower\s+defense|platformer|card\s+game|'
+    r'\b(?:racing|chess|poker|mmorpg|rpg|rts|gta|minecraft)\b', re.IGNORECASE,
+)
+
+
+def game_kind(goal):
+    if FPS_GOAL.search(goal):
+        return 'unsupported' if re.search(r'вид\w*\s+сверху|от\s+третьего\s+лица|top[- ]down|third[- ]person', goal, re.I) else 'fps'
+    if UNSUPPORTED_GENRE.search(goal):
+        return 'unsupported'
+    return 'collector'
+
+
+def game_seed(mission_id):
+    return int.from_bytes(hashlib.sha256(mission_id.encode()).digest()[:4], 'big') % 99999 + 1
+
+
+def fps_game_result(goal, mission_id):
+    match = re.search(r'«([^»]{1,54})»|"([^"]{1,54})"', goal)
+    title = (match[1] or match[2]) if match else 'Сигнал из глубины'
+    theme = 'ice' if re.search(r'ледян|снежн|ice|frozen', goal, re.I) else (
+        'crimson' if re.search(r'лав[аыу]|красн|crimson|lava', goal, re.I) else 'industrial'
+    )
+    return game_link({'v': 2, 'title': title, 'theme': theme, 'difficulty': 1, 'stages': 3,
+                      'seed': game_seed(mission_id)})
+
 
 # Adapted workflow from gamedev-skills v2.0.0 (Apache-2.0):
 # phaser-core (scene and state), phaser-arcade-physics (collisions and pickups),
@@ -65,7 +99,7 @@ def game_plan(goal, *, previous_title=None):
     if not wants_game(goal):
         return None
     return validate_plan({
-        'title': f'Доработка игры «{previous_title}»' if previous_title else 'Браузерная мини-игра',
+        'title': f'Доработка игры «{previous_title}»' if previous_title else ('Ретрошутер от первого лица' if game_kind(goal) == 'fps' else 'Браузерная игра'),
         'steps': [{
             'id': 's1', 'title': 'Настроить и собрать игру',
             'tool': 'game.build', 'arguments': {},
@@ -92,19 +126,25 @@ def game_json(raw):
 
 
 def game_link(spec):
-    require(isinstance(spec, dict) and set(spec) == {'v','title','pickup','theme','count','seconds','speed','seed'}
-            and type(spec['v']) is int and spec['v'] == 1, 'mission_game_invalid', 502)
-    value = spec
-    require(value['theme'] in ('forest','neon','desert','ice'), 'mission_game_invalid', 502)
-    for key, low, high in [('count',5,12), ('seconds',30,120), ('speed',130,230)]:
-        require(type(value[key]) is int and low <= value[key] <= high, 'mission_game_invalid', 502)
-    title = checked_game_text(value['title'], 54)
-    pickup = checked_game_text(value['pickup'], 21)
-    require(type(value['seed']) is int and 1 <= value['seed'] <= 99999, 'mission_game_invalid', 502)
-    spec = {**value, 'title': title, 'pickup': pickup}
+    require(isinstance(spec, dict) and type(spec.get('v')) is int and spec['v'] in {1, 2},
+            'mission_game_invalid', 502)
+    version = spec['v']
+    if version == 1:
+        require(set(spec) == {'v','title','pickup','theme','count','seconds','speed','seed'}
+                and spec['theme'] in ('forest','neon','desert','ice'), 'mission_game_invalid', 502)
+        ranges = [('count',5,12), ('seconds',30,120), ('speed',130,230)]
+        spec = {**spec, 'pickup': checked_game_text(spec['pickup'], 21)}
+    else:
+        require(set(spec) == {'v','title','theme','difficulty','stages','seed'}
+                and spec['theme'] in ('industrial','crimson','ice'), 'mission_game_invalid', 502)
+        ranges = [('difficulty',0,2), ('stages',1,3)]
+    for key, low, high in [*ranges, ('seed',1,99999)]:
+        require(type(spec[key]) is int and low <= spec[key] <= high, 'mission_game_invalid', 502)
+    title = checked_game_text(spec['title'], 54)
+    spec = {**spec, 'title': title}
     fragment = quote(json.dumps(spec, ensure_ascii=False, separators=(',', ':')), safe='')
     require(len(fragment) + 3 <= 1700, 'mission_game_invalid', 502)
-    return {'title': title, 'url': PREVIEW_ORIGIN + '/game/#v1=' + fragment}
+    return {'title': title, 'url': PREVIEW_ORIGIN + f'/game/#v{version}=' + fragment}
 
 
 GAME_REVISION_SYSTEM = (
@@ -118,12 +158,19 @@ GAME_REVISION_SYSTEM = (
 )
 
 
+FPS_REVISION_SYSTEM = (
+    'Отредактируй настройки оригинального ретрошутера. Верни только JSON с изменёнными полями: '
+    'title (до 54 символов), theme (industrial, crimson, ice), difficulty (0 легко, 1 нормально, 2 сложно), '
+    'stages (целое 1–3) или seed (целое 1–99999, только по запросу изменить карту). '
+    'Механика неизменна. Если правка невозможна, верни {}. Не добавляй код или другие поля.'
+)
+
+
 def game_result(raw, mission_id):
     value = game_json(raw)
     require(isinstance(value, dict) and set(value) == {'title','pickup','theme','count','seconds','speed'},
             'mission_game_invalid', 502)
-    seed = int.from_bytes(hashlib.sha256(mission_id.encode()).digest()[:4], 'big') % 99999 + 1
-    return game_link({**value, 'v': 1, 'seed': seed})
+    return game_link({**value, 'v': 1, 'seed': game_seed(mission_id)})
 
 
 def revise_game_result(raw, prior):

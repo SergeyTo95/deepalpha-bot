@@ -11,7 +11,7 @@ TOOLS={
  'notebook.search':('Заметки и память','read',{'query':'text to search saved records'}),
  'web.search':('Поиск открытых источников','read',{'query':'public search text'}),
  'calendar.list':('События календаря','read',{'time_min':'RFC3339 with offset','time_max':'RFC3339 with offset'}),
- 'game.build':('Собрать игру Phaser','draft',{}),
+ 'game.build':('Собрать браузерную игру','draft',{}),
  'text.draft':('Подготовить черновик','draft',{'instruction':'what to write using earlier step results'}),
  'document.export':('Создать файл','file',{'source_step':'earlier text.draft step id','format':'pdf|docx|pptx|xlsx','title':'file title'}),
  'notebook.save':('Сохранить в заметки','idempotent',{'source_step':'earlier text.draft step id','title':'note title'}),

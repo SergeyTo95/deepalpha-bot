@@ -191,12 +191,14 @@ def test_revision_endpoint_links_original_game_and_github_target(tmp_path):
     asyncio.run(scenario())
 
 
-def test_play_and_share_enforce_live_owner_and_recipient_permissions(tmp_path, monkeypatch):
+@pytest.mark.parametrize("fps", [False, True])
+def test_play_and_share_enforce_live_owner_and_recipient_permissions(tmp_path, monkeypatch, fps):
     import hashlib
 
     from aiohttp import ClientSession, web
     from aiohttp.test_utils import TestClient, TestServer
     from desktop import game_proxy
+    from desktop.game_missions import fps_game_result
     from desktop.mission_routes import setup_mission_routes
     from desktop.mission_store import MissionStore
 
@@ -205,14 +207,18 @@ def test_play_and_share_enforce_live_owner_and_recipient_permissions(tmp_path, m
         monkeypatch.setenv('VELIA_GAME_PREVIEW_INTERNAL_TOKEN', token)
         store = MissionStore(sqlite_path=tmp_path / 'access.db', session_key='x' * 48)
         preview = web.Application()
+        expected_title = "Сигнал из глубины" if fps else SPEC['title']
+        expected_version = 2 if fps else 1
 
         async def assets(request):
             assert request.headers.get('X-Velia-Game-Internal') == token
-            if request.path == '/game.mjs':
+            if request.path == ('/fps.mjs' if fps else '/game.mjs'):
                 return web.Response(text='const demo = {};\ntry { launch(loadSpec()); }\n', content_type='text/javascript')
             if request.path == '/download':
-                assert json.loads(request.query['spec'])['title'] == SPEC['title']
+                spec = json.loads(request.query['spec'])
+                assert spec['title'] == expected_title and spec['v'] == expected_version
                 return web.Response(body=b'zip', content_type='application/zip')
+            assert request.path == ('/fps' if fps else '/')
             return web.Response(text='<main><a id="game-download" href="./download">ZIP</a>\n'
                                      '<script type="module" src="./game.mjs"></script></main>',
                                 content_type='text/html')
@@ -239,14 +245,15 @@ def test_play_and_share_enforce_live_owner_and_recipient_permissions(tmp_path, m
                                  handlers={}, store=store, tools=object())
             game_proxy.setup_game_proxy(app, client_key, store=store, session_for=session)
             async with TestClient(TestServer(app)) as client:
-                goal = 'Создай игру'
+                goal = 'Создай игру от первого лица' if fps else 'Создай игру'
                 mission = store.create(7, goal, game_plan(goal), 'velia-flash', 'UTC', 'private-game')
                 claimed = store.claim(7, mission['id'], 1)
 
                 def complete(record):
                     record.update(status='completed', lease=None, lease_until=0)
                     record['steps'][0].update(status='completed', result={
-                        'kind': 'game', 'data': game_result(json.dumps(SPEC), mission['id']),
+                        'kind': 'game', 'data': (fps_game_result(goal, mission['id']) if fps else
+                                                 game_result(json.dumps(SPEC), mission['id'])),
                     })
                 store.checkpoint(7, mission['id'], claimed['lease'], complete)
                 path = '/game/project/' + mission['id'] + '/s1/'
@@ -258,10 +265,12 @@ def test_play_and_share_enforce_live_owner_and_recipient_permissions(tmp_path, m
                 assert (await client.get(path + 'download?spec=wrong', headers=owner)).status == 404
                 assert (await client.get('/game/download?spec=old')).status == 404
                 assert (await client.get('/game/game.mjs')).status == 404
-                assert SPEC['title'] not in await (await client.get('/game/')).text()
+                assert expected_title not in await (await client.get('/game/')).text()
                 game = await client.get(path + 'game.mjs', headers=owner)
                 assert game.status == 200 and game.headers['Cache-Control'] == 'private, no-store'
-                assert '\\u' in await game.text()
+                script = await game.text()
+                assert '\\u' in script and 'launch(demo);' in script
+                assert f'"v":{expected_version}' in script
                 assert (await client.get(path + 'download', headers=owner)).status == 200
                 assert (await client.get(shares, headers=stranger)).status == 404
                 active = await (await client.get(shares, headers=owner)).json()
@@ -292,3 +301,43 @@ def test_play_and_share_enforce_live_owner_and_recipient_permissions(tmp_path, m
                 assert store.find(store.transaction(7), mission['id'])['game_shares'] == {}
 
     asyncio.run(scenario())
+
+
+def test_original_shooter_request_uses_fps_and_supported_settings():
+    import asyncio
+    from types import SimpleNamespace
+
+    from desktop.game_missions import game_kind, game_plan, revise_game_result, saved_game_spec
+    from desktop.mission_runtime import MissionTools
+
+    prompt = ('Создай игру в стиле Doom. 5 видов монстров, 3 вида оружия которым нужны '
+              'патроны и есть лом которому не нужно. 3 уровня сложности. Дальше придумай что нибудь еще')
+    assert game_kind(prompt) == 'fps'
+    plan = game_plan(prompt)
+    assert 'Ретрошутер' in plan['title']
+    tools = MissionTools(upstream=None, upstream_stream=None, authorize_model=None, handlers={})
+    user = SimpleNamespace(access='test',user_id=7)
+    mission = {'goal':prompt,'id':'test-fps-id','model':'velia-flash'}
+    result = asyncio.run(tools.execute(user, mission, plan['steps'][0], None))
+    spec = saved_game_spec(result['data']['url'])
+    assert spec.keys() == {'v','title','theme','difficulty','stages','seed'}
+    assert spec['v'] == 2 and spec['stages'] == 3
+    assert saved_game_spec(revise_game_result('{"theme":"ice"}',spec)['url'])['theme'] == 'ice'
+    assert result['evidence']['engine'] == 'raycaster'
+
+
+def test_an_unsupported_genre_is_not_passed_to_the_collector_template():
+    import asyncio
+    from types import SimpleNamespace
+
+    from desktop.game_missions import game_plan
+    from desktop.mission_runtime import MissionTools
+    from desktop.mission_schema import MissionError
+
+    prompt = 'Создай игру про гонки на машинах'
+    plan = game_plan(prompt)
+    tools = MissionTools(upstream=None, upstream_stream=None, authorize_model=None, handlers={})
+    user = SimpleNamespace(access='test',user_id=7)
+    mission = {'goal':prompt,'id':'test-fps-id','model':'velia-flash'}
+    with pytest.raises(MissionError, match='mission_game_genre_unsupported'):
+        asyncio.run(tools.execute(user, mission, plan['steps'][0], None))

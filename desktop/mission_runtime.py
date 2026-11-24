@@ -200,27 +200,45 @@ class MissionTools:
         elif name=='calendar.list':
             data=await self.google_call(session,m,step,'calendar_events_list',a);require(isinstance(data.get('events'),list),'mission_tool_unconfirmed',502);evidence.update(kind='calendar_read')
         elif name=='game.build':
-            from desktop.game_missions import GAME_SYSTEM, GAME_REVISION_PREFIX, GAME_REVISION_SYSTEM, game_result, revise_game_result
-            permission=await self.authorize(session.access,m['model'])
-            if permission:raise MissionError(permission[0],permission[1])
-            generate=self.handlers.get('generate_background')
-            require(generate is not None,'mission_model_unavailable',503)
-            reserve=self.handlers.get('reserve_background',self.handlers['reserve'])
-            release=self.handlers.get('release_background',self.handlers['release'])
-            require(reserve(session.user_id) is None,'mission_model_busy',429)
-            try:
-                edit = m.get('game_revision')
-                prior = edit['previous_specs'][0] if edit else None
-                prompt = json.dumps({'current':prior,'instruction':m['goal'].removeprefix(GAME_REVISION_PREFIX)},
-                                    ensure_ascii=False) if edit else m['goal'][:3000]
-                content=await generate(m['model'],[
-                    {'role':'system','content':GAME_REVISION_SYSTEM if edit else GAME_SYSTEM},
-                    {'role':'user','content':prompt},
-                ],max_tokens=768)
-                data=revise_game_result(content,prior) if edit else game_result(content,m['id'])
-            finally:
-                release(session.user_id)
-            kind='game';evidence.update(kind='validated_game_spec',engine='phaser-3.90')
+            from desktop.game_missions import (FPS_REVISION_SYSTEM, GAME_SYSTEM, GAME_REVISION_PREFIX,
+                                               GAME_REVISION_SYSTEM, fps_game_result, game_kind, game_result,
+                                               revise_game_result)
+            edit = m.get('game_revision')
+            prior = edit['previous_specs'][0] if edit else None
+            requested = game_kind(m['goal'])
+            version = prior['v'] if edit else (2 if requested == 'fps' else 1)
+            if not edit:
+                require(requested != 'unsupported', 'mission_game_genre_unsupported', 400)
+            else:
+                require(not (requested == 'unsupported' or requested == 'fps' and version == 1),
+                        'mission_game_genre_unsupported', 400)
+            if version == 2 and not edit:
+                data = fps_game_result(m['goal'], m['id'])
+            else:
+                permission = await self.authorize(session.access, m['model'])
+                if permission:
+                    raise MissionError(permission[0], permission[1])
+                generate = self.handlers.get('generate_background')
+                require(generate is not None, 'mission_model_unavailable', 503)
+                reserve = self.handlers.get('reserve_background', self.handlers['reserve'])
+                release = self.handlers.get('release_background', self.handlers['release'])
+                require(reserve(session.user_id) is None, 'mission_model_busy', 429)
+                try:
+                    prompt = (json.dumps({'current': prior, 'instruction': m['goal'].removeprefix(GAME_REVISION_PREFIX)},
+                                         ensure_ascii=False) if edit else m['goal'][:3000])
+                    system = GAME_SYSTEM
+                    if edit:
+                        system = FPS_REVISION_SYSTEM if version == 2 else GAME_REVISION_SYSTEM
+                    content = await generate(m['model'], [
+                        {'role': 'system', 'content': system},
+                        {'role': 'user', 'content': prompt},
+                    ], max_tokens=768)
+                    data = revise_game_result(content, prior) if edit else game_result(content, m['id'])
+                finally:
+                    release(session.user_id)
+            kind = 'game'
+            evidence.update(kind='validated_game_spec', engine='raycaster' if version == 2 else 'phaser-3.90')
+
         elif name=='text.draft':
             content=await self.draft(session,m,step,save_conversation)
             from desktop.mission_delivery import document_plan,missing_plan_days,document_text

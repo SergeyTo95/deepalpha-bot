@@ -50,7 +50,7 @@ export function mountGameExport({url,client,id,step,model,chatBound,signal}) {
   const edit=node('button','Доработать');edit.type='button';edit.setAttribute('aria-expanded','false');controls.append(edit);
   const editForm=node('form');editForm.className='feature-form';editForm.hidden=true;
   const instruction=node('textarea');instruction.setAttribute('aria-label','Что изменить в игре');
-  instruction.placeholder='Например, увеличь таймер до 90 секунд и выбери неоновую тему';
+  instruction.placeholder='Например, поменяй название или оформление';
   instruction.rows=3;instruction.maxLength=1500;instruction.required=true;
   const revise=node('button','Создать новую версию');revise.type='submit';
   const editStatus=node('p');editStatus.setAttribute('role','status');

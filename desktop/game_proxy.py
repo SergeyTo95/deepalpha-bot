@@ -70,8 +70,10 @@ def notice(title, *, detail='', status=404, retry=None):
 def setup_game_proxy(app, client_key, *, store, session_for):
     token = os.getenv('VELIA_GAME_PREVIEW_INTERNAL_TOKEN', '').strip()
 
-    async def asset(name, spec=None):
+    async def asset(name, spec=None, *, fps=False):
         path, content_type, limit = ASSETS[name]
+        if fps and name in {'index.html', 'game.mjs'}:
+            path = '/fps' if name == 'index.html' else '/fps.mjs'
         params = {'spec': json.dumps(spec, ensure_ascii=False, separators=(',', ':'))} if spec is not None else None
         try:
             async with app[client_key].get(ASSET_ORIGIN + path, params=params,
@@ -155,22 +157,24 @@ def setup_game_proxy(app, client_key, *, store, session_for):
                           retry=request.path)
         if name == 'access':
             return web.Response(status=204, headers=HEADERS)
+        game_spec = saved_game_spec(data['url'])
+        fps = game_spec['v'] == 2
         if name == 'index.html':
-            html = (await asset(name)).decode('utf-8')
+            html = (await asset(name, fps=fps)).decode('utf-8')
             html = html.replace('./style.css', '/game/style.css').replace('./phaser.min.js', '/game/phaser.min.js')
             if not owner_view:
                 html = re.sub(r'^.*id="game-download".*\n', '', html, flags=re.MULTILINE)
             body = html.encode('utf-8')
         elif name == 'game.mjs':
-            spec = json.dumps(saved_game_spec(data['url']), ensure_ascii=True, separators=(',', ':'))
-            source = (await asset(name)).decode('utf-8')
+            spec = json.dumps(game_spec, ensure_ascii=True, separators=(',', ':'))
+            source = (await asset(name, fps=fps)).decode('utf-8')
             source, count = re.subn(r'^const demo = .*?;$', lambda _: 'const demo = ' + spec + ';', source,
                                     flags=re.MULTILINE)
             if count != 1 or source.count('launch(loadSpec());') != 1:
                 raise web.HTTPServiceUnavailable(headers=HEADERS)
             body = (source.replace('launch(loadSpec());', 'launch(demo);') + POLL_ACCESS).encode('utf-8')
         else:
-            body = await asset(name, saved_game_spec(data['url']))
+            body = await asset(name, game_spec)
         headers = HEADERS
         if name == 'download':
             headers = {**HEADERS, 'Content-Disposition': 'attachment; filename="velia-game.zip"'}
