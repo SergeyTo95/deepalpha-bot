@@ -44,3 +44,12 @@ def test_github_connect_urls_never_expose_server_secrets(monkeypatch):
     for url in urls:
         assert "do-not-leak-client-secret" not in url
         assert "do-not-leak-private-key" not in url
+
+
+def test_web_github_installation_has_a_signed_web_return(monkeypatch):
+    monkeypatch.setenv("VELIA_DEVELOPER_STATE_SECRET", "g" * 32)
+    state = routes.project_service.create_install_state(42, web=True)
+    assert routes.project_service.verify_install_state(state)["web"] is True
+    native = routes.project_service.create_install_state(42)
+    assert "web" not in routes.project_service.verify_install_state(native)
+    assert routes._safe_redirect_url(web_client=True) == "https://velyoncore.ai/?connection=github"

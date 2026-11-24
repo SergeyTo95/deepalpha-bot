@@ -55,7 +55,9 @@ def _env_int(name: str, default: int, minimum: int = 1, maximum: int = 1000) -> 
     return min(maximum, max(minimum, value))
 
 
-def _safe_redirect_url() -> str:
+def _safe_redirect_url(*, web_client: bool = False) -> str:
+    if web_client:
+        return "https://velyoncore.ai/?connection=github"
     value = str(
         os.getenv("VELIA_DEVELOPER_CALLBACK_REDIRECT", "velia://developer/github-connected")
         or "velia://developer/github-connected"
@@ -159,7 +161,9 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
             await asyncio.to_thread(project_service.ensure_developer_tables)
             await asyncio.to_thread(github_service.validate_github_app_configuration)
             _clear_connection_error(int(auth["user_id"]))
-            state = project_service.create_install_state(int(auth["user_id"]))
+            state = project_service.create_install_state(
+                int(auth["user_id"]), web=request.path.endswith("/github/web-install-url"),
+            )
             return routes_module._json_response(
                 {
                     "ok": True,
@@ -176,9 +180,11 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
         installation_id = _int(request.query.get("installation_id"))
         code = str(request.query.get("code") or "")
         callback_user_id = 0
+        redirect = _safe_redirect_url()
         try:
             payload = project_service.verify_install_state(state)
             callback_user_id = int(payload["user_id"])
+            redirect = _safe_redirect_url(web_client=payload.get("web") is True)
             details_list = await asyncio.to_thread(
                 github_service.authorize_user_installations,
                 code,
@@ -192,8 +198,8 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
                 )
             _clear_connection_error(callback_user_id)
             primary_installation_id = int(details_list[0]["installation_id"])
-            separator = "&" if "?" in _safe_redirect_url() else "?"
-            location = _safe_redirect_url() + separator + urlencode(
+            separator = "&" if "?" in redirect else "?"
+            location = redirect + separator + urlencode(
                 {
                     "connected": "true",
                     "installation_id": primary_installation_id,
@@ -209,7 +215,6 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
             _remember_connection_error(callback_user_id, exc.code)
             logger.warning("VELIA_DEVELOPER_GITHUB_CALLBACK_FAILED user_id=%s code=%s detail=%s", callback_user_id, exc.code, exc.detail)
             code = exc.code
-            redirect = _safe_redirect_url()
             separator = "&" if "?" in redirect else "?"
             location = redirect + separator + urlencode({"connected": "false", "error": str(code)})
             raise web.HTTPFound(location=location)
@@ -217,7 +222,6 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
             code = getattr(exc, "code", "github_connection_failed")
             _remember_connection_error(callback_user_id, str(code))
             logger.exception("VELIA_DEVELOPER_GITHUB_CALLBACK_UNEXPECTED user_id=%s code=%s", callback_user_id, code)
-            redirect = _safe_redirect_url()
             separator = "&" if "?" in redirect else "?"
             location = redirect + separator + urlencode({"connected": "false", "error": str(code)})
             try:
@@ -542,6 +546,7 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
 
     app.router.add_get(f"{_PREFIX}/status", status)
     app.router.add_post(f"{_PREFIX}/github/install-url", install_url)
+    app.router.add_post(f"{_PREFIX}/github/web-install-url", install_url)
     app.router.add_get(f"{_PREFIX}/github/callback", github_callback)
     app.router.add_get(f"{_PREFIX}/installations", installations)
     app.router.add_get(f"{_PREFIX}/repositories", repositories)
