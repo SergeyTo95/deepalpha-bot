@@ -5,6 +5,8 @@ export const MISSION_ERRORS={
   game_github_conflict:'В GitHub изменилась версия игры. Проверь ветку и открой соответствующую версию в Велии.',
   mission_game_revision_no_change:'В этой версии можно менять название, оформление, предметы, таймер и скорость. Укажи, что именно изменить.',
   mission_game_not_found:'Исходная игра не найдена в этом аккаунте.',
+  mission_game_share_invalid:'Проверь режим доступа и код получателя.',
+  mission_game_share_limit:'Достигнут лимит активных ссылок. Отзови одну из них, чтобы создать новую.',
   game_github_unconfirmed:'GitHub не подтвердил экспорт. Повтори отправку в тот же репозиторий.',
   game_source_unavailable:'Исходники игры временно недоступны. Попробуй повторить.',
   game_source_invalid:'Не удалось проверить исходники игры.',
@@ -79,6 +81,7 @@ export function setupMissionClient({profile,request=missionRequest,onUnauthorize
       const path='/'+encodeURIComponent(id)+'/games/'+encodeURIComponent(step)+'/revise';
       const result=await call(path,{method:'POST',data,signal});remember(result.mission);return result.mission;
     },
+    gameShares:(id,step,suffix,options)=>call('/'+encodeURIComponent(id)+'/games/'+encodeURIComponent(step)+'/shares'+suffix,options),
     gameGithub:(id,step,suffix,options)=>call('/'+encodeURIComponent(id)+'/games/'+encodeURIComponent(step)+'/github'+suffix,options),
     create:async(data,signal)=>{const result=await call('',{method:'POST',data,signal});remember(result.mission);return result.mission;},
     action:async(m,name)=>{const result=await call('/'+m.id+'/'+name,{method:'POST',data:{revision:m.revision,...(name==='approve'?{token:m.steps.find(s=>s.status==='awaiting_approval').approval.token}:{})}});remember(result.mission);return result.mission;},

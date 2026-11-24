@@ -510,13 +510,12 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
         if agent_available:
             from desktop.background_agent import setup_background_agent
             setup_background_agent(app, browser_agent_run)
-        from desktop.game_proxy import setup_game_proxy
-        setup_game_proxy(app, CLIENT)
         setup_web_routes(app, origin=origin, upstream=upstream, authenticate=authenticate,
             allowed=allowed, valid_session=valid_session, json_response=json_response, handlers=handlers,
             account_balance=account_balance, authorize_model=authorize_model, upstream_stream=upstream_stream,
             web_search=web_search, browser_agent_run=browser_agent_run if agent_available else None,
-            browser_takeover=browser_takeover if agent_available else None, binary_upstream=binary_upstream)
+            browser_takeover=browser_takeover if agent_available else None, binary_upstream=binary_upstream,
+            game_client_key=CLIENT)
         if os.getenv("VELIA_WEB_GUEST_ENABLED") == "true":
             from desktop.guest_routes import setup_guest_routes
             setup_guest_routes(app, origin=origin, handlers=handlers, json_response=json_response,

@@ -157,7 +157,7 @@ class Session:
 
 def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_session,
                      json_response, handlers, account_balance, authorize_model, upstream_stream,
-                     web_search=None, browser_agent_run=None, browser_takeover=None, binary_upstream=None):
+                     web_search=None, browser_agent_run=None, browser_takeover=None, binary_upstream=None, game_client_key=None):
     client_digest=hashlib.sha256()
     for path in sorted([*STATIC.glob('*.mjs'),STATIC/'index.html',STATIC/'style.css']):
         client_digest.update(path.name.encode()+b'\0'+path.read_bytes())
@@ -626,6 +626,9 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     mission_service=setup_mission_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response,
         upstream=upstream, upstream_stream=upstream_stream, authorize_model=authorize_model, authenticate=authenticate,
         handlers=handlers, google=cloud_connections['google'], web_search=web_search, origin=origin, session_identity=mission_identity)
+    if game_client_key is not None:
+        from desktop.game_proxy import setup_game_proxy
+        setup_game_proxy(app, game_client_key, store=mission_service['store'], session_for=session_for)
     for provider, bridge in cloud_connections.items():
         setup_figma_routes(app, session_for=session_for, same_origin=same_origin, json_response=json_response,
             connector=bridge, oauth=bridge.oauth, provider=provider, prefix="/web-api/v1/connections/" + provider)

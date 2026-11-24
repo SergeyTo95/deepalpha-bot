@@ -1,8 +1,6 @@
-const previewPaths = new Map([
-  ['https://velyoncore.ai','/game/'],
-  ['https://velia-game-preview-production.up.railway.app','/'],
-  ['https://games.velyoncore.ai','/'],
-]);
+const gamesOrigin = 'https://velyoncore.ai';
+const privatePath = /^\/game\/project\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/s[1-8]\/$/u;
+const sharePath = /^\/game\/share\/[A-Za-z0-9_-]{150,350}\/$/u;
 
 export function wantsGame(text) {
   const match = String(text).trim().match(/^(?:велия[,\s]+)?(?:(?:создай|сделай|разработай|собери|напиши)\s+(?:[\p{L}\p{N}_-]+\s+){0,5}(?:(?:2d|html5)[- ])?(?:игру|мини[- ]?игру|игрушку)|(?:create|build|make|develop)\s+(?:[\p{L}\p{N}_-]+\s+){0,5}(?:(?:2d|html5)[- ])?(?:game|mini[- ]?game))(?=$|[\s,.!:?])/iu);
@@ -20,23 +18,18 @@ export function wantsGameRevision(text) {
 }
 
 export function gamePreviewLink(raw) {
+  if (typeof raw !== 'string') return '';
   try {
-    const url = new URL(raw);
-    if (url.pathname === previewPaths.get(url.origin) && !url.search && !url.username && !url.password
-        && url.hash.startsWith('#v1=') && url.hash.length <= 1701) return 'https://velyoncore.ai/game/' + url.hash;
+    const url = new URL(raw, gamesOrigin);
+    if (url.origin === gamesOrigin && privatePath.test(url.pathname) && !url.search && !url.hash
+        && !url.username && !url.password) return url.href;
   } catch { /* Invalid results never become navigation targets. */ }
   return '';
 }
 
 export function gameDownloadLink(raw) {
   const play = gamePreviewLink(raw);
-  if (!play) return '';
-  try {
-    const url = new URL(play);
-    const spec = decodeURIComponent(url.hash.slice(4));
-    JSON.parse(spec);
-    return new URL('download?' + new URLSearchParams({spec}), url).href;
-  } catch { return ''; }
+  return play ? new URL('download', play).href : '';
 }
 
 export function mountGameExport({url,client,id,step,model,chatBound,signal}) {
@@ -81,6 +74,83 @@ export function mountGameExport({url,client,id,step,model,chatBound,signal}) {
     }catch(error){if(!signal.aborted)editStatus.textContent=error.message;}
     finally{revise.disabled=false;instruction.disabled=false;}
   };
+  const access=node('button','Доступ');access.type='button';
+  access.setAttribute('aria-expanded','false');controls.append(access);
+  const sharing=node('section');sharing.hidden=true;
+  const shareForm=node('form');shareForm.className='feature-form';
+  const defaultAccess=node('p','Игра закрыта по умолчанию. Выдай отдельную ссылку, чтобы открыть доступ.');
+  const scope=node('select');scope.setAttribute('aria-label','Кому дать доступ');
+  const placeholder=node('option','Выбери, кому дать доступ');placeholder.value='';
+  const everyone=node('option','Всем, у кого есть ссылка');everyone.value='public';
+  const individual=node('option','Конкретному аккаунту');individual.value='personal';
+  scope.append(placeholder,everyone,individual);scope.required=true;
+  const recipient=node('input');recipient.type='text';recipient.placeholder='Код получателя';
+  recipient.autocomplete='off';recipient.maxLength=24;recipient.pattern='[a-fA-F0-9]{24}';
+  recipient.setAttribute('aria-label','Код получателя');
+  const recipientHelp=node('label');recipientHelp.hidden=true;
+  recipientHelp.append(node('span','Попроси получателя прислать его код Велии.'),recipient,
+                       link('Где получить код',gamesOrigin+'/game/access-code'));
+  const createShare=node('button','Создать ссылку');createShare.type='submit';createShare.disabled=true;
+  const shareStatus=node('p');shareStatus.setAttribute('role','status');
+  const shareList=node('div');
+  recipient.disabled=true;
+  shareForm.append(defaultAccess,scope,recipientHelp,createShare,shareStatus,shareList);sharing.append(shareForm);
+  let sharingBusy=false;
+  const shareRequest=(suffix,options={})=>client.gameShares(id,step,suffix,{...options,signal});
+  const lockSharing=value=>{
+    sharingBusy=value;scope.disabled=value;recipient.disabled=value||recipientHelp.hidden;createShare.disabled=value||!scope.value;
+    for(const button of shareList.querySelectorAll('button'))button.disabled=value;
+  };
+  function drawShares(shares){
+    shareList.replaceChildren();
+    for(const share of shares){
+      if(!sharePath.test(share.url)||!/^\w{32}$/.test(share.id))continue;
+      const title=share.scope==='personal'?'Персональная ссылка':'Для всех по ссылке';
+      const row=node('div');row.className='feature-actions';
+      const address=node('input');address.value=new URL(share.url,gamesOrigin).href;
+      address.readOnly=true;address.setAttribute('aria-label',title);
+      const copy=node('button','Копировать');copy.type='button';
+      copy.onclick=async()=>{
+        try{await navigator.clipboard.writeText(address.value);shareStatus.textContent='Ссылка скопирована.';}
+        catch{address.select();shareStatus.textContent='Скопируй выделенную ссылку.';}
+      };
+      const revoke=node('button','Отозвать');revoke.type='button';
+      revoke.onclick=async()=>{
+        if(sharingBusy)return;
+        lockSharing(true);
+        try{
+          drawShares((await shareRequest('/'+share.id,{method:'DELETE',data:{}})).shares);
+          shareStatus.textContent='Ссылка отозвана.';
+        }catch(error){if(!signal.aborted)shareStatus.textContent=error.message;}
+        finally{lockSharing(false);}
+      };
+      row.append(node('span',title),address,copy,revoke);shareList.append(row);
+    }
+  }
+  access.onclick=async()=>{
+    sharing.hidden=!sharing.hidden;
+    access.setAttribute('aria-expanded',String(!sharing.hidden));
+    if(sharing.hidden||sharingBusy)return;
+    lockSharing(true);shareStatus.textContent='Проверяю доступ…';
+    try{drawShares((await shareRequest('')).shares);shareStatus.textContent='';}
+    catch(error){if(!signal.aborted)shareStatus.textContent=error.message;}
+    finally{lockSharing(false);}
+  };
+  scope.onchange=()=>{
+    recipientHelp.hidden=scope.value!=='personal';recipient.required=!recipientHelp.hidden;
+    lockSharing(false);
+  };
+  shareForm.onsubmit=async event=>{
+    event.preventDefault();
+    if(sharingBusy||!scope.value)return;
+    lockSharing(true);
+    try{
+      const data=scope.value==='personal'?{scope:'personal',recipient:recipient.value.trim().toLowerCase()}:{scope:'public'};
+      drawShares((await shareRequest('',{method:'POST',data})).shares);
+      recipient.value='';shareStatus.textContent='Ссылка создана.';
+    }catch(error){if(!signal.aborted)shareStatus.textContent=error.message;}
+    finally{lockSharing(false);}
+  };
   const toggle=node('button','В GitHub');toggle.type='button';toggle.setAttribute('aria-expanded','false');controls.append(toggle);
   const form=node('form');form.className='feature-form';form.hidden=true;
   const repositories=node('select');repositories.setAttribute('aria-label','Репозиторий GitHub');
@@ -89,7 +159,7 @@ export function mountGameExport({url,client,id,step,model,chatBound,signal}) {
   const status=node('p');status.setAttribute('role','status');
   const result=node('div');
   form.append(install,repositories,submit,status,result);
-  box.append(controls,editForm,form);
+  box.append(controls,editForm,sharing,form);
   const request=(suffix,options={})=>client.gameGithub(id,step,suffix,{...options,signal});
   const option=(label,value)=>{const o=node('option',label);o.value=String(value);return o;};
   let busy=false,target=null;

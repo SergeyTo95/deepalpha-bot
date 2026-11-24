@@ -209,11 +209,26 @@ def setup_mission_routes(app,*,session_for,same_origin,json_response,upstream,up
         configured()
         user = request[SESSION].user_id
         mission = await asyncio.to_thread(store.detail, user, request.match_info['mission_id'])
-        step = next((item for item in mission['steps'] if item['id'] == request.match_info['step_id']), None)
-        result = (step or {}).get('result') or {}
-        require(step and step['status'] == 'completed' and result.get('kind') == 'game',
-                'mission_game_not_found', 404)
-        return mission, result['data']
+        return mission, store.game_step(mission, request.match_info['step_id'])
+
+    async def game_shares(request):
+        configured()
+        data = request.get(BODY, {})
+        user = request[SESSION].user_id
+        mission_id, step_id = request.match_info['mission_id'], request.match_info['step_id']
+        scope = recipient = revoke = None
+        if request.method == 'POST':
+            scope, recipient = data.get('scope'), data.get('recipient')
+            require((scope == 'public' and set(data) == {'scope'}) or
+                    (scope == 'personal' and set(data) == {'scope', 'recipient'} and
+                     isinstance(recipient, str) and re.fullmatch(r'[a-f0-9]{24}', recipient)),
+                    'mission_game_share_invalid', 400)
+        if request.method == 'DELETE':
+            require(not data, 'mission_game_share_invalid', 400)
+            revoke = request.match_info['share_id']
+        shares = await asyncio.to_thread(store.game_shares, user, mission_id, step_id,
+                                         scope=scope, recipient=recipient, revoke=revoke)
+        return json_response({'ok': True, 'shares': shares})
 
     async def revise_game(request):
         from desktop.game_missions import GAME_REVISION_PREFIX, game_plan, saved_game_spec
@@ -352,8 +367,11 @@ def setup_mission_routes(app,*,session_for,same_origin,json_response,upstream,up
     app.router.add_post('/web-api/v1/missions/{mission_id}/{action:run|pause|cancel|approve|refresh-approval}',action)
     game_path = '/web-api/v1/missions/{mission_id}/games/{step_id:s[1-8]}'
     app.router.add_post(game_path + '/revise', revise_game)
+    app.router.add_get(game_path + '/shares', game_shares)
+    app.router.add_post(game_path + '/shares', game_shares)
+    app.router.add_delete(game_path + r'/shares/{share_id:[a-f0-9]{32}}', game_shares)
     app.router.add_get(game_path + '/github/{action:installations|repositories|target}', game_github)
     app.router.add_post(game_path + '/github', game_github)
     app.router.add_get('/web-api/v1/missions/{mission_id}/files/{step_id:s[1-8]}',file)
 
-    return {'enabled':store is not None,'accept':accept_conversation,'messages':conversation_history,'detach':detach_conversation,'origin':origin}
+    return {'enabled':store is not None,'store':store,'accept':accept_conversation,'messages':conversation_history,'detach':detach_conversation,'origin':origin}

@@ -9,7 +9,7 @@ import secrets
 import re
 import time
 import uuid
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from desktop.guest_store import GuestStore
 from desktop.mission_schema import MissionError,require,validate_plan,timezone,MODELS,TOOLS,digest,text
 
@@ -22,6 +22,7 @@ class MissionStore(GuestStore):
         super().__init__(dsn,sqlite_path=sqlite_path);self.clock=clock
         self.secret=hashlib.sha256(b'velia-mission-owner-v1:'+session_key.encode()).digest()
         self.cipher=Fernet(base64.urlsafe_b64encode(hashlib.sha256(b'velia-mission-data-v1:'+session_key.encode()).digest()))
+        self.game_cipher=Fernet(base64.urlsafe_b64encode(hashlib.sha256(b'velia-game-link-v1:'+session_key.encode()).digest()))
     def owner(self,user):return hmac.new(self.secret,str(user).encode(),hashlib.sha256).hexdigest()
     def initialize(self):
         with closing(self.connect()) as conn,closing(conn.cursor()) as cur:
@@ -65,6 +66,59 @@ class MissionStore(GuestStore):
         m=next((m for m in doc['missions'] if m['id']==id),None);require(m is not None,'mission_not_found',404);return m
     @staticmethod
     def touch(m,now):m.update(revision=m['revision']+1,updated_at=now)
+    def read_game(self, user, mission_id, step_id):
+        owner = self.owner(user)
+        with closing(self.connect()) as conn, closing(conn.cursor()) as cur:
+            self.execute(cur, 'SELECT encrypted FROM velia_mission_workspace WHERE owner_hash=?', (owner,))
+            row = cur.fetchone()
+        require(row is not None, 'mission_game_not_found', 404)
+        doc = json.loads(self.cipher.decrypt(row[0].encode()))
+        require(doc.get('owner') == owner, 'mission_storage_unavailable', 503)
+        mission = self.find(doc, mission_id)
+        return self.game_step(mission, step_id), mission.get('game_shares', {})
+
+    @staticmethod
+    def game_step(mission, step_id):
+        step = next((item for item in mission['steps'] if item['id'] == step_id), None)
+        result = (step or {}).get('result') or {}
+        require(step and step['status'] == 'completed' and result.get('kind') == 'game',
+                'mission_game_not_found', 404)
+        return result['data']
+
+    def game_recipient(self, user):
+        digest = hmac.new(self.secret, ('game-recipient:' + str(user)).encode(), hashlib.sha256).hexdigest()
+        return digest[:24]
+
+    def open_game_share(self, token):
+        try:
+            owner, mission_id, step, nonce = json.loads(self.game_cipher.decrypt(token.encode() + b'=' * (-len(token) % 4)))
+            return owner, mission_id, step, nonce
+        except (InvalidToken, ValueError, TypeError):
+            raise MissionError('mission_game_not_found', 404) from None
+
+    def game_shares(self, user, mission_id, step_id, *, scope=None, recipient=None, revoke=None):
+        def change(doc):
+            mission = self.find(doc, mission_id)
+            self.game_step(mission, step_id)
+            shares = mission.setdefault('game_shares', {})
+            if revoke:
+                entry = shares.get(revoke)
+                if entry and entry['step'] == step_id:
+                    del shares[revoke]
+            elif scope:
+                require(len(shares) < 20, 'mission_game_share_limit', 409)
+                nonce = secrets.token_hex(16)
+                token = self.game_cipher.encrypt(json.dumps([user, mission_id, step_id, nonce]).encode()).decode().rstrip('=')
+                shares[nonce] = {'step': step_id, 'url': '/game/share/' + token + '/',
+                                 'scope': scope, 'recipient': recipient}
+            return [{'id': nonce, **{k: entry[k] for k in ('url', 'scope', 'recipient')}}
+                    for nonce, entry in shares.items() if entry['step'] == step_id]
+        if not scope and not revoke:
+            _, shares = self.read_game(user, mission_id, step_id)
+            return [{'id': nonce, **{k: entry[k] for k in ('url', 'scope', 'recipient')}}
+                    for nonce, entry in shares.items() if entry['step'] == step_id]
+        return self.transaction(user, change)
+
     def create(self,user,goal,plan,model,zone,key,*,source=None,context='',game_revision=None):
         require(text(goal,6000));timezone(zone)
         if plan is not None:validate_plan(plan,goal)
@@ -214,10 +268,13 @@ class MissionStore(GuestStore):
     @staticmethod
     def public(m,*,summary=False):
         value=deepcopy(m)
-        for k in ('lease','lease_until','conversation_id','request_id','request_hash','notices','context','last_answer','original_goal','game_revision'):value.pop(k,None)
+        for k in ('lease','lease_until','conversation_id','request_id','request_hash','notices','context','last_answer','original_goal','game_revision','game_shares'):value.pop(k,None)
         for step in value['steps']:
             step.pop('approved',None)
             step.pop('dispatched',None)
             if summary:step.pop('result',None);step.pop('arguments',None);step.pop('approval',None)
-            elif step.get('result'):step['result'].pop('file',None)
+            elif step.get('result'):
+                step['result'].pop('file',None)
+                if step['result']['kind'] == 'game':
+                    step['result']['data']['url'] = '/game/project/' + m['id'] + '/' + step['id'] + '/'
         return value

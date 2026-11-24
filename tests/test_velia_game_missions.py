@@ -189,3 +189,106 @@ def test_revision_endpoint_links_original_game_and_github_target(tmp_path):
             assert store.detail(7, original['id'])['steps'][0]['result']['data'] == original_result
 
     asyncio.run(scenario())
+
+
+def test_play_and_share_enforce_live_owner_and_recipient_permissions(tmp_path, monkeypatch):
+    import hashlib
+
+    from aiohttp import ClientSession, web
+    from aiohttp.test_utils import TestClient, TestServer
+    from desktop import game_proxy
+    from desktop.mission_routes import setup_mission_routes
+    from desktop.mission_store import MissionStore
+
+    async def scenario():
+        token = 'fixture-token-with-more-than-thirty-two-characters'
+        monkeypatch.setenv('VELIA_GAME_PREVIEW_INTERNAL_TOKEN', token)
+        store = MissionStore(sqlite_path=tmp_path / 'access.db', session_key='x' * 48)
+        preview = web.Application()
+
+        async def assets(request):
+            assert request.headers.get('X-Velia-Game-Internal') == token
+            if request.path == '/game.mjs':
+                return web.Response(text='const demo = {};\ntry { launch(loadSpec()); }\n', content_type='text/javascript')
+            if request.path == '/download':
+                assert json.loads(request.query['spec'])['title'] == SPEC['title']
+                return web.Response(body=b'zip', content_type='application/zip')
+            return web.Response(text='<main><a id="game-download" href="./download">ZIP</a>\n'
+                                     '<script type="module" src="./game.mjs"></script></main>',
+                                content_type='text/html')
+
+        preview.router.add_get('/{path:.*}', assets)
+
+        async def session(request):
+            value = request.headers.get('X-Test-Account')
+            return SimpleNamespace(user_id=int(value), access='test-session') if value else None
+
+        owner = {'X-Test-Account': '7'}
+        recipient = {'X-Test-Account': '8'}
+        stranger = {'X-Test-Account': '9'}
+        account = hashlib.sha256(b':7').hexdigest()[:24]
+
+        async with TestServer(preview) as source, ClientSession() as client_session:
+            monkeypatch.setattr(game_proxy, 'ASSET_ORIGIN', str(source.make_url('/')).rstrip('/'))
+            app = web.Application()
+            client_key = web.AppKey('asset_client', ClientSession)
+            app[client_key] = client_session
+            setup_mission_routes(app, session_for=session, same_origin=lambda req: req.headers.get('Origin') == 'https://velyoncore.ai',
+                                 json_response=lambda data, status=200: web.json_response(data, status=status),
+                                 upstream=None, upstream_stream=None, authorize_model=None, authenticate=None,
+                                 handlers={}, store=store, tools=object())
+            game_proxy.setup_game_proxy(app, client_key, store=store, session_for=session)
+            async with TestClient(TestServer(app)) as client:
+                goal = 'Создай игру'
+                mission = store.create(7, goal, game_plan(goal), 'velia-flash', 'UTC', 'private-game')
+                claimed = store.claim(7, mission['id'], 1)
+
+                def complete(record):
+                    record.update(status='completed', lease=None, lease_until=0)
+                    record['steps'][0].update(status='completed', result={
+                        'kind': 'game', 'data': game_result(json.dumps(SPEC), mission['id']),
+                    })
+                store.checkpoint(7, mission['id'], claimed['lease'], complete)
+                path = '/game/project/' + mission['id'] + '/s1/'
+                shares = '/web-api/v1/missions/' + mission['id'] + '/games/s1/shares'
+                details = await (await client.get('/web-api/v1/missions/' + mission['id'], headers=owner)).json()
+                assert details['mission']['steps'][0]['result']['data']['url'] == path
+                assert (await client.get(path)).status == 404
+                assert (await client.get(path + 'game.mjs', headers=stranger)).status == 404
+                assert (await client.get(path + 'download?spec=wrong', headers=owner)).status == 404
+                assert (await client.get('/game/download?spec=old')).status == 404
+                assert (await client.get('/game/game.mjs')).status == 404
+                assert SPEC['title'] not in await (await client.get('/game/')).text()
+                game = await client.get(path + 'game.mjs', headers=owner)
+                assert game.status == 200 and game.headers['Cache-Control'] == 'private, no-store'
+                assert '\\u' in await game.text()
+                assert (await client.get(path + 'download', headers=owner)).status == 200
+                assert (await client.get(shares, headers=stranger)).status == 404
+                active = await (await client.get(shares, headers=owner)).json()
+                assert active['shares'] == []
+                assert (await client.post(shares, headers=owner, json={'scope': 'public', 'account': account})).status == 403
+                write = {**owner, 'Origin': 'https://velyoncore.ai'}
+                public = (await (await client.post(shares, headers=write, json={'scope': 'public', 'account': account})).json())['shares'][0]
+                opened = await client.get(public['url'])
+                assert opened.status == 200 and 'game-download' not in await opened.text()
+                assert (await client.get(public['url'] + 'access')).status == 204
+                assert (await client.get(public['url'] + 'download')).status == 404
+                code = store.game_recipient(8)
+                assert code in await (await client.get('/game/access-code', headers=recipient)).text()
+                personal = (await (await client.post(shares, headers=write, json={
+                    'scope': 'personal', 'recipient': code, 'account': account,
+                })).json())['shares'][1]
+                assert (await client.get(personal['url'])).status == 404
+                assert (await client.get(personal['url'], headers=stranger)).status == 404
+                assert (await client.get(personal['url'] + 'game.mjs', headers=recipient)).status == 200
+                for entry, headers in ((public, {}), (personal, recipient)):
+                    assert (await client.get(entry['url'] + 'access', headers=headers)).status == 204
+                    revoke = await client.delete(shares + '/' + entry['id'], headers=write, json={'account': account})
+                    assert revoke.status == 200
+                    assert (await client.get(entry['url'], headers=headers)).status == 404
+                    assert (await client.get(entry['url'] + 'access', headers=headers)).status == 404
+                    assert (await client.get(entry['url'] + 'game.mjs', headers=headers)).status == 404
+                assert (await client.get(path, headers=owner)).status == 200
+                assert store.find(store.transaction(7), mission['id'])['game_shares'] == {}
+
+    asyncio.run(scenario())

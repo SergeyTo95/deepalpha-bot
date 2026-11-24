@@ -11,18 +11,18 @@ test('routes game creation without intercepting questions or game plans', () => 
   }
 });
 
-test('allows only game links on the dedicated preview origin', () => {
-  const link = 'https://velia-game-preview-production.up.railway.app/#v1=%7B%7D';
-  const branded = 'https://velyoncore.ai/game/#v1=%7B%7D';
-  assert.equal(gamePreviewLink(link), branded);
-  assert.equal(gamePreviewLink(branded), branded);
-  assert.equal(gameDownloadLink(link), 'https://velyoncore.ai/game/download?spec=%7B%7D');
-  for (const invalid of ['javascript:alert(1)', 'https://outside.invalid/#v1=1',
-    link.replace('/#', '/login#'), link.replace('/#', '/?query=1#'), link.replace('#v1=', '#wrong=')]) {
+test('launch and ZIP use an owner-scoped URL without exposing the saved settings', () => {
+  const path = '/game/project/a1234567-1234-1234-1234-123456789abc/s1/';
+  const url = 'https://velyoncore.ai'+path;
+  assert.equal(gamePreviewLink(path), url);
+  assert.equal(gamePreviewLink(url), url);
+  assert.equal(gameDownloadLink(url), url+'download');
+  for (const invalid of ['javascript:alert(1)', 'https://outside.invalid'+path,
+    'https://velyoncore.ai/game/#v1=%7B%7D', url+'?spec=%7B%7D', url+'#v1=1']) {
     assert.equal(gamePreviewLink(invalid), '');
+    assert.equal(gameDownloadLink(invalid), '');
   }
 });
-
 
 test('recognizes follow-up game edits while leaving other chat requests alone', () => {
   for (const text of ['Велия, доработай игру', 'Сделай игру сложнее',
