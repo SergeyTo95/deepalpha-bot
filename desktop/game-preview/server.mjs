@@ -6,6 +6,8 @@ import { decodeGame, gameSources, gameZip } from './exports.mjs';
 const assets = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/game.mjs': ['game.mjs', 'text/javascript; charset=utf-8'],
+  '/fps': ['fps.html', 'text/html; charset=utf-8'],
+  '/fps.mjs': ['fps.mjs', 'text/javascript; charset=utf-8'],
   '/style.css': ['style.css', 'text/css; charset=utf-8'],
   '/phaser.min.js': ['phaser.min.js', 'text/javascript; charset=utf-8'],
 };

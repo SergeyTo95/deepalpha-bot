@@ -26,3 +26,29 @@ button:focus-visible { outline: 2px solid #d6f466; outline-offset: 2px; }
 @media (max-height: 700px) and (orientation: portrait) { main { padding-top: 12px; } }
 
 #game-download { display: inline-block; padding: 8px 0; color: #d6f466; text-underline-offset: 4px; }
+
+.fps { color: #eee9dd; background: #101216; }
+.fps-shell { max-width: 880px; margin: 0 auto; padding: clamp(12px, 3vw, 30px); }
+.fps-head, .fps-hud { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 18px; }
+.fps-head { margin-bottom: 14px; }
+.fps-head h1 { margin: 0; color: #f5ddb2; font-size: clamp(1.5rem, 5vw, 2.9rem); line-height: 1.1; }
+.fps-head p { margin: 6px 0 0; color: #adb1b9; }
+.fps-head a { color: #f0c986; }
+.fps-screen { position: relative; isolation: isolate; background: #0a0b0d; border: 1px solid #48433d; }
+.fps-screen canvas { display: block; width: 100%; height: auto; aspect-ratio: 5 / 3; image-rendering: pixelated; touch-action: none; }
+.fps-overlay { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 8px; padding: 8px; text-align: center; background: #11131ae6; }
+.fps-overlay[hidden], .fps-overlay [hidden] { display: none; }
+.fps-overlay h2, .fps-overlay p { margin: 0; }
+.fps-overlay h2 { color: #f5ddb2; font-size: clamp(1.05rem, 4vw, 2.2rem); }
+.fps-overlay p, .fps-overlay label { font-size: clamp(.75rem, 2.5vw, 1rem); }
+.fps button, .fps select { min-height: 38px; border: 1px solid #635d54; border-radius: 5px; background: #24262c; color: #eee9dd; font: inherit; padding: 5px 9px; cursor: pointer; }
+.fps button:focus-visible, .fps select:focus-visible { outline: 2px solid #f2c578; outline-offset: 2px; }
+.fps #fps-start, .fps button.fps-fire, .fps button[aria-pressed="true"] { border-color: #c58942; color: #ffe9c4; background: #513525; }
+.fps-hud { padding: 9px 0; min-height: 42px; color: #e5c991; font-size: clamp(.75rem, 2.5vw, .95rem); }
+#fps-notice { flex-basis: 100%; min-height: 1.2em; color: #c2c6ce; }
+.fps-arsenal, .fps-touch { display: grid; gap: 5px; margin-bottom: 8px; }
+.fps-arsenal { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.fps-touch { grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(0, 1.5fr); }
+.fps-arsenal button { font-size: clamp(.66rem, 2.3vw, 1rem); padding-inline: 2px; }
+.fps-touch button { min-height: 48px; touch-action: none; user-select: none; }
+.fps-help { color: #adb1b9; font-size: .82rem; margin: 5px 0; }

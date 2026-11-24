@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Сигнал из глубины</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./game.mjs"></script>
+</head>
+<body class="fps">
+  <main class="fps-shell">
+    <header class="fps-head">
+      <div><h1 id="fps-title">Сигнал из глубины</h1><p id="fps-stage"></p></div>
+      <a id="game-download" href="./download">Скачать ZIP</a>
+    </header>
+    <div class="fps-screen">
+      <canvas id="fps-view" width="400" height="240" aria-label="Вид от первого лица"></canvas>
+      <div id="fps-overlay" class="fps-overlay">
+        <h2 id="fps-message">Сигнал из глубины</h2>
+        <p id="fps-detail">Найди ключ и выход из каждого сектора.</p>
+        <label id="fps-difficulty-label">Сложность
+          <select id="fps-difficulty">
+            <option value="0">Легко</option>
+            <option value="1">Нормально</option>
+            <option value="2">Сложно</option>
+          </select>
+        </label>
+        <button id="fps-start" type="button">Начать игру</button>
+      </div>
+    </div>
+    <div class="fps-hud">
+      <span id="fps-health"></span><span id="fps-ammo"></span><span id="fps-key"></span>
+      <span id="fps-notice" role="status"></span>
+    </div>
+    <div class="fps-arsenal" aria-label="Оружие">
+      <button type="button" data-weapon="0">1 · Лом</button>
+      <button type="button" data-weapon="1">2 · Винтовка</button>
+      <button type="button" data-weapon="2">3 · Дробовик</button>
+      <button type="button" data-weapon="3">4 · Импульсатор</button>
+    </div>
+    <div class="fps-touch" aria-label="Управление">
+      <button type="button" data-control="forward" aria-label="Вперёд">↑</button>
+      <button type="button" data-control="left" aria-label="Поворот влево">↶</button>
+      <button type="button" data-control="back" aria-label="Назад">↓</button>
+      <button type="button" data-control="right" aria-label="Поворот вправо">↷</button>
+      <button type="button" class="fps-fire" data-control="fire">Атака</button>
+    </div>
+    <p class="fps-help">WASD, стрелки, пробел и 1–4 · На телефоне используй кнопки или проведи по экрану для поворота.</p>
+  </main>
+</body>
+</html>
