@@ -218,3 +218,59 @@ def test_game_export_creates_an_isolated_branch_and_retry_returns_existing_commi
 def assert_no_pr(project, pull_requests_required):
     assert project == PROJECT
     assert pull_requests_required is False
+
+
+def test_game_revision_updates_only_settings_and_rejects_stale_branch(monkeypatch):
+    import base64
+
+    game_id = "a1234567-1234-1234-1234-123456789abc"
+    original = {"v": 1, "title": "Лёд", "seconds": 60}
+    revised = {**original, "seconds": 90}
+    head = "a" * 40
+    source = 'const demo = {"v":1,"title":"Лёд","seconds":60};\r\n// Keep handwritten code\r\n'
+    next_source = source.replace('"seconds":60', '"seconds":90')
+    changes = []
+    monkeypatch.setenv("VELIA_DEVELOPER_WORK_BRANCH_PREFIX", "velia")
+    monkeypatch.setattr(write_service, "require_write_permissions", assert_no_pr)
+    monkeypatch.setattr(write_service, "_token", lambda project: "repo-scoped-token")
+    monkeypatch.setattr(write_service, "_portable_game_sources", lambda _: {"game.js": "// template"})
+
+    def fake_request(method, path, *, token, **kwargs):
+        nonlocal head, source
+        assert token == "repo-scoped-token"
+        folder = f"games/velia-{game_id}"
+        if method == "GET" and path.endswith(f"/git/ref/heads/velia%2Fgame-{game_id}"):
+            return {"object": {"sha": head}}
+        if method == "GET" and path.endswith("/contents/" + folder):
+            assert kwargs["params"] == {"ref": head}
+            return [{"name": "game.js", "sha": "f" * 40}]
+        if method == "GET" and path.endswith("/contents/" + folder + "/game.js"):
+            assert kwargs["params"] == {"ref": head}
+            return {"encoding": "base64", "sha": "f" * 40,
+                    "content": base64.b64encode(source.encode()).decode()}
+        if method == "GET" and path.endswith("/git/commits/" + head):
+            return {"tree": {"sha": "b" * 40}}
+        changes.append(method)
+        if method == "POST" and path.endswith("/git/trees"):
+            assert kwargs["body"] == {"base_tree": "b" * 40, "tree": [
+                {"path": folder + "/game.js", "type": "blob", "mode": "100644", "content": next_source},
+            ]}
+            return {"sha": "c" * 40}
+        if method == "POST" and path.endswith("/git/commits"):
+            assert kwargs["body"]["parents"] == [head]
+            return {"sha": "d" * 40}
+        if method == "PATCH" and path.endswith(f"/git/refs/heads/velia%2Fgame-{game_id}"):
+            assert kwargs["body"] == {"sha": "d" * 40, "force": False}
+            head, source = "d" * 40, next_source
+            return {"object": {"sha": head}}
+        raise AssertionError((method, path))
+
+    monkeypatch.setattr(write_service, "_request", fake_request)
+    for _ in range(2):
+        saved = write_service.publish_game(PROJECT, game_id=game_id, spec=revised, previous_specs=[original])
+        assert saved["commit_sha"] == "d" * 40
+    assert changes == ["POST", "POST", "PATCH"]
+    with pytest.raises(write_service.DeveloperWriteError, match="game_github_conflict"):
+        write_service.publish_game(PROJECT, game_id=game_id, spec={**original, "seconds": 75},
+                                   previous_specs=[original])
+    assert changes == ["POST", "POST", "PATCH"]

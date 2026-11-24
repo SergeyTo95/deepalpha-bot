@@ -275,7 +275,11 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
         if not auth:
             return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
         data = await routes_module._read_json(request)
-        if (not data or set(data) != {"installation_id", "repository_id", "game_id", "spec"}
+        required = {"installation_id", "repository_id", "game_id", "spec"}
+        previous = data.get("previous_specs", []) if data else []
+        if (not data or set(data) - {"previous_specs"} != required
+                or not isinstance(previous, list) or len(previous) > 10
+                or any(not isinstance(item, dict) for item in previous)
                 or any(type(data[k]) is not int or not 0 < data[k] < 2**53
                        for k in ("installation_id", "repository_id"))
                 or not isinstance(data["game_id"], str) or len(data["game_id"]) != 36
@@ -294,7 +298,10 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
                 "installation_id": installation_id, "repository_id": repository_id,
                 "repository_full_name": repository["full_name"], "selected_branch": repository["default_branch"],
             }
-            result = await asyncio.to_thread(write_service.publish_game, project, game_id=data["game_id"], spec=data["spec"])
+            result = await asyncio.to_thread(
+                write_service.publish_game, project, game_id=data["game_id"],
+                spec=data["spec"], previous_specs=previous,
+            )
             return routes_module._json_response({"ok": True, "export": result}, status=201)
         except write_service.DeveloperWriteError as exc:
             return routes_module._json_response({"ok": False, "error": exc.code}, status=exc.status)

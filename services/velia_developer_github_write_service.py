@@ -338,7 +338,26 @@ def _portable_game_sources(spec: Dict[str, Any]) -> Dict[str, str]:
         raise DeveloperWriteError("game_source_unavailable", status=503) from exc
 
 
-def publish_game(project: Dict[str, Any], *, game_id: str, spec: Dict[str, Any]) -> Dict[str, str]:
+def _game_branch_code(root, folder, ref, token, blob):
+    if not blob:
+        raise DeveloperWriteError("game_github_conflict", status=409)
+    file = _request("GET", root + "/contents/" + folder + "/game.js", params={"ref": ref}, token=token)
+    encoded = file.get("content")
+    if file.get("sha") != blob or file.get("encoding") != "base64" or not isinstance(encoded, str) or len(encoded) > 410000:
+        raise DeveloperWriteError("game_github_conflict", status=409)
+    try:
+        source = base64.b64decode("".join(encoded.split()), validate=True).decode("utf-8")
+        lines = list(re.finditer(r"^const demo = (.+);(?=\r?$)", source, re.MULTILINE))
+        if len(lines) != 1:
+            raise ValueError("missing game settings")
+        match = lines[0]
+        return source, match, json.loads(match[1])
+    except (TypeError, ValueError) as exc:
+        raise DeveloperWriteError("game_github_conflict", status=409) from exc
+
+
+def publish_game(project: Dict[str, Any], *, game_id: str, spec: Dict[str, Any],
+                 previous_specs: Iterable[Dict[str, Any]] = ()) -> Dict[str, str]:
     if not re.fullmatch(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}", game_id):
         raise DeveloperWriteError("game_source_invalid", status=400)
     require_write_permissions(project, pull_requests_required=False)
@@ -350,14 +369,11 @@ def publish_game(project: Dict[str, Any], *, game_id: str, spec: Dict[str, Any])
     prefix = str(os.getenv("VELIA_DEVELOPER_WORK_BRANCH_PREFIX", "velia/") or "velia/").strip().rstrip("/")
     folder = "games/velia-" + game_id
     branch = _validate_work_branch(prefix + "/game-" + game_id, base)
-    operations = _validate_operations(
-        {"op": "upsert", "path": folder + "/" + path, "content": text} for path, text in files.items()
-    )
     hashes = {}
     for path, text in files.items():
         value = text.encode("utf-8")
         hashes[path] = hashlib.sha1(f"blob {len(value)}\0".encode() + value).hexdigest()
-    ref_path = root + "/git/ref/heads/" + quote(branch, safe="")
+    branch_path = "/heads/" + quote(branch, safe="")
 
     def receipt(sha):
         return {"branch": branch, "commit_sha": sha,
@@ -365,24 +381,42 @@ def publish_game(project: Dict[str, Any], *, game_id: str, spec: Dict[str, Any])
 
     def existing():
         try:
-            ref = _request("GET", ref_path, token=token)
+            ref = _request("GET", root + "/git/ref" + branch_path, token=token)
         except DeveloperWriteError as exc:
             if exc.status == 404:
-                return None
+                return None, None
             raise
         sha = str((ref.get("object") or {}).get("sha") or "")
         if not re.fullmatch(r"[a-f0-9]{40}", sha):
             raise DeveloperWriteError("game_github_unconfirmed", status=502)
-        items = _request("GET", root + "/contents/" + folder, params={"ref": sha}, token=token)
+        try:
+            items = _request("GET", root + "/contents/" + folder, params={"ref": sha}, token=token)
+        except DeveloperWriteError as exc:
+            if exc.status == 404:
+                raise DeveloperWriteError("game_github_conflict", status=409) from exc
+            raise
         actual = {item.get("name"): item.get("sha") for item in items if isinstance(item, dict)} if isinstance(items, list) else {}
-        if actual != hashes:
-            raise DeveloperWriteError("game_github_branch_exists", status=409)
-        return receipt(sha)
+        if actual == hashes:
+            return sha, None
+        source, match, current = _game_branch_code(root, folder, sha, token, actual.get("game.js"))
+        if current == spec:
+            return sha, None
+        if current not in previous_specs:
+            raise DeveloperWriteError("game_github_conflict", status=409)
+        settings = json.dumps(spec, ensure_ascii=False, separators=(",", ":"))
+        return sha, source[:match.start(1)] + settings + source[match.end(1):]
 
-    previous = existing()
-    if previous is not None:
-        return previous
-    parent = branch_head(project, base)["sha"]
+    parent, revised_source = existing()
+    if parent and revised_source is None:
+        return receipt(parent)
+    update = parent is not None
+    if update:
+        files = {"game.js": revised_source}
+    else:
+        parent = branch_head(project, base)["sha"]
+    operations = _validate_operations(
+        {"op": "upsert", "path": folder + "/" + path, "content": text} for path, text in files.items()
+    )
     commit = _request("GET", root + "/git/commits/" + quote(parent), token=token)
     base_tree = str((commit.get("tree") or {}).get("sha") or "")
     if not re.fullmatch(r"[a-f0-9]{40}", base_tree):
@@ -391,19 +425,26 @@ def publish_game(project: Dict[str, Any], *, game_id: str, spec: Dict[str, Any])
         {"path": op["path"], "type": "blob", "mode": "100644", "content": op["content"]} for op in operations
     ]}, token=token, expected=(201,))
     commit = _request("POST", root + "/git/commits", body={
-        "tree": tree["sha"], "parents": [parent], "message": "Add a VELIA Phaser game"
+        "tree": tree["sha"], "parents": [parent],
+        "message": "Update a VELIA Phaser game" if update else "Add a VELIA Phaser game",
     }, token=token, expected=(201,))
     sha = str(commit.get("sha") or "")
     if not re.fullmatch(r"[a-f0-9]{40}", sha):
         raise DeveloperWriteError("game_github_unconfirmed", status=502)
     try:
-        ref = _request("POST", root + "/git/refs", body={"ref": "refs/heads/" + branch, "sha": sha},
-                       token=token, expected=(201,))
+        if update:
+            ref = _request("PATCH", root + "/git/refs" + branch_path,
+                           body={"sha": sha, "force": False}, token=token, expected=(200,))
+        else:
+            ref = _request("POST", root + "/git/refs", body={"ref": "refs/heads/" + branch, "sha": sha},
+                           token=token, expected=(201,))
     except DeveloperWriteError as exc:
         if exc.status in {409, 422, 503}:
-            previous = existing()
-            if previous is not None:
-                return previous
+            latest, pending = existing()
+            if latest and pending is None:
+                return receipt(latest)
+            if exc.status in {409, 422}:
+                raise DeveloperWriteError("game_github_conflict", status=409) from exc
         raise
     if (ref.get("object") or {}).get("sha") != sha:
         raise DeveloperWriteError("game_github_unconfirmed", status=502)
