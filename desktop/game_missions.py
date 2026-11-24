@@ -3,12 +3,31 @@ import hashlib
 import json
 import re
 import unicodedata
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 from desktop.mission_schema import MissionError, require, validate_plan
 
 
-PREVIEW_ORIGIN = 'https://velia-game-preview-production.up.railway.app'
+PREVIEW_ORIGIN = 'https://velyoncore.ai'
+PREVIEW_PATHS = {
+    'velyoncore.ai': '/game/',
+    'velia-game-preview-production.up.railway.app': '/',
+    'games.velyoncore.ai': '/',
+}
+
+
+def saved_game_spec(url):
+    require(isinstance(url, str) and len(url) <= 1800, 'mission_game_invalid', 400)
+    parts = urlsplit(url)
+    require(parts.scheme == 'https' and parts.path == PREVIEW_PATHS.get(parts.netloc)
+            and not parts.query and parts.fragment.startswith('v1='), 'mission_game_invalid', 400)
+    try:
+        spec = json.loads(unquote(parts.fragment[3:], errors='strict'))
+    except (UnicodeError, ValueError):
+        raise MissionError('mission_game_invalid', 400) from None
+    require(isinstance(spec, dict) and set(spec) == {'v','title','pickup','theme','count','seconds','speed','seed'},
+            'mission_game_invalid', 400)
+    return spec
 GAME_INTENT = re.compile(
     r'^(?:велия[,\s]+)?(?:(?:создай|сделай|разработай|собери|напиши)\s+'
     r'(?:[\w-]+\s+){0,5}(?:(?:2d|html5)[- ])?(?:игру|мини[- ]?игру|игрушку)|'
@@ -78,4 +97,4 @@ def game_result(raw, mission_id):
     spec = {**value, 'title': title, 'pickup': pickup, 'v': 1, 'seed': seed}
     fragment = quote(json.dumps(spec, ensure_ascii=False, separators=(',', ':')), safe='')
     require(len(fragment) + 3 <= 1700, 'mission_game_invalid', 502)
-    return {'title': title, 'url': PREVIEW_ORIGIN + '/#v1=' + fragment}
+    return {'title': title, 'url': PREVIEW_ORIGIN + '/game/#v1=' + fragment}

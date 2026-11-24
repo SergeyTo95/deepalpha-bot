@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { decodeGame, gameSources, gameZip } from './exports.mjs';
 
 const assets = {
   '/': ['index.html', 'text/html; charset=utf-8'],
@@ -18,9 +19,34 @@ createServer((request, response) => {
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
     'Cache-Control': 'no-cache',
+    'X-Velia-Game-Preview': '1',
   };
   if (!['GET', 'HEAD'].includes(request.method)) {
     response.writeHead(405, { ...headers, Allow: 'GET, HEAD' }).end();
+    return;
+  }
+  if (request.url.length > 6000) {
+    response.writeHead(414, headers).end();
+    return;
+  }
+  if (path === '/download' || path === '/source.json') {
+    let spec;
+    try {
+      const query = new URL(request.url, 'http://localhost').searchParams;
+      spec = query.has('spec') ? decodeGame(query.get('spec')) : null;
+    } catch {
+      response.writeHead(400, headers).end();
+      return;
+    }
+    const archive = path === '/download';
+    const body = archive ? gameZip(spec, files) : Buffer.from(JSON.stringify({ files: gameSources(spec, files) }));
+    response.writeHead(200, {
+      ...headers,
+      'Cache-Control': 'private, no-store',
+      'Content-Type': archive ? 'application/zip' : 'application/json; charset=utf-8',
+      'Content-Length': body.length,
+      ...(archive && { 'Content-Disposition': 'attachment; filename="velia-game.zip"' }),
+    }).end(request.method === 'HEAD' ? undefined : body);
     return;
   }
   const asset = path === '/health' ? { type: 'text/plain', body: Buffer.from('ok') } : files.get(path);

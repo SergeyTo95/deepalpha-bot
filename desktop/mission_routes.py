@@ -205,6 +205,37 @@ def setup_mission_routes(app,*,session_for,same_origin,json_response,upstream,up
     async def delete(request):
         configured();require(set(request[BODY])=={'revision'});result=await asyncio.to_thread(store.control,request[SESSION].user_id,request.match_info['mission_id'],revision(request),'delete')
         return json_response({'ok':True,**result})
+    async def game_github(request):
+        from desktop.game_missions import saved_game_spec
+
+        configured()
+        session = request[SESSION]
+        mission = await asyncio.to_thread(store.detail, session.user_id, request.match_info['mission_id'])
+        step = next((item for item in mission['steps'] if item['id'] == request.match_info['step_id']), None)
+        result = (step or {}).get('result') or {}
+        require(step and step['status'] == 'completed' and result.get('kind') == 'game',
+                'mission_game_not_found', 404)
+        if request.method == 'POST':
+            data = request[BODY]
+            require(set(data) == {'installation_id', 'repository_id'} and all(
+                type(data[key]) is int and 0 < data[key] < 2**53 for key in data
+            ), 'mission_game_invalid', 400)
+            url = result['data']['url']
+            path = '/mobile-api/v1/developer/github/game-export'
+            data = {**data, 'game_id': mission['id'], 'spec': saved_game_spec(url)}
+        else:
+            data = None
+            action = request.match_info.get('action')
+            if action == 'installations':
+                path = '/mobile-api/v1/developer/installations'
+            else:
+                installation = request.query.get('installation_id', '')
+                require(re.fullmatch(r'[1-9][0-9]{0,15}', installation) and int(installation) < 2**53,
+                        'mission_game_invalid', 400)
+                path = '/mobile-api/v1/developer/repositories?installation_id=' + installation
+        status, value = await upstream(request.method, path, token=session.access, data=data)
+        return json_response(value, status)
+
     async def file(request):
         configured();m=await asyncio.to_thread(store.detail,request[SESSION].user_id,request.match_info['mission_id'])
         step=next((s for s in m['steps'] if s['id']==request.match_info['step_id'] and s['status']=='completed'),None)
@@ -266,6 +297,9 @@ def setup_mission_routes(app,*,session_for,same_origin,json_response,upstream,up
     app.router.add_get('/web-api/v1/missions/{mission_id}',detail)
     app.router.add_delete('/web-api/v1/missions/{mission_id}',delete)
     app.router.add_post('/web-api/v1/missions/{mission_id}/{action:run|pause|cancel|approve|refresh-approval}',action)
+    game_path = '/web-api/v1/missions/{mission_id}/games/{step_id:s[1-8]}/github'
+    app.router.add_get(game_path + '/{action:installations|repositories}', game_github)
+    app.router.add_post(game_path, game_github)
     app.router.add_get('/web-api/v1/missions/{mission_id}/files/{step_id:s[1-8]}',file)
 
     return {'enabled':store is not None,'accept':accept_conversation,'messages':conversation_history,'detach':detach_conversation,'origin':origin}

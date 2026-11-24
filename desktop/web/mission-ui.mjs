@@ -1,5 +1,5 @@
 import {MISSION_LABELS,missionError,activeMission} from './missions.mjs';
-import {gamePreviewLink} from './game-preview.mjs';
+import {mountGameExport,gamePreviewLink} from './game-preview.mjs';
 import {financeReport} from './finance.mjs';
 const node=(tag,text,className)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(className)e.className=className;return e;};
 const button=(text,action)=>{const e=node('button',text);e.type='button';e.onclick=action;return e;};
@@ -18,7 +18,7 @@ function resultText(step){
   return '';
 }
 export function mountMissionCard(parent,{client,id,signal,toast=()=>{}}){
-  const root=node('article',undefined,'mission-card feature-card');parent.append(root);let signature='',working=false;
+  const root=node('article',undefined,'mission-card feature-card');parent.append(root);let signature='',working=false;const games=new Map();
   const unwatch=client.watch(id);
   async function run(m,name,b){
     if(working||signal.aborted)return;working=true;b.disabled=true;
@@ -48,8 +48,8 @@ export function mountMissionCard(parent,{client,id,signal,toast=()=>{}}){
         if(step.result.kind==='game'){
           const url=gamePreviewLink(step.result.data?.url);
           if(url){
-            const a=node('a','Играть','mission-file');a.href=url;a.target='_blank';a.rel='noopener noreferrer';
-            row.append(node('p',step.result.data.title,'mission-text'),a);
+            if(!games.has(url))games.set(url,mountGameExport({url,client,id,step:step.id,signal}));
+            row.append(node('p',step.result.data.title,'mission-text'),games.get(url));
           }else row.append(node('p','Ссылка на игру недоступна.','feature-notice'));
         }else if(step.result.kind==='file'){
           const a=node('a','Скачать '+step.result.data.format.toUpperCase()+' · '+Math.ceil(step.result.data.bytes/1024)+' КБ');a.href='/web-api/v1/missions/'+encodeURIComponent(id)+'/files/'+encodeURIComponent(step.id);a.className='mission-file';row.append(a);

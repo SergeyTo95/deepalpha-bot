@@ -24,3 +24,5 @@ button:focus-visible { outline: 2px solid #d6f466; outline-offset: 2px; }
 .directions button:nth-child(2) { grid-column: 1; }
 .directions button:active, .directions button[data-pressed] { background: #d6f466; color: #142015; }
 @media (max-height: 700px) and (orientation: portrait) { main { padding-top: 12px; } }
+
+#game-download { display: inline-block; padding: 8px 0; color: #d6f466; text-underline-offset: 4px; }

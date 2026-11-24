@@ -3,6 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "scripts": {"build": "node build.mjs", "start": "node server.mjs"},
-  "dependencies": {"phaser": "3.90.0"}
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "fflate": "0.8.2",
+    "phaser": "3.90.0"
+  }
 }

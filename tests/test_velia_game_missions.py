@@ -68,7 +68,7 @@ def test_selected_model_produces_an_isolated_preview_link():
     assert calls == [('reserve', 7), ('release', 7)]
     assert result['kind'] == 'game'
     url = urlsplit(result['data']['url'])
-    assert 'https://' + url.netloc == PREVIEW_ORIGIN and url.path == '/' and not url.query
+    assert 'https://' + url.netloc == PREVIEW_ORIGIN and url.path == '/game/' and not url.query
     spec = json.loads(unquote(url.fragment.removeprefix('v1=')))
     assert {k: spec[k] for k in SPEC} == SPEC
     assert spec['v'] == 1 and 1 <= spec['seed'] <= 99999

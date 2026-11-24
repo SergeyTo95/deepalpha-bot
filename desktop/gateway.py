@@ -112,10 +112,11 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
         if idempotency_key:
             headers['Idempotency-Key'] = idempotency_key
         billing = path.startswith("/mobile-api/v1/economy/creem/")
+        game_export = path == "/mobile-api/v1/developer/github/game-export"
         try:
             async with app[CLIENT].request(method, config.auth_origin + path, headers=headers,
                     json=data, allow_redirects=False,
-                    timeout=ClientTimeout(total=360, sock_read=300) if any(x in path for x in ('/generate', '/literature', '/synthesize', '/runs', '/research')) else ClientTimeout(total=90 if path.startswith('/mobile-api/v1/economy/creem-test/') or path=='/mobile-api/v1/economy/creem/upgrade-plus' else 45 if path=='/mobile-api/v1/economy/creem/checkout' else 25)) as response:
+                    timeout=ClientTimeout(total=360, sock_read=300) if any(x in path for x in ('/generate', '/literature', '/synthesize', '/runs', '/research')) else ClientTimeout(total=120 if game_export else 90 if path.startswith('/mobile-api/v1/economy/creem-test/') or path=='/mobile-api/v1/economy/creem/upgrade-plus' else 45 if path=='/mobile-api/v1/economy/creem/checkout' else 25)) as response:
                 body = bytearray()
                 async for chunk in response.content.iter_chunked(8192):
                     body.extend(chunk)
@@ -509,6 +510,8 @@ def create_app(config=None, *, check_identity=True, web_origin=None, guest_store
         if agent_available:
             from desktop.background_agent import setup_background_agent
             setup_background_agent(app, browser_agent_run)
+        from desktop.game_proxy import setup_game_proxy
+        setup_game_proxy(app, CLIENT)
         setup_web_routes(app, origin=origin, upstream=upstream, authenticate=authenticate,
             allowed=allowed, valid_session=valid_session, json_response=json_response, handlers=handlers,
             account_balance=account_balance, authorize_model=authorize_model, upstream_stream=upstream_stream,
