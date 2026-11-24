@@ -261,6 +261,42 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
         except Exception as exc:
             return _error_response(routes_module, exc)
 
+    async def game_export(request: web.Request) -> web.Response:
+        from services import velia_developer_github_write_service as write_service
+
+        blocked = _require_feature(routes_module, request)
+        if blocked:
+            return blocked
+        auth = _auth(routes_module, request)
+        if not auth:
+            return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        data = await routes_module._read_json(request)
+        if (not data or set(data) != {"installation_id", "repository_id", "game_id", "spec"}
+                or any(type(data[k]) is not int or not 0 < data[k] < 2**53
+                       for k in ("installation_id", "repository_id"))
+                or not isinstance(data["game_id"], str) or len(data["game_id"]) != 36
+                or not isinstance(data["spec"], dict)):
+            return routes_module._json_response({"ok": False, "error": "game_source_invalid"}, status=400)
+        if not write_service.write_enabled():
+            return routes_module._json_response({"ok": False, "error": "developer_write_disabled"}, status=403)
+        installation_id, repository_id = data["installation_id"], data["repository_id"]
+        try:
+            await asyncio.to_thread(project_service.get_installation, int(auth["user_id"]), installation_id)
+            repos = await asyncio.to_thread(github_service.list_installation_repositories, installation_id)
+            repository = next((item for item in repos if item["id"] == repository_id and not item["archived"]), None)
+            if not repository:
+                raise project_service.DeveloperProjectError("repository_not_accessible", status=404)
+            project = {
+                "installation_id": installation_id, "repository_id": repository_id,
+                "repository_full_name": repository["full_name"], "selected_branch": repository["default_branch"],
+            }
+            result = await asyncio.to_thread(write_service.publish_game, project, game_id=data["game_id"], spec=data["spec"])
+            return routes_module._json_response({"ok": True, "export": result}, status=201)
+        except write_service.DeveloperWriteError as exc:
+            return routes_module._json_response({"ok": False, "error": exc.code}, status=exc.status)
+        except Exception as exc:
+            return _error_response(routes_module, exc)
+
     async def repository_branches(request: web.Request) -> web.Response:
         blocked = _require_feature(routes_module, request)
         if blocked:
@@ -509,6 +545,7 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
     app.router.add_get(f"{_PREFIX}/github/callback", github_callback)
     app.router.add_get(f"{_PREFIX}/installations", installations)
     app.router.add_get(f"{_PREFIX}/repositories", repositories)
+    app.router.add_post(f"{_PREFIX}/github/game-export", game_export)
     app.router.add_get(
         f"{_PREFIX}/repositories/{{repository_id}}/branches",
         repository_branches,

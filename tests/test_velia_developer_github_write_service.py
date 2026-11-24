@@ -159,3 +159,62 @@ def test_commit_status_combines_partial_check_runs_and_commit_statuses_across_po
     }
     assert rounds == {"check_runs": 2, "statuses": 2}
     assert sleeps == [0.001]
+
+
+def test_game_export_creates_an_isolated_branch_and_retry_returns_existing_commit(monkeypatch):
+    import hashlib
+
+    game_id = "a1234567-1234-1234-1234-123456789abc"
+    spec = {"v": 1, "title": "Лёд"}
+    sources = {"index.html": "<title>Игра</title>", "game.js": "const game = {};"}
+    ref = {}
+    calls = []
+    monkeypatch.setenv("VELIA_DEVELOPER_WORK_BRANCH_PREFIX", "velia")
+    monkeypatch.setattr(write_service, "require_write_permissions",
+                        lambda project, *, pull_requests_required: assert_no_pr(project, pull_requests_required))
+    monkeypatch.setattr(write_service, "_token", lambda project: "repo-scoped-token")
+    monkeypatch.setattr(write_service, "branch_head", lambda project, branch: {"sha": "b" * 40})
+    monkeypatch.setattr(write_service, "_portable_game_sources", lambda value: sources if value == spec else {})
+
+    def fake_request(method, path, *, token, **kwargs):
+        assert token == "repo-scoped-token"
+        calls.append((method, path))
+        if method == "GET" and "/git/ref/" in path:
+            if not ref:
+                raise write_service.DeveloperWriteError("github_not_found", status=404)
+            return ref
+        if method == "GET" and "/git/commits/" in path:
+            return {"tree": {"sha": "c" * 40}}
+        if method == "GET" and "/contents/" in path:
+            return [
+                {"name": name, "sha": hashlib.sha1(
+                    f"blob {len(text.encode())}\0".encode() + text.encode()).hexdigest()}
+                for name, text in sources.items()
+            ]
+        if path.endswith("/git/trees"):
+            assert {entry["path"] for entry in kwargs["body"]["tree"]} == {
+                f"games/velia-{game_id}/{name}" for name in sources
+            }
+            return {"sha": "d" * 40}
+        if path.endswith("/git/commits"):
+            return {"sha": "e" * 40}
+        if path.endswith("/git/refs"):
+            assert kwargs["body"]["ref"] == f"refs/heads/velia/game-{game_id}"
+            ref.update(object={"sha": kwargs["body"]["sha"]})
+            return ref
+        raise AssertionError(path)
+
+    monkeypatch.setattr(write_service, "_request", fake_request)
+    first = write_service.publish_game(PROJECT, game_id=game_id, spec=spec)
+    assert first["commit_sha"] == "e" * 40
+    assert first["url"].endswith(f"/games/velia-{game_id}")
+    written = sum(method == "POST" for method, _ in calls)
+    assert written == 3
+    assert write_service.publish_game(PROJECT, game_id=game_id, spec=spec) == first
+    assert sum(method == "POST" for method, _ in calls) == written
+    assert all(method != "PATCH" for method, _ in calls)
+
+
+def assert_no_pr(project, pull_requests_required):
+    assert project == PROJECT
+    assert pull_requests_required is False

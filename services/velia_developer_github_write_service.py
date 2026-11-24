@@ -1,9 +1,13 @@
 import base64
+import hashlib
+import json
 import os
 import re
 import time
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote
+
+import requests
 
 from services import velia_developer_github_service as github_service
 
@@ -62,7 +66,7 @@ def _token(project: Dict[str, Any]) -> str:
         raise DeveloperWriteError(exc.code, status=exc.status, detail=exc.detail) from exc
 
 
-def require_write_permissions(project: Dict[str, Any]) -> Dict[str, str]:
+def require_write_permissions(project: Dict[str, Any], *, pull_requests_required: bool = True) -> Dict[str, str]:
     if not write_enabled():
         raise DeveloperWriteError("developer_write_disabled", status=403)
     installation_id, _, _, _ = _project_values(project)
@@ -82,7 +86,7 @@ def require_write_permissions(project: Dict[str, Any]) -> Dict[str, str]:
     workflows = str(permissions.get("workflows") or "").lower()
     if contents != "write":
         raise DeveloperWriteError("github_contents_write_permission_required", status=403)
-    if pull_requests != "write":
+    if pull_requests_required and pull_requests != "write":
         raise DeveloperWriteError("github_pull_requests_write_permission_required", status=403)
     return {
         "contents": contents,
@@ -304,6 +308,106 @@ def commit_operations(
         "commit_sha": commit_sha,
         "files": [item["path"] for item in validated],
     }
+
+
+_GAME_SOURCE = "https://velia-game-preview-production.up.railway.app/source.json"
+_GAME_FILES = {"index.html", "style.css", "game.js", "README.md", "package.json", ".gitignore"}
+
+
+def _portable_game_sources(spec: Dict[str, Any]) -> Dict[str, str]:
+    try:
+        raw = json.dumps(spec, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        if len(raw.encode("utf-8")) > 1000:
+            raise ValueError("oversize")
+        with requests.get(_GAME_SOURCE, params={"spec": raw}, stream=True,
+                          allow_redirects=False, timeout=(4, 6)) as response:
+            if response.status_code != 200:
+                raise DeveloperWriteError("game_source_invalid" if response.status_code == 400
+                                          else "game_source_unavailable", status=400 if response.status_code == 400 else 503)
+            body = bytearray()
+            for chunk in response.iter_content(4096):
+                body.extend(chunk)
+                if len(body) > 64000:
+                    raise ValueError("oversize")
+        files = json.loads(body)["files"]
+        if not isinstance(files, dict) or set(files) != _GAME_FILES or any(
+                not isinstance(value, str) for value in files.values()):
+            raise ValueError("invalid file manifest")
+        return files
+    except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
+        raise DeveloperWriteError("game_source_unavailable", status=503) from exc
+
+
+def publish_game(project: Dict[str, Any], *, game_id: str, spec: Dict[str, Any]) -> Dict[str, str]:
+    if not re.fullmatch(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}", game_id):
+        raise DeveloperWriteError("game_source_invalid", status=400)
+    require_write_permissions(project, pull_requests_required=False)
+    _, _, repository, base = _project_values(project)
+    owner, name = _owner_name(repository)
+    root = f"/repos/{quote(owner)}/{quote(name)}"
+    token = _token(project)
+    files = _portable_game_sources(spec)
+    prefix = str(os.getenv("VELIA_DEVELOPER_WORK_BRANCH_PREFIX", "velia/") or "velia/").strip().rstrip("/")
+    folder = "games/velia-" + game_id
+    branch = _validate_work_branch(prefix + "/game-" + game_id, base)
+    operations = _validate_operations(
+        {"op": "upsert", "path": folder + "/" + path, "content": text} for path, text in files.items()
+    )
+    hashes = {}
+    for path, text in files.items():
+        value = text.encode("utf-8")
+        hashes[path] = hashlib.sha1(f"blob {len(value)}\0".encode() + value).hexdigest()
+    ref_path = root + "/git/ref/heads/" + quote(branch, safe="")
+
+    def receipt(sha):
+        return {"branch": branch, "commit_sha": sha,
+                "url": f"https://github.com/{owner}/{name}/tree/{sha}/{folder}"}
+
+    def existing():
+        try:
+            ref = _request("GET", ref_path, token=token)
+        except DeveloperWriteError as exc:
+            if exc.status == 404:
+                return None
+            raise
+        sha = str((ref.get("object") or {}).get("sha") or "")
+        if not re.fullmatch(r"[a-f0-9]{40}", sha):
+            raise DeveloperWriteError("game_github_unconfirmed", status=502)
+        items = _request("GET", root + "/contents/" + folder, params={"ref": sha}, token=token)
+        actual = {item.get("name"): item.get("sha") for item in items if isinstance(item, dict)} if isinstance(items, list) else {}
+        if actual != hashes:
+            raise DeveloperWriteError("game_github_branch_exists", status=409)
+        return receipt(sha)
+
+    previous = existing()
+    if previous is not None:
+        return previous
+    parent = branch_head(project, base)["sha"]
+    commit = _request("GET", root + "/git/commits/" + quote(parent), token=token)
+    base_tree = str((commit.get("tree") or {}).get("sha") or "")
+    if not re.fullmatch(r"[a-f0-9]{40}", base_tree):
+        raise DeveloperWriteError("game_github_unconfirmed", status=502)
+    tree = _request("POST", root + "/git/trees", body={"base_tree": base_tree, "tree": [
+        {"path": op["path"], "type": "blob", "mode": "100644", "content": op["content"]} for op in operations
+    ]}, token=token, expected=(201,))
+    commit = _request("POST", root + "/git/commits", body={
+        "tree": tree["sha"], "parents": [parent], "message": "Add a VELIA Phaser game"
+    }, token=token, expected=(201,))
+    sha = str(commit.get("sha") or "")
+    if not re.fullmatch(r"[a-f0-9]{40}", sha):
+        raise DeveloperWriteError("game_github_unconfirmed", status=502)
+    try:
+        ref = _request("POST", root + "/git/refs", body={"ref": "refs/heads/" + branch, "sha": sha},
+                       token=token, expected=(201,))
+    except DeveloperWriteError as exc:
+        if exc.status in {409, 422, 503}:
+            previous = existing()
+            if previous is not None:
+                return previous
+        raise
+    if (ref.get("object") or {}).get("sha") != sha:
+        raise DeveloperWriteError("game_github_unconfirmed", status=502)
+    return receipt(sha)
 
 
 def create_draft_pull_request(
