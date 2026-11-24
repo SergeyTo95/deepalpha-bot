@@ -25,7 +25,7 @@ const manifest = {
   name: 'velia-phaser-game',
   private: true,
   dependencies: { phaser: '3.90.0' },
-  overrides: { eventemitter3: '5.0.1' },
+  overrides: { eventemitter3: '5.0.4' },
   scripts: { prepare: 'node -e "' + setup + '"' },
 };
 const readme = '# Игра из VELIA\n\nОткройте index.html в браузере. Если в папке отсутствует phaser.min.js, сначала выполните npm install.\n\n' +
@@ -34,9 +34,7 @@ const readme = '# Игра из VELIA\n\nОткройте index.html в брау
 
 export function gameSources(spec, files) {
   const index = files.get('/').body.toString('utf8')
-    .replace('<script type="module" src="/game.mjs"></script>', '<script src="./game.js" defer></script>')
-    .replace('href="/style.css"', 'href="./style.css"')
-    .replace('src="/phaser.min.js"', 'src="./phaser.min.js"')
+    .replace('<script type="module" src="./game.mjs"></script>', '<script src="./game.js" defer></script>')
     .replace(/^.*id="game-download".*\n/m, '');
   const original = files.get('/game.mjs').body.toString('utf8');
   const game = spec ? original.replace(/^const demo = .*;$/m, () => 'const demo = ' + JSON.stringify(spec) + ';') : original;

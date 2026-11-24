@@ -37,7 +37,7 @@ function launch(spec) {
   element('world').textContent = location.hash ? theme.label : 'GECKOSHI';
   element('title').textContent = spec.title;
   const download = element('game-download');
-  if (download && location.hash) download.href = '/download?' + new URLSearchParams({spec: JSON.stringify(spec)});
+  if (download && location.hash) download.href = './download?' + new URLSearchParams({spec: JSON.stringify(spec)});
   document.title = spec.title;
   element('objective').textContent = 'Собери все предметы до истечения времени.';
   function frame(label, action) {

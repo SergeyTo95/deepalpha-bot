@@ -12,21 +12,6 @@ const files = new Map(await Promise.all(Object.entries(assets).map(async ([path,
   path, { type, body: await readFile(new URL('./dist/' + file, import.meta.url)) },
 ])));
 const policy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
-const branded = 'https://games.velyoncore.ai';
-const legacy = 'velia-game-preview-production.up.railway.app';
-let brandedReady = false;
-async function checkBrandedDomain() {
-  try {
-    const response = await fetch(branded + '/health', { redirect: 'error', signal: AbortSignal.timeout(2200) });
-    brandedReady = response.ok && response.headers.get('X-Velia-Game-Preview') === '1';
-    await response.body?.cancel();
-  } catch {
-    brandedReady = false;
-  }
-}
-await checkBrandedDomain();
-setInterval(checkBrandedDomain, 60000).unref();
-
 createServer((request, response) => {
   const path = request.url.split('?', 1)[0];
   const headers = {
@@ -42,10 +27,6 @@ createServer((request, response) => {
   }
   if (request.url.length > 6000) {
     response.writeHead(414, headers).end();
-    return;
-  }
-  if (brandedReady && request.headers.host === legacy && ['/', '/download'].includes(path)) {
-    response.writeHead(307, { ...headers, Location: branded + request.url }).end();
     return;
   }
   if (path === '/download' || path === '/source.json') {
