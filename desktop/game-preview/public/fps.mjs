@@ -18,9 +18,9 @@ const monsters = [
   { name: 'Призрак', hp: 52, speed: .98, range: 7, damage: 10, reload: 2.1, color: '#f2b86d' },
 ];
 const tiers = [
-  { pressure: .74, health: .8, damage: .7, supply: 1.45 },
-  { pressure: 1, health: 1, damage: 1, supply: 1 },
-  { pressure: 1.2, health: 1.24, damage: 1.45, supply: .8 },
+  { pressure: .74, health: .8, damage: .7, supply: 1.45, startGrace: 3 },
+  { pressure: 1, health: 1, damage: 1, supply: 1, startGrace: 2 },
+  { pressure: 1.2, health: 1.24, damage: 1.45, supply: .8, startGrace: 0 },
 ];
 const palettes = {
   industrial: { sky: '#1c2230', horizon: '#10121c', floor: '#382f2b', wall: [174,134,104], door: [78,172,160] },
@@ -125,13 +125,15 @@ function launch(spec) {
   sky.addColorStop(0,palette.sky); sky.addColorStop(1,palette.horizon);
   const floor = ctx.createLinearGradient(0,horizon,0,height);
   floor.addColorStop(0,palette.horizon); floor.addColorStop(1,palette.floor);
-  const input = new Map();
-  const spray = document.querySelectorAll('[data-weapon]');
+  const input = new Map(), aim = new Map();
+  const weaponButtons = document.querySelectorAll('[data-weapon]');
+  const stick = element('stick'), thumb = element('thumb'), fireButton = element('fire'), mapButton = element('map');
+  const movement = {id:null, straight:0, strafe:0};
   const keys = {KeyW:'forward', ArrowUp:'forward', KeyS:'back', ArrowDown:'back', KeyA:'strafe-left',
     KeyD:'strafe-right', ArrowLeft:'left', ArrowRight:'right', Space:'fire'};
   const player = {x:1.5,y:1.5,a:0,hp:100,slot:1,ammo:[0,36,12,16],key:false,cooldown:0};
   let level, tier = tiers[spec.difficulty], stage = 0, active = false, routes, pathDelay = 0;
-  let flash = 0, hit = 0, lastFrame = 0, bolts = [], drag = null, map = false;
+  let flash = 0, hit = 0, lastFrame = 0, bolts = [], map = false, spawnGrace = 0;
   select.value = String(spec.difficulty);
 
   function hud() {
@@ -139,13 +141,38 @@ function launch(spec) {
     element('health').textContent = 'Здоровье ' + Math.max(0,Math.ceil(player.hp));
     element('ammo').textContent = weapons[player.slot].name + ' · ' + (player.slot ? player.ammo[player.slot] : '∞');
     element('key').textContent = player.key ? 'Ключ найден' : 'Ключ не найден';
-    for (const button of spray) button.setAttribute('aria-pressed', String(Number(button.dataset.weapon) === player.slot));
+    for (const button of weaponButtons) button.setAttribute('aria-pressed', String(Number(button.dataset.weapon) === player.slot));
+  }
+  function setMap(value) {
+    map = value;
+    mapButton.setAttribute('aria-pressed', String(value));
+  }
+  function resetStick() {
+    Object.assign(movement, {id:null, straight:0, strafe:0});
+    thumb.style.transform = '';
+  }
+  function clearInput() {
+    input.clear();
+    aim.clear();
+    resetStick();
+    fireButton.removeAttribute('data-held');
+  }
+  function updateStick(event) {
+    const box = stick.getBoundingClientRect();
+    const radius = Math.max(1, box.width * .32);
+    const x = (event.clientX - box.left - box.width/2) / radius;
+    const y = (event.clientY - box.top - box.height/2) / radius;
+    const length = Math.hypot(x,y);
+    const scale = length < .12 ? 0 : Math.min(1, length) / length;
+    movement.strafe = x*scale;
+    movement.straight = -y*scale;
+    thumb.style.transform = 'translate(' + movement.strafe*radius + 'px,' + -movement.straight*radius + 'px)';
   }
   function switchWeapon(slot) { player.slot = slot; hud(); }
   function notice(text) { element('notice').textContent = text; }
   function menu(title, detail, action) {
     active = false;
-    input.clear();
+    clearInput();
     element('message').textContent = title;
     element('detail').textContent = detail;
     element('difficulty-label').hidden = false;
@@ -156,7 +183,7 @@ function launch(spec) {
     level = sector(spec.seed, stage);
     Object.assign(player,{x:1.5,y:1.5,a:level.facing,key:false,cooldown:0});
     level.foes.forEach(e => Object.assign(e,{hp:Math.ceil(monsters[e.kind].hp*tier.health),ready:.7,hurt:0}));
-    bolts = []; routes = null; pathDelay = 0; flash = hit = 0;
+    bolts = []; routes = null; pathDelay = 0; flash = hit = 0; spawnGrace = tier.startGrace;
     hud();
   }
   function open(x,y,r=.17) {
@@ -242,8 +269,8 @@ function launch(spec) {
   function update(dt) {
     const pressed = action => [...input.values()].includes(action);
     player.a = angle(player.a + (Number(pressed('right'))-Number(pressed('left')))*dt*2.1);
-    const straight = Number(pressed('forward'))-Number(pressed('back'));
-    const strafe = Number(pressed('strafe-right'))-Number(pressed('strafe-left'));
+    const straight = movement.straight + Number(pressed('forward'))-Number(pressed('back'));
+    const strafe = movement.strafe + Number(pressed('strafe-right'))-Number(pressed('strafe-left'));
     const stride = dt*2.9/Math.max(1,Math.hypot(straight,strafe));
     move(player,(Math.cos(player.a)*straight-Math.sin(player.a)*strafe)*stride,
       (Math.sin(player.a)*straight+Math.cos(player.a)*strafe)*stride);
@@ -275,7 +302,8 @@ function launch(spec) {
         newSector(); notice('Следующий сектор. Найди новый ключ.');
       }
     }
-    moveFoes(dt);
+    if (spawnGrace > 0) spawnGrace -= dt;
+    else moveFoes(dt);
   }
 
   function wallSlice(x,y,h,ray) {
@@ -386,42 +414,74 @@ function launch(spec) {
   }
 
   start.onclick = () => {
-    tier = tiers[Number(select.value)]; stage=0; map=false;
+    tier = tiers[Number(select.value)]; stage=0; setMap(false); clearInput();
     Object.assign(player,{hp:100,slot:1,ammo:[0,36,12,16]});
     newSector();
-    notice('Найди ключ и выход. M показывает карту.');
+    notice('Найди ключ и выход из сектора.');
     overlay.hidden=true; active=true; start.blur();
   };
-  for (const button of spray) button.onclick = () => { if(active) switchWeapon(Number(button.dataset.weapon)); };
-  for (const button of document.querySelectorAll('[data-control]')) {
-    button.addEventListener('pointerdown', e=>{
-      if(!active)return;
-      e.preventDefault();button.setPointerCapture(e.pointerId);
-      input.set(e.pointerId,button.dataset.control);
-    });
-    for (const event of ['pointerup','pointercancel','lostpointercapture']) {
-      button.addEventListener(event,e=>input.delete(e.pointerId));
+  for (const button of weaponButtons) button.onclick = () => { if(active) switchWeapon(Number(button.dataset.weapon)); };
+  for (const surface of document.querySelectorAll('.fps-touch, .fps-arsenal, #fps-view')) {
+    for (const event of ['contextmenu', 'selectstart', 'dragstart']) {
+      surface.addEventListener(event, e=>e.preventDefault());
     }
   }
-  view.addEventListener('pointerdown', e=>{
-    if(!active)return;
-    view.setPointerCapture(e.pointerId);drag={id:e.pointerId,x:e.clientX};
+  const releaseEvents = ['pointerup','pointercancel','lostpointercapture'];
+  stick.addEventListener('pointerdown', e=>{
+    if (!active || movement.id !== null || e.button !== 0) return;
+    e.preventDefault();
+    stick.setPointerCapture(e.pointerId);
+    movement.id = e.pointerId;
+    updateStick(e);
   });
-  view.addEventListener('pointermove', e=>{
-    if(drag?.id!==e.pointerId)return;
-    player.a=angle(player.a+(e.clientX-drag.x)*.012);drag.x=e.clientX;
+  stick.addEventListener('pointermove', e=>{
+    if (movement.id === e.pointerId) updateStick(e);
   });
-  for (const event of ['pointerup','pointercancel','lostpointercapture']) {
-    view.addEventListener(event,e=>{ if(drag?.id===e.pointerId)drag=null; });
+  for (const event of releaseEvents) {
+    stick.addEventListener(event, e=>{ if (movement.id === e.pointerId) resetStick(); });
   }
+  for (const surface of [view, fireButton]) {
+    surface.addEventListener('pointerdown', e=>{
+      if (!active || e.button !== 0) return;
+      e.preventDefault();
+      surface.setPointerCapture(e.pointerId);
+      aim.set(e.pointerId, e.clientX);
+      if (surface !== fireButton) return;
+      input.set(e.pointerId, 'fire');
+      fireButton.setAttribute('data-held', '');
+      fire();
+    });
+    surface.addEventListener('pointermove', e=>{
+      if (!aim.has(e.pointerId)) return;
+      const dx = e.clientX - aim.get(e.pointerId);
+      player.a = angle(player.a + dx * Math.PI * 1.5 / Math.max(280, view.clientWidth || width));
+      aim.set(e.pointerId, e.clientX);
+    });
+    for (const event of releaseEvents) {
+      surface.addEventListener(event, e=>{
+        aim.delete(e.pointerId);
+        input.delete(e.pointerId);
+        if (surface === fireButton && ![...input.keys()].some(key=>typeof key === 'number')) {
+          fireButton.removeAttribute('data-held');
+        }
+      });
+    }
+  }
+  fireButton.onclick = e=>{ if (active && e.detail === 0) fire(); };
+  mapButton.onclick = ()=>{ if (active) setMap(!map); };
   window.addEventListener('keydown', e=>{
-    if(!active)return;
-    if(keys[e.code]){e.preventDefault();input.set(e.code,keys[e.code]);}
-    if(/^Digit[1-4]$/.test(e.code))switchWeapon(Number(e.code.at(-1))-1);
-    if(e.code==='KeyM'&&!e.repeat)map=!map;
+    if (!active) return;
+    if (keys[e.code]) {
+      e.preventDefault();
+      input.set(e.code, keys[e.code]);
+      if (e.code === 'Space' && !e.repeat) fire();
+    }
+    if (/^Digit[1-4]$/.test(e.code)) switchWeapon(Number(e.code.at(-1))-1);
+    if (e.code === 'KeyM' && !e.repeat) setMap(!map);
   });
   window.addEventListener('keyup', e=>input.delete(e.code));
-  window.addEventListener('blur',()=>{input.clear();drag=null;});
+  window.addEventListener('blur', clearInput);
+  document.addEventListener('visibilitychange', ()=>{ if (document.hidden) clearInput(); });
   newSector(); render();
   menu(spec.title,'Найди ключ и выход из каждого сектора.','Начать игру');
   requestAnimationFrame(frame);

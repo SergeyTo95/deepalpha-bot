@@ -33,22 +33,47 @@ button:focus-visible { outline: 2px solid #d6f466; outline-offset: 2px; }
 .fps-head { margin-bottom: 14px; }
 .fps-head h1 { margin: 0; color: #f5ddb2; font-size: clamp(1.5rem, 5vw, 2.9rem); line-height: 1.1; }
 .fps-head p { margin: 6px 0 0; color: #adb1b9; }
-.fps-head a { color: #f0c986; }
-.fps-screen { position: relative; isolation: isolate; background: #0a0b0d; border: 1px solid #48433d; }
+.fps #game-download { color: #f0c986; }
+.fps-screen { position: relative; isolation: isolate; overflow: hidden; border-radius: 10px; background: #0a0b0d; border: 1px solid #48433d; }
 .fps-screen canvas { display: block; width: 100%; height: auto; aspect-ratio: 5 / 3; image-rendering: pixelated; touch-action: none; }
 .fps-overlay { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 8px; padding: 8px; text-align: center; background: #11131ae6; }
 .fps-overlay[hidden], .fps-overlay [hidden] { display: none; }
 .fps-overlay h2, .fps-overlay p { margin: 0; }
 .fps-overlay h2 { color: #f5ddb2; font-size: clamp(1.05rem, 4vw, 2.2rem); }
 .fps-overlay p, .fps-overlay label { font-size: clamp(.75rem, 2.5vw, 1rem); }
-.fps button, .fps select { min-height: 38px; border: 1px solid #635d54; border-radius: 5px; background: #24262c; color: #eee9dd; font: inherit; padding: 5px 9px; cursor: pointer; }
+.fps button, .fps select { min-height: 38px; border: 1px solid #635d54; border-radius: 5px; background: #24262c; color: #eee9dd; font: inherit; min-width: 0; padding: 5px 9px; cursor: pointer; }
 .fps button:focus-visible, .fps select:focus-visible { outline: 2px solid #f2c578; outline-offset: 2px; }
 .fps #fps-start, .fps button.fps-fire, .fps button[aria-pressed="true"] { border-color: #c58942; color: #ffe9c4; background: #513525; }
-.fps-hud { padding: 9px 0; min-height: 42px; color: #e5c991; font-size: clamp(.75rem, 2.5vw, .95rem); }
+.fps-hud { padding: 9px 0; min-height: 42px; color: #e5c991; font-size: clamp(.75rem, 2.5vw, .95rem); font-variant-numeric: tabular-nums; }
 #fps-notice { flex-basis: 100%; min-height: 1.2em; color: #c2c6ce; }
-.fps-arsenal, .fps-touch { display: grid; gap: 5px; margin-bottom: 8px; }
-.fps-arsenal { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.fps-touch { grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(0, 1.5fr); }
+.fps-screen canvas, .fps-touch, .fps-arsenal {
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.fps-arsenal { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-bottom: 10px; }
 .fps-arsenal button { font-size: clamp(.66rem, 2.3vw, 1rem); padding-inline: 2px; }
-.fps-touch button { min-height: 48px; touch-action: none; user-select: none; }
-.fps-help { color: #adb1b9; font-size: .82rem; margin: 5px 0; }
+.fps-touch { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.fps-move { display: grid; justify-items: center; gap: 5px; font-size: .75rem; color: #adb1b9; }
+.fps-stick {
+  width: clamp(100px, 26vw, 128px);
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border: 1px solid #746353;
+  border-radius: 50%;
+  background: radial-gradient(circle, #38312a, #191a22 72%);
+}
+.fps-thumb { width: 43%; aspect-ratio: 1; border: 2px solid #b59468; border-radius: 50%; background: #523c2d; pointer-events: none; }
+.fps-actions { display: grid; grid-template-columns: minmax(54px, auto) minmax(76px, auto); align-items: center; gap: 8px; }
+.fps-actions button { min-height: 48px; }
+.fps button.fps-fire { min-height: 68px; font-weight: 750; }
+.fps button.fps-fire[data-held] { background: #88512f; }
+.fps-help { color: #adb1b9; font-size: .8rem; margin: 5px 0; }
+.fps-help-touch { display: none; }
+@media (any-pointer: coarse) {
+  .fps-help-touch { display: block; }
+  .fps-help-keyboard { display: none; }
+  .fps-arsenal button { min-height: 44px; }
+}

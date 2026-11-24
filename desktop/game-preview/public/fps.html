@@ -38,14 +38,20 @@
       <button type="button" data-weapon="2">3 · Дробовик</button>
       <button type="button" data-weapon="3">4 · Импульсатор</button>
     </div>
-    <div class="fps-touch" aria-label="Управление">
-      <button type="button" data-control="forward" aria-label="Вперёд">↑</button>
-      <button type="button" data-control="left" aria-label="Поворот влево">↶</button>
-      <button type="button" data-control="back" aria-label="Назад">↓</button>
-      <button type="button" data-control="right" aria-label="Поворот вправо">↷</button>
-      <button type="button" class="fps-fire" data-control="fire">Атака</button>
+    <div class="fps-touch" aria-label="Сенсорное управление">
+      <div class="fps-move">
+        <div id="fps-stick" class="fps-stick" aria-label="Джойстик движения">
+          <span id="fps-thumb" class="fps-thumb" aria-hidden="true"></span>
+        </div>
+        <span>Движение</span>
+      </div>
+      <div class="fps-actions">
+        <button id="fps-map" type="button" aria-pressed="false">Карта</button>
+        <button id="fps-fire" type="button" class="fps-fire">Огонь</button>
+      </div>
     </div>
-    <p class="fps-help">WASD, стрелки, пробел и 1–4 · На телефоне используй кнопки или проведи по экрану для поворота.</p>
+    <p class="fps-help fps-help-touch">Джойстик слева. Повернись свайпом по игре или веди палец по кнопке «Огонь», чтобы целиться и стрелять.</p>
+    <p class="fps-help fps-help-keyboard">WASD и стрелки · пробел — огонь · 1–4 — оружие · M — карта</p>
   </main>
 </body>
 </html>

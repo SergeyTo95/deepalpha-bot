@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { decodeGame, gameSources, gameZip } from './exports.mjs';
@@ -14,6 +14,10 @@ const assets = {
 const files = new Map(await Promise.all(Object.entries(assets).map(async ([path, [file, type]]) => [
   path, { type, body: await readFile(new URL('./dist/' + file, import.meta.url)) },
 ])));
+const fpsPage = files.get('/fps');
+const stylesheetVersion = createHash('sha256').update(files.get('/style.css').body).digest('hex').slice(0, 12);
+fpsPage.body = Buffer.from(fpsPage.body.toString('utf8').replace('./style.css', './style.css?v=' + stylesheetVersion));
+
 const policy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 const internalToken = Buffer.from((process.env.VELIA_GAME_PREVIEW_INTERNAL_TOKEN || '').trim());
 

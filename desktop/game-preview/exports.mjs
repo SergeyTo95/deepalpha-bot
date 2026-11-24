@@ -42,6 +42,7 @@ const readme = '# Игра из VELIA\n\nОткройте index.html в брау
 export function gameSources(spec, files) {
   const fps = spec?.v === 2;
   const index = files.get(fps ? '/fps' : '/').body.toString('utf8')
+    .replace(/\.\/style\.css\?v=[\da-f]+/u, './style.css')
     .replace('<script type="module" src="./game.mjs"></script>', '<script src="./game.js" defer></script>')
     .replace(/^.*id="game-download".*\n/m, '');
   const original = files.get(fps ? '/fps.mjs' : '/game.mjs').body.toString('utf8');
@@ -50,7 +51,7 @@ export function gameSources(spec, files) {
     'index.html': index,
     'style.css': files.get('/style.css').body.toString('utf8'),
     'game.js': game,
-    'README.md': fps ? '# Ретрошутер из VELIA\n\nОткройте index.html в браузере. WASD и стрелки для движения, пробел для атаки, цифры 1–4 для смены оружия. На телефоне используйте экранные кнопки. Найдите ключ и выход из сектора.\n' : readme,
+    'README.md': fps ? '# Ретрошутер из VELIA\n\nОткройте index.html в браузере. WASD и стрелки для движения, пробел для атаки, цифры 1–4 для смены оружия. На телефоне используйте джойстик и свайп по игровому полю. Для атаки нажмите «Огонь». Найдите ключ и выход из сектора.\n' : readme,
     'package.json': JSON.stringify(fps ? {name: 'velia-retro-fps', private: true} : manifest, null, 2) + '\n',
     '.gitignore': 'node_modules/\nphaser.min.js\n',
   };
