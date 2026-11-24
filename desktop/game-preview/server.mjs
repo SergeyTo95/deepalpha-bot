@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { decodeGame, gameSources, gameZip } from './exports.mjs';
@@ -12,13 +13,15 @@ const files = new Map(await Promise.all(Object.entries(assets).map(async ([path,
   path, { type, body: await readFile(new URL('./dist/' + file, import.meta.url)) },
 ])));
 const policy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+const internalToken = Buffer.from((process.env.VELIA_GAME_PREVIEW_INTERNAL_TOKEN || '').trim());
+
 createServer((request, response) => {
   const path = request.url.split('?', 1)[0];
   const headers = {
     'Content-Security-Policy': policy,
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
-    'Cache-Control': 'no-cache',
+    'Cache-Control': 'private, no-store',
     'X-Velia-Game-Preview': '1',
   };
   if (!['GET', 'HEAD'].includes(request.method)) {
@@ -28,6 +31,13 @@ createServer((request, response) => {
   if (request.url.length > 6000) {
     response.writeHead(414, headers).end();
     return;
+  }
+  if (path !== '/health') {
+    const supplied = Buffer.from(String(request.headers['x-velia-game-internal'] || ''));
+    if (internalToken.length < 32 || supplied.length !== internalToken.length || !timingSafeEqual(internalToken, supplied)) {
+      response.writeHead(404, headers).end();
+      return;
+    }
   }
   if (path === '/download' || path === '/source.json') {
     let spec;
