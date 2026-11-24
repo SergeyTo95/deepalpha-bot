@@ -9,6 +9,7 @@ from desktop.mission_schema import MissionError, require, validate_plan
 
 
 PREVIEW_ORIGIN = 'https://velyoncore.ai'
+GAME_REVISION_PREFIX = 'Сделай игру со следующей правкой: '
 PREVIEW_PATHS = {
     'velyoncore.ai': '/game/',
     'velia-game-preview-production.up.railway.app': '/',
@@ -28,6 +29,8 @@ def saved_game_spec(url):
     require(isinstance(spec, dict) and set(spec) == {'v','title','pickup','theme','count','seconds','speed','seed'},
             'mission_game_invalid', 400)
     return spec
+
+
 GAME_INTENT = re.compile(
     r'^(?:велия[,\s]+)?(?:(?:создай|сделай|разработай|собери|напиши)\s+'
     r'(?:[\w-]+\s+){0,5}(?:(?:2d|html5)[- ])?(?:игру|мини[- ]?игру|игрушку)|'
@@ -58,11 +61,11 @@ def wants_game(goal):
     return bool(match and not GAME_PLAN_ONLY.search(GAME_WORD.split(match[0], maxsplit=1)[0]))
 
 
-def game_plan(goal):
+def game_plan(goal, *, previous_title=None):
     if not wants_game(goal):
         return None
     return validate_plan({
-        'title': 'Браузерная мини-игра',
+        'title': f'Доработка игры «{previous_title}»' if previous_title else 'Браузерная мини-игра',
         'steps': [{
             'id': 's1', 'title': 'Настроить и собрать игру',
             'tool': 'game.build', 'arguments': {},
@@ -77,24 +80,56 @@ def checked_game_text(value, maximum):
     return value.strip()
 
 
-def game_result(raw, mission_id):
+def game_json(raw):
     require(isinstance(raw, str) and len(raw) <= 2200, 'mission_game_invalid', 502)
     body = raw.strip()
     if body.startswith('```'):
         body = body.removeprefix('```json').removeprefix('```').removesuffix('```').strip()
     try:
-        value = json.loads(body)
+        return json.loads(body)
     except ValueError:
         raise MissionError('mission_game_invalid', 502) from None
-    require(isinstance(value, dict) and set(value) == {'title','pickup','theme','count','seconds','speed'},
-            'mission_game_invalid', 502)
+
+
+def game_link(spec):
+    require(isinstance(spec, dict) and set(spec) == {'v','title','pickup','theme','count','seconds','speed','seed'}
+            and type(spec['v']) is int and spec['v'] == 1, 'mission_game_invalid', 502)
+    value = spec
     require(value['theme'] in ('forest','neon','desert','ice'), 'mission_game_invalid', 502)
     for key, low, high in [('count',5,12), ('seconds',30,120), ('speed',130,230)]:
         require(type(value[key]) is int and low <= value[key] <= high, 'mission_game_invalid', 502)
     title = checked_game_text(value['title'], 54)
     pickup = checked_game_text(value['pickup'], 21)
-    seed = int.from_bytes(hashlib.sha256(mission_id.encode()).digest()[:4], 'big') % 99999 + 1
-    spec = {**value, 'title': title, 'pickup': pickup, 'v': 1, 'seed': seed}
+    require(type(value['seed']) is int and 1 <= value['seed'] <= 99999, 'mission_game_invalid', 502)
+    spec = {**value, 'title': title, 'pickup': pickup}
     fragment = quote(json.dumps(spec, ensure_ascii=False, separators=(',', ':')), safe='')
     require(len(fragment) + 3 <= 1700, 'mission_game_invalid', 502)
     return {'title': title, 'url': PREVIEW_ORIGIN + '/game/#v1=' + fragment}
+
+
+GAME_REVISION_SYSTEM = (
+    'Отредактируй существующую браузерную игру Phaser. Текущие настройки и просьба пользователя '
+    'придут как JSON. Верни только JSON-объект с полями, которые пользователь просит изменить. '
+    'Не повторяй остальной конфиг. Поля: title (название до 54 символов), pickup (название предметов до 21 символа), '
+    'theme (forest, neon, desert, ice), count (целое 5–12), seconds (целое 30–120), speed (целое 130–230), '
+    'seed (целое 1–99999, меняй только по запросу на перестановку предметов). '
+    'Механика, препятствия и управление фиксированы. Если запрос выходит за эти возможности или ничего '
+    'не меняется, верни пустой объект {}. Не добавляй код, имена файлов, URL или новые поля.'
+)
+
+
+def game_result(raw, mission_id):
+    value = game_json(raw)
+    require(isinstance(value, dict) and set(value) == {'title','pickup','theme','count','seconds','speed'},
+            'mission_game_invalid', 502)
+    seed = int.from_bytes(hashlib.sha256(mission_id.encode()).digest()[:4], 'big') % 99999 + 1
+    return game_link({**value, 'v': 1, 'seed': seed})
+
+
+def revise_game_result(raw, prior):
+    patch = game_json(raw)
+    require(isinstance(patch, dict) and set(patch) <= set(prior) - {'v'},
+            'mission_game_invalid', 502)
+    require(bool(patch) and any(prior[k] != value or type(prior[k]) is not type(value)
+                                for k, value in patch.items()), 'mission_game_revision_no_change', 400)
+    return game_link({**prior, **patch})

@@ -65,7 +65,7 @@ class MissionStore(GuestStore):
         m=next((m for m in doc['missions'] if m['id']==id),None);require(m is not None,'mission_not_found',404);return m
     @staticmethod
     def touch(m,now):m.update(revision=m['revision']+1,updated_at=now)
-    def create(self,user,goal,plan,model,zone,key,*,source=None,context=''):
+    def create(self,user,goal,plan,model,zone,key,*,source=None,context='',game_revision=None):
         require(text(goal,6000));timezone(zone)
         if plan is not None:validate_plan(plan,goal)
         if source is not None:
@@ -73,13 +73,16 @@ class MissionStore(GuestStore):
             require(isinstance(source['chat_id'],str) and re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}',source['chat_id']) and text(source['title'],160) and type(source['remote']) is bool)
         require(isinstance(context,str) and len(context)<=2000)
         require(model in MODELS and isinstance(key,str) and len(key)<=100 and bool(key.strip()))
-        fingerprint=digest([goal,plan,model,zone,source,context])
+        payload=[goal,plan,model,zone,source,context]
+        if game_revision is not None:payload.append(game_revision)
+        fingerprint=digest(payload)
         def change(doc):
             old=next((m for m in doc['missions'] if m['request_id']==key),None)
             if old:require(old['request_hash']==fingerprint,'mission_request_conflict',409);return old
             require(len(doc['missions'])<10,'mission_limit',429)
             now=self.clock();m={'id':str(uuid.uuid4()),'goal':goal,'original_goal':goal,'title':plan['title'] if plan else goal[:120],'model':model,'time_zone':zone,'request_id':key,'request_hash':fingerprint,'revision':1,'created_at':now,'updated_at':now,'status':'draft','lease':None,'lease_until':0,'conversation_id':None,'source':deepcopy(source),'context':context,'needs_plan':plan is None,'plan_generation':0,'question':None,'notices':[],
               'steps':[{**deepcopy(s),'status':'pending','result':None,'error':None,'approval':None,'approved':None} for s in (plan['steps'] if plan else [])]}
+            if game_revision is not None:m['game_revision']=deepcopy(game_revision)
             doc['missions'].insert(0,m);return m
         return self.transaction(user,change)
     def detail(self,user,id):return self.transaction(user,lambda doc:self.find(doc,id))
@@ -211,7 +214,7 @@ class MissionStore(GuestStore):
     @staticmethod
     def public(m,*,summary=False):
         value=deepcopy(m)
-        for k in ('lease','lease_until','conversation_id','request_id','request_hash','notices','context','last_answer','original_goal'):value.pop(k,None)
+        for k in ('lease','lease_until','conversation_id','request_id','request_hash','notices','context','last_answer','original_goal','game_revision'):value.pop(k,None)
         for step in value['steps']:
             step.pop('approved',None)
             step.pop('dispatched',None)

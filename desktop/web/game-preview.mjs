@@ -11,6 +11,14 @@ export function wantsGame(text) {
   return !/(?:^|\s)(?:план|концепци\p{L}*|иде[яию]|сценари[йя]|plan|concept|idea)(?=\s|$)/iu.test(prefix);
 }
 
+export function wantsGameRevision(text) {
+  const value=String(text).trim().replace(/^велия[,\s]+/iu,'');
+  return /^(?:доработай|обнови|измени|переделай|исправь|переименуй)\s+(?:эту\s+|мою\s+|нашу\s+)?(?:мини[- ]?)?игру(?=$|[\s,.!:?])/iu.test(value)
+      || /^сделай\s+(?:(?:эту\s+)?игру\s+)?(?:сложнее|проще|легче|быстрее|медленнее)(?=$|[\s,.!:?])/iu.test(value)
+      || /^(?:добавь|убери|увеличь|уменьши|поменяй|подними|снизь|поставь)\s+(?:\d+\s+секунд|[^\n]*(?:таймер|сложност|светляч|предмет|скорост|тему\s+игры))/iu.test(value)
+      || /^(?:edit|revise|update|rename)\s+(?:(?:this|the|my|our)\s+)?(?:mini[- ]?)?game\b/iu.test(value);
+}
+
 export function gamePreviewLink(raw) {
   try {
     const url = new URL(raw);
@@ -31,7 +39,7 @@ export function gameDownloadLink(raw) {
   } catch { return ''; }
 }
 
-export function mountGameExport({url,client,id,step,signal}) {
+export function mountGameExport({url,client,id,step,model,chatBound,signal}) {
   const node=(tag,text)=>{
     const el=document.createElement(tag);
     if(text)el.textContent=text;
@@ -46,21 +54,50 @@ export function mountGameExport({url,client,id,step,signal}) {
   controls.append(link('Играть',url));
   const zip=gameDownloadLink(url);
   if(zip)controls.append(link('Скачать ZIP',zip));
-  const toggle=node('button','В GitHub');toggle.type='button';controls.append(toggle);
+  const edit=node('button','Доработать');edit.type='button';edit.setAttribute('aria-expanded','false');controls.append(edit);
+  const editForm=node('form');editForm.className='feature-form';editForm.hidden=true;
+  const instruction=node('textarea');instruction.setAttribute('aria-label','Что изменить в игре');
+  instruction.placeholder='Например, увеличь таймер до 90 секунд и выбери неоновую тему';
+  instruction.rows=3;instruction.maxLength=1500;instruction.required=true;
+  const revise=node('button','Создать новую версию');revise.type='submit';
+  const editStatus=node('p');editStatus.setAttribute('role','status');
+  editForm.append(instruction,revise,editStatus);
+  let revisionKey='', lastInstruction='';
+  edit.onclick=()=>{
+    editForm.hidden=!editForm.hidden;
+    edit.setAttribute('aria-expanded',String(!editForm.hidden));
+    if(!editForm.hidden)instruction.focus();
+  };
+  editForm.onsubmit=async event=>{
+    event.preventDefault();
+    const value=instruction.value.trim();
+    if(revise.disabled||!value||signal.aborted)return;
+    if(value!==lastInstruction){lastInstruction=value;revisionKey=crypto.randomUUID();}
+    revise.disabled=true;instruction.disabled=true;editStatus.textContent='Сохраняю правки…';
+    try{
+      await client.reviseGame(id,step,{instruction:value,model,request_id:revisionKey},signal);
+      instruction.value='';lastInstruction='';
+      editStatus.textContent=chatBound?'Велия готовит новую версию. Она появится в исходном чате и в «Задачах».':'Велия готовит новую версию. Она появится в «Задачах».';
+    }catch(error){if(!signal.aborted)editStatus.textContent=error.message;}
+    finally{revise.disabled=false;instruction.disabled=false;}
+  };
+  const toggle=node('button','В GitHub');toggle.type='button';toggle.setAttribute('aria-expanded','false');controls.append(toggle);
   const form=node('form');form.className='feature-form';form.hidden=true;
   const repositories=node('select');repositories.setAttribute('aria-label','Репозиторий GitHub');
   const install=node('select');install.setAttribute('aria-label','Аккаунт GitHub');
-  const submit=node('button','Загрузить в новую ветку');submit.type='submit';submit.disabled=true;
+  const submit=node('button','Сохранить в GitHub');submit.type='submit';submit.disabled=true;
   const status=node('p');status.setAttribute('role','status');
   const result=node('div');
   form.append(install,repositories,submit,status,result);
-  box.append(controls,form);
+  box.append(controls,editForm,form);
   const request=(suffix,options={})=>client.gameGithub(id,step,suffix,{...options,signal});
   const option=(label,value)=>{const o=node('option',label);o.value=String(value);return o;};
-  let busy=false;
+  let busy=false,target=null;
+  const selectedTarget=()=>target&&String(target.installation_id)===install.value&&String(target.repository_id)===repositories.value;
   function lock(value){
     busy=value;install.disabled=value;repositories.disabled=value;
     submit.disabled=value||!repositories.value;
+    submit.textContent=selectedTarget()?'Обновить ветку GitHub':'Сохранить в GitHub';
   }
   async function loadRepos(){
     repositories.replaceChildren(option('Выбери репозиторий', ''));
@@ -68,7 +105,8 @@ export function mountGameExport({url,client,id,step,signal}) {
     const payload=await request('/repositories?installation_id='+encodeURIComponent(install.value));
     const repos=payload.repositories.filter(item=>!item.archived&&Number.isSafeInteger(item.id)&&item.id>0);
     for(const item of repos)repositories.append(option(item.full_name+(item.private?' (приватный)':''),item.id));
-    if(repos.length===1)repositories.value=String(repos[0].id);
+    if(target&&repos.some(item=>item.id===target.repository_id)&&String(target.installation_id)===install.value)repositories.value=String(target.repository_id);
+    else if(repos.length===1)repositories.value=String(repos[0].id);
     status.textContent=repos.length?'':'В этом подключении нет доступных репозиториев.';
   }
   toggle.onclick=async()=>{
@@ -77,7 +115,8 @@ export function mountGameExport({url,client,id,step,signal}) {
     if(form.hidden||busy||install.options.length)return;
     lock(true);status.textContent='Проверяю подключение GitHub…';
     try{
-      const payload=await request('/installations');
+      const [payload,saved]=await Promise.all([request('/installations'),request('/target').catch(()=>null)]);
+      target=saved?.target||null;
       if(signal.aborted)return;
       if(!payload.installations.length){
         status.textContent='Подключи GitHub в разделе «Интеграции» и нажми «В GitHub» снова.';
@@ -85,7 +124,8 @@ export function mountGameExport({url,client,id,step,signal}) {
       }
       install.replaceChildren(option('Выбери аккаунт GitHub',''));
       for(const item of payload.installations)install.append(option(item.account_login,item.installation_id));
-      if(payload.installations.length===1)install.value=String(payload.installations[0].installation_id);
+      if(target&&payload.installations.some(item=>item.installation_id===target.installation_id))install.value=String(target.installation_id);
+      else if(payload.installations.length===1)install.value=String(payload.installations[0].installation_id);
       status.textContent='';
       await loadRepos();
     }catch(error){if(!signal.aborted)status.textContent=error.message;}
@@ -97,11 +137,11 @@ export function mountGameExport({url,client,id,step,signal}) {
     try{await loadRepos();}catch(error){if(!signal.aborted)status.textContent=error.message;}
     finally{lock(false);}
   };
-  repositories.onchange=()=>{submit.disabled=!repositories.value;status.textContent='';result.replaceChildren();};
+  repositories.onchange=()=>{lock(false);status.textContent='';result.replaceChildren();};
   form.onsubmit=async event=>{
     event.preventDefault();
     if(busy||!install.value||!repositories.value)return;
-    lock(true);result.replaceChildren();status.textContent='Отправляю файлы в выбранный репозиторий…';
+    lock(true);result.replaceChildren();status.textContent='Сохраняю версию в выбранном репозитории…';
     try{
       const payload=await request('',{method:'POST',data:{installation_id:Number(install.value),repository_id:Number(repositories.value)}});
       if(signal.aborted)return;
@@ -109,7 +149,8 @@ export function mountGameExport({url,client,id,step,signal}) {
       if(remote.origin!=='https://github.com'||remote.username||remote.password||
           !/^\/[\w.-]+\/[\w.-]+\/tree\/[a-f0-9]{40}\/games\/velia-[a-f0-9-]{36}$/u.test(remote.pathname))
         throw Error('GitHub вернул некорректную ссылку.');
-      status.textContent='Файлы загружены в новую ветку.';
+      target={installation_id:Number(install.value),repository_id:Number(repositories.value)};
+      status.textContent='Версия сохранена в ветке игры.';
       result.append(link('Открыть файлы в GitHub',remote.href));
     }catch(error){if(!signal.aborted)status.textContent=error.message;}
     finally{lock(false);}

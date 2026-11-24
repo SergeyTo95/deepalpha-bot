@@ -2,6 +2,9 @@ import {readCompletion,apiError} from './core.mjs';
 export const MISSION_LABELS={queued:'В очереди',planning:'Составляю план',waiting_input:'Нужно уточнение',draft:'План готов',running:'Выполняется',pausing:'Останавливаюсь после текущего шага',paused:'На паузе',awaiting_approval:'Жду подтверждения',completed:'Завершена',failed:'Нужна помощь',interrupted:'Можно продолжить',uncertain:'Результат действия нужно проверить',cancelling:'Отменяю после текущего шага',cancelled:'Отменена'};
 export const MISSION_ERRORS={
   game_github_branch_exists:'Ветка этой игры уже существует с другими файлами. Проверь её на GitHub.',
+  game_github_conflict:'В GitHub изменилась версия игры. Проверь ветку и открой соответствующую версию в Велии.',
+  mission_game_revision_no_change:'В этой версии можно менять название, оформление, предметы, таймер и скорость. Укажи, что именно изменить.',
+  mission_game_not_found:'Исходная игра не найдена в этом аккаунте.',
   game_github_unconfirmed:'GitHub не подтвердил экспорт. Повтори отправку в тот же репозиторий.',
   game_source_unavailable:'Исходники игры временно недоступны. Попробуй повторить.',
   game_source_invalid:'Не удалось проверить исходники игры.',
@@ -72,6 +75,10 @@ export function setupMissionClient({profile,request=missionRequest,onUnauthorize
     answer:async(m,answer,key)=>{const result=await call('/'+m.id+'/answer',{method:'POST',data:{revision:m.revision,answer,request_id:key}});remember(result.mission);return result.mission;},
     status:()=>lastError,loaded:()=>loaded,catalog:()=>call('/catalog'),list:()=>rows,get:id=>details.get(id),subscribe:fn=>{listeners.add(fn);return ()=>listeners.delete(fn);},
     watch:id=>{watched.set(id,(watched.get(id)||0)+1);return ()=>{if(watched.get(id)>1)watched.set(id,watched.get(id)-1);else watched.delete(id);};},refresh,
+    reviseGame:async(id,step,data,signal)=>{
+      const path='/'+encodeURIComponent(id)+'/games/'+encodeURIComponent(step)+'/revise';
+      const result=await call(path,{method:'POST',data,signal});remember(result.mission);return result.mission;
+    },
     gameGithub:(id,step,suffix,options)=>call('/'+encodeURIComponent(id)+'/games/'+encodeURIComponent(step)+'/github'+suffix,options),
     create:async(data,signal)=>{const result=await call('',{method:'POST',data,signal});remember(result.mission);return result.mission;},
     action:async(m,name)=>{const result=await call('/'+m.id+'/'+name,{method:'POST',data:{revision:m.revision,...(name==='approve'?{token:m.steps.find(s=>s.status==='awaiting_approval').approval.token}:{})}});remember(result.mission);return result.mission;},

@@ -1527,7 +1527,7 @@ dialog::backdrop {
   .model-menu { left: 0; right: 0; bottom: 74px; width: auto; max-height: min(360px, 65dvh); overflow-y: auto; }
 }
 
-.feature-form label[hidden] { display: none; }
+.feature-form[hidden], .feature-form label[hidden] { display: none; }
 .feature-help { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
 .file-dialog { width: min(960px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); padding: 22px; border: 1px solid var(--border); border-radius: 18px; background: var(--rail); color: var(--text); }
 .file-dialog::backdrop { background: #000b; }

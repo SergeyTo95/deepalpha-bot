@@ -48,7 +48,7 @@ export function mountMissionCard(parent,{client,id,signal,toast=()=>{}}){
         if(step.result.kind==='game'){
           const url=gamePreviewLink(step.result.data?.url);
           if(url){
-            if(!games.has(url))games.set(url,mountGameExport({url,client,id,step:step.id,signal}));
+            if(!games.has(url))games.set(url,mountGameExport({url,client,id,step:step.id,model:m.model,chatBound:m.source&&!m.source.detached,signal}));
             row.append(node('p',step.result.data.title,'mission-text'),games.get(url));
           }else row.append(node('p','Ссылка на игру недоступна.','feature-notice'));
         }else if(step.result.kind==='file'){

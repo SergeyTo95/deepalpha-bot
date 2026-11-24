@@ -200,7 +200,7 @@ class MissionTools:
         elif name=='calendar.list':
             data=await self.google_call(session,m,step,'calendar_events_list',a);require(isinstance(data.get('events'),list),'mission_tool_unconfirmed',502);evidence.update(kind='calendar_read')
         elif name=='game.build':
-            from desktop.game_missions import GAME_SYSTEM, game_result
+            from desktop.game_missions import GAME_SYSTEM, GAME_REVISION_PREFIX, GAME_REVISION_SYSTEM, game_result, revise_game_result
             permission=await self.authorize(session.access,m['model'])
             if permission:raise MissionError(permission[0],permission[1])
             generate=self.handlers.get('generate_background')
@@ -209,11 +209,15 @@ class MissionTools:
             release=self.handlers.get('release_background',self.handlers['release'])
             require(reserve(session.user_id) is None,'mission_model_busy',429)
             try:
+                edit = m.get('game_revision')
+                prior = edit['previous_specs'][0] if edit else None
+                prompt = json.dumps({'current':prior,'instruction':m['goal'].removeprefix(GAME_REVISION_PREFIX)},
+                                    ensure_ascii=False) if edit else m['goal'][:3000]
                 content=await generate(m['model'],[
-                    {'role':'system','content':GAME_SYSTEM},
-                    {'role':'user','content':m['goal'][:3000]},
+                    {'role':'system','content':GAME_REVISION_SYSTEM if edit else GAME_SYSTEM},
+                    {'role':'user','content':prompt},
                 ],max_tokens=768)
-                data=game_result(content,m['id'])
+                data=revise_game_result(content,prior) if edit else game_result(content,m['id'])
             finally:
                 release(session.user_id)
             kind='game';evidence.update(kind='validated_game_spec',engine='phaser-3.90')
