@@ -313,6 +313,17 @@ def test_legacy_conversation_request_runs_real_plan_draft_pdf_and_returns_to_sam
             normal=await client.post(url,json={**body,'content':'Привет','idempotency_key':str(uuid.uuid4()),'web_search':False},headers=HEAD)
             assert normal.status==200 and 'X-Velia-Mission-Id' not in normal.headers and 'Обычный ответ' in await normal.text()
             assert foreground==[7] and len(store.transaction(7)['missions'])==1
+            shooter_body={**body,'content':'Создай оригинальный ретрошутер от первого лица. Добавь 5 видов монстров.',
+                          'idempotency_key':str(uuid.uuid4())}
+            native_calls=len(native)
+            shooter=await client.post(url,json=shooter_body,headers=HEAD)
+            assert shooter.status==200 and 'Приняла задачу' in await shooter.text()
+            shooter_id=shooter.headers['X-Velia-Mission-Id']
+            game=await wait_for(store,shooter_id,'completed')
+            assert game['source']['chat_id']==cid and game['steps'][0]['result']['evidence']['engine']=='raycaster'
+            repeat=await client.post(url,json=shooter_body,headers=HEAD)
+            assert repeat.headers['X-Velia-Mission-Id']==shooter_id
+            assert len(native)==native_calls and foreground==[7]
             deleted=await client.post('/web-api/v1/conversations/'+cid+'/delete',json={},headers=HEAD)
             assert deleted.status==200 and store.detail(7,id)['source']['detached'] is True
             assert await service['messages'](7,cid)==[]

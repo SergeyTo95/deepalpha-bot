@@ -88,7 +88,7 @@ test("PRO overload remains actionable through its streamed error", async () => {
   assert.doesNotMatch(apiError("pro_overloaded"), /токены|баланс|Quantum|Flash/);
   assert.match(apiError("pro_quota_exhausted"), /PRO.*ограничил запросы/);
   assert.match(apiError("pro_tokens_required"), /токены/);
-  assert.match(apiError("flash_overloaded"), /VELIA Flash.*техническом обслуживании/);
+  assert.match(apiError("flash_overloaded"), /VELIA Flash.*перегружена/);
   assert.equal(apiError("private-upstream-text"), "Не удалось выполнить запрос. Попробуй ещё раз.");
 });
 test("preparation progress is separate from answer text and rejects unknown stages", async () => {
@@ -287,7 +287,9 @@ test("continuation only offers a user-requested new turn for partial safe chat a
 
 test("only model service failures show VELIA maintenance, not personal quota or billing",()=>{
   for(const mode of ["flash","quantum","pro"]){
-    for(const code of ["unavailable","provider_error","overloaded","timeout","invalid_response","rate_limited"]){
+    const codes = ["unavailable","provider_error","timeout","invalid_response"];
+    if(mode!=="flash")codes.push("overloaded","rate_limited");
+    for(const code of codes){
       const text=apiError(mode+"_"+code);
       assert.match(text,/VELIA (?:Flash|Quantum|PRO) сейчас на техническом обслуживании/);
       assert.doesNotMatch(text,/DeepSeek|Z\.ai|Groq|Minimax|провайдер/);
@@ -296,6 +298,7 @@ test("only model service failures show VELIA maintenance, not personal quota or 
     assert.ok(!/техническом обслуживании/.test(apiError(mode+"_spend_cap_reached")));
     assert.ok(!/техническом обслуживании/.test(apiError(mode+"_quota_exhausted")));
   }
+  assert.match(apiError("flash_rate_limited"), /VELIA Flash.*ограничила частоту запросов/);
   assert.equal(maintenanceNotice("unknown"),null);
 });
 test("inactive chats have no seven-day expiration; refresh only on foreground return",()=>{

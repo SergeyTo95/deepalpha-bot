@@ -171,7 +171,7 @@ export function maintenanceNotice(model) {
 export function apiError(code) {
   if (typeof code === "string") {
     const match = /^(flash|quantum|pro)_(?:unavailable|provider_error|overloaded|timeout|invalid_response|rate_limited)$/.exec(code);
-    if (match) return maintenanceNotice("velia-" + match[1]);
+    if (match && code !== "flash_overloaded" && code !== "flash_rate_limited") return maintenanceNotice("velia-" + match[1]);
   }
   return (
     {
@@ -242,8 +242,8 @@ export function apiError(code) {
       flash_access_required: "Доступ к модели Flash пока не активирован. Попробуй позже.",
       flash_spend_cap_reached: "Запрос Flash заблокирован денежным лимитом ключа. Бесплатный доступ к модели сейчас не подтверждён.",
       flash_quota_exhausted: "Сервис Flash временно ограничил запросы. Попробуй позже.",
-      flash_rate_limited: "Слишком много запросов к Flash. Подожди немного и повтори.",
-      flash_overloaded: "Сервис Flash сейчас перегружен. Подожди 30 секунд и нажми «Повторить».",
+      flash_rate_limited: "VELIA Flash временно ограничила частоту запросов. Попробуй чуть позже.",
+      flash_overloaded: "VELIA Flash сейчас перегружена. Подожди немного и нажми «Повторить».",
       flash_web_search_unavailable: "Не удалось получить источники из интернета для Flash. Попробуй ещё раз.",
       flash_provider_error: "Сервис Flash временно недоступен. Попробуй позже.",
       flash_invalid_response: "Ответ Flash прервался. Можно повторить запрос.",

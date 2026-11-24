@@ -14,6 +14,9 @@ from desktop.mission_schema import MissionError, validate_plan
     'Создай браузерную 2D-игру Geckoshi',
     'Велия, сделай игру про космос',
     'Build a browser game about stars',
+    'Велия, собери ретро-шутер',
+    'Create a first-person shooter',
+    'Build a retro FPS',
 ])
 def test_game_requests_use_single_bounded_tool(goal):
     assert game_plan(goal)['steps'][0]['tool'] == 'game.build'
@@ -21,6 +24,8 @@ def test_game_requests_use_single_bounded_tool(goal):
 
 @pytest.mark.parametrize('goal', [
     'Создай план про игру', 'Как создать игру?', 'Make a concept for a game',
+    'Как создать ретрошутер?', 'Создай концепцию ретрошутера',
+    'Напиши план для ретрошутера', 'Make a concept for a retro shooter',
 ])
 def test_general_requests_cannot_execute_game_tool(goal):
     assert game_plan(goal) is None
@@ -303,15 +308,19 @@ def test_play_and_share_enforce_live_owner_and_recipient_permissions(tmp_path, m
     asyncio.run(scenario())
 
 
-def test_original_shooter_request_uses_fps_and_supported_settings():
+@pytest.mark.parametrize('prompt', [
+    'Создай игру в стиле Doom. 5 видов монстров, 3 вида оружия которым нужны '
+    'патроны и есть лом которому не нужно. 3 уровня сложности. Дальше придумай что нибудь еще',
+    'Создай оригинальный ретрошутер от первого лица. Добавь 5 видов монстров, 3 вида оружия с патронами, '
+    'лом без патронов и 3 уровня сложности. Остальное придумай сама.',
+])
+def test_original_shooter_request_uses_fps_and_supported_settings(prompt):
     import asyncio
     from types import SimpleNamespace
 
     from desktop.game_missions import game_kind, game_plan, revise_game_result, saved_game_spec
     from desktop.mission_runtime import MissionTools
 
-    prompt = ('Создай игру в стиле Doom. 5 видов монстров, 3 вида оружия которым нужны '
-              'патроны и есть лом которому не нужно. 3 уровня сложности. Дальше придумай что нибудь еще')
     assert game_kind(prompt) == 'fps'
     plan = game_plan(prompt)
     assert 'Ретрошутер' in plan['title']

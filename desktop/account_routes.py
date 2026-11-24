@@ -223,8 +223,9 @@ def setup_account_routes(app, *, session_for, same_origin, upstream, upstream_st
         if permission:
             return error(*permission)
         if missions and missions['enabled'] and not attachments and not data.get('medical_no_search'):
+            from desktop.game_missions import wants_game
             from desktop.mission_chat import wants_task,accepted_text
-            if wants_task(data['content']):
+            if wants_game(data['content']) or wants_task(data['content']):
                 m=await missions['accept'](session,request.match_info['conversation_id'],data['content'],data['model'],data['idempotency_key'])
                 LOG.info('VELIA_CONVERSATION_TASK_ACCEPTED model=%s task_id=%s',data['model'],m['id'])
                 text=accepted_text(m,missions['origin'])

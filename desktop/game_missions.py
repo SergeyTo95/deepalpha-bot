@@ -34,12 +34,12 @@ def saved_game_spec(url):
 
 GAME_INTENT = re.compile(
     r'^(?:велия[,\s]+)?(?:(?:создай|сделай|разработай|собери|напиши)\s+'
-    r'(?:[\w-]+\s+){0,5}(?:(?:2d|html5)[- ])?(?:игру|мини[- ]?игру|игрушку)|'
-    r'(?:create|build|make|develop)\s+(?:[\w-]+\s+){0,5}(?:(?:2d|html5)[- ])?(?:game|mini[- ]?game))(?=$|[\s,.!:?])',
+    r'(?:[\w-]+\s+){0,5}(?:(?:2d|html5)[- ])?(?:игру|мини[- ]?игру|игрушку|(?:ретро[- ]?)?шутер)|'
+    r'(?:create|build|make|develop)\s+(?:[\w-]+\s+){0,5}(?:(?:2d|html5)[- ])?(?:game|mini[- ]?game|(?:retro[- ]?)?shooter|fps))(?=$|[\s,.!:?])',
     re.IGNORECASE,
 )
 GAME_PLAN_ONLY = re.compile(r'\b(?:план|концепци\w*|иде[яию]|сценари[йя]|plan|concept|idea)\b', re.IGNORECASE)
-GAME_WORD = re.compile(r'\b(?:игру|мини[- ]?игру|игрушку|game|mini[- ]?game)\b', re.IGNORECASE)
+GAME_WORD = re.compile(r'\b(?:игру|мини[- ]?игру|игрушку|(?:ретро[- ]?)?шутер|game|mini[- ]?game|(?:retro[- ]?)?shooter|fps)\b', re.IGNORECASE)
 
 FPS_GOAL = re.compile(
     r'\b(?:doom|wolfenstein|fps|дум(?:а|е|ом)?|boomer\s+shooter)\b|'

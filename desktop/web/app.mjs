@@ -1175,7 +1175,7 @@ function miniAppMessageContext(message){
 async function runMissionChat(text,voiceTurn,{game=false,gameParent=null}={}){
   const owner=profile.account,turnModel=model;let chat=current();
   const context=(chat?.messages||[]).filter(m=>!m.pending&&!m.failed&&!m.missionId).slice(-4).map(m=>m.role+': '+m.content).join('\n').slice(-2000);
-  const goal=chat?.missionPending&&!wantsMission(text)?chat.missionPending.goal+'\nУточнение: '+text:text;
+  const goal=!game&&chat?.missionPending&&!wantsMission(text)?chat.missionPending.goal+'\nУточнение: '+text:text;
   if(!chat||chat.agent||chat.figma||chat.connectionProvider){chat={id:crypto.randomUUID(),title:text.slice(0,70),messages:[],updated:Date.now()};chats.unshift(chat);currentId=chat.id;}
   const user={role:'user',content:text,sentAt:Date.now(),requestId:crypto.randomUUID(),missionTurn:true},answer={role:'assistant',content:'Сохраняю задачу…',model:turnModel,local:true,pending:true,sentAt:Date.now(),missionTurn:true};
   chat.messages.push(user,answer);chat.missionPrivate=true;chat.missionPending=null;chat.miniAppPending=null;chat.crmPending=false;chat.financePending=false;chat.finance=false;chat.pulseDraft=null;

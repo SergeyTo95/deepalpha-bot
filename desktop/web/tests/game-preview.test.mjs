@@ -3,10 +3,14 @@ import assert from 'node:assert/strict';
 import {gameDownloadLink, gamePreviewLink, wantsGame, wantsGameRevision} from '../game-preview.mjs';
 
 test('routes game creation without intercepting questions or game plans', () => {
-  for (const goal of ['Создай браузерную 2D-игру Geckoshi','Велия, сделай игру про космос','Build a browser game']) {
+  for (const goal of ['Создай браузерную 2D-игру Geckoshi','Велия, сделай игру про космос','Build a browser game',
+    'Создай оригинальный ретрошутер от первого лица. Добавь 5 видов монстров, 3 вида оружия с патронами, лом без патронов и 3 уровня сложности. Остальное придумай сама.',
+    'Велия, собери ретро-шутер', 'Create a first-person shooter', 'Build a retro FPS']) {
     assert.equal(wantsGame(goal), true, goal);
   }
-  for (const goal of ['Создай план про игру','Как создать игру?','Make a concept for a game']) {
+  for (const goal of ['Создай план про игру','Как создать игру?','Make a concept for a game',
+    'Как создать ретрошутер?', 'Создай концепцию ретрошутера', 'Напиши план для ретрошутера',
+    'Make a concept for a retro shooter']) {
     assert.equal(wantsGame(goal), false, goal);
   }
 });

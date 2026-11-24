@@ -3,9 +3,9 @@ const privatePath = /^\/game\/project\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{1
 const sharePath = /^\/game\/share\/[A-Za-z0-9_-]{150,350}\/$/u;
 
 export function wantsGame(text) {
-  const match = String(text).trim().match(/^(?:велия[,\s]+)?(?:(?:создай|сделай|разработай|собери|напиши)\s+(?:[\p{L}\p{N}_-]+\s+){0,5}(?:(?:2d|html5)[- ])?(?:игру|мини[- ]?игру|игрушку)|(?:create|build|make|develop)\s+(?:[\p{L}\p{N}_-]+\s+){0,5}(?:(?:2d|html5)[- ])?(?:game|mini[- ]?game))(?=$|[\s,.!:?])/iu);
+  const match = String(text).trim().match(/^(?:велия[,\s]+)?(?:(?:создай|сделай|разработай|собери|напиши)\s+(?:[\p{L}\p{N}_-]+\s+){0,5}(?:(?:2d|html5)[- ])?(?:игру|мини[- ]?игру|игрушку|(?:ретро[- ]?)?шутер)|(?:create|build|make|develop)\s+(?:[\p{L}\p{N}_-]+\s+){0,5}(?:(?:2d|html5)[- ])?(?:game|mini[- ]?game|(?:retro[- ]?)?shooter|fps))(?=$|[\s,.!:?])/iu);
   if (!match) return false;
-  const [prefix] = match[0].split(/(?:игру|мини[- ]?игру|игрушку|\bgame\b|mini[- ]?game)/iu, 1);
+  const [prefix] = match[0].split(/(?:игру|мини[- ]?игру|игрушку|(?:ретро[- ]?)?шутер|\b(?:game|mini[- ]?game|(?:retro[- ]?)?shooter|fps)\b)/iu, 1);
   return !/(?:^|\s)(?:план|концепци\p{L}*|иде[яию]|сценари[йя]|plan|concept|idea)(?=\s|$)/iu.test(prefix);
 }
 
