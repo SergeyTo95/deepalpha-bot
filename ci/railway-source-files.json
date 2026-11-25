@@ -192,6 +192,7 @@
   "bot/admin_viewers.py",
   "ci/Dockerfile.velia-flash-verify",
   "ci/Dockerfile.verified-backend",
+  "ci/probe-velia-document-recognition.py",
   "ci/probe-velia-flash.py",
   "ci/probe-velia-quantum.py",
   "ci/railway-ci-manifest.json",

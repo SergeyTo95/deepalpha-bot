@@ -16,6 +16,9 @@ RUN ls -la /app
 RUN ls -la /app/db || echo "NO DB FOLDER"
 RUN ls -la /app/bot/
 ENV PYTHONPATH=/app
+RUN if [ "$VELIA_ATTACHMENTS_OCRIA_ENABLED" = 1 ]; then \
+      python ci/probe-velia-document-recognition.py; \
+    fi
 RUN pip install supervisor --break-system-packages
 RUN mkdir -p /etc/supervisor/conf.d
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
