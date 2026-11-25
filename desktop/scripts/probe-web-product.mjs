@@ -38,7 +38,7 @@ await Promise.all([
     assert.ok(cookie && trial.remaining > 0, 'guest_limit_unavailable');
     const reply = await path('/web-api/v1/guest/chat/completions', {method: 'POST',
       headers: {Origin: origin, 'X-Velia-Request': '1', Cookie: cookie, 'Content-Type': 'application/json'},
-      body: JSON.stringify({model: 'velia-flash', stream: true, web_search: false, max_tokens: 50,
+      body: JSON.stringify({model: 'velia-flash', stream: true, web_search: false,
         messages: [{role: 'user', content: 'Сколько будет 2 плюс 2? Ответь одним коротким предложением.'}]}),
     });
     try {
