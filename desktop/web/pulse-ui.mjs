@@ -139,7 +139,6 @@ export async function mountPulse(parent,{pulse,webPush,notebook,toast,signal,dra
     const save=node('button','Сохранить настройки');save.type='submit';form.append(save);form.onsubmit=async event=>{event.preventDefault();save.disabled=true;await operation(async()=>{const wasEnabled=pulse.state().settings.digest;const saved=await pulse.settings(Object.fromEntries(Object.entries(inputs).map(([key,input])=>[key,input.type==='checkbox'?input.checked:input.value])));if(saved.digest!==wasEnabled)productEvent(saved.digest?'digest_configured':'digest_paused','digest');});save.disabled=false;};settingsBox.append(form,weeklyBox);
   }
   async function load(){try{await pulse.sync();if(signal.aborted)return;draw();}catch(error){if(!signal.aborted)cards.replaceChildren(node('p',error.message,'feature-notice'));}}
-  const onBlur=()=>queueMicrotask(draw);parent.addEventListener('focusout',onBlur);signal.addEventListener('abort',()=>parent.removeEventListener('focusout',onBlur),{once:true});
   const unsubscribe=pulse.subscribe(draw);signal.addEventListener('abort',unsubscribe,{once:true});filter.onchange=draw;await load();if(signal.aborted)return;
   if(draft.notification_id){
     const notice=pulse.state().notifications.find(n=>n.id===draft.notification_id),item=pulse.state().items.find(p=>p.item_id===notice?.item_id);
