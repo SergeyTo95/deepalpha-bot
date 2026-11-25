@@ -111,7 +111,7 @@ def test_merged_concept_repair_sees_the_rejected_call_and_the_exact_error(monkey
             assert len(state["search_queries"]) == len(state["payloads"]) == (1 if recover else 0)
             assert "merged_context_quote" not in wire and "context_merges_independent_concepts" not in wire
             async with client.get(server.make_url("/web-api/v1/guest"), headers=guest_headers(cookie)) as response:
-                assert (await response.json())["remaining"] == 29
+                assert (await response.json())["remaining"] == (29 if recover else 30)
     asyncio.run(run())
 
 
@@ -202,7 +202,7 @@ def test_schema_repair_keeps_the_original_question_and_never_searches_an_invalid
             assert len(state["search_queries"]) == (1 if recover else 0)
             assert len(state["payloads"]) == (1 if recover else 0)
             async with client.get(server.make_url("/web-api/v1/guest"), headers=guest_headers(cookie)) as response:
-                assert (await response.json())["remaining"] == 29
+                assert (await response.json())["remaining"] == (29 if recover else 30)
     asyncio.run(run())
 
 

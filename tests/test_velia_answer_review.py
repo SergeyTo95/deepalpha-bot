@@ -84,7 +84,7 @@ def test_missing_conditions_or_source_support_are_repaired_privately_once(monkey
             assert "включая условные" in repair["repair"]["instruction"]
             assert (final in wire and "[DONE]" in wire) if recover else ('"error"' in wire and "[DONE]" not in wire)
             async with client.get(server.make_url("/web-api/v1/guest"), headers=guest_headers(cookie)) as response:
-                assert (await response.json())["remaining"] == 29
+                assert (await response.json())["remaining"] == (29 if recover else 30)
     asyncio.run(run())
 
 
@@ -133,7 +133,7 @@ def test_rejected_publication_receives_exact_tool_feedback_without_rewriting_the
             assert all(private not in wire for private in (bad, "PRIVATE_DRAFT", "PRIVATE_REVIEW_WRAPPER", "answer_rejected", "invalid_review_1"))
             assert (final in wire and "[DONE]" in wire) if recover else ('"error"' in wire and "[DONE]" not in wire)
             async with client.get(server.make_url("/web-api/v1/guest"), headers=guest_headers(cookie)) as response:
-                assert (await response.json())["remaining"] == 29
+                assert (await response.json())["remaining"] == (29 if recover else 30)
     asyncio.run(run())
 
 
@@ -232,7 +232,7 @@ def test_structured_editor_sources_are_validated_and_rendered_next_to_their_para
                 assert '"error"' in wire and "[DONE]" not in wire and "Питание и прогулки" not in wire
             assert wire.count('"web_search"') == 1
             async with client.get(server.make_url("/web-api/v1/guest"), headers=guest_headers(cookie)) as response:
-                assert (await response.json())["remaining"] == 29
+                assert (await response.json())["remaining"] == (29 if invalid is None else 30)
     asyncio.run(run())
 
 

@@ -211,7 +211,7 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_
                         if first_chunk:
                             timing("first_event")
                             first_chunk = False
-                        if not delivered and chunk.strip() == b"data: [DONE]":
+                        if not delivered and (chunk.strip() == b"data: [DONE]" or chunk.startswith(b'data: {"error":')):
                             await settle_quota()
                         await response.write(chunk)
                         if not delivered and guest_text_frame(chunk):

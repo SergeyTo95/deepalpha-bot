@@ -251,7 +251,7 @@ def test_search_failure_never_generates_an_unverified_answer(monkeypatch, tmp_pa
                 assert response.status == 503 and (await response.json())["error"] == "web_search_unavailable"
             assert state["payloads"] == [] and len(state["search_queries"]) == 1
             async with client.get(server.make_url("/web-api/v1/guest"), headers=guest_headers(cookie)) as response:
-                assert (await response.json())["remaining"] == 29
+                assert (await response.json())["remaining"] == 30
     asyncio.run(run())
 
 
