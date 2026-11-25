@@ -193,6 +193,42 @@ def test_pulse_mutations_require_current_web_account_and_preserve_backend_owner_
     asyncio.run(scenario())
 
 
+def test_pulse_mission_link_round_trips_through_existing_authority():
+    import hashlib
+    async def scenario():
+        origin='https://velia.example'
+        account=hashlib.sha256((origin+':7').encode()).hexdigest()[:24]
+        mission='11111111-1111-4111-8111-111111111111'
+        seen=[]
+        async def session_for(_):
+            return SimpleNamespace(access='owner-token',user_id=7)
+        async def upstream(method,path,**kwargs):
+            assert path=='/mobile-api/v1/pulse' and kwargs['token']=='owner-token'
+            if method=='POST':
+                resource=kwargs['data']['resource']
+                assert resource=={'kind':'chat','id':'mission:'+mission}
+                seen.append(resource)
+                return 201,{'ok':True,'item':{'resource':resource}}
+            return 200,{'ok':True,'items':[{'resource':seen[-1]},{'resource':{'kind':'chat','id':mission}}],
+                        'notifications':[{'resource':seen[-1]}]}
+        app=web.Application()
+        setup_feature_routes(app,origin=origin,session_for=session_for,same_origin=lambda r:r.headers.get('Origin')==origin,
+                             upstream=upstream,json_response=lambda d,status=200:web.json_response(d,status=status))
+        async with TestServer(app) as server,ClientSession() as client:
+            headers={'Origin':origin}
+            url=server.make_url('/web-api/v1/features/pulse')
+            link={'kind':'mission','id':mission}
+            bad=await client.post(url,headers=headers,json={'account':account,'resource':{**link,'id':'invalid'}})
+            assert bad.status==400 and not seen
+            response=await client.post(url,headers=headers,json={'account':account,'resource':link})
+            assert response.status==201 and (await response.json())['item']['resource']==link
+            response=await client.get(url)
+            state=await response.json()
+            assert state['items'][0]['resource']==state['notifications'][0]['resource']==link
+            assert state['items'][1]['resource']=={'kind':'chat','id':mission}
+    asyncio.run(scenario())
+
+
 def test_push_routes_are_exact_and_bind_the_trusted_origin_and_current_account():
     import hashlib
     for method,path in [('GET','pulse/push/config'),('POST','pulse/push/devices'),('POST','pulse/push/receipt'),('DELETE','pulse/push/devices/11111111-1111-4111-8111-111111111111')]:

@@ -142,7 +142,9 @@ export async function mountPulse(parent,{pulse,webPush,notebook,toast,signal,dra
   const unsubscribe=pulse.subscribe(draw);signal.addEventListener('abort',unsubscribe,{once:true});filter.onchange=draw;await load();if(signal.aborted)return;
   if(draft.notification_id){
     const notice=pulse.state().notifications.find(n=>n.id===draft.notification_id),item=pulse.state().items.find(p=>p.item_id===notice?.item_id);
+    const mission=[notice?.resource,item?.resource].find(resource=>resource?.kind==='mission');
     if(notice?.kind==='digest'||item&&weeklyDigest(item))showOverview(notice?.kind==='digest'?'today':'week');
+    else if(mission)await openResource(mission);
     else if(item)focusReminder(item);
     else inbox.scrollIntoView?.({block:'start'});
   }

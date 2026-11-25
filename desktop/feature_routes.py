@@ -41,6 +41,16 @@ SENSITIVE = {
     "authorization", "clientsecret", "webhooksecret", "privatekey",
     "workerurl", "workertoken", "workerapikey",
 }
+PULSE_MISSION_REF = re.compile(r'mission:([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\Z')
+
+
+def pulse_mission_resource(entry):
+    resource = entry.get('resource') if isinstance(entry, dict) else None
+    if not isinstance(resource, dict) or resource.get('kind') != 'chat':
+        return
+    match = PULSE_MISSION_REF.fullmatch(str(resource.get('id', '')))
+    if match:
+        entry['resource'] = {'kind': 'mission', 'id': match[1]}
 
 def safe_result(value):
     if isinstance(value, dict):
@@ -113,6 +123,15 @@ def setup_feature_routes(app, *, session_for, same_origin, upstream, json_respon
             if (path == 'notebook' or path.startswith('notebook/materials/') or path == 'pulse' or path.startswith('pulse/')) and request.method != 'GET':
                 account = hashlib.sha256((origin + ':' + str(session.user_id)).encode()).hexdigest()[:24]
                 if data.get('account') != account:return error('notebook_owner_changed', 403)
+            if path == 'pulse' and request.method == 'POST':
+                resource = data.get('resource')
+                if isinstance(resource, dict) and resource.get('kind') == 'mission':
+                    ref = 'mission:' + str(resource.get('id', ''))
+                    if set(resource) != {'kind', 'id'} or not PULSE_MISSION_REF.fullmatch(ref):
+                        return error('pulse_resource_invalid', 400)
+                    # Pulse accepts chat references with opaque IDs. Gateways
+                    # resolve this namespaced variant through the owned task API.
+                    data['resource'] = {'kind': 'chat', 'id': ref}
             if path=='pulse/push/devices' and request.method=='POST':data={**data,'origin':origin}
             key = request.headers.get('Idempotency-Key')
             if key and not re.fullmatch(r'[A-Za-z0-9:_-]{8,128}', key):
@@ -121,6 +140,11 @@ def setup_feature_routes(app, *, session_for, same_origin, upstream, json_respon
                 **({'idempotency_key': key} if key else {}))
             if (path == 'notebook' or path == 'pulse' or path.startswith('pulse/')) and isinstance(result, dict) and result.get('ok'):
                 result = {**result, 'account':hashlib.sha256((origin + ':' + str(session.user_id)).encode()).hexdigest()[:24]}
+                if path == 'pulse' or path.startswith('pulse/'):
+                    pulse_mission_resource(result.get('item'))
+                    for key in ('items', 'notifications'):
+                        for entry in result.get(key) or ():
+                            pulse_mission_resource(entry)
             return json_response(safe_result(result), status)
         except web.HTTPRequestEntityTooLarge:
             return error("request_too_large", 413)
