@@ -30,6 +30,8 @@ class GuestStore:
             cur.execute("""CREATE TABLE IF NOT EXISTS velia_web_guest_usage (
                 quota_key TEXT PRIMARY KEY, used INTEGER NOT NULL DEFAULT 0,
                 CHECK (used >= 0 AND used <= 30))""")
+            cur.execute("""CREATE TABLE IF NOT EXISTS velia_web_guest_reservations (
+                request_id TEXT PRIMARY KEY, key_first TEXT NOT NULL, key_second TEXT NOT NULL)""")
             conn.commit()
 
     def remaining(self, keys):
@@ -37,7 +39,7 @@ class GuestStore:
             self.execute(cur, "SELECT used FROM velia_web_guest_usage WHERE quota_key IN (?, ?)", tuple(keys))
             return LIMIT - max((int(row[0]) for row in cur.fetchall()), default=0)
 
-    def reserve(self, keys):
+    def reserve(self, keys, *, request_id=None):
         keys = sorted(keys)
         with closing(self.connect()) as conn, closing(conn.cursor()) as cur:
             try:
@@ -53,11 +55,28 @@ class GuestStore:
                 if max(int(row[0]) for row in rows) >= LIMIT:
                     raise GuestLimitReached()
                 self.execute(cur, "UPDATE velia_web_guest_usage SET used = used + 1 WHERE quota_key IN (?, ?)", tuple(keys))
+                if request_id:
+                    self.execute(cur, "INSERT INTO velia_web_guest_reservations (request_id, key_first, key_second) VALUES (?, ?, ?)",
+                                 (request_id, *keys))
                 conn.commit()
                 return LIMIT - max(int(row[0]) for row in rows) - 1
             except Exception:
                 conn.rollback()
                 raise
+
+    def settle(self, request_id, *, delivered):
+        with closing(self.connect()) as conn, closing(conn.cursor()) as cur:
+            if self.sqlite_path is not None:
+                cur.execute("BEGIN IMMEDIATE")
+            self.execute(cur, "DELETE FROM velia_web_guest_reservations WHERE request_id = ? RETURNING key_first, key_second",
+                         (request_id,))
+            keys = cur.fetchone()
+            if keys and not delivered:
+                self.execute(cur, "SELECT used FROM velia_web_guest_usage WHERE quota_key IN (?, ?) ORDER BY quota_key"
+                             + (" FOR UPDATE" if self.sqlite_path is None else ""), keys)
+                cur.fetchall()
+                self.execute(cur, "UPDATE velia_web_guest_usage SET used = used - 1 WHERE quota_key IN (?, ?) AND used > 0", keys)
+            conn.commit()
 
     def delete_probe_keys(self, keys):
         """Operator qualification only; never exposed as a public route."""

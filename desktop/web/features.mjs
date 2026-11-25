@@ -1,4 +1,5 @@
 import {mountMissionList} from './mission-ui.mjs';
+import {MISSION_LABELS} from './missions.mjs';
 import {mountPulse} from './pulse-ui.mjs';
 import {mountPlaceCard} from './place-card.mjs';
 import {NotebookMaterials} from './notebook-materials.mjs';
@@ -231,7 +232,7 @@ function display(value, depth = 0) {
   return box;
 }
 
-export function setupFeatures({notebook,pulse,webPush,openPulseResource=()=>{},openMemorySource=()=>{},openSavedMiniApp=()=>{},previewFile=async()=>{},discussNote=()=>{},signedIn, openAuth, openIncomePlanner, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, openTopic, prepareAgentixChat=()=>{}, prepareFigmaChat=()=>{}, prepareConnectionChat=()=>{}, missionClient=null,prepareMissionChat=()=>{}, taskState=()=>null, prepareTask=()=>{}, onUnauthorized = () => {}}) {
+export function setupFeatures({notebook,pulse,webPush,openPulseResource=()=>{},openMemorySource=()=>{},openSavedMiniApp=()=>{},previewFile=async()=>{},discussNote=()=>{},signedIn, openAuth, openIncomePlanner, toast, isBusy, voiceSettings, openImage, openConversation, prepareMedicalChat, openTopic, prepareAgentixChat=()=>{}, prepareFigmaChat=()=>{}, prepareConnectionChat=()=>{}, missionClient=null,prepareMissionChat=()=>{}, remindMission,productEvent,taskState=()=>null, prepareTask=()=>{}, onUnauthorized = () => {}}) {
   const root = document.getElementById('feature-view'), nav = document.getElementById('feature-nav');
   let epoch = 0, section = null, controller = null, inlineBody = null, cleanup=()=>{};
   const close = () => {epoch++; cleanup();cleanup=()=>{};controller?.abort(); inlineBody?.remove(); inlineBody=null; root.replaceChildren(); root.hidden = true; section = null; nav.querySelectorAll('button').forEach(b=>b.removeAttribute('aria-current')); document.getElementById('conversation-scroll').hidden = false; document.querySelector('.composer-area').hidden = false;};
@@ -275,8 +276,8 @@ export function setupFeatures({notebook,pulse,webPush,openPulseResource=()=>{},o
     const bar = node('div', undefined, 'feature-actions');
     for (const [title, fn] of items) {const b = button(title, () => run(b, fn)); bar.append(b);} parent.append(bar);
   }
-  async function collection(path, key, target, detail, offset = 0) {
-    const ticket = epoch, result = await call(path + (path.includes('?') ? '&' : '?') + 'offset=' + offset);
+  async function collection(path, key, target, detail, offset = 0, response = null) {
+    const ticket = epoch, result = await (response||call(path + (path.includes('?') ? '&' : '?') + 'offset=' + offset));
     if (ticket !== epoch) return;
     if (!offset) target.replaceChildren();
     const values = result[key] || [];
@@ -304,7 +305,7 @@ export function setupFeatures({notebook,pulse,webPush,openPulseResource=()=>{},o
     const head = node('div', undefined, 'feature-header'), heading=node('div'); heading.append(node('span','ВОЗМОЖНОСТИ VELIA','feature-eyebrow'),node('h1', SECTIONS.find(s=>s[0]===name)?.[1] || 'VELIA'),node('p',descriptions[name])); head.append(heading, button('К диалогу', close)); heading.querySelector('h1').tabIndex=-1; root.append(head); heading.querySelector('h1').focus({preventScroll:true});
     const body = node('div',undefined,'feature-body'); root.append(body); const loading=node('p','Загрузка…','feature-empty'); loading.setAttribute('role','status'); body.append(loading);
     try {
-      if(name==='pulse'){body.replaceChildren();await mountPulse(body,{pulse,webPush,notebook,toast,signal:controller.signal,draft,openResource:openPulseResource,openVisits:date=>open('map',{tab:'visits',date})});return;}
+      if(name==='pulse'){body.replaceChildren();await mountPulse(body,{pulse,webPush,notebook,toast,signal:controller.signal,draft,missions:missionClient,productEvent,openResource:openPulseResource,openVisits:date=>open('map',{tab:'visits',date})});return;}
       if(name==='memory'){body.replaceChildren();await mountMemory(body,{notebook,toast,signal:controller.signal,draft,openSource:openMemorySource,discuss:discussNote});return;}
       if (name === 'notes') {body.replaceChildren();await mountNotebook(body,{notebook,toast,signal:controller.signal,draft,discuss:discussNote,openMiniApp:entry=>openSavedMiniApp(entry).catch(e=>toast(e.message)),remember:rememberEntry,remind:entry=>open('pulse',{title:entry.title,resource:{kind:['place','visit','material'].includes(entry.kind)?entry.kind:'note',id:entry.id}}),openMaterial:async entry=>{try{const file=await new NotebookMaterials(notebook).read(entry.id);if(!controller.signal.aborted)await previewFile(file);}catch(error){if(!controller.signal.aborted)toast(error.message);}},openPlace:entry=>open('map',{placeId:entry.id}),openMap:entry=>open('map',entry.kind==='visit'?{title:entry.title,address:entry.address,lat:entry.lat,lon:entry.lon}:entry)});return;}
       if (name === 'map') {body.replaceChildren();if(draft.placeId){await mountPlaceCard(body,{notebook,placeId:draft.placeId,signal:controller.signal,toast,previewFile,open,remind:entry=>open('pulse',{title:entry.title,resource:{kind:'place',id:entry.id}}),discuss:discussNote});return;}const tabs=node('div',undefined,'feature-actions');tabs.append(button('Места',()=>open('map')),button('Выезды',()=>open('map',{tab:'visits'})));body.append(tabs);const content=node('div');body.append(content);if(draft.tab==='visits')await mountVisits(content,{notebook,toast,signal:controller.signal,draft,discuss:discussNote,remind:entry=>open('pulse',{title:entry.task||entry.title,timezone:entry.timezone,schedule:{kind:'once',date:entry.date,time:entry.time},resource:{kind:'visit',id:entry.id}}),openMap:entry=>open('map',entry.kind==='visit'?{title:entry.title,address:entry.address,lat:entry.lat,lon:entry.lon}:entry)});else await mountMap(content,{notebook,toast,signal:controller.signal,draft,openPlace:place=>open('map',{placeId:place.id})});return;}
@@ -419,9 +420,67 @@ export function setupFeatures({notebook,pulse,webPush,openPulseResource=()=>{},o
         const fields=['title','goal','audience','style','constraints'].map(k=>[k,labels[k],k==='title'?'text':'textarea']);
         body.replaceChildren(form(fields,'Создать проект',async d=>{await call('projects',{method:'POST',data:{passport:d},key:crypto.randomUUID()});await refresh();}));
         const list=node('div');body.append(list);
-        const detail=async(p,card)=>{const r=await call('projects/'+p.id);card.replaceChildren(form(fields,'Сохранить изменения',async d=>{await call('projects/'+p.id,{method:'PATCH',data:{passport:d,expected_revision:r.project.revision}});await detail(p,card);},r.project.passport));const resources=node('div');card.append(form([['kind','Тип','select',[['chat','Диалог'],['deepalpha','DeepAlpha'],['image','Изображения'],['video','Видео'],['music','Музыка']]],['title','Название'],['query','Запрос','textarea']],'Добавить ресурс',async d=>{await call('project-resources',{method:'POST',data:{...d,project_id:p.id},key:crypto.randomUUID()});await collection('project-resources?project_id='+encodeURIComponent(p.id),'resources',resources);}));card.append(resources);await collection('project-resources?project_id='+encodeURIComponent(p.id),'resources',resources);};
+        const detail=async(p,card)=>{
+          const r=await call('projects/'+p.id);if(ticket!==epoch)return;
+          card.replaceChildren(node('h3',r.project.passport.title),form(fields,'Сохранить изменения',async d=>{await call('projects/'+p.id,{method:'PATCH',data:{passport:d,expected_revision:r.project.revision}});await detail(p,card);},r.project.passport));
+          const work=node('section',undefined,'feature-card'),resources=node('div'),resourcePath='project-resources?project_id='+encodeURIComponent(p.id);
+          card.append(work,form([['kind','Тип','select',[['chat','Диалог'],['deepalpha','DeepAlpha'],['image','Изображения'],['video','Видео'],['music','Музыка']]],['title','Название'],['query','Запрос','textarea']],'Добавить ресурс',async d=>{await call('project-resources',{method:'POST',data:{...d,project_id:p.id},key:crypto.randomUUID()});await detail(p,card);}),resources);
+          const materialsRequest=call(resourcePath);
+          await Promise.all([collection(resourcePath,'resources',resources,undefined,0,materialsRequest),mountProjectTasks()]);
+          async function mountProjectTasks(){
+            if(!missionClient)return;
+            const signal=controller.signal;
+            const results=await Promise.allSettled([missionClient.projectBrief(p.id,signal),materialsRequest,missionClient.poll()]);
+            if(signal.aborted||ticket!==epoch||!work.isConnected)return;
+            const [briefResult,materialResult,missionResult]=results;
+            work.append(node('h3','Поручения проекта'));
+            let brief=briefResult.value?.brief;
+            if(!brief){work.append(node('p',briefResult.reason?.message||'Не удалось открыть решения проекта.','feature-notice'));return;}
+            const decisions=form([['decisions','Подтверждённые решения','textarea']],'Сохранить решения',async data=>{
+              brief=(await missionClient.saveProjectBrief(p.id,{decisions:data.decisions,revision:brief.revision},signal)).brief;
+              await detail(p,card);
+            },brief);
+            decisions.querySelector('textarea').maxLength=1200;work.append(decisions);
+            const context=node('fieldset'),selected=new Set(),selectedResources=new Set();
+            context.append(node('legend','Что использовать в новом поручении'));
+            const option=(label,description,key,set,checked)=>{
+              const row=node('label',undefined,'project-context-row'),input=node('input');
+              input.type='checkbox';input.checked=checked;if(checked)set.add(key);
+              input.onchange=()=>{if(input.checked)set.add(key);else set.delete(key);};
+              row.append(input,node('span',label));
+              if(description)row.append(node('small',description));
+              context.append(row);
+            };
+            for(const [key,label] of [...fields.slice(1),['decisions','Подтверждённые решения']]){
+              const value=key==='decisions'?brief.decisions:r.project.passport[key];
+              if(value)option(label,value.slice(0,240),key,selected,true);
+            }
+            const materials=materialResult.value?.resources||[];
+            if(materials.length)context.append(node('p','Можно выбрать до трёх материалов. Велия использует названия и краткие описания.'));
+            for(const material of materials)option(material.title,material.seed_query?.slice(0,100),material.id,selectedResources,false);
+            if(materialResult.status==='rejected')context.append(node('p','Не удалось загрузить список материалов.','feature-notice'));
+            context.append(button('Новое поручение',()=>{
+              if(selectedResources.size>3){toast('Выбери до трёх материалов.');return;}
+              prepareMissionChat({project_id:p.id,project_fields:[...selected],project_resource_ids:[...selectedResources]});
+            }));
+            work.append(context);
+            const related=node('div');work.append(related);
+            const draw=()=>{
+              related.replaceChildren();
+              for(const m of missionClient.list().filter(m=>m.project?.id===p.id)){
+                const row=node('div',undefined,'feature-actions');
+                row.append(button(m.title,()=>{productEvent?.('result_opened','mission');open('autopilot',{tab:'missions',missionId:m.id});}),node('small',MISSION_LABELS[m.status]||m.status));
+                related.append(row);
+              }
+            };
+            if(missionResult.status==='rejected')work.append(node('p','Не удалось обновить список поручений.','feature-notice'));
+            draw();
+            const unsubscribe=missionClient.subscribe(()=>{if(related.isConnected)draw();else unsubscribe();});
+            signal.addEventListener('abort',unsubscribe,{once:true});
+          }
+        };
         const refresh=()=>collection('projects','projects',list,detail);
-        try{await refresh();}catch(e){if(e.name==='AbortError')throw e;if(ticket===epoch)list.replaceChildren(node('p','Не удалось загрузить материалы проектов. Подключённые репозитории можно открыть ниже.','feature-notice'));}
+        try{await refresh();if(draft.projectId&&ticket===epoch){const selected=node('article',undefined,'feature-card');list.prepend(selected);await detail({id:draft.projectId},selected);}}catch(e){if(e.name==='AbortError')throw e;if(ticket===epoch)list.replaceChildren(node('p','Не удалось загрузить материалы проектов. Подключённые репозитории можно открыть ниже.','feature-notice'));}
         if(ticket!==epoch)return;
         const repositories=node('details',undefined,'feature-advanced');
         repositories.append(node('summary','Репозитории и разработка'));
@@ -708,7 +767,7 @@ export function setupFeatures({notebook,pulse,webPush,openPulseResource=()=>{},o
       if(key==='missions'){
         if(!missionClient)return;
         missionView=new AbortController();
-        await mountMissionList(mount,{client:missionClient,signal:missionView.signal,toast,prepare:prepareMissionChat,selectedId:draft.missionId});return;
+        await mountMissionList(mount,{client:missionClient,signal:missionView.signal,toast,prepare:prepareMissionChat,selectedId:draft.missionId,remind:remindMission,openProject:id=>open('projects',{projectId:id}),openChat:source=>openPulseResource({kind:'chat',id:source.chat_id})});return;
       }
       if(key==='schedules'){
         mount.append(node('p','Загрузка…','feature-empty'));

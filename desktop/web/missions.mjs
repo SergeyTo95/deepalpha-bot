@@ -1,6 +1,9 @@
 import {readCompletion,apiError} from './core.mjs';
 export const MISSION_LABELS={queued:'В очереди',planning:'Составляю план',waiting_input:'Нужно уточнение',draft:'План готов',running:'Выполняется',pausing:'Останавливаюсь после текущего шага',paused:'На паузе',awaiting_approval:'Жду подтверждения',completed:'Завершена',failed:'Нужна помощь',interrupted:'Можно продолжить',uncertain:'Результат действия нужно проверить',cancelling:'Отменяю после текущего шага',cancelled:'Отменена'};
 export const MISSION_ERRORS={
+  mission_project_unavailable:'Проект временно недоступен или не найден в этом аккаунте.',
+  mission_cannot_revise:'Доработка доступна для завершённой задачи с текстовым результатом.',
+  mission_invalid_deadline:'Укажи корректные дату и время.',
   game_github_branch_exists:'Ветка этой игры уже существует с другими файлами. Проверь её на GitHub.',
   game_github_conflict:'В GitHub изменилась версия игры. Проверь ветку и открой соответствующую версию в Велии.',
   mission_game_revision_no_change:'Эта правка не подходит к настройкам выбранной игры или совпадает с текущей версией.',
@@ -75,6 +78,10 @@ export function setupMissionClient({profile,request=missionRequest,onUnauthorize
   return {reset,poll,notifications:()=>notices,readNotice:async id=>{await call('/inbox/'+encodeURIComponent(id)+'/read',{method:'POST',data:{}});notices=notices.map(n=>n.id===id?{...n,status:'read',read:true}:n);notify();},
     detachChat:async chat_id=>{await call('/detach-chat',{method:'POST',data:{chat_id}});for(const m of rows)if(m.source?.chat_id===chat_id)m.source.detached=true;for(const m of details.values())if(m.source?.chat_id===chat_id)m.source.detached=true;},
     submit:async(data,signal)=>{const result=await call('/submit',{method:'POST',data,signal});remember(result.mission);return result.mission;},
+    projectBrief:(id,signal)=>call('/project/'+encodeURIComponent(id)+'/brief',{signal}),
+    saveProjectBrief:(id,brief,signal)=>call('/project/'+encodeURIComponent(id)+'/brief',{method:'PATCH',data:brief,signal}),
+    deadline:async(m,due_at,signal)=>{const result=await call('/'+m.id+'/deadline',{method:'PATCH',data:{revision:m.revision,due_at},signal});remember(result.mission);return result.mission;},
+    revise:async(m,data,signal)=>{const result=await call('/'+m.id+'/revise',{method:'POST',data,signal});remember(result.mission);return result.mission;},
     answer:async(m,answer,key)=>{const result=await call('/'+m.id+'/answer',{method:'POST',data:{revision:m.revision,answer,request_id:key}});remember(result.mission);return result.mission;},
     status:()=>lastError,loaded:()=>loaded,catalog:()=>call('/catalog'),list:()=>rows,get:id=>details.get(id),subscribe:fn=>{listeners.add(fn);return ()=>listeners.delete(fn);},
     watch:id=>{watched.set(id,(watched.get(id)||0)+1);return ()=>{if(watched.get(id)>1)watched.set(id,watched.get(id)-1);else watched.delete(id);};},refresh,

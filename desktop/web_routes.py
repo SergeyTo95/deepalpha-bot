@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import hashlib
 import hmac
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -528,7 +529,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
     async def asset(request):
         name = {"/privacy":"privacy.html", "/terms":"terms.html", "/pricing":"pricing.html", "/content-policy":"content-policy.html", "/thanks":"thanks.html"}.get(
             request.path, request.match_info.get("name", "index.html"))
-        if name not in {"thanks.html", "thanks.css", "privacy.html", "terms.html", "pricing.html", "content-policy.html", "legal.css", "index.html", "velia-sw.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "badge-96.png", "web-push.mjs", "app.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "notebook.mjs", "notebook-ui.mjs", "pulse.mjs", "pulse-ui.mjs", "pulse-agent.mjs", "place-history.mjs", "place-card.mjs", "notebook-materials.mjs", "place-agent.mjs", "map.mjs", "map-agent.mjs", "map-result.mjs", "map-routing.mjs", "route-planner.mjs", "memory.mjs", "memory-schema.mjs", "memory-ui.mjs", "mini-app-core.mjs", "mini-apps.mjs", "mini-app-ui.mjs", "game-preview.mjs", "missions.mjs", "mission-ui.mjs", "task-results.mjs", "client-updates.mjs", "visits.mjs", "visit-ui.mjs", "visit-agent.mjs", "leaflet-vendor.js", "leaflet-vendor.css", "leaflet-LICENSE.txt", "features.mjs", "token-purchase.mjs", "subscription-plans.mjs", "sandbox-billing.mjs", "balance-overview.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "service-icons.mjs", "document-exports.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "finance.mjs", "crm.mjs", "meetings.mjs", "meeting-ui.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
+        if name not in {"thanks.html", "thanks.css", "privacy.html", "terms.html", "pricing.html", "content-policy.html", "legal.css", "index.html", "velia-sw.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "badge-96.png", "web-push.mjs", "app.mjs", "starter.mjs", "autoloop.mjs", "core.mjs", "syntax.mjs", "syntax-vendor.mjs", "local-history.mjs", "notebook.mjs", "notebook-ui.mjs", "pulse.mjs", "pulse-ui.mjs", "pulse-agent.mjs", "place-history.mjs", "place-card.mjs", "notebook-materials.mjs", "place-agent.mjs", "map.mjs", "map-agent.mjs", "map-result.mjs", "map-routing.mjs", "route-planner.mjs", "memory.mjs", "memory-schema.mjs", "memory-ui.mjs", "mini-app-core.mjs", "mini-apps.mjs", "mini-app-ui.mjs", "game-preview.mjs", "missions.mjs", "mission-ui.mjs", "task-results.mjs", "client-updates.mjs", "visits.mjs", "visit-ui.mjs", "visit-agent.mjs", "leaflet-vendor.js", "leaflet-vendor.css", "leaflet-LICENSE.txt", "features.mjs", "token-purchase.mjs", "subscription-plans.mjs", "sandbox-billing.mjs", "balance-overview.mjs", "figma.mjs", "connections.mjs", "connection-ui.mjs", "service-icons.mjs", "document-exports.mjs", "agentix.mjs", "agentix-business-builder.mjs", "work.mjs", "income-planner.mjs", "finance.mjs", "crm.mjs", "meetings.mjs", "meeting-ui.mjs", "voice.mjs", "voice-channel.mjs", "voice-capture.mjs", "voice-text.mjs", "speech-audio.mjs", "background-tasks.mjs", "files.mjs", "style.css", "favicon.svg"}:
             raise web.HTTPNotFound()
         if name=='index.html':
             html=(STATIC/name).read_text().replace('<html ', '<html data-client-version="'+client_version+'" ',1).replace('/web/app.mjs"','/web/app.mjs?v='+client_version+'"',1).replace('/web/style.css"','/web/style.css?v='+client_version+'"',1)
@@ -545,6 +546,39 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
                 "base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
             "Permissions-Policy": "camera=(), microphone=(self), geolocation=(self)"})
         return response
+    product_window = [0, 0]
+    async def product_event(request):
+        if not same_origin(request):
+            return error('invalid_origin', 403)
+        try:
+            value = await request.clone(client_max_size=1024).json()
+        except (ValueError, TypeError, web.HTTPException):
+            return error('invalid_request', 400)
+        fields={'event','scenario','surface','browser','duration_ms'}
+        if not isinstance(value, dict) or set(value) not in (fields,fields|{'reason'}):
+            return error('invalid_request', 400)
+        event, scenario, surface, browser, duration = (value[k] for k in
+                                                        ('event','scenario','surface','browser','duration_ms'))
+        if (event not in ('visit','example_viewed','example_used','reply_useful','generation_failed',
+                          'task_saved','result_created','result_opened','digest_configured','digest_paused')
+                or scenario not in ('meeting','comparison','day','game','calculator','chat','mission','digest')
+                or surface not in ('guest','member') or not isinstance(browser, str)
+                or not re.fullmatch(r'[a-f0-9]{32}', browser)
+                or type(duration) is not int or not 0 <= duration <= 600000
+                or value.get('reason') not in (None,'busy','unavailable','quota','network','stopped','other')):
+            return error('invalid_request', 400)
+        now = int(time.time()) // 60
+        if product_window[0] != now:
+            product_window[:] = [now, 0]
+        if product_window[1] >= 180:
+            return web.Response(status=204)
+        product_window[1] += 1
+        identity = hmac.new(os.environ['VELIA_WEB_SESSION_KEY'].encode(),
+                            ('product-event:' + surface + ':' + browser).encode(), hashlib.sha256).hexdigest()[:24]
+        logging.getLogger('velia.product').info('VELIA_PRODUCT event=%s scenario=%s surface=%s visitor=%s duration_ms=%d reason=%s',
+                                               event, scenario, surface, identity, duration, value.get('reason') or '-')
+        return web.Response(status=204, headers={'Cache-Control':'no-store'})
+
     async def client_version_status(request):return json_response({'ok':True,'version':client_version})
     async def model_health_status(request):
         from desktop.model_health import snapshot
@@ -559,6 +593,7 @@ def setup_web_routes(app, *, origin, upstream, authenticate, allowed, valid_sess
         return response
     app.router.add_get("/web-api/v1/models/status", model_health_status)
     app.router.add_get('/web-api/v1/client-version',client_version_status)
+    app.router.add_post('/web-api/v1/product-event',product_event)
     app.router.add_get("/", asset)
     app.router.add_get("/privacy", asset)
     app.router.add_get("/terms", asset)

@@ -22,6 +22,22 @@ LIFETIME = 365 * 24 * 3600
 GUEST = web.RequestKey("velia_guest_cookie", str)
 
 
+def guest_text_frame(wire):
+    for line in wire.splitlines():
+        if not line.startswith(b"data:"):
+            continue
+        try:
+            event = json.loads(line[5:].strip())
+            choices = event.get("choices") or []
+            delta = choices[0].get("delta", {}) if choices else {}
+            value = delta.get("content", "")
+            if isinstance(value, str) and value.strip():
+                return True
+        except (ValueError, TypeError, AttributeError):
+            continue
+    return False
+
+
 def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_search=None):
     secret = os.environ["VELIA_WEB_SESSION_KEY"].encode()
     cipher = Fernet(secret)
@@ -107,11 +123,28 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_
         if failure is not None:
             return failure
         response = None
+        request_id = secrets.token_hex(16)
+        delivered = False
+        reservation = None
         started = time.monotonic()
         def timing(stage):
             # Timings only: no prompts, account identifiers, keys or answers.
             print("VELIA_GUEST_TIMING " + json.dumps({"stage": stage,
                 "elapsed_ms": round((time.monotonic() - started) * 1000)}), flush=True)
+        async def settle_quota():
+            nonlocal reservation
+            if reservation is None:
+                return
+            try:
+                await asyncio.shield(reservation)
+            except Exception:
+                reservation = None
+                return
+            try:
+                await asyncio.to_thread(store.settle, request_id, delivered=delivered)
+                reservation = None
+            except Exception:
+                print("VELIA_GUEST_SETTLEMENT_FAILED", flush=True)
         try:
             async with ClientSession(timeout=ClientTimeout(total=600, sock_read=300)) as client:
                 headers = {"Authorization": "Bearer " + os.getenv("VELIA_DESKTOP_FLASH_API_KEY", "")}
@@ -120,7 +153,8 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_
                     await check_flash_context(client, endpoint, headers, payload)
                 timing("context_checked")
                 try:
-                    remaining = await asyncio.to_thread(store.reserve, quota_keys)
+                    reservation = asyncio.create_task(asyncio.to_thread(store.reserve, quota_keys, request_id=request_id))
+                    remaining = await asyncio.shield(reservation)
                 except GuestLimitReached:
                     return error("guest_limit_reached", 429)
                 except Exception:
@@ -142,6 +176,11 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_
                         if "text" in event:
                             wire = {"model":FLASH_ID, "choices":[{"delta":{"content":event["text"]}}]}
                             await response.write(("data: "+json.dumps(wire,ensure_ascii=False)+"\n\n").encode())
+                            if not delivered and isinstance(event["text"], str) and event["text"].strip():
+                                delivered = True
+                                timing("first_text")
+                    if not delivered:
+                        await settle_quota()
                     await response.write(b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
                     await response.write_eof()
                     return response
@@ -152,8 +191,10 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_
                     payload = await web_search.enrich(request, payload)
                     timing("request_prepared")
                     if request.get(PREPARED_REPLY):
-                        return await prepared_web_response(request, request[PREPARED_REPLY],
+                        response = await prepared_web_response(request, request[PREPARED_REPLY],
                             headers={"X-Velia-Guest-Remaining": str(remaining)})
+                        delivered = bool(request[PREPARED_REPLY].strip())
+                        return response
                     await check_flash_context(client, endpoint, headers, payload)
                 async with client.post(endpoint + "/v1/chat/completions", json=payload, headers=headers, allow_redirects=False) as upstream:
                     if upstream.status != 200 or "text/event-stream" not in upstream.headers.get("Content-Type", ""):
@@ -170,13 +211,22 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_
                         if first_chunk:
                             timing("first_event")
                             first_chunk = False
+                        if not delivered and chunk.strip() == b"data: [DONE]":
+                            await settle_quota()
                         await response.write(chunk)
+                        if not delivered and guest_text_frame(chunk):
+                            delivered = True
+                            timing("first_text")
+                    if not delivered:
+                        await settle_quota()
                     await response.write_eof()
                     timing("complete")
                     return response
         except QuantumError as exc:
             code = free_models.error_code(exc.code, "flash")
             if response is not None and response.prepared:
+                if not delivered:
+                    await settle_quota()
                 await response.write(("data: "+json.dumps({"error":{"message":code}})+"\n\n").encode())
                 await response.write_eof()
                 return response
@@ -189,7 +239,10 @@ def setup_guest_routes(app, *, origin, handlers, json_response, store=None, web_
                 return response
             return error("model_connection_failed", 502)
         finally:
-            handlers["release"](sid)
+            try:
+                await settle_quota()
+            finally:
+                handlers["release"](sid)
 
     app.router.add_get("/web-api/v1/guest", current)
     app.router.add_post("/web-api/v1/guest/chat/completions", chat)

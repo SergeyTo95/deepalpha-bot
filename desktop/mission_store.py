@@ -119,7 +119,8 @@ class MissionStore(GuestStore):
                     for nonce, entry in shares.items() if entry['step'] == step_id]
         return self.transaction(user, change)
 
-    def create(self,user,goal,plan,model,zone,key,*,source=None,context='',game_revision=None):
+    def create(self,user,goal,plan,model,zone,key,*,source=None,context='',game_revision=None,
+               project=None,parent_id=None,revision_text=None):
         require(text(goal,6000));timezone(zone)
         if plan is not None:validate_plan(plan,goal)
         if source is not None:
@@ -129,6 +130,8 @@ class MissionStore(GuestStore):
         require(model in MODELS and isinstance(key,str) and len(key)<=100 and bool(key.strip()))
         payload=[goal,plan,model,zone,source,context]
         if game_revision is not None:payload.append(game_revision)
+        if project is not None:payload.append(project)
+        if parent_id is not None:payload.append(parent_id)
         fingerprint=digest(payload)
         def change(doc):
             old=next((m for m in doc['missions'] if m['request_id']==key),None)
@@ -137,9 +140,20 @@ class MissionStore(GuestStore):
             now=self.clock();m={'id':str(uuid.uuid4()),'goal':goal,'original_goal':goal,'title':plan['title'] if plan else goal[:120],'model':model,'time_zone':zone,'request_id':key,'request_hash':fingerprint,'revision':1,'created_at':now,'updated_at':now,'status':'draft','lease':None,'lease_until':0,'conversation_id':None,'source':deepcopy(source),'context':context,'needs_plan':plan is None,'plan_generation':0,'question':None,'notices':[],
               'steps':[{**deepcopy(s),'status':'pending','result':None,'error':None,'approval':None,'approved':None} for s in (plan['steps'] if plan else [])]}
             if game_revision is not None:m['game_revision']=deepcopy(game_revision)
+            if project is not None:m['project']=deepcopy(project)
+            if parent_id is not None:
+                m.update(parent_id=parent_id,revision_text=revision_text)
             doc['missions'].insert(0,m);return m
         return self.transaction(user,change)
     def detail(self,user,id):return self.transaction(user,lambda doc:self.find(doc,id))
+    def set_deadline(self,user,id,revision,due_at):
+        def change(doc):
+            m=self.find(doc,id)
+            require(m['revision']==revision,'mission_revision_conflict',409)
+            if due_at is None:m.pop('due_at',None)
+            else:m['due_at']=due_at
+            self.touch(m,self.clock());return m
+        return self.transaction(user,change)
     def claim(self,user,id,revision):
         def change(doc):
             m=self.find(doc,id)
@@ -268,7 +282,7 @@ class MissionStore(GuestStore):
     @staticmethod
     def public(m,*,summary=False):
         value=deepcopy(m)
-        for k in ('lease','lease_until','conversation_id','request_id','request_hash','notices','context','last_answer','original_goal','game_revision','game_shares'):value.pop(k,None)
+        for k in ('lease','lease_until','conversation_id','request_id','request_hash','notices','context','last_answer','original_goal','game_revision','game_shares','revision_text'):value.pop(k,None)
         for step in value['steps']:
             step.pop('approved',None)
             step.pop('dispatched',None)

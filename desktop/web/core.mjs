@@ -328,7 +328,9 @@ export async function readCompletion(response, onText, onSearch = () => {}, onPr
     try {
       data = await response.json();
     } catch {}
-    const error = new Error(apiError(data?.error?.message || data?.error));
+    const code=data?.error?.message||data?.error;
+    const error = new Error(apiError(code));
+    error.code=code;
     error.status = response.status;
     throw error;
   }
@@ -367,7 +369,12 @@ export async function readCompletion(response, onText, onSearch = () => {}, onPr
     } catch {
       throw new Error(apiError("stream_incomplete"));
     }
-    if (event.error) throw new Error(apiError(event.error.message || event.error));
+    if (event.error) {
+      const code=event.error.message||event.error;
+      const error=new Error(apiError(code));
+      error.code=code;
+      throw error;
+    }
     if (["understanding", "generating"].includes(event.progress)) onProgress(event.progress);
     if (event.web_search) {
       search = safeSearch(event.web_search);

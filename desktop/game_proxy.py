@@ -53,6 +53,8 @@ window.addEventListener('pagehide', () => { document.body.hidden = true; });
 window.addEventListener('pageshow', checkAccess);
 setInterval(checkAccess, 10000);
 """
+DEMO_SPEC = {'v': 2, 'title': 'Сигнал из глубины', 'theme': 'industrial',
+             'difficulty': 0, 'stages': 3, 'seed': 3189}
 UUID = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
 
@@ -145,10 +147,11 @@ def setup_game_proxy(app, client_key, *, store, session_for):
 
     async def serve(request):
         name = request.match_info.get('asset', 'index.html')
-        owner_view = 'token' not in request.match_info
+        demo = request.path in {'/game/demo/', '/game/demo/game.mjs'}
+        owner_view = not demo and 'token' not in request.match_info
         if name == 'download' and not owner_view:
             raise web.HTTPNotFound(headers=HEADERS)
-        data = await authorized_game(request)
+        data = {} if demo else await authorized_game(request)
         if data is None:
             if name != 'index.html':
                 raise web.HTTPNotFound(headers=HEADERS)
@@ -157,7 +160,7 @@ def setup_game_proxy(app, client_key, *, store, session_for):
                           retry=request.path)
         if name == 'access':
             return web.Response(status=204, headers=HEADERS)
-        game_spec = saved_game_spec(data['url'])
+        game_spec = DEMO_SPEC if demo else saved_game_spec(data['url'])
         fps = game_spec['v'] == 2
         if name == 'index.html':
             html = (await asset(name, fps=fps)).decode('utf-8')
@@ -172,10 +175,10 @@ def setup_game_proxy(app, client_key, *, store, session_for):
                                     flags=re.MULTILINE)
             if count != 1 or source.count('launch(loadSpec());') != 1:
                 raise web.HTTPServiceUnavailable(headers=HEADERS)
-            body = (source.replace('launch(loadSpec());', 'launch(demo);') + POLL_ACCESS).encode('utf-8')
+            body = (source.replace('launch(loadSpec());', 'launch(demo);') + ('' if demo else POLL_ACCESS)).encode('utf-8')
         else:
             body = await asset(name, game_spec)
-        headers = HEADERS
+        headers = {**HEADERS, 'Cache-Control': 'public, max-age=300'} if demo else HEADERS
         if name == 'download':
             headers = {**HEADERS, 'Content-Disposition': 'attachment; filename="velia-game.zip"'}
         return web.Response(body=body, content_type=ASSETS[name][1], headers=headers,
@@ -187,6 +190,8 @@ def setup_game_proxy(app, client_key, *, store, session_for):
     app.router.add_get('/game', redirect)
     app.router.add_get('/game/', landing)
     app.router.add_get('/game/access-code', access_code)
+    app.router.add_get('/game/demo/', serve)
+    app.router.add_get(r'/game/demo/{asset:game\.mjs}', serve)
     app.router.add_get(r'/game/{asset:style\.css|phaser\.min\.js}', static_asset)
     private = '/game/project/{mission:' + UUID + '}/{step:s[1-8]}/'
     shared = r'/game/share/{token:[A-Za-z0-9_-]{150,350}}/'

@@ -250,6 +250,12 @@ def test_play_and_share_enforce_live_owner_and_recipient_permissions(tmp_path, m
                                  handlers={}, store=store, tools=object())
             game_proxy.setup_game_proxy(app, client_key, store=store, session_for=session)
             async with TestClient(TestServer(app)) as client:
+                if fps:
+                    demo = await client.get('/game/demo/')
+                    assert demo.status == 200 and 'game-download' not in await demo.text()
+                    demo_script = await (await client.get('/game/demo/game.mjs')).text()
+                    assert 'launch(demo);' in demo_script and '"v":2' in demo_script
+                    assert (await client.get('/game/demo/download')).status == 404
                 goal = 'Создай игру от первого лица' if fps else 'Создай игру'
                 mission = store.create(7, goal, game_plan(goal), 'velia-flash', 'UTC', 'private-game')
                 claimed = store.claim(7, mission['id'], 1)

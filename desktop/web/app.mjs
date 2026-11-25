@@ -1,6 +1,7 @@
+import {mountStarter} from './starter.mjs';
 import {setupClientUpdates} from './client-updates.mjs';
 import {setupWebPush} from './web-push.mjs';
-import {setupPulse,wantsPulse,pulseWhen,pulseDateReply,pulseMessageContext} from './pulse.mjs';
+import {setupPulse,wantsPulse,pulseWhen,pulseDateReply,pulseMessageContext,localParts} from './pulse.mjs';
 import {runPulseCommand} from './pulse-agent.mjs';
 import {visitSummary} from './visits.mjs';
 import {wantsMap,wantsPlaceHistory,runMapAgent,mapMessageContext} from './map-agent.mjs';
@@ -80,6 +81,7 @@ let profile = null,
   ready = false,
   internetAvailable = false,
   medicalDraftMode = false,
+  missionProjectDraft = null,
   chats = [],
   currentId = null,
   storageKey = null,
@@ -199,7 +201,7 @@ const webPush=setupWebPush({profile:()=>profile,pulse});
 async function openPulseResource(resource){
   if(busy){toast('Дождись завершения текущего ответа.');return;}
   try{if(resource.kind==='chat'){let chat=chats.find(p=>p.id===resource.id);if(!chat){await syncHistory();chat=chats.find(p=>p.id===resource.id);}if(!chat)throw Error('Диалог не найден в этом аккаунте.');features.close();await openChat(chat);return;}
-    if(resource.kind==='mission'){const m=await missions.refresh(resource.id);if(!profile)return;restoreTaskMessages();const chat=chats.find(c=>c.id===m.source?.chat_id);if(chat&&!m.source?.detached){await openChat(chat);Array.from(document.querySelectorAll('[data-mission-id="'+m.id+'"][data-task-event]')).at(-1)?.scrollIntoView({block:'center'});}else await features.open('autopilot',{tab:'missions',missionId:m.id});return;}
+    if(resource.kind==='mission'){const m=await missions.refresh(resource.id);if(!profile)return;if(m.status==='completed')recordProductEvent('result_opened','mission');restoreTaskMessages();const chat=chats.find(c=>c.id===m.source?.chat_id);if(chat&&!m.source?.detached){await openChat(chat);Array.from(document.querySelectorAll('[data-mission-id="'+m.id+'"][data-task-event]')).at(-1)?.scrollIntoView({block:'center'});}else await features.open('autopilot',{tab:'missions',missionId:m.id});return;}
     const entry=(await notebook.load()).find(p=>p.id===resource.id);if(!entry)throw Error('Связанная запись удалена. Само напоминание сохранено.');
     if(entry.kind==='place')await features.open('map',{placeId:entry.id});else if(entry.kind==='visit')await features.open('map',{tab:'visits',date:entry.date});else await features.open('notes',{id:entry.id});
   }catch(error){toast(error.message);}
@@ -242,10 +244,16 @@ missions.subscribe(()=>{
   for(const n of missions.notifications())taskNoticeSeen.add(n.id);while(taskNoticeSeen.size>500)taskNoticeSeen.delete(taskNoticeSeen.values().next().value);
   if(profile&&fresh.length)toast(fresh.length>1?'Есть обновления задач ('+fresh.length+').':pulse.state().settings?.preview?fresh[0].title:fresh[0].task_status==='completed'?'Ваша задача выполнена. Результат сохранён в чате.':'Для вашей задачи есть обновление. Откройте «Задачи» или Pulse.');
 });
-const features = setupFeatures({missionClient:missions,prepareMissionChat:()=>{
+function openMissionReminder(m){
+  const timezone=pulse.state().settings?.timezone||Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC';
+  const schedule=m.due_at*1000>Date.now()+60000?{kind:'once',...localParts(m.due_at*1000,timezone)}:undefined;
+  return features.open('pulse',{title:m.title,timezone,schedule,resource:{kind:'mission',id:m.id}});
+}
+const features = setupFeatures({missionClient:missions,remindMission:openMissionReminder,productEvent:recordProductEvent,prepareMissionChat:(project=null)=>{
   if(busy){toast('Дождись завершения ответа.');return;}
   if($('prompt').value.trim()){toast('Сохрани или очисти черновик сообщения перед переходом.');return;}
-  features.close();setAgentMode(false,true);newChat();$('prompt').value='Выполни миссию: ';resizePrompt();$('prompt').focus();
+  setAgentMode(false,true);newChat();missionProjectDraft=project;$('prompt').value='Выполни миссию: ';resizePrompt();$('prompt').focus();
+  if(project)toast('Выбранные материалы проекта будут приложены к поручению.');
 },notebook,pulse,webPush,openPulseResource,openMemorySource,openSavedMiniApp,previewFile:file=>fileTools.previewFile(file),discussNote:entry=>{
   if(busy)return;
   if($('prompt').value.trim()){toast('В чате есть черновик. Сохрани или очисти его перед переходом.');return;}
@@ -504,7 +512,8 @@ function messageNode(message, index) {
   const latestTaskEvent=message.missionId?current().messages.findLast(m=>m.missionId===message.missionId&&m.taskEvent)?.taskEvent:null;
   if((!latestTaskEvent||message.taskEvent===latestTaskEvent)&&profile&&typeof message.missionId==='string'&&/^[0-9a-f-]{36}$/u.test(message.missionId)){
     const controller=new AbortController();mapViews.push(controller);
-    mountMissionCard(article,{client:missions,id:message.missionId,signal:controller.signal,toast});
+    mountMissionCard(article,{client:missions,id:message.missionId,signal:controller.signal,toast,remind:openMissionReminder,
+      openTask:id=>features.open('autopilot',{tab:'missions',missionId:id}),openProject:id=>features.open('projects',{projectId:id})});
   }
   if(message.miniApp&&!message.pending&&!message.failed){
     const controller=new AbortController(),owner=profile?.account,chat=current();mapViews.push(controller);
@@ -781,6 +790,7 @@ function setBusy(value) {
 }
 function newChat() {
   medicalDraftMode=false;
+  missionProjectDraft=null;
   legacyTopic=null;
   topicViews.clear();
   voice.stop();
@@ -973,7 +983,7 @@ async function resumeBackgroundAgent(job){
 }
 
 async function openChat(chat, background = false) {
-  if (!background) { voice.stop(); features.close(); clearFiles(); legacyTopic=null; medicalDraftMode=false; topicViews.clear(); }
+  if (!background) { voice.stop(); features.close(); clearFiles(); legacyTopic=null; medicalDraftMode=false; missionProjectDraft=null; topicViews.clear(); }
   if (busy || (!profile && !guest)) return;
   const account = profile?.account;
   currentId = chat.id;
@@ -1057,6 +1067,7 @@ async function applyProfile(value) {
   const changed = profile?.account !== value.account;
   if(changed){if(profile?.account)await webPush.disable().catch(()=>{});lockHistory(); guest = null;}
   profile = value;
+  if(changed)recordProductEvent('visit');
   missions.poll().catch(()=>{});
   background.poll();
   autoloop.poll();
@@ -1137,6 +1148,7 @@ function applyGuest(value) {
   const changed = guest?.account !== value.account || storageKey !== "velia-web-guest-v1:" + value.account;
   if(changed){features.close();features.clearMedicalData();medicalDraftMode=false;voice.stop();clearFiles();fileTools.clear();}
   guest = value;
+  if(changed)recordProductEvent('visit');
   internetAvailable = !!value.web_search;
   setAgentMode(false);
   $("agent-toggle").hidden = true;
@@ -1174,6 +1186,8 @@ function miniAppMessageContext(message){
 }
 async function runMissionChat(text,voiceTurn,{game=false,gameParent=null}={}){
   const owner=profile.account,turnModel=model;let chat=current();
+  const project=gameParent?null:missionProjectDraft;
+  const started=performance.now();
   const context=(chat?.messages||[]).filter(m=>!m.pending&&!m.failed&&!m.missionId).slice(-4).map(m=>m.role+': '+m.content).join('\n').slice(-2000);
   const goal=!game&&chat?.missionPending&&!wantsMission(text)?chat.missionPending.goal+'\nУточнение: '+text:text;
   if(!chat||chat.agent||chat.figma||chat.connectionProvider){chat={id:crypto.randomUUID(),title:text.slice(0,70),messages:[],updated:Date.now()};chats.unshift(chat);currentId=chat.id;}
@@ -1184,7 +1198,10 @@ async function runMissionChat(text,voiceTurn,{game=false,gameParent=null}={}){
   try{
     await save();guard();
     const m=gameParent?await missions.reviseGame(gameParent.id,gameParent.step,{instruction:text,model:turnModel,request_id:user.requestId},signal)
-      :await missions.submit({goal,model:turnModel,time_zone:Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC',request_id:user.requestId,source:{chat_id:chat.id,title:chat.title.slice(0,160),remote:!!chat.remote},context},signal);guard();
+      :await missions.submit({goal,model:turnModel,time_zone:Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC',request_id:user.requestId,source:{chat_id:chat.id,title:chat.title.slice(0,160),remote:!!chat.remote},context,...project},signal);guard();
+    missionProjectDraft=null;
+    recordProductEvent('task_saved',game?'game':starterScenario==='chat'?'mission':starterScenario,performance.now()-started);
+    starterScenario='chat';
     user.missionOrigin=m.id;answer.missionId=m.id;answer.missionAck=m.id;answer.content=gameParent?'Готовлю новую версию игры. Когда она будет готова, здесь появится кнопка «Играть».':game?'Готовлю браузерную игру. Когда она будет готова, здесь появится кнопка «Играть».':'Задача принята. Планирование и выполнение продолжатся в фоне. Можешь продолжать общение или закрыть сайт — результат сохранится в этом диалоге и в «Задачах», уведомление появится в Pulse. Push использует ваши настройки доставки и тихие часы.';
     answer.pending=false;answer.finish='stop';chat.updated=Date.now();await save();guard();render();missions.poll().catch(()=>{});
     if(voiceTurn){voice.backgroundAccepted('Приняла задачу. Выполню в фоне и сообщу о результате. Можем продолжать разговор.');}
@@ -1204,6 +1221,7 @@ async function runMiniAppChat(text,voiceTurn){
     if(result.question){answer.content=result.question;chat.miniAppPending=result.pending;}
     else{answer.miniApp=result.app;answer.content='Создала интерактивное приложение. Меняй параметры в карточке — результаты и график пересчитываются сразу.';}
     answer.pending=false;answer.finish='stop';chat.updated=Date.now();await save();guard();render();
+    if(result.app){recordProductEvent('result_created','calculator');starterScenario='chat';}
     if(voiceTurn){voice.update(answer.content);voice.complete(answer.content);}
   }catch(error){if(profile?.account===owner){answer.pending=false;answer.failed=true;answer.content=error.name==='AbortError'?'Создание приложения остановлено.':error.message;render();save();if(voiceTurn)voice.failure(false,answer.content);}}
   finally{if(abort?.signal===signal){abort=null;setBusy(false);}if(profile?.account===owner)render();}
@@ -1366,6 +1384,8 @@ async function generate(retry = false, voiceTurn = false) {
     if (busy) return;
     if (!guest || guest.remaining <= 0) { openAuth(); return; }
   }
+  const productStarted=performance.now(), productScenario=starterScenario;
+  let firstText=0;
   const text = $("prompt").value.trim() || (selectedFiles.length ? "Проанализируй прикреплённые файлы." : "");
   let gameParent=null;
   if(!retry&&!agentMode&&!selectedFiles.length&&wantsGameRevision(text)){
@@ -1377,19 +1397,19 @@ async function generate(retry = false, voiceTurn = false) {
     }
   }
   if(!retry&&(gameParent||wantsGame(text))){
-    if(!profile){openAuth();return;}
+    if(!profile){toast('Войди, чтобы сохранить свою игру и получить исходники. Демо можно открыть сразу.');openAuth();return;}
     if(selectedFiles.length){toast('Опиши игру текстом; для этой версии достаточно названия, темы и сложности.');return;}
     if(!profile.models.includes(model)){toast(apiError(profile.pro_locked_reason||'pro_tokens_required'));return;}
     await runMissionChat(text,voiceTurn,{game:true,gameParent});return;
   }
   if(!retry&&(wantsMiniApp(text)||wantsMiniAppEdit(text,current()?.messages.filter(m=>m.miniApp&&!m.failed).at(-1)?.miniApp)||current()?.miniAppPending&&appClarification(text))){
-    if(!profile){openAuth();return;}
+    if(!profile){toast('Войди, чтобы сохранить свой калькулятор. Готовый пример доступен сразу.');openAuth();return;}
     if(selectedFiles.length){toast('Опиши параметры приложения текстом; небольшую таблицу можно вставить прямо в сообщение.');return;}
     if(!profile.models.includes(model)){toast(apiError(profile.pro_locked_reason||'pro_tokens_required'));return;}
     await runMiniAppChat(text,voiceTurn);return;
   }
-  if(!retry&&(wantsMission(text)||!agentMode&&!selectedFiles.length&&wantsBackgroundTask(text)||current()?.missionPending&&missionClarification(text))){
-    if(!profile){openAuth();return;}
+  if(!retry&&(missionProjectDraft||wantsMission(text)||!agentMode&&!selectedFiles.length&&wantsBackgroundTask(text)||current()?.missionPending&&missionClarification(text))){
+    if(!profile){toast('Войди, чтобы сохранить поручение и вернуться к результату.');openAuth();return;}
     if(selectedFiles.length){toast('Для первой версии миссий опиши исходные данные текстом или сохрани их в заметках.');return;}
     if(!profile.models.includes(model)){toast(apiError(profile.pro_locked_reason||'pro_tokens_required'));return;}
     await runMissionChat(text,voiceTurn);return;
@@ -1660,6 +1680,7 @@ async function generate(retry = false, voiceTurn = false) {
       renderGuestCounter();
     }
     const result = await readCompletion(response, (content) => {
+      if(!firstText&&content.trim())firstText=performance.now();
       answer.content = voiceTurn ? polishVoiceReply(content) : content;
       if (content) clearTimeout(slowTimer);
       if (voiceTurn) voice.update(answer.content);
@@ -1685,9 +1706,16 @@ async function generate(retry = false, voiceTurn = false) {
       const entry={entry_id:user.requestId,kind:user.specialty,created_at:new Date(user.sentAt || Date.now()).toISOString()};
       await storeTopic(chat,entry,user.requestId);
     }
+    if(answer.content.trim()&&!answer.failed)recordProductEvent('reply_useful',productScenario,(firstText||performance.now())-productStarted);
+    starterScenario='chat';
     voice.complete(mapReplyText(answer.content,answer.mapData));
   } catch (error) {
     voice.failure(false,error.name==="AbortError"?"Ответ остановлен. Повтори подключение, чтобы продолжить.":error.message);
+    if(firstText)recordProductEvent('reply_useful',productScenario,firstText-productStarted);
+    recordProductEvent('generation_failed',productScenario,performance.now()-productStarted,
+      error.name==='AbortError'?'stopped':error.name==='TypeError'?'network':
+      error.status===402||String(error.code).includes('limit')?'quota':
+      error.status===429||/busy|overloaded/.test(error.code||'')?'busy':error.status>=500||String(error.code).includes('unavailable')?'unavailable':'other');
     if (error.name === "AbortError") answer.stopped = true;
     else {
       answer.failed =
@@ -1845,6 +1873,37 @@ $("takeover-screen-button").onclick = (e) => {
 $("takeover-continue").onclick = continueAfterTakeover;
 $("auth-close").onclick = () => $("auth-dialog").close();
 $("auth-dialog").addEventListener("close", () => { incomeToSave = null; authView++; });
+const productBrowsers=new Map();
+let starterScenario='chat';
+function recordProductEvent(event,scenario='chat',duration=0,reason){
+  if(navigator.doNotTrack==='1'||navigator.globalPrivacyControl===true)return;
+  const surface=profile?'member':'guest';
+  const bucket='velia-product-id:'+ (profile?.account||'guest');
+  if(!productBrowsers.has(bucket)) {
+    try{
+      const saved=localStorage.getItem(bucket)?.split(':')||[];
+      const valid=/^[a-f0-9]{32}$/.test(saved[0]||'')&&Number(saved[1])>Date.now();
+      const id=valid?saved[0]:crypto.randomUUID().replaceAll('-','');
+      if(!valid)localStorage.setItem(bucket,id+':'+(Date.now()+30*86400000));
+      productBrowsers.set(bucket,id);
+    }catch{return;}
+  }
+  fetch('/web-api/v1/product-event',{method:'POST',credentials:'same-origin',keepalive:true,
+    headers:{'Content-Type':'application/json','X-Velia-Request':'1'},
+    body:JSON.stringify({event,scenario,surface,browser:productBrowsers.get(bucket),reason,duration_ms:Math.max(0,Math.min(600000,Math.round(duration)))})
+  }).catch(()=>{});
+}
+mountStarter({onDraft:(prompt)=>{
+  if(busy)return false;
+  if($('prompt').value.trim()&&!confirm('Заменить текущий черновик примером?'))return false;
+  $('prompt').value=prompt;
+  resizePrompt();
+  $('prompt').focus();
+  return true;
+},onEvent:(event,scenario)=>{
+  if(event==='example_used')starterScenario=scenario;
+  recordProductEvent(event,scenario);
+}});
 $("guest-login").onclick = openAuth;
 $("pairing-link").onclick = () => {
   try { sessionStorage.setItem("velia-auth-pending", "1"); } catch {}

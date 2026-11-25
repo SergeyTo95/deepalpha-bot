@@ -17,7 +17,8 @@ function resultText(step){
   if(step.tool==='review')return 'Результат согласован пользователем.';
   return '';
 }
-export function mountMissionCard(parent,{client,id,signal,toast=()=>{}}){
+const projectFields={goal:'цель',audience:'аудитория',style:'стиль',constraints:'ограничения',decisions:'решения'};
+export function mountMissionCard(parent,{client,id,signal,toast=()=>{},remind,openTask,openProject,openChat}){
   const root=node('article',undefined,'mission-card feature-card');parent.append(root);let signature='',working=false;const games=new Map();
   const unwatch=client.watch(id);
   async function run(m,name,b){
@@ -29,7 +30,17 @@ export function mountMissionCard(parent,{client,id,signal,toast=()=>{}}){
     if(signal.aborted)return;
     const m=client.get(id);if(!m){root.replaceChildren(node('p',client.loaded?.()&&!client.list().some(m=>m.id===id)?'Миссия удалена или недоступна.':'Загружаю состояние миссии…'));return;}
     const next=m.revision+':'+(client.status?.()||'');if(next===signature)return;if(root.contains?.(document.activeElement)&&document.activeElement?.tagName==='TEXTAREA')return;signature=next;
-    root.replaceChildren(node('small','VELYON MISSION','feature-eyebrow'),node('h3',m.title),node('p',MISSION_LABELS[m.status]||'Проверяю состояние','mission-state'));
+    root.replaceChildren(node('h3',m.title),node('p',MISSION_LABELS[m.status]||'Проверяю состояние','mission-state'));
+    if(m.due_at)root.append(node('p','Срок · '+new Date(m.due_at*1000).toLocaleString('ru',{dateStyle:'medium',timeStyle:'short'})));
+    if(m.project){
+      const connection=node('p','Проект «'+m.project.title+'»');
+      if(m.project.fields.length)connection.append(node('small','Материалы · '+m.project.fields.map(key=>projectFields[key]).join(', ')));
+      for(const resource of m.project.resources||[])connection.append(node('small','Источник · '+resource.title));
+      if(openProject)connection.append(button('Открыть проект',()=>openProject(m.project.id)));
+      root.append(connection);
+    }
+    if(m.parent_id&&openTask)root.append(button('Исходный результат',()=>openTask(m.parent_id)));
+    if(m.source&&!m.source.detached&&openChat)root.append(button('Исходный чат',()=>openChat(m.source)));
     if(m.planning_error)root.append(node('p',missionError(m.planning_error),'feature-notice'));
     if(m.status==='waiting_input'&&m.question){
       const form=node('form',undefined,'feature-form'),input=node('textarea'),submit=node('button','Продолжить с ответом');
@@ -76,6 +87,33 @@ export function mountMissionCard(parent,{client,id,signal,toast=()=>{}}){
     root.append(steps);
     if(m.status==='uncertain')root.append(node('p','Проверь внешний сервис: операция могла выполниться. Автоматический повтор заблокирован.','feature-notice'));
     const actions=node('div',undefined,'feature-actions');
+    if(client.deadline){
+      const deadline=node('details');deadline.append(node('summary',m.due_at?'Изменить срок':'Указать срок'));
+      const form=node('form',undefined,'feature-form'),date=node('input'),save=node('button','Сохранить срок');
+      date.type='datetime-local';date.setAttribute('aria-label','Срок задачи по времени устройства');save.type='submit';
+      if(m.due_at){const local=new Date(m.due_at*1000);date.value=new Date(local.getTime()-local.getTimezoneOffset()*60000).toISOString().slice(0,16);}
+      const change=async value=>{
+        if(working)return;working=true;save.disabled=true;
+        try{await client.deadline(m,value,signal);}catch(error){if(!signal.aborted)toast(error.message);}
+        finally{working=false;save.disabled=false;}
+      };
+      form.append(date,save);if(m.due_at)form.append(button('Убрать срок',()=>change(null)));
+      form.onsubmit=event=>{event.preventDefault();if(date.value)change(Math.floor(new Date(date.value).getTime()/1000));};deadline.append(form);actions.append(deadline);
+    }
+    if(remind)actions.append(button('Напомнить в Пульсе',()=>remind(m)));
+    if(client.revise&&m.status==='completed'&&m.steps.some(s=>s.result?.kind==='draft')){
+      const edit=node('details'),form=node('form',undefined,'feature-form'),input=node('textarea'),send=node('button','Создать доработку');
+      edit.append(node('summary','Доработать'));input.maxLength=1500;input.required=true;input.rows=3;input.setAttribute('aria-label','Что изменить в результате');input.placeholder='Например, сократи отчёт до одной страницы';send.type='submit';
+      form.append(input,send);edit.append(form);actions.append(edit);let key,previous;
+      form.onsubmit=async event=>{
+        event.preventDefault();const instruction=input.value.trim();if(working||!instruction)return;
+        if(previous!==instruction){previous=instruction;key=crypto.randomUUID();}
+        working=true;send.disabled=true;
+        try{const revised=await client.revise(m,{instruction,request_id:key},signal);if(!signal.aborted)openTask?.(revised.id);}
+        catch(error){if(!signal.aborted)toast(error.message);}
+        finally{working=false;send.disabled=false;}
+      };
+    }
     if(['draft','paused','failed','interrupted'].includes(m.status)){const b=button(m.status==='draft'?'Запустить':m.needs_plan?'Повторить планирование':'Продолжить с сохранённого шага',()=>run(m,'run',b));actions.append(b);}
     if(['queued','planning','running'].includes(m.status)){const pause=button('Приостановить',()=>run(m,'pause',pause));actions.append(pause);}
     if(!['completed','cancelled'].includes(m.status)){const cancel=button('Отменить миссию',()=>run(m,'cancel',cancel));actions.append(cancel);}
@@ -87,10 +125,10 @@ export function mountMissionCard(parent,{client,id,signal,toast=()=>{}}){
   draw();if(!client.get(id))client.refresh(id).catch(e=>{if(!signal.aborted)root.replaceChildren(node('p',e.message,'feature-notice'));});
   return root;
 }
-export async function mountMissionList(parent,{client,signal,toast,prepare,selectedId}){
-  const list=node('div'),detail=node('div');parent.append(button('Новая миссия в чате',prepare),button('Обновить миссии',()=>client.poll().catch(e=>toast(e.message))),list,detail);
+export async function mountMissionList(parent,{client,signal,toast,prepare,selectedId,remind,openProject,openChat}){
+  const list=node('div'),detail=node('div');parent.append(button('Новое поручение в чате',()=>prepare()),button('Обновить поручения',()=>client.poll().catch(e=>toast(e.message))),detail,list);
   let controller=null,signature='';
-  function open(id){controller?.abort();controller=new AbortController();detail.replaceChildren();mountMissionCard(detail,{client,id,signal:controller.signal,toast});}
+  function open(id){controller?.abort();controller=new AbortController();detail.replaceChildren();mountMissionCard(detail,{client,id,signal:controller.signal,toast,remind,openProject,openChat,openTask:open});}
   function draw(){
     if(signal.aborted)return;const rows=client.list(),next=rows.map(m=>m.id+':'+m.revision).join('|');if(next===signature&&list.childNodes.length)return;signature=next;
     list.replaceChildren();if(!rows.length)list.append(node('p','Миссий пока нет. Опиши в чате цель и нужные результаты.','feature-empty'));

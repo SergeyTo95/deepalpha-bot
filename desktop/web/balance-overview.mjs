@@ -1,4 +1,10 @@
 const PLANS = Object.freeze({free:'Free',plus:'Plus',pro:'Pro',max:'Max'});
+const PLAN_USE = {
+  free:'Повседневные вопросы и черновики с Flash.',
+  plus:'Регулярная работа над документами и поручениями.',
+  pro:'Больше месячного бюджета для исследований и работы с файлами.',
+  max:'Самый большой месячный бюджет для частых объёмных задач.',
+};
 const integer = value => Number.isSafeInteger(value) && value>=0 ? value : null;
 const format = value => value===null ? '—' : new Intl.NumberFormat('ru-RU').format(value);
 function expiry(value) {
@@ -29,7 +35,8 @@ export function mountBalanceOverview(root,{account=null,usage=null,now=Date.now(
     node('span','токенов доступно','balance-unit'),node('p',view.hasBalance?'Твой запас для задач с Велией.':'Не удалось загрузить баланс. Попробуй обновить раздел.','balance-caption'));
   const plan=node('div',undefined,'balance-plan');
   const badge=node('span',view.plan,'balance-plan-badge balance-plan-'+view.code);
-  plan.append(node('span','ТЕКУЩИЙ ТАРИФ','balance-eyebrow'),badge,node('p',view.status,'balance-plan-status'));
+  plan.append(node('span','ТЕКУЩИЙ ТАРИФ','balance-eyebrow'),badge,node('p',view.status,'balance-plan-status'),
+    node('p',PLAN_USE[view.code],'balance-caption'));
   const link=node('a','Посмотреть тарифы ↓','balance-plan-link');link.href='#velia-memberships';plan.append(link);
   hero.append(amount,plan);section.append(hero);
   if(view.hasUsage) {
@@ -38,5 +45,9 @@ export function mountBalanceOverview(root,{account=null,usage=null,now=Date.now(
     const context=node('p','Показаны ответы из доступной статистики аккаунта.','balance-caption');
     activity.append(value,context);section.append(activity);
   }
-  root.append(section);return section;
+  const help=node('details',undefined,'feature-card');
+  help.append(node('summary','Сколько расходуют разные задачи'),
+    node('p','Примеры на главной, демонстрационная игра и калькулятор из галереи используют 0 токенов.'),
+    node('p','Для платных задач расход зависит от выбранного инструмента и объёма работы. Баланс выше показывает доступные токены аккаунта.'));
+  section.append(help);root.append(section);return section;
 }

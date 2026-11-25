@@ -8,7 +8,7 @@ import os
 import re
 from urllib.parse import quote
 from aiohttp import web
-from desktop.mission_schema import MissionError,require,MODELS,TOOLS
+from desktop.mission_schema import MissionError,require,MODELS,TOOLS,text
 from desktop.mission_store import MissionStore
 from desktop.mission_runtime import MissionTools,run_mission,leased_text_call
 from desktop.mission_delivery import MissionDelivery
@@ -18,6 +18,7 @@ from velia_desktop_routes import AuthenticationUnavailable
 SESSION=web.RequestKey('mission_session',object)
 BODY=web.RequestKey('mission_body',dict)
 ID=re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z')
+PROJECT_FIELDS={'goal':'Цель','audience':'Аудитория','style':'Стиль','constraints':'Ограничения','decisions':'Решения'}
 
 def setup_mission_routes(app,*,session_for,same_origin,json_response,upstream,upstream_stream,authorize_model,authenticate,handlers,google=None,web_search=None,store=None,tools=None,origin='',session_identity=None):
     dsn,key=os.getenv('VELIA_WEB_GUEST_DATABASE_URL'),os.getenv('VELIA_WEB_SESSION_KEY')
@@ -146,15 +147,102 @@ def setup_mission_routes(app,*,session_for,same_origin,json_response,upstream,up
             task.add_done_callback(done)
     async def submit(request):
         configured();data=request[BODY]
-        require(set(data)=={'goal','model','time_zone','request_id','source','context'},'mission_invalid_request')
+        required={'goal','model','time_zone','request_id','source','context'}
+        project_keys={'project_id','project_fields'}
+        require(set(data) in (required,required|project_keys,required|project_keys|{'project_resource_ids'}),'mission_invalid_request')
         source=data['source'];require(isinstance(source,dict),'mission_invalid_request')
         if source.get('remote'):
             require(isinstance(source.get('chat_id'),str) and ID.fullmatch(source['chat_id']),'mission_invalid_request')
             status,value=await upstream('GET','/mobile-api/v1/conversations/'+source['chat_id']+'/messages?limit=1',token=request[SESSION].access)
             require(status==200 and value.get('ok') is True,'mission_source_unavailable',404)
-        m=await asyncio.to_thread(store.create,request[SESSION].user_id,data['goal'],None,data['model'],data['time_zone'],data['request_id'],source=source,context=data['context'])
+        context=data['context'];require(isinstance(context,str) and len(context)<=2000)
+        project=None
+        if 'project_id' in data:
+            fields=data['project_fields']
+            require(isinstance(fields,list) and len(fields)<=len(PROJECT_FIELDS)
+                    and all(isinstance(k,str) and k in PROJECT_FIELDS for k in fields)
+                    and len(set(fields))==len(fields))
+            passport=await owned_project(request,data['project_id'])
+            brief=await asyncio.to_thread(read_brief,request[SESSION].user_id,data['project_id'])
+            passport={**passport,'decisions':brief['decisions']}
+            project={'id':data['project_id'],'title':passport['title'],'fields':fields}
+            excerpts=[PROJECT_FIELDS[k]+': '+passport[k][:240] for k in fields if passport.get(k)]
+            selected=data.get('project_resource_ids',[])
+            require(isinstance(selected,list) and len(selected)<=3 and all(isinstance(key,str) and ID.fullmatch(key) for key in selected)
+                    and len(set(selected))==len(selected))
+            if selected:
+                status,value=await upstream('GET','/mobile-api/v1/project-resources?project_id='+data['project_id'],
+                                            token=request[SESSION].access)
+                require(status==200 and value.get('ok') is True,'mission_project_unavailable',503)
+                resources={item['id']:item for item in value['resources']}
+                require(all(key in resources for key in selected),'mission_project_unavailable',404)
+                project['resources']=[{'id':key,'title':resources[key]['title']} for key in selected]
+                excerpts.extend('Материал «'+resources[key]['title']+'»: '+resources[key]['seed_query'][:100] for key in selected)
+            excerpt='\n'.join(excerpts)
+            if excerpt:context=('Материалы проекта:\n'+excerpt+'\n\n'+context).strip()[:2000]
+        m=await asyncio.to_thread(store.create,request[SESSION].user_id,data['goal'],None,data['model'],data['time_zone'],data['request_id'],source=source,context=context,project=project)
         if m['status']=='draft':await start(request[SESSION],m['id'],m['revision'],submitted=True)
         m=await asyncio.to_thread(store.detail,request[SESSION].user_id,m['id'])
+        return json_response({'ok':True,'mission':store.public(m)},201)
+    async def owned_project(request,project_id):
+        require(isinstance(project_id,str) and ID.fullmatch(project_id),'mission_project_unavailable',404)
+        status,value=await upstream('GET','/mobile-api/v1/projects/'+project_id,token=request[SESSION].access)
+        require(status==200 and value.get('ok') is True,'mission_project_unavailable',404 if status==404 else 503)
+        return value['project']['passport']
+
+    def read_brief(user,project_id):
+        return store.transaction(user,lambda doc:doc.get('project_briefs',{}).get(project_id,{'decisions':'','revision':0}))
+
+    async def project_brief(request):
+        configured();project_id=request.match_info['project_id'];user=request[SESSION].user_id
+        await owned_project(request,project_id)
+        if request.method=='GET':
+            brief=await asyncio.to_thread(read_brief,user,project_id)
+        else:
+            data=request[BODY];require(set(data)=={'decisions','revision'} and type(data['revision']) is int
+                                      and isinstance(data['decisions'],str) and len(data['decisions'])<=1200)
+            def change(doc):
+                briefs=doc.setdefault('project_briefs',{})
+                current=briefs.get(project_id,{'decisions':'','revision':0})
+                require(current['revision']==data['revision'],'mission_revision_conflict',409)
+                brief={'decisions':data['decisions'].strip(),'revision':current['revision']+1}
+                briefs[project_id]=brief
+                return brief
+            brief=await asyncio.to_thread(store.transaction,user,change)
+        return json_response({'ok':True,'brief':brief})
+
+    async def deadline(request):
+        configured();data=request[BODY];require(set(data)=={'revision','due_at'})
+        due_at=data['due_at']
+        require(due_at is None or type(due_at) is int and 0<due_at<4102444800,
+                'mission_invalid_deadline')
+        value=await asyncio.to_thread(store.set_deadline,request[SESSION].user_id,request.match_info['mission_id'],
+                                      revision(request),due_at)
+        return json_response({'ok':True,'mission':store.public(value)})
+
+    async def revise(request):
+        configured();data=request[BODY]
+        require(set(data)=={'instruction','request_id'} and text(data['instruction'],1500))
+        session=request[SESSION]
+        parent=await asyncio.to_thread(store.detail,session.user_id,request.match_info['mission_id'])
+        require(parent['status']=='completed','mission_cannot_revise',409)
+        draft=next((s for s in reversed(parent['steps']) if (s.get('result') or {}).get('kind')=='draft'),None)
+        require(draft is not None,'mission_cannot_revise',409)
+        instruction=data['instruction'].strip()
+        steps=[{'id':'s1','tool':'text.draft','title':'Доработать исходный результат',
+                'arguments':{'instruction':'Внеси изменения, указанные пользователем.'}}]
+        for step in parent['steps']:
+            if step['tool']=='document.export' and step['arguments']['source_step']==draft['id'] and step['status']=='completed':
+                steps.append({'id':'s'+str(len(steps)+1),'tool':'document.export','title':step['title'],
+                              'arguments':{**step['arguments'],'source_step':'s1'}})
+        title=parent['title']
+        if not title.startswith('Доработка · '):title=('Доработка · '+title)[:160]
+        m=await asyncio.to_thread(store.create,session.user_id,instruction,{'title':title,'steps':steps},
+                                  parent['model'],parent['time_zone'],data['request_id'],
+                                  project=parent.get('project'),parent_id=parent['id'],
+                                  revision_text=draft['result']['data']['text'])
+        if m['status']=='draft':await start(session,m['id'],m['revision'],submitted=True)
+        m=await asyncio.to_thread(store.detail,session.user_id,m['id'])
         return json_response({'ok':True,'mission':store.public(m)},201)
     async def inbox(request):
         configured();return json_response({'ok':True,'notifications':await asyncio.to_thread(store.inbox,request[SESSION].user_id)})
@@ -357,12 +445,16 @@ def setup_mission_routes(app,*,session_for,same_origin,json_response,upstream,up
     app.router.add_get('/web-api/v1/missions/inbox',inbox)
     app.router.add_post('/web-api/v1/missions/inbox/{notice_id}/read',read_notice)
     app.router.add_post('/web-api/v1/missions/submit',submit)
+    app.router.add_get('/web-api/v1/missions/project/{project_id}/brief',project_brief)
+    app.router.add_patch('/web-api/v1/missions/project/{project_id}/brief',project_brief)
     app.router.add_post('/web-api/v1/missions/detach-chat',detach_chat)
     app.router.add_post('/web-api/v1/missions/{mission_id}/answer',answer)
     app.router.add_get('/web-api/v1/missions/catalog',catalog)
     app.router.add_get('/web-api/v1/missions',listing)
     app.router.add_post('/web-api/v1/missions',create)
     app.router.add_get('/web-api/v1/missions/{mission_id}',detail)
+    app.router.add_patch('/web-api/v1/missions/{mission_id}/deadline',deadline)
+    app.router.add_post('/web-api/v1/missions/{mission_id}/revise',revise)
     app.router.add_delete('/web-api/v1/missions/{mission_id}',delete)
     app.router.add_post('/web-api/v1/missions/{mission_id}/{action:run|pause|cancel|approve|refresh-approval}',action)
     game_path = '/web-api/v1/missions/{mission_id}/games/{step_id:s[1-8]}'

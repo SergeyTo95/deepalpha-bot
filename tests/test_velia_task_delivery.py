@@ -48,6 +48,9 @@ async def fixture(store,t=None,upstream=None):
                 account=hashlib.sha256(('https://velia.example:'+headers.get('X-User','')).encode()).hexdigest()[:24]
                 return await raw.post(url,json={'account':account,**json},headers=headers)
             async def get(self,*args,**kwargs):return await raw.get(*args,**kwargs)
+            async def patch(self,url,*,json,headers):
+                account=hashlib.sha256(('https://velia.example:'+headers.get('X-User','')).encode()).hexdigest()[:24]
+                return await raw.patch(url,json={'account':account,**json},headers=headers)
         yield Client(),t,seen
 HEAD={'X-User':'7','Origin':'https://velia.example'}
 async def wait_for(store,id,status):
@@ -56,6 +59,55 @@ async def wait_for(store,id,status):
         if m['status']==status:return m
         await asyncio.sleep(.01)
     raise AssertionError(m)
+
+
+def test_link_project_deadline_revision_and_inbox_to_owned_results(store):
+    project_id, resource_id = str(uuid.uuid4()), str(uuid.uuid4())
+    base = '/web-api/v1/missions'
+    brief = f'{base}/project/{project_id}/brief'
+    stranger = {**HEAD, 'X-User': '9'}
+
+    async def upstream(method, path, **kwargs):
+        if path.endswith('/projects/' + project_id):
+            return 200, {'ok':True, 'project':{'passport':{'title':'Магазин','goal':'Выпустить каталог',
+                                                            'audience':'Непереданная аудитория'}}}
+        if path.endswith('?project_id=' + project_id):
+            return 200, {'ok':True, 'resources':[{'id':resource_id,'title':'Витрина','seed_query':'Список корзин'}]}
+        if method=='POST' and path.endswith('/pulse'):
+            return 201, {'ok':True,'item':{'item_id':kwargs['data']['id']}}
+        return 200, {'ok':True}
+
+    async def scenario():
+        async with fixture(store, upstream=upstream) as (client, planner, _):
+            response=await client.patch(brief,json={'decisions':'Сначала доставка','revision':0},headers=HEAD)
+            assert response.status==200 and (await response.json())['brief']['revision']==1
+            assert (await (await client.get(brief,headers=stranger)).json())['brief']['decisions']==''
+            data={**payload(),'project_id':project_id,'project_fields':['goal','decisions'],'project_resource_ids':[resource_id]}
+            response=await client.post(base+'/submit',json=data,headers=HEAD)
+            assert response.status==201
+            original=(await response.json())['mission']
+            record=await wait_for(store,original['id'],'completed')
+            assert 'Список корзин' in record['context'] and 'Сначала доставка' in record['context']
+            assert 'Непереданная аудитория' not in record['context'] and 'context' not in original
+            path=base+'/'+record['id']
+            assert (await client.patch(path+'/deadline',json={'revision':record['revision']-1,'due_at':1900000000},headers=HEAD)).status==409
+            response=await client.patch(path+'/deadline',json={'revision':record['revision'],'due_at':1900000000},headers=HEAD)
+            assert (await response.json())['mission']['due_at']==1900000000
+            change={'instruction':'Сократи текст','request_id':'text-revision'}
+            assert (await client.post(path+'/revise',json=change,headers=stranger)).status==404
+            response=await client.post(path+'/revise',json=change,headers=HEAD)
+            assert response.status==201
+            revision=(await response.json())['mission']
+            updated=await wait_for(store,revision['id'],'completed')
+            assert updated['parent_id']==record['id'] and updated['project']['id']==project_id
+            assert updated['revision_text']=='Проверенный результат' and 'revision_text' not in revision
+            replay=await client.post(path+'/revise',json=change,headers=HEAD)
+            assert (await replay.json())['mission']['id']==revision['id']
+            signal=next(n for n in store.inbox(7) if n['mission_id']==updated['id'])
+            assert signal['resource']['id']==updated['id']
+            assert (await client.get(base+'/'+signal['resource']['id'],headers=HEAD)).status==200
+
+    asyncio.run(scenario())
 
 def test_submit_returns_before_planning_and_finishes_without_browser_poll(store):
     async def scenario():

@@ -196,3 +196,41 @@ def test_free_api_guest_preserves_trial_quota_without_bonsai_or_planner(monkeypa
                 assert "Поняла" in await response.text()
             assert calls==["glm-4.5-flash"] and state["payloads"]==state["intent_payloads"]==[]
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("has_text", [False, True])
+def test_free_api_guest_charges_only_after_text(monkeypatch, tmp_path, has_text):
+    import velia_quantum_turn
+    from velia_quantum_provider import QuantumError
+
+    async def run():
+        monkeypatch.setenv("VELIA_WEB_GUEST_ENABLED", "true")
+        store = GuestStore(sqlite_path=tmp_path / "guest.db")
+        async with fixture(monkeypatch, guest_store=store) as (server, client, _):
+            monkeypatch.setenv("VELIA_FREE_API_TIERS_ENABLED", "true")
+            monkeypatch.setenv("VELIA_ZAI_API_KEY", "fixture-zai")
+
+            async def stream(*args, **kwargs):
+                yield {"text": "Полезный текст" if has_text else " "}
+                raise QuantumError("quantum_model_busy", 429)
+
+            monkeypatch.setattr(velia_quantum_turn, "stream_turn", stream)
+            cookie, _, _ = await guest(server, client)
+            url = server.make_url("/web-api/v1/guest/chat/completions")
+            async with client.post(url, headers=guest_headers(cookie), json=BODY) as response:
+                assert "flash_model_busy" in await response.text()
+            async with client.get(server.make_url("/web-api/v1/guest"), headers=guest_headers(cookie)) as response:
+                assert (await response.json())["remaining"] == (29 if has_text else 30)
+    asyncio.run(run())
+
+
+def test_guest_refund_is_idempotent_and_shared_network_counts_are_preserved(tmp_path):
+    store = GuestStore(sqlite_path=tmp_path / "guest.db")
+    store.initialize()
+    store.reserve(("guest-1", "network"), request_id="failed")
+    store.reserve(("guest-2", "network"), request_id="delivered")
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        list(pool.map(lambda _: store.settle("failed", delivered=False), range(12)))
+    store.settle("delivered", delivered=True)
+    assert store.remaining(("guest-1", "another-network")) == 30
+    assert store.remaining(("guest-2", "network")) == 29

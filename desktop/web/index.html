@@ -99,52 +99,46 @@
             <div class="welcome-symbol">
               <img src="/web/favicon.svg" alt="" width="58" height="58" />
             </div>
-            <div class="eyebrow">ТВОИ ИДЕИ. НОВЫЕ ВОЗМОЖНОСТИ.</div>
-            <h1>Место для<br /><span>твоих идей.</span></h1>
-            <p class="welcome-copy">
-              Думай шире. Создавай проще.<br class="mobile-break" />
-              Велия рядом.
-            </p>
-            <div class="suggestions">
-              <button class="suggestion" id="income-open" type="button">
-                <span data-icon="bolt"></span><strong>Найти способ заработать</strong>
-                <small>Подобрать услугу и посчитать цель</small><span class="suggestion-arrow">↗</span>
+            <h1>От поручения<br /><span>к результату</span></h1>
+            <p class="welcome-copy">Разбери встречу, выбери вариант или спланируй день с Велией.</p>
+            <div class="suggestions starter-suggestions">
+              <button class="suggestion" type="button" data-starter="meeting">
+                <span data-icon="pen"></span><strong>Разобрать встречу</strong>
+                <small>Решения, ответственные и сроки</small>
               </button>
-              <button
-                class="suggestion"
-                data-prompt="Помоги превратить мою идею в понятный план. Для начала задай несколько важных вопросов."
-              >
-                <span data-icon="spark"></span><strong>Из идеи — в план</strong
-                ><small>Найти первый шаг</small
-                ><span class="suggestion-arrow">↗</span>
+              <button class="suggestion" type="button" data-starter="comparison">
+                <span data-icon="layers"></span><strong>Сравнить варианты</strong>
+                <small>Цена, сроки и выбор</small>
               </button>
-              <button
-                class="suggestion"
-                data-prompt="Помоги написать сильный текст. Уточни аудиторию, задачу и желаемый тон."
-              >
-                <span data-icon="pen"></span><strong>Найти нужные слова</strong
-                ><small>Текст с твоим характером</small
-                ><span class="suggestion-arrow">↗</span>
-              </button>
-              <button
-                class="suggestion"
-                data-prompt="Помоги разобраться в сложной теме: объясни простыми словами и на примерах. Спроси, что я хочу понять."
-              >
-                <span data-icon="layers"></span
-                ><strong>Разобраться в сложном</strong
-                ><small>Ясно и на примерах</small
-                ><span class="suggestion-arrow">↗</span>
-              </button>
-              <button
-                class="suggestion"
-                data-prompt="Помоги с кодом: разобраться в ошибке или продумать решение. Спроси, над чем я работаю."
-              >
-                <span data-icon="code"></span
-                ><strong>Создать что-то своё</strong
-                ><small>Код, решения и идеи</small
-                ><span class="suggestion-arrow">↗</span>
+              <button class="suggestion" type="button" data-starter="day">
+                <span data-icon="bolt"></span><strong>Спланировать день</strong>
+                <small>Порядок дел и ближайшие сроки</small>
               </button>
             </div>
+            <details class="starter-gallery">
+              <summary>Галерея примеров</summary>
+              <div class="starter-gallery-grid">
+                <section class="feature-card">
+                  <h2>Калькулятор заказа</h2>
+                  <form id="starter-calculator" class="starter-calculator">
+                    <label>Количество <input name="count" type="number" min="0" max="10000000" value="20" /></label>
+                    <label>Себестоимость <input name="cost" type="number" min="0" max="10000000" value="350" /></label>
+                    <label>Цена за штуку <input name="price" type="number" min="0" max="10000000" value="500" /></label>
+                    <output aria-live="polite">Прибыль 3 000 ₽</output>
+                  </form>
+                  <button id="starter-own-calculator" type="button">Сделать свой</button>
+                </section>
+                <section class="feature-card">
+                  <h2>Ретрошутер</h2>
+                  <p>Сигнал из глубины</p>
+                  <div class="feature-actions">
+                    <a id="starter-demo-game" href="/game/demo/" target="_blank" rel="noopener">Играть</a>
+                    <button id="starter-own-game" type="button">Создать свой</button>
+                  </div>
+                </section>
+              </div>
+              <button id="income-open" type="button">План заработка</button>
+            </details>
             <p class="public-description" lang="en">Velia is a personal AI assistant for writing, research, planning, and everyday work. With your permission, Velia can help you work with Google Calendar, Gmail, Drive, Docs, and Sheets. Connecting Google is optional.</p>
             <nav class="legal-links" aria-label="Privacy and legal information" lang="en">
               <a href="/pricing">Pricing</a>
@@ -274,7 +268,16 @@
         </div>
       </main>
     </div>
-    <dialog class="income-dialog" id="income-dialog" aria-labelledby="income-title">
+    <dialog id="starter-example" class="starter-dialog" aria-labelledby="starter-title">
+    <h2 id="starter-title"></h2>
+    <div id="starter-content"></div>
+    <div class="feature-actions">
+      <button id="starter-use" type="button">Подставить свои данные</button>
+      <button id="starter-close" type="button">Закрыть</button>
+    </div>
+  </dialog>
+
+  <dialog class="income-dialog" id="income-dialog" aria-labelledby="income-title">
       <button type="button" class="dialog-close icon-button" id="income-close" aria-label="Закрыть">
         <span data-icon="close"></span>
       </button>
