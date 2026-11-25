@@ -2,6 +2,7 @@ import io
 from typing import Any, List
 
 from db.database import get_connection
+from services import velia_attachment_ocr_service as ocr
 from services import velia_attachment_service as attachment_service
 
 
@@ -53,7 +54,22 @@ def _safe_extract_pdf(raw: bytes) -> str:
             page_text = ""
         if page_text:
             chunks.append(page_text)
-    text = attachment_service._normalize_text("\n\n".join(chunks))
+    native_text = "\n\n".join(chunks)
+    use_ocr = ocr.enabled()
+    within_ocr_page_limit = 0 < len(pages) <= ocr.pdf_page_limit()
+    if use_ocr and within_ocr_page_limit and ocr.pdf_page_sizes_supported(pages):
+        try:
+            markdown = ocr.extract_markdown(raw, suffix=".pdf", page_count=len(pages))
+        except attachment_service.AttachmentError:
+            # A text layer already covering every page can serve as the fallback.
+            if len(chunks) != len(pages):
+                raise
+        else:
+            if markdown:
+                return markdown
+    if use_ocr and not native_text and len(pages) > ocr.pdf_page_limit():
+        raise attachment_service.AttachmentError("document_ocr_too_many_pages", status=413)
+    text = attachment_service._normalize_text(native_text)
     if not text:
         raise attachment_service.AttachmentError(
             "document_has_no_readable_text",
