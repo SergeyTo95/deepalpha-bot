@@ -806,11 +806,20 @@ def test_public_privacy_and_terms_are_accessible_without_login_and_linked_from_h
                         assert 'Sexually explicit content is prohibited' in page
                         assert 'href="/content-policy"' in page
                         assert 'href="/pricing"' in page
+                        assert 'href="/web/document-recognition-license.txt"' in page
+                        assert 'paragraph 5 and Attachment A' in page
                     if path == '/pricing':
                         assert 'Sign in and open Balance and usage' in page
                         assert 'Plus — $14.99/month' in page and 'Pro — $29.99/month' in page and 'Max — $59.99/month' in page
                         assert 'Баланс и использование' in page
                         assert '<script' not in page
+            async with client.get(server.make_url('/web/document-recognition-license.txt')) as response:
+                assert response.status == 200
+                assert response.content_type == 'text/plain'
+                license_text = await response.text()
+                assert 'https://huggingface.co/llamaindex/OCRia-nano-1' in license_text
+                assert 'OCRia-nano-1 MODEL LICENSE' in license_text
+                assert 'USE RESTRICTIONS' in license_text
             async with client.get(server.make_url('/web/legal.css')) as response:
                 assert response.status == 200
                 assert response.content_type == 'text/css'
