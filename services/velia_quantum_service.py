@@ -6,10 +6,23 @@ from velia_quantum_provider import (MODEL_ID, PROVIDER_ID, QuantumError, StreamD
     available, bounded_int, configuration, payload, response_error)
 
 
+def attachments_available():
+    from services.velia_attachment_ocr_service import enabled
+    from services.velia_flash_service import env_bool
+
+    return enabled() and env_bool("VELIA_FILE_ANALYST_ENABLED", False)
+
+
 def public_capability():
+    from services.velia_attachment_ocr_service import enabled
+
     config = configuration()
-    return {"chat_quantum": config is not None, "chat_quantum_attachments": False,
-        "chat_quantum_source": config.source if config else None}
+    return {
+        "chat_selected_model_inputs": enabled(),
+        "chat_quantum": config is not None,
+        "chat_quantum_attachments": bool(config and attachments_available()),
+        "chat_quantum_source": config.source if config else None,
+    }
 
 
 def budget_error(cursor, user_id):
@@ -75,7 +88,7 @@ def generate(prompt, *, request_id="", on_delta=None):
 def dispatch_send(user_id, conversation_id, content, *, on_delta=None, on_reset=None, **kwargs):
     if not available():
         return {"ok": False, "error": "quantum_unavailable"}
-    if kwargs.get("attachment_ids"):
+    if kwargs.get("attachment_ids") and not attachments_available():
         return {"ok": False, "error": "quantum_attachments_unsupported"}
     from services import velia_chat_service as chat
     from services.velia_mobile_hardening_service import (
@@ -96,7 +109,7 @@ def dispatch_send(user_id, conversation_id, content, *, on_delta=None, on_reset=
         conn.commit()
         existing = chat._existing_request_result(cursor, user_id=user_id,
             conversation_id=conversation_id, idempotency_key=kwargs.get("idempotency_key", ""), chat_mode="quantum")
-        if existing:
+        if existing and kwargs.get("attachment_ids") is None:
             return existing
         cursor.execute("SELECT pg_try_advisory_lock(hashtextextended('velia:quantum:provider', 0))")
         global_lock = bool(_first_value(cursor.fetchone()))
