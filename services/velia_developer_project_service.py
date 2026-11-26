@@ -157,6 +157,11 @@ def ensure_developer_tables() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_velia_dev_installations_user "
                 "ON velia_developer_installations(user_id, updated_at DESC)"
             )
+            cursor.execute("""
+                ALTER TABLE velia_developer_installations
+                    ADD COLUMN IF NOT EXISTS github_user_id BIGINT,
+                    ADD COLUMN IF NOT EXISTS github_user_login TEXT
+            """)
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS velia_developer_projects (
@@ -227,6 +232,24 @@ def ensure_developer_tables() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_velia_dev_tool_events_run "
                 "ON velia_developer_tool_events(run_id, created_at ASC)"
             )
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS velia_project_test_launches (
+                    project_id TEXT NOT NULL REFERENCES velia_developer_projects(project_id),
+                    request_id UUID NOT NULL,
+                    repository_id BIGINT NOT NULL,
+                    branch TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    github_run_id BIGINT,
+                    conclusion TEXT,
+                    head_sha TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (project_id, request_id)
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_velia_project_test_launches_recent
+                ON velia_project_test_launches(repository_id, created_at DESC)
+            """)
             conn.commit()
             _SCHEMA_READY = True
         except Exception:
@@ -253,6 +276,10 @@ def record_installation(user_id: int, details: Dict[str, Any]) -> Dict[str, Any]
     installation_id = int(details.get("installation_id") or 0)
     if installation_id <= 0:
         raise DeveloperProjectError("invalid_installation", status=400)
+    github_user_id = details.get("authorized_user_id")
+    github_user_login = str(details.get("authorized_user_login") or "")[:100]
+    if type(github_user_id) is not int or github_user_id <= 0 or not github_user_login:
+        github_user_id, github_user_login = None, None
     conn = get_connection()
     cursor = _dict_cursor(conn)
     try:
@@ -268,13 +295,15 @@ def record_installation(user_id: int, details: Dict[str, Any]) -> Dict[str, Any]
             """
             INSERT INTO velia_developer_installations (
                 installation_id, user_id, account_login, account_type,
-                repository_selection, created_at, updated_at, deleted_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, NULL)
+                repository_selection, created_at, updated_at, deleted_at, github_user_id, github_user_login
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, %s, %s)
             ON CONFLICT (installation_id) DO UPDATE SET
                 account_login=EXCLUDED.account_login,
                 account_type=EXCLUDED.account_type,
                 repository_selection=EXCLUDED.repository_selection,
                 updated_at=EXCLUDED.updated_at,
+                github_user_id=EXCLUDED.github_user_id,
+                github_user_login=EXCLUDED.github_user_login,
                 deleted_at=NULL
             RETURNING installation_id, user_id, account_login, account_type,
                       repository_selection, created_at, updated_at
@@ -287,6 +316,8 @@ def record_installation(user_id: int, details: Dict[str, Any]) -> Dict[str, Any]
                 str(details.get("repository_selection") or "")[:40],
                 _utcnow(),
                 _utcnow(),
+                github_user_id,
+                github_user_login,
             ),
         )
         row = cursor.fetchone()
@@ -323,7 +354,7 @@ def list_installations(user_id: int) -> List[Dict[str, Any]]:
         conn.close()
 
 
-def get_installation(user_id: int, installation_id: int) -> Dict[str, Any]:
+def get_installation(user_id: int, installation_id: int, *, include_actor: bool = False) -> Dict[str, Any]:
     ensure_developer_tables()
     conn = get_connection()
     cursor = _dict_cursor(conn)
@@ -331,7 +362,7 @@ def get_installation(user_id: int, installation_id: int) -> Dict[str, Any]:
         cursor.execute(
             """
             SELECT installation_id, user_id, account_login, account_type,
-                   repository_selection, created_at, updated_at
+                   repository_selection, created_at, updated_at, github_user_id, github_user_login
             FROM velia_developer_installations
             WHERE installation_id=%s AND user_id=%s AND deleted_at IS NULL
             """,
@@ -340,7 +371,11 @@ def get_installation(user_id: int, installation_id: int) -> Dict[str, Any]:
         row = cursor.fetchone()
         if not row:
             raise DeveloperProjectError("installation_not_found", status=404)
-        return _serialize_installation(row)
+        installation = _serialize_installation(row)
+        if include_actor:
+            installation["github_user_id"] = _value(row, "github_user_id", 7)
+            installation["github_user_login"] = _value(row, "github_user_login", 8)
+        return installation
     finally:
         cursor.close()
         conn.close()

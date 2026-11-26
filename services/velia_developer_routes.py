@@ -12,6 +12,7 @@ from aiohttp import web
 from services import velia_developer_fast_path_service as agent_service
 from services import velia_developer_github_service as github_service
 from services import velia_developer_project_service as project_service
+from services import velia_project_tools as project_tools
 from services import velia_pr_review_service as pr_review
 from services import velia_pr_review_engine as pr_engine
 
@@ -304,6 +305,16 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
                 write_service.publish_game, project, game_id=data["game_id"],
                 spec=data["spec"], previous_specs=previous,
             )
+            # The GitHub export already succeeded. A failure fetching link metadata must
+            # not change its result or turn a successful write into a retry.
+            try:
+                if repository["private"] is False:
+                    metadata = await asyncio.to_thread(project_tools.metadata, project)
+                    result["cloud_shell_url"] = project_tools.cloud_shell_url(
+                        metadata, result["branch"], f'games/velia-{data["game_id"]}',
+                    )
+            except github_service.DeveloperGithubError:
+                pass
             return routes_module._json_response({"ok": True, "export": result}, status=201)
         except write_service.DeveloperWriteError as exc:
             return routes_module._json_response({"ok": False, "error": exc.code}, status=exc.status)
@@ -619,6 +630,34 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
         except Exception as exc:
             return _error_response(routes_module, exc)
 
+    async def project_tools_endpoint(request: web.Request) -> web.Response:
+        blocked = _require_feature(routes_module, request)
+        if blocked:
+            return blocked
+        auth = _auth(routes_module, request)
+        if not auth:
+            return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        user_id = int(auth["user_id"])
+        operation = request.match_info.route.name
+        try:
+            project = await asyncio.to_thread(project_service.get_project, user_id, request.match_info["project_id"])
+            installation = await asyncio.to_thread(
+                project_service.get_installation, user_id, project["installation_id"], include_actor=True,
+            )
+            if operation == "developer-cloud-shell":
+                repository = await asyncio.to_thread(project_tools.metadata, project)
+                payload = {"url": project_tools.cloud_shell_url(repository, project["selected_branch"])}
+            elif operation == "developer-test-run-latest":
+                payload = {"run": await asyncio.to_thread(project_tools.latest, project)}
+            elif request.method == "POST":
+                data = await routes_module._read_json(request)
+                payload = {"run": await asyncio.to_thread(project_tools.dispatch, project, installation, data)}
+            else:
+                payload = await asyncio.to_thread(project_tools.overview, project, installation)
+            return routes_module._json_response({"ok": True, **payload})
+        except Exception as exc:
+            return _error_response(routes_module, exc)
+
     app.cleanup_ctx.append(review_context)
     review_prefix = f"{_PREFIX}/projects/{{project_id}}"
     app.router.add_get(f"{review_prefix}/pull-requests", review_endpoint)
@@ -626,6 +665,10 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
     app.router.add_post(f"{review_prefix}/pr-reviews", review_endpoint)
     app.router.add_get(f"{review_prefix}/pr-reviews/{{review_id}}", review_endpoint)
     app.router.add_post(f"{review_prefix}/pr-reviews/{{review_id}}/publish", review_endpoint)
+    app.router.add_get(f"{review_prefix}/cloud-shell", project_tools_endpoint, name="developer-cloud-shell")
+    app.router.add_get(f"{review_prefix}/test-runs", project_tools_endpoint)
+    app.router.add_post(f"{review_prefix}/test-runs", project_tools_endpoint)
+    app.router.add_get(f"{review_prefix}/test-runs/latest", project_tools_endpoint, name="developer-test-run-latest")
 
     app.router.add_get(f"{_PREFIX}/status", status)
     app.router.add_post(f"{_PREFIX}/github/install-url", install_url)

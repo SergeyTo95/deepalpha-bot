@@ -146,13 +146,17 @@ def _request(
     body: Optional[Dict[str, Any]] = None,
     expected: Iterable[int] = (200,),
     text_matches: bool = False,
+    api_version: Optional[str] = None,
 ) -> Any:
     timeout = _env_int("VELIA_DEVELOPER_GITHUB_TIMEOUT_SECONDS", 20, 3, 60)
+    headers = _headers(token, text_matches=text_matches)
+    if api_version:
+        headers["X-GitHub-Api-Version"] = api_version
     try:
         response = HTTP.request(
             method,
             f"{_GITHUB_API}{path}",
-            headers=_headers(token, text_matches=text_matches),
+            headers=headers,
             params=params,
             json=body,
             timeout=timeout,
@@ -238,6 +242,7 @@ def installation_details(installation_id: int) -> Dict[str, Any]:
         "account_type": str(account.get("type") or ""),
         "repository_selection": str(data.get("repository_selection") or ""),
         "contents_permission": contents_permission,
+        "actions_permission": str(permissions.get("actions") or "").lower(),
     }
 
 
@@ -401,6 +406,7 @@ def repository_metadata(installation_id: int, repository_id: int, full_name: str
         "owner": owner,
         "name": name,
         "private": bool(data.get("private")),
+        "visibility": str(data.get("visibility") or ""),
         "archived": bool(data.get("archived")),
         "default_branch": str(data.get("default_branch") or "main"),
     }
