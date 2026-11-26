@@ -1861,3 +1861,18 @@ dialog::backdrop {
   .starter-suggestions, .starter-gallery-grid { grid-template-columns: 1fr; }
   .starter-suggestions { gap: 6px; }
 }
+
+.file-table-scroll { max-height: 48vh; overflow: auto; margin-block: .75rem; }
+.file-table-scroll table { border-collapse: collapse; width: 100%; font-size: .875rem; }
+.file-table-scroll th,.file-table-scroll td { padding: .5rem .7rem; border: 1px solid var(--line,#8b918960); text-align: start; overflow-wrap: anywhere; }
+.file-pager { display: flex; align-items: center; flex-wrap: wrap; gap: .55rem; margin-block: .75rem; }
+.file-pdf-page { display: block; width: 100%; height: auto; background: white; }
+.history-match { display: block; opacity: .75; font-size: .8rem; line-height: 1.3; overflow: hidden; white-space: normal; }
+.message.history-highlight { outline: 2px solid currentColor; outline-offset: .25rem; }
+
+.file-diff { max-height: 60vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.file-diff ins { background: #27643c55; }
+.file-diff del { background: #9d364855; }
+.file-redaction-preview { display:block; width:100%; min-height:12rem; resize:vertical; }
+.diagram-preview { padding: .75rem; }
+.diagram-preview img { display:block; max-width:100%; margin-block-end:.5rem; background:#fafafa; }

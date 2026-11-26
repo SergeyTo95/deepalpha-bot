@@ -25,6 +25,11 @@ import {
 import {setupFeatures, featureRequest, chatSpecialty} from "./features.mjs";
 import {isAgentixBusinessBrief,businessContinuationReminder} from "./agentix-business-builder.mjs";
 import {prepareFile, fileSize, setupFileTools} from "./files.mjs";
+import {isSpreadsheet, workbookAttachment} from "./table-tools.mjs";
+import {searchHistory} from "./history-search.mjs";
+import {pdfReferences, readablePdfReferences} from "./pdf-preview.mjs";
+import {mountDiagramButtons} from "./diagram-preview.mjs";
+import {canExtractLocalText} from "./document-tools.mjs";
 import {setupVoice} from "./voice.mjs";
 import {polishVoiceReply} from "./voice-text.mjs";
 import {setupBackgroundTasks, taskAcknowledgement} from "./background-tasks.mjs";
@@ -124,7 +129,7 @@ const fileTools=setupFileTools({toast});
 const notebook=new Notebook(featureRequest);
 let mapViews=[];
 function clearFiles(){selectedFiles=[];$("attachment-input").value="";$("attachment-preview").replaceChildren();}
-function filePreview(){const target=$("attachment-preview");target.replaceChildren();selectedFiles.forEach((item,i)=>{const chip=document.createElement('div');chip.className='file-chip';const view=document.createElement('button');view.type='button';view.textContent=item.file.name+' · '+fileSize(item.file.size)+(item.file.type.startsWith('image/')&&(model!=="velia-pro"||profile?.free_api_tiers)?' · Распознавание текста':'');view.onclick=()=>fileTools.previewFile(item.file).catch(()=>toast('Не удалось открыть файл.'));const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label','Удалить '+item.file.name);remove.onclick=()=>{selectedFiles.splice(i,1);filePreview();resizePrompt();};chip.append(view,remove);target.append(chip);});if(selectedFiles.length){const bar=document.createElement('div');bar.className='file-shortcuts';for(const [title,prompt] of [['Протокол встречи','Подготовь протокол встречи: решения, поручения и открытые вопросы.'],['Пересказать','Кратко перескажи содержание прикреплённых файлов.'],['Извлечь текст','Извлеки текст из прикреплённых файлов. Отметь неразборчивые места.'],['Проверить ошибки','Проверь прикреплённые файлы на ошибки и несоответствия.']]){const b=document.createElement('button');b.type='button';b.textContent=title;b.onclick=()=>{$('prompt').value=prompt;resizePrompt();$('prompt').focus();};bar.append(b);}target.append(bar);}}
+function filePreview(){const target=$("attachment-preview");target.replaceChildren();selectedFiles.forEach((item,i)=>{const chip=document.createElement('div');chip.className='file-chip';const view=document.createElement('button');view.type='button';view.textContent=item.file.name+' · '+fileSize(item.file.size)+(item.file.type.startsWith('image/')&&(model!=="velia-pro"||profile?.free_api_tiers)?' · Распознавание текста':'');view.onclick=()=>fileTools.previewFile(item.file).catch(()=>toast('Не удалось открыть файл.'));const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label','Удалить '+item.file.name);remove.onclick=()=>{selectedFiles.splice(i,1);filePreview();resizePrompt();};chip.append(view,remove);target.append(chip);});if(selectedFiles.length){const bar=document.createElement('div');bar.className='file-shortcuts';for(const [title,prompt] of [['Протокол встречи','Подготовь протокол встречи: решения, поручения и открытые вопросы.'],['Пересказать','Кратко перескажи содержание прикреплённых файлов.'],['Извлечь текст','Извлеки текст из прикреплённых файлов. Отметь неразборчивые места.'],['Проверить ошибки','Проверь прикреплённые файлы на ошибки и несоответствия.']]){const b=document.createElement('button');b.type='button';b.textContent=title;b.onclick=()=>{$('prompt').value=prompt;resizePrompt();$('prompt').focus();};bar.append(b);}if(selectedFiles.length===2&&selectedFiles.every(item=>canExtractLocalText(item.file))){const b=document.createElement('button');b.type='button';b.textContent='Сравнить документы';b.onclick=()=>fileTools.compareFiles(selectedFiles[0].file,selectedFiles[1].file);bar.append(b);}target.append(bar);}}
 function addFiles(files) {
   if (busy) return;
   if (!profile) { openAuth(); return; }
@@ -317,6 +322,7 @@ function lockHistory() {
   background.reset();
   pulse.reset();$('pulse-open').hidden=true;
   autoloop.reset();
+  ++historyQueryVersion; clearTimeout(historyQueryTimer);
   abort?.abort(); clearTimeout(saveTimer); saveTimer = null;
   notebook.lock();localHistory.lock(); storageKey = null; chats = []; currentId = null;
   topicViews.clear(); legacyTopic=null;
@@ -429,15 +435,30 @@ function resizePrompt() {
   $("prompt").style.height = Math.min(180, $("prompt").scrollHeight) + "px";
   $("send").disabled = !ready || busy || (!$("prompt").value.trim() && !selectedFiles.length);
 }
+let historyQueryVersion = 0;
+let historyQueryTimer;
 function renderHistory() {
+  const query = $("search").value.trim().slice(0, 200);
+  const revision = ++historyQueryVersion;
+  clearTimeout(historyQueryTimer);
+  const items = chats.filter(chat => (chat.remote || chat.messages.length) &&
+    chat.title.toLocaleLowerCase().includes(query.toLocaleLowerCase())).sort(historyOrder);
+  drawHistory(items.map(chat => ({chat})), query);
+  if (query.length < 2) return;
+  historyQueryTimer = setTimeout(async () => {
+    try {
+      const {MiniSearch} = await import('/web/productivity-index.mjs');
+      if (revision !== historyQueryVersion) return;
+      const byId = new Map(chats.map(chat => [chat.id, chat]));
+      const matches = searchHistory(MiniSearch, chats, query).map(match => ({chat: byId.get(match.chatId), match}));
+      const titles = new Set(matches.filter(({match}) => match.index < 0).map(({chat}) => chat.id));
+      drawHistory([...items.filter(chat => !titles.has(chat.id)).map(chat => ({chat})), ...matches], query);
+    } catch { /* Title search remains available if the local index did not load. */ }
+  }, 140);
+}
+
+function drawHistory(items, filter) {
   $("history").replaceChildren();
-  const filter = $("search").value.trim().toLocaleLowerCase(),
-    items = [...chats]
-      .filter(
-        (c) =>
-          (c.remote || c.messages.length) && c.title.toLocaleLowerCase().includes(filter),
-      )
-      .sort(historyOrder);
   if (!items.length) {
     const p = document.createElement("p");
     p.className = "history-empty";
@@ -450,12 +471,12 @@ function renderHistory() {
     return;
   }
   let group = "";
-  for (const chat of items) {
+  for (const {chat, match} of items) {
     const label =
       new Date(chat.updated).toDateString() === new Date().toDateString()
         ? "Сегодня"
         : "Ранее";
-    if (label !== group) {
+    if (!filter && label !== group) {
       group = label;
       const h = document.createElement("div");
       h.className = "history-group";
@@ -469,7 +490,22 @@ function renderHistory() {
     open.textContent = (chat.isPinned ? "📌 " : "") + chat.title;
     open.title = chat.title;
     open.disabled = busy;
-    open.onclick = () => openChat(chat);
+    if (match?.index >= 0) {
+      const snippet = document.createElement('span');
+      snippet.className = 'history-match';
+      snippet.textContent = match.snippet;
+      open.append(snippet);
+    }
+    open.onclick = async () => {
+      const account = profile?.account;
+      await openChat(chat);
+      if (profile?.account !== account || currentId !== chat.id || !(match?.index >= 0)) return;
+      const index = match.serverId ? chat.messages.findIndex(message => message.serverId === match.serverId) : match.index;
+      if (index < 0) return;
+      const node = $("messages").querySelector('[data-index="' + index + '"]');
+      node?.classList.add('history-highlight');
+      node?.scrollIntoView({block:'center'});
+    };
     const del = document.createElement("button");
     del.className = "history-delete";
     del.innerHTML = icon("trash");
@@ -503,11 +539,12 @@ function messageNode(message, index) {
   if (message.role === "user") content.textContent = message.content;
   else
     content.innerHTML = message.content
-      ? renderMarkdown(mapReplyText(message.content,message.mapData), {highlight: !message.pending})
+      ? renderMarkdown(readablePdfReferences(mapReplyText(message.content,message.mapData)), {highlight: !message.pending})
       : busy && !message.failed
         ? '<div class="thinking" aria-label="Велия готовит ответ"><span></span><span></span><span></span></div>'
         : "";
   article.append(content);
+  if(message.role==="assistant"&&!message.pending)mountDiagramButtons(content,fileTools.downloadText);
   if(message.taskEvent){article.dataset.taskEvent=message.taskEvent;article.dataset.missionId=message.missionId;}
   const latestTaskEvent=message.missionId?current().messages.findLast(m=>m.missionId===message.missionId&&m.taskEvent)?.taskEvent:null;
   if((!latestTaskEvent||message.taskEvent===latestTaskEvent)&&profile&&typeof message.missionId==='string'&&/^[0-9a-f-]{36}$/u.test(message.missionId)){
@@ -538,6 +575,31 @@ function messageNode(message, index) {
   if(message.pulseIds?.length||message.pulseDraft){const box=document.createElement('section');box.className='chat-pulse-result';for(const id of (message.pulseIds||[]).slice(0,12)){const item=pulse.state().items.find(p=>p.item_id===id);if(item){const p=document.createElement('p');p.textContent=item.title+' · '+pulseWhen(item);box.append(p);}}const b=document.createElement('button');b.type='button';b.textContent=message.pulseDraft?'Уточнить напоминание':'Открыть Пульс';b.onclick=()=>features.open('pulse',message.pulseDraft||{});box.append(b);article.append(box);}
   if(message.role==='user'&&!wantsPulse(message.content)&&/(?:надо бы|нужно будет|обещал[аи]?).{0,100}(?:завтра|сегодня|пятниц|понедельник|вторник|сред|четверг|суббот|воскрес)/iu.test(message.content)){const b=document.createElement('button');b.type='button';b.textContent='Напомнить об этом';b.onclick=()=>features.open('pulse',{title:message.content.slice(0,500),resource:{kind:'chat',id:current().id}});article.append(b);}
   if(message.fileNames?.length){const files=document.createElement('div');files.className='message-files';message.fileNames.forEach((name,i)=>{const id=message.attachmentIds?.[i],available=!!fileTools.get(id),item=document.createElement(available?'button':'span');item.textContent=name;if(available){item.type='button';item.onclick=()=>{const original=fileTools.get(id);if(original)fileTools.previewFile(original).catch(()=>toast('Не удалось открыть файл.'));else toast('Оригинал больше не доступен в этой сессии. Прикрепи файл заново.');};}else item.title='Оригинал недоступен для просмотра в этой сессии.';files.append(item);});article.append(files);}
+  if (message.role === 'assistant' && !message.pending) {
+    const references = pdfReferences(message.content);
+    if (references.length) {
+      const group = document.createElement('div');
+      group.className = 'message-files';
+      const preceding = current().messages.slice(0,index).reverse();
+      for (const {name,page} of references) {
+        const source = preceding.find(turn => turn.role === 'user' && /\.pdf$/iu.test(name) && turn.fileNames?.includes(name));
+        const indexInSource = source?.fileNames.indexOf(name);
+        if (indexInSource == null || source.fileNames.lastIndexOf(name) !== indexInSource) continue;
+        const id = source.attachmentIds?.[indexInSource];
+        if (!id) continue;
+        const cite = document.createElement('button');
+        cite.type = 'button';
+        cite.textContent = name + ' · стр. ' + page;
+        cite.onclick = () => {
+          const original = fileTools.get(id);
+          if (original?.type === 'application/pdf') fileTools.previewFile(original,page).catch(() => toast('Не удалось открыть PDF.'));
+          else toast('Оригинал недоступен. Прикрепи этот PDF заново.');
+        };
+        group.append(cite);
+      }
+      if (group.childElementCount) article.append(group);
+    }
+  }
   if (message.role === "assistant" && message.search) {
     const sources = sourceNode(message.search);
     if (sources) article.append(sources);
@@ -1432,7 +1494,7 @@ async function generate(retry = false, voiceTurn = false) {
     await runCrmChat(text,voiceTurn);return;
   }
   if(current())current().crmPending=false;
-  if(!retry&&!cloudProvider(text)&&!wantsFigma(text)&&!wantsPulse(text)&&!wantsMap(text,current()?.messages||[])&&
+  if(!retry&&!selectedFiles.length&&!cloudProvider(text)&&!wantsFigma(text)&&!wantsPulse(text)&&!wantsMap(text,current()?.messages||[])&&
       (wantsFinance(text)||current()?.financePending&&financeFollowup(text)||current()?.finance&&financeRangeFollowup(text))){
     if(!profile){openAuth();return;}
     if(!profile.models.includes(model)){toast(apiError(profile.pro_locked_reason||'pro_tokens_required'));return;}
@@ -1459,6 +1521,9 @@ async function generate(retry = false, voiceTurn = false) {
   if(mapTurn&&selectedFiles.length&&!/(?:прикрепи|сохрани|добавь|attach|save|add)/iu.test(text)){toast('Чтобы сохранить файлы у места, напиши: «Прикрепи эти файлы к этому месту».');return;}
   if(selectedFiles.length&&!mapTurn&&model!=='velia-pro'&&!profile.selected_model_inputs){toast(apiError('selected_model_files_unavailable'));return;}
   if(selectedFiles.length&&!mapTurn&&model==='velia-quantum'&&!profile.quantum_attachments){toast(apiError('quantum_attachments_unsupported'));return;}
+  if(mapTurn && selectedFiles.some(item => isSpreadsheet(item.file) && /\.xlsx$/iu.test(item.file.name))){
+    toast('Для XLSX открой таблицу или отправь её в обычный чат.');return;
+  }
   const mapFiles=mapTurn?selectedFiles.map(item=>item.file):[];
   if(connectedTurn && agentMode)setAgentMode(false,true);
   const detected=!retry && !agentMode && !connectedTurn && (medicalDraftMode?'medical_document':chatSpecialty(text,selectedFiles.map(item=>item.file)));
@@ -1521,7 +1586,7 @@ async function generate(retry = false, voiceTurn = false) {
       if (!profile || agentMode || !chat.remote) {toast("Для файлов открой обычный диалог после входа.");return;}
       abort = new AbortController();
       setBusy(true);
-      try {for(const item of filesForTurn){$("generation-status").textContent="Читаю файл «"+item.file.name+"»…";const r=await featureRequest(`conversations/${chat.id}/attachments`,{method:"POST",file:item.file,key:item.key,chatModel:model,signal:abort.signal});attachments.push(r.attachment.id);fileTools.remember(r.attachment.id,item.file);}}
+      try {for(const item of filesForTurn){$("generation-status").textContent="Читаю файл «"+item.file.name+"»…";const r=await featureRequest(`conversations/${chat.id}/attachments`,{method:"POST",file:await workbookAttachment(item.file,abort.signal),key:item.key,chatModel:model,signal:abort.signal});attachments.push(r.attachment.id);fileTools.remember(r.attachment.id,item.file);}}
       catch(error){toast(error.name==="AbortError"?"Отправка остановлена.":error.message);return;}finally{abort=null;setBusy(false);$("generation-status").textContent="";}
     }
     chat.messages.push({ role: "user", content: text, attachmentIds:attachments, fileNames:filesForTurn.map(x=>x.file.name), requestId: crypto.randomUUID(),
