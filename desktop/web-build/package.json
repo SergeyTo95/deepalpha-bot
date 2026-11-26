@@ -2,6 +2,13 @@
   "name": "velia-web-build",
   "private": true,
   "devDependencies": {
-    "esbuild": "0.25.12"
+    "diff": "9.0.0",
+    "esbuild": "0.25.12",
+    "fflate": "0.8.3",
+    "mermaid": "12.3.0",
+    "minisearch": "7.2.0",
+    "papaparse": "5.5.3",
+    "pdfjs-dist": "6.5.438",
+    "read-excel-file": "9.3.20"
   }
 }

@@ -12,8 +12,22 @@ RUN node --check /opt/velia-web/app.mjs && node --check /opt/velia-web/velia-sw.
 RUN node --test /opt/velia-web/tests/*.test.mjs
 COPY desktop/web-build/package.json desktop/web-build/package-lock.json /opt/velia-web-build/
 RUN npm ci --prefix /opt/velia-web-build --ignore-scripts --no-audit --no-fund
+COPY desktop/web-build/table-worker.mjs desktop/web-build/productivity-index.mjs desktop/web-build/diagram-engine.mjs /opt/velia-web-build/
+RUN cp /opt/velia-web/table-tools.mjs /opt/velia-web-build/table-tools.mjs \
+    && mkdir -p /opt/velia-web/dist \
+    && /opt/velia-web-build/node_modules/.bin/esbuild /opt/velia-web-build/table-worker.mjs /opt/velia-web-build/productivity-index.mjs /opt/velia-web-build/diagram-engine.mjs \
+      --bundle --minify --charset=utf8 --format=esm --out-extension:.js=.mjs --legal-comments=linked --outdir=/opt/velia-web/dist \
+    && cp /opt/velia-web-build/node_modules/pdfjs-dist/legacy/build/pdf.min.mjs /opt/velia-web/dist/pdf-engine.mjs \
+    && cp /opt/velia-web-build/node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs /opt/velia-web/dist/pdf-worker.mjs \
+    && cp /opt/velia-web-build/node_modules/pdfjs-dist/LICENSE /opt/velia-web/dist/pdf-LICENSE.txt \
+    && cp /opt/velia-web-build/node_modules/mermaid/LICENSE /opt/velia-web/dist/diagram-LICENSE.txt \
+    && for name in read-excel-file minisearch diff fflate papaparse saxen unzipper-esm worker-f; do \
+      printf '\n%s\n' "$name" >> /opt/velia-web/dist/productivity-LICENSES.txt; \
+      cat "/opt/velia-web-build/node_modules/$name"/LICENSE* >> /opt/velia-web/dist/productivity-LICENSES.txt || exit 1; \
+    done \
+    && gzip -kn9 /opt/velia-web/dist/diagram-engine.mjs /opt/velia-web/dist/pdf-engine.mjs /opt/velia-web/dist/pdf-worker.mjs
 RUN /opt/velia-web-build/node_modules/.bin/esbuild /opt/velia-web/app.mjs \
-      --bundle --minify --charset=utf8 --format=esm --outfile=/opt/velia-web/dist/app.mjs \
+      --bundle --minify --charset=utf8 --format=esm --external:/web/* --outfile=/opt/velia-web/dist/app.mjs \
     && /opt/velia-web-build/node_modules/.bin/esbuild /opt/velia-web/style.css \
       --minify --charset=utf8 --outfile=/opt/velia-web/dist/style.css \
     && /opt/velia-web-build/node_modules/.bin/esbuild /opt/velia-web/velia-sw.js \
