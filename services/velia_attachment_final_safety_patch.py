@@ -47,13 +47,13 @@ def _safe_extract_pdf(raw: bytes) -> str:
         )
 
     chunks: List[str] = []
-    for page in pages:
+    for index, page in enumerate(pages, start=1):
         try:
             page_text = str(page.extract_text() or "").strip()
         except Exception:
             page_text = ""
         if page_text:
-            chunks.append(page_text)
+            chunks.append(f"[PDF_PAGE {index}]\n{page_text}")
     native_text = "\n\n".join(chunks)
     use_ocr = ocr.enabled()
     within_ocr_page_limit = 0 < len(pages) <= ocr.pdf_page_limit()
