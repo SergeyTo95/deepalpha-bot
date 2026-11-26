@@ -91,6 +91,10 @@ def test_group(group, sha):
     try:
         run(f'pg_ctl -D {data} -l {data}/server.log -o "-h 127.0.0.1 -p 55432 -k /tmp" -w start', env)
         started = True
+        if group == 'backend':
+            run('createdb -h 127.0.0.1 -p 55432 ci_pr_review', env)
+            review_env = dict(env, VELIA_PR_REVIEW_TEST_DSN='postgresql://postgres@127.0.0.1:55432/ci_pr_review')
+            run('python -m pytest -q -p no:cacheprovider tests/test_velia_pr_review.py', review_env)
         for number, (name, spec) in enumerate(manifest.items()):
             if spec['group'] != group:
                 continue

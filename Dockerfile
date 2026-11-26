@@ -12,6 +12,7 @@ RUN if [ "$VELIA_ATTACHMENTS_OCRIA_ENABLED" = 1 ]; then \
       pip check; \
     fi
 COPY . .
+RUN sh ci/install-velia-pr-review.sh /usr/local/bin/velia-open-code-review
 RUN ls -la /app
 RUN ls -la /app/db || echo "NO DB FOLDER"
 RUN ls -la /app/bot/

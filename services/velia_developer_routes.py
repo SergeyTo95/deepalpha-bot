@@ -12,6 +12,8 @@ from aiohttp import web
 from services import velia_developer_fast_path_service as agent_service
 from services import velia_developer_github_service as github_service
 from services import velia_developer_project_service as project_service
+from services import velia_pr_review_service as pr_review
+from services import velia_pr_review_engine as pr_engine
 
 
 logger = logging.getLogger(__name__)
@@ -85,7 +87,7 @@ def _github_install_url(state: str) -> str:
 
 
 def _error_response(routes_module: Any, exc: Exception) -> web.Response:
-    if isinstance(exc, project_service.DeveloperProjectError):
+    if isinstance(exc, (project_service.DeveloperProjectError, pr_review.ReviewError)):
         return routes_module._json_response({"ok": False, "error": exc.code}, status=exc.status)
     if isinstance(exc, github_service.DeveloperGithubError):
         payload = {"ok": False, "error": exc.code}
@@ -357,7 +359,7 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
             return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
         try:
             items = await asyncio.to_thread(project_service.list_projects, int(auth["user_id"]))
-            return routes_module._json_response({"ok": True, "projects": items})
+            return routes_module._json_response({"ok": True, "pr_review_enabled": pr_review.allowed(int(auth["user_id"])), "projects": items})
         except Exception as exc:
             return _error_response(routes_module, exc)
 
@@ -550,6 +552,80 @@ def setup_velia_developer_routes(app: web.Application, routes_module: Any) -> No
                 except Exception:
                     logger.exception("VELIA_DEVELOPER_RUN_FINALIZE_FAILED run_id=%s", run_id)
             return _error_response(routes_module, exc)
+
+    review_wakeup = asyncio.Event()
+    review_schema_ready = False
+
+    async def review_worker():
+        nonlocal review_schema_ready
+        while pr_review.enabled() and pr_review.ready():
+            try:
+                if not review_schema_ready:
+                    await asyncio.to_thread(project_service.ensure_developer_tables)
+                    await asyncio.to_thread(pr_review.ensure_schema)
+                    review_schema_ready = True
+                while await asyncio.to_thread(pr_review.process_once):
+                    await asyncio.sleep(0)
+            except Exception as exc:
+                logger.warning("VELIA_PR_REVIEW_WORKER %s", type(exc).__name__)
+            try:
+                await asyncio.wait_for(review_wakeup.wait(), timeout=30)
+            except asyncio.TimeoutError:
+                pass
+            finally:
+                review_wakeup.clear()
+
+    async def review_context(_application):
+        task = asyncio.create_task(review_worker(), name="velia-pr-review-worker") if pr_review.enabled() else None
+        try:
+            yield
+        finally:
+            if task:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    async def review_endpoint(request: web.Request) -> web.Response:
+        blocked = _require_feature(routes_module, request)
+        if blocked:
+            return blocked
+        auth = _auth(routes_module, request)
+        if not auth:
+            return routes_module._json_response({"ok": False, "error": "unauthorized"}, status=401)
+        user_id = int(auth["user_id"])
+        if not pr_review.allowed(user_id):
+            return routes_module._json_response({"ok": False, "error": "pr_review_not_allowed"}, status=403)
+        if not review_schema_ready:
+            return routes_module._json_response({"ok": False, "error": "pr_review_not_ready"}, status=503)
+        project_id = request.match_info["project_id"]
+        review_id = request.match_info.get("review_id")
+        try:
+            project = await asyncio.to_thread(pr_review.project_for, user_id, project_id)
+            if request.path.endswith("/pull-requests"):
+                pulls = await asyncio.to_thread(pr_engine.list_pulls, project)
+                payload = {"pulls": pulls, "models": pr_engine.available_models()}
+            elif request.method == "GET" and not review_id:
+                payload = {"reviews": await asyncio.to_thread(pr_review.list_reviews, user_id, project_id)}
+            elif request.method == "GET":
+                payload = {"review": await asyncio.to_thread(pr_review.fetch_review, user_id, project_id, review_id)}
+            elif review_id:
+                payload = {"review": await asyncio.to_thread(pr_review.publish, user_id, project, review_id)}
+            else:
+                data = await routes_module._read_json(request)
+                if not isinstance(data, dict):
+                    raise pr_review.ReviewError("pr_review_invalid_request")
+                payload = {"review": await asyncio.to_thread(pr_review.enqueue, user_id, project, data)}
+                review_wakeup.set()
+            return routes_module._json_response({"ok": True, **payload})
+        except Exception as exc:
+            return _error_response(routes_module, exc)
+
+    app.cleanup_ctx.append(review_context)
+    review_prefix = f"{_PREFIX}/projects/{{project_id}}"
+    app.router.add_get(f"{review_prefix}/pull-requests", review_endpoint)
+    app.router.add_get(f"{review_prefix}/pr-reviews", review_endpoint)
+    app.router.add_post(f"{review_prefix}/pr-reviews", review_endpoint)
+    app.router.add_get(f"{review_prefix}/pr-reviews/{{review_id}}", review_endpoint)
+    app.router.add_post(f"{review_prefix}/pr-reviews/{{review_id}}/publish", review_endpoint)
 
     app.router.add_get(f"{_PREFIX}/status", status)
     app.router.add_post(f"{_PREFIX}/github/install-url", install_url)
