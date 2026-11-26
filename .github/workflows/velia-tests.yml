@@ -1,0 +1,52 @@
+name: VELIA project tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: velia-project-tests
+  cancel-in-progress: false
+
+jobs:
+  web:
+    name: Browser tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feat/velia-web-signin
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Show tested revision
+        run: git rev-parse HEAD
+      - name: Test browser tools
+        run: node --test desktop/web/tests/*.test.mjs
+  server:
+    name: Server tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feat/velia-signin-authority
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Show tested revision
+        run: git rev-parse HEAD
+      - name: Install test dependencies
+        run: python -m pip install -r requirements.txt pytest
+      - name: Test GitHub project tools
+        run: >
+          python -m pytest -q
+          tests/test_velia_developer_github_service.py
+          tests/test_velia_developer_project_service.py
+          tests/test_velia_developer_routes.py
+          tests/test_velia_project_tools.py
