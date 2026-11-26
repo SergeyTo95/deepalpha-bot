@@ -20,6 +20,13 @@ ROUTES += [("GET", "agent/schedules/status"), ("GET", "agent/schedules"), ("POST
            ("POST", "agent/schedules/{scheduleId}/disable"), ("DELETE", "agent/schedules/{scheduleId}")]
 ROUTES += [("GET", "research/missions/{missionId}/runs"), ("GET", "research/runs/{runId}"),
            ("POST", "research/runs/{runId}/cancel")]
+ROUTES += [
+    ("GET", "developer/projects/{projectId}/pull-requests"),
+    ("GET", "developer/projects/{projectId}/pr-reviews"),
+    ("POST", "developer/projects/{projectId}/pr-reviews"),
+    ("GET", "developer/projects/{projectId}/pr-reviews/{reviewId}"),
+    ("POST", "developer/projects/{projectId}/pr-reviews/{reviewId}/publish"),
+]
 PATTERNS = [(method, re.compile(re.sub(r"\{[^}]+\}", "[A-Za-z0-9_-]{1,128}", path) + r"\Z"))
             for method, path in ROUTES]
 BINARY_ROUTES = [
