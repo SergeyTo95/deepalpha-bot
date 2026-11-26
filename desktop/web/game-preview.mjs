@@ -1,3 +1,5 @@
+import {validatedCloudShellUrl} from './project-tools.mjs';
+
 const gamesOrigin = 'https://velyoncore.ai';
 const privatePath = /^\/game\/project\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/s[1-8]\/$/u;
 const sharePath = /^\/game\/share\/[A-Za-z0-9_-]{150,350}\/$/u;
@@ -47,6 +49,9 @@ export function mountGameExport({url,client,id,step,model,chatBound,signal}) {
   controls.append(link('Играть',url));
   const zip=gameDownloadLink(url);
   if(zip)controls.append(link('Скачать ZIP',zip));
+  const cloudShell=link('Открыть в Cloud Shell','#');
+  cloudShell.hidden=true;
+  controls.append(cloudShell);
   const edit=node('button','Доработать');edit.type='button';edit.setAttribute('aria-expanded','false');controls.append(edit);
   const editForm=node('form');editForm.className='feature-form';editForm.hidden=true;
   const instruction=node('textarea');instruction.setAttribute('aria-label','Что изменить в игре');
@@ -222,6 +227,9 @@ export function mountGameExport({url,client,id,step,model,chatBound,signal}) {
       target={installation_id:Number(install.value),repository_id:Number(repositories.value)};
       status.textContent='Версия сохранена в ветке игры.';
       result.append(link('Открыть файлы в GitHub',remote.href));
+      const shell=validatedCloudShellUrl(payload.export.cloud_shell_url,remote.pathname.split('/').slice(1,3).join('/'));
+      cloudShell.hidden=!shell;
+      cloudShell.href=shell||'#';
     }catch(error){if(!signal.aborted)status.textContent=error.message;}
     finally{lock(false);}
   };

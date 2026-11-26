@@ -26,6 +26,10 @@ ROUTES += [
     ("POST", "developer/projects/{projectId}/pr-reviews"),
     ("GET", "developer/projects/{projectId}/pr-reviews/{reviewId}"),
     ("POST", "developer/projects/{projectId}/pr-reviews/{reviewId}/publish"),
+    ("GET", "developer/projects/{projectId}/cloud-shell"),
+    ("GET", "developer/projects/{projectId}/test-runs"),
+    ("POST", "developer/projects/{projectId}/test-runs"),
+    ("GET", "developer/projects/{projectId}/test-runs/latest"),
 ]
 PATTERNS = [(method, re.compile(re.sub(r"\{[^}]+\}", "[A-Za-z0-9_-]{1,128}", path) + r"\Z"))
             for method, path in ROUTES]
