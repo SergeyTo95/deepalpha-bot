@@ -563,6 +563,7 @@
   "services/velia_attachment_idempotency_service.py",
   "services/velia_attachment_message_runtime_patch.py",
   "services/velia_attachment_ocr_service.py",
+  "services/velia_attachment_pdf_worker.py",
   "services/velia_attachment_privacy_service.py",
   "services/velia_attachment_public_contract.py",
   "services/velia_attachment_routing_service.py",

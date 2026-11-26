@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 
@@ -60,15 +61,19 @@ def extract_markdown(raw: bytes, *, suffix: str, page_count: int) -> str:
             source = Path(directory) / ("input" + suffix)
             source.write_bytes(raw)
             output = Path(directory) / "text.md"
-            subprocess.run(
-                [
-                    limiter, "--as=4294967296", "--fsize=2097152", "--",
+            if suffix == ".pdf":
+                worker = Path(__file__).with_name("velia_attachment_pdf_worker.py").resolve()
+                command = [sys.executable, str(worker), str(source), str(output), str(page_count), str(_PDF_DPI)]
+            else:
+                command = [
                     binary, "parse", "--quiet", "--format", "markdown",
                     "--ocr-backend", "ocria-nano", "--num-workers", "1",
                     "--max-pages", str(page_count), "--dpi", str(_PDF_DPI),
                     "--image-mode", "off", "--no-links", "--keep-headers-footers",
                     "--output", str(output), str(source),
-                ],
+                ]
+            subprocess.run(
+                [limiter, "--as=4294967296", "--fsize=2097152", "--", *command],
                 cwd=directory,
                 env=env,
                 stdin=subprocess.DEVNULL,
