@@ -282,6 +282,15 @@ export async function runCloudAgent({
   );
 }
 
+export async function openGitHubAuthorization(call, signal) {
+  const result = await call("developer/github/web-install-url", {method:"POST", signal});
+  const target = new URL(result.url);
+  if (target.origin !== "https://github.com" || target.username || target.password
+      || target.pathname !== "/login/oauth/authorize")
+    throw new Error("Некорректная ссылка подключения GitHub.");
+  if (!signal.aborted) window.location.assign(target.href);
+}
+
 export function mountConnections(parent, { call, toast, signal }) {
   const github = connectionRow(parent, "GitHub", "Репозитории и код");
   github.toggle.onclick = () =>
@@ -292,19 +301,7 @@ export function mountConnections(parent, { call, toast, signal }) {
           if (!signal.aborted) github.show(false);
           return;
         }
-        const result = await call("developer/github/web-install-url", {
-          method: "POST",
-        });
-        const target = new URL(result.url);
-        if (
-          target.protocol !== "https:" ||
-          target.hostname !== "github.com" ||
-          target.username ||
-          target.password ||
-          target.pathname !== "/login/oauth/authorize"
-        )
-          throw new Error("Некорректная ссылка подключения GitHub.");
-        if (!signal.aborted) window.location.assign(target.href);
+        await openGitHubAuthorization(call, signal);
       },
       { signal, toast },
     );

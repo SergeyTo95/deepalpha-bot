@@ -1,4 +1,5 @@
 import {mountPullRequestReview} from "./pr-review.mjs";
+import {mountProjectTests, openProjectCloudShell} from './project-tools.mjs';
 import {mountMissionList} from './mission-ui.mjs';
 import {MISSION_LABELS} from './missions.mjs';
 import {mountPulse} from './pulse-ui.mjs';
@@ -498,14 +499,26 @@ export function setupFeatures({notebook,pulse,webPush,openPulseResource=()=>{},o
             for(const project of data.projects||[]){
               const card=node('article',undefined,'feature-card');
               card.append(node('h3',project.repository_full_name||project.name||'Репозиторий'),node('p',project.selected_branch?'Ветка: '+project.selected_branch:'Выбери проект для разработки.'));
-              actions(card,[['Открыть разработку',()=>development(card,project)]]);
-              if(data.pr_review_enabled && /^[-.a-z0-9_]+\/[-.a-z0-9_]+$/iu.test(project.repository_full_name||'')){
-                const reviewPanel=node('section');
-                actions(card,[['Проверить PR',()=>mountPullRequestReview(reviewPanel,{
-                  project,request:call,signal:controller.signal,element:node,button,confirmPublish:message=>confirm(message),
-                })]]);
-                card.append(reviewPanel);
+              const links=[['Открыть разработку',()=>development(card,project)]];
+              const toolPanels=[];
+              if(/^[-.a-z0-9_]+\/[-.a-z0-9_]+$/iu.test(project.repository_full_name||'')){
+                const tools={project,request:call,signal:controller.signal,element:node,button};
+                if(data.pr_review_enabled){
+                  const reviewPanel=node('section');
+                  links.push(['Проверить PR',()=>mountPullRequestReview(reviewPanel,{...tools,confirmPublish:message=>confirm(message)})]);
+                  toolPanels.push(reviewPanel);
+                }
+                const testPanel=node('section');
+                links.push(['Запустить тесты',()=>mountProjectTests(testPanel,tools)]);
+                toolPanels.push(testPanel);
+                if(project.private===false){
+                  const shellPanel=node('section');
+                  links.push(['Открыть в Cloud Shell',()=>openProjectCloudShell(shellPanel,tools)]);
+                  toolPanels.push(shellPanel);
+                }
               }
+              actions(card,links);
+              card.append(...toolPanels);
               repositoryList.append(card);
             }
           }catch(e){if(ticket===epoch&&e.name!=='AbortError'){loaded=false;repositoryList.replaceChildren(node('p',e.message,'feature-notice'));}}
